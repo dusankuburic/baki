@@ -6,6 +6,7 @@ import (
 	"go.uber.org/fx/fxtest"
 
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/platform/secret"
 	"pad-analyzer/internal/redisx"
 )
 
@@ -23,7 +24,7 @@ func TestProvide_DisabledWhenURLUnset(t *testing.T) {
 
 func TestProvide_BadURLIsRejected(t *testing.T) {
 	lc := fxtest.NewLifecycle(t)
-	_, err := redisx.Provide(lc, &config.Config{Redis: config.RedisConfig{URL: "redis://[::1" /* malformed */}})
+	_, err := redisx.Provide(lc, &config.Config{Redis: config.RedisConfig{URL: secret.New("redis://[::1" /* malformed */)}})
 	if err == nil {
 		t.Fatal("expected an error for a malformed PAD_REDIS_URL, got nil")
 	}
@@ -35,7 +36,7 @@ func TestProvide_BadURLIsRejected(t *testing.T) {
 func TestProvide_UnreachableIsRejected(t *testing.T) {
 	lc := fxtest.NewLifecycle(t)
 	// :1 is reserved/unroutable in most CI → Ping times out fast.
-	_, err := redisx.Provide(lc, &config.Config{Redis: config.RedisConfig{URL: "redis://127.0.0.1:1/0"}})
+	_, err := redisx.Provide(lc, &config.Config{Redis: config.RedisConfig{URL: secret.New("redis://127.0.0.1:1/0")}})
 	if err == nil {
 		t.Fatal("expected an error when the configured Redis is unreachable, got nil")
 	}

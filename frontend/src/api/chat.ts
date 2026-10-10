@@ -65,6 +65,16 @@ export const chatApi = {
     excludedItemIndices?: number[],
   ): Promise<void> => request('/api/chat/fix-decision', {body: {streamId, proposalId, approved, excludedItemIndices}}),
 
+  // The same decision for an approval_request (a later server's name for the
+  // event; its decision route). Same body.
+  respondApprovalDecision: (
+    streamId: string,
+    proposalId: string,
+    approved: boolean,
+    excludedItemIndices?: number[],
+  ): Promise<void> =>
+    request('/api/chat/approval-decision', {body: {streamId, proposalId, approved, excludedItemIndices}}),
+
   resumeStream: (
     id: string,
     from = 0,

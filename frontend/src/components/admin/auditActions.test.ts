@@ -41,6 +41,12 @@ describe('auditActions', () => {
     expect(actionLabel(enDashboard.actions, 'azure.model_delete')).toBe('Removed an Azure AI Foundry model')
   })
 
+  it('labels the CI credential and CI run actions', () => {
+    expect(actionLabel(enDashboard.actions, 'org.ci_credential_create')).toBe('Created a CI credential')
+    expect(actionLabel(enDashboard.actions, 'org.ci_credential_revoke')).toBe('Revoked a CI credential')
+    expect(actionLabel(enDashboard.actions, 'ci.webhook_run')).toBe('Recorded a CI run')
+  })
+
   it('tints failed sign-ins and administration, and leaves the rest neutral', () => {
     expect(actionTone('auth.login_failure')).toContain('semantic-error')
     expect(actionTone('admin.role_change')).toContain('brand')

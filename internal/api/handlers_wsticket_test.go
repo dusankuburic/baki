@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 
 	"pad-analyzer/internal/auth"
 )
@@ -34,13 +37,47 @@ func TestWSTicket_IssuedForAuthenticatedUser(t *testing.T) {
 	if claims.UserID != "user-1" {
 		t.Errorf("ticket UserID: got %q want %q", claims.UserID, "user-1")
 	}
+	// The response says when the ticket stops being accepted (additive; the client type always declared it).
+	exp, err := time.Parse(time.RFC3339, resp.ExpiresAt)
+	if err != nil {
+		t.Fatalf("expiresAt %q is not RFC 3339: %v", resp.ExpiresAt, err)
+	}
+	if !exp.Equal(claims.ExpiresAt.Time) && exp.Sub(claims.ExpiresAt.Time).Abs() > time.Second {
+		t.Errorf("expiresAt %v, ticket exp %v", exp, claims.ExpiresAt.Time)
+	}
 }
 
-// Regression: verifyAPIToken (personal access token / machine auth) returns
-// Claims with a zero-valued RegisteredClaims — ExpiresAt is nil. handleWSTicket
+// A PAT's ticket carries the token's scopes and its revocable JTI, so the socket acts as that token (R7).
+func TestWSTicket_PATTicketCarriesScopes(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	seedUserWithRole(t, rt, "u-owner", "u-owner@acme.io", auth.RoleMember)
+	session := jwtBearer(t, rt, "u-owner", "u-owner@acme.io")
+	pat := mintPAT(t, rt, session, []string{auth.ScopeRead})
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/ws-ticket", pat, nil)
+	checkStatus(t, rr, http.StatusOK)
+	var resp struct {
+		Ticket string `json:"ticket"`
+	}
+	decodeJSON(t, rr, &resp)
+	claims, err := rt.security.AuthMgr.VerifyWSTicket(resp.Ticket)
+	if err != nil {
+		t.Fatalf("issued ticket failed to verify: %v", err)
+	}
+	actor := auth.ActorFromWSTicket(claims)
+	if actor.Kind != auth.ActorToken || actor.TokenID == "" || !slices.Equal(actor.Scopes, []string{auth.ScopeRead}) {
+		t.Fatalf("a read PAT's ticket stands for %+v, want the read-scoped token", actor)
+	}
+	if claims.SrcJTI != auth.PATJTI(actor.TokenID) {
+		t.Errorf("ticket src_jti %q, want the PAT's revocable jti", claims.SrcJTI)
+	}
+}
+
+// Regression: PAT claims used to come with a zero-valued RegisteredClaims, and
+// a PAT without an expiry still has a nil ExpiresAt (ClaimsForPAT). handleWSTicket
 // used to dereference claims.ExpiresAt.Time unconditionally, panicking into a
-// 500 on every PAT-bearing ws-ticket request (and a stack-dump DoS on repeat).
-// Such claims must no longer panic and must yield a usable ticket.
+// 500 on every such ws-ticket request (and a stack-dump DoS on repeat). Such
+// claims must not panic and must yield a usable ticket.
 func TestWSTicket_PATClaimsWithNilExpiresAt_DoesNotPanic(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	// Reuse the router's configured AuthMgr; handleWSTicket only needs security.
@@ -89,6 +126,27 @@ func TestWS_RejectsMissingOrInvalidTicket(t *testing.T) {
 	}
 }
 
+// A ticket without the version claim comes from a server that predates ticket
+// scopes: its missing scopes cannot be read as "unscoped", so /ws refuses it
+// (401) and the client reconnects with a fresh ticket.
+func TestWS_RejectsVersionlessTicket(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	now := time.Now()
+	legacy := auth.Claims{UserID: "user-1", Email: "alice@example.com", Role: auth.RoleMember, SrcJTI: auth.PATJTI("tok-1")}
+	legacy.RegisteredClaims = jwt.RegisteredClaims{
+		ID: "legacy-ticket", IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(30 * time.Second)),
+		Subject: "user-1", Issuer: "pad-analyzer", Audience: jwt.ClaimStrings{"pad-ws-ticket"},
+	}
+	ticket, err := jwt.NewWithClaims(jwt.SigningMethodHS256, legacy).SignedString([]byte(testToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/ws?flowId=f1&ticket="+ticket, nil)
+	rr := httptest.NewRecorder()
+	rt.ServeHTTP(rr, req)
+	checkStatus(t, rr, http.StatusUnauthorized)
+}
+
 // An access token presented in the ?ticket= slot must be rejected (audience
 // separation): it would otherwise let the long-lived token authorize the WS.
 func TestWS_RejectsAccessTokenAsTicket(t *testing.T) {
@@ -109,7 +167,7 @@ func TestWS_RejectsAccessTokenAsTicket(t *testing.T) {
 // is NOT a 401, while the replay IS a 401.)
 func TestWS_TicketIsSingleUse(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	ticket, _, err := rt.security.AuthMgr.IssueWSTicket("user-1", "alice@example.com", auth.RoleAdmin, "", time.Time{})
+	ticket, _, err := rt.security.AuthMgr.IssueWSTicket(auth.WSTicketSource{UserID: "user-1", Email: "alice@example.com", Role: auth.RoleAdmin})
 	if err != nil {
 		t.Fatalf("IssueWSTicket: %v", err)
 	}

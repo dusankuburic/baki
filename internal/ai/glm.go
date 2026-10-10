@@ -33,23 +33,20 @@ func NewGLMProvider(apiKey string) *GLMProvider {
 
 func (g *GLMProvider) SupportsTools() bool { return true }
 
-func (g *GLMProvider) ID() string           { return "glm" }
-func (g *GLMProvider) Name() string         { return "GLM (z.ai)" }
+func (g *GLMProvider) ID() string           { return glmSpec.ID }
+func (g *GLMProvider) Name() string         { return glmSpec.Name }
 func (g *GLMProvider) ContextLimit() int    { return 200000 }
-func (g *GLMProvider) DefaultModel() string { return "glm-5.2" }
+func (g *GLMProvider) DefaultModel() string { return glmSpec.DefaultModel }
 
 // No free GLM model remains in the catalog since the 4.7 family was dropped;
 // empty matches the other pay-only providers (the connection test then uses
 // the default model alone).
 func (g *GLMProvider) FreeModel() string { return "" }
 
-// PricePerMillionTokens is the fallback price used to meter out-of-catalog
-// models (audited.record). It must mirror the default model's catalog entry:
-// a stale/lowball value silently under-bills usage and keeps the daily budget
-// from ever tripping for models the catalog hasn't caught up to.
-func (g *GLMProvider) PricePerMillionTokens() Pricing {
-	return Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}
-}
+// PricePerMillionTokens is the fallback price used to meter out-of-catalog models (audited.record): the
+// default model's catalogue row, so it cannot drift (a stale/lowball value once silently under-billed usage
+// and kept the daily budget from ever tripping for models the catalogue had not caught up to).
+func (g *GLMProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(glmSpec) }
 
 func (g *GLMProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	return g.embed(ctx, text)
@@ -60,7 +57,7 @@ func (g *GLMProvider) EstimateTokens(text string) int {
 }
 
 func (g *GLMProvider) Models(_ context.Context) ([]ModelInfo, error) {
-	return catalogModels("glm"), nil
+	return catalogModels(glmSpec.Catalog), nil
 }
 
 func (g *GLMProvider) Chat(ctx context.Context, req Request) (*Response, error) {

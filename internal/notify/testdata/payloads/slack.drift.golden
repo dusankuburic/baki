@@ -1,0 +1,10 @@
+POST /services/T/B/X
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: drift
+X-Baki-Signature: sha256=09646b3dba6ec328fa65702ee8b6b65db14599983a59cd99bd695daef0c71889
+X-Baki-Signature-V2: sha256=39fc031003cbeb7092d0351e9f65db9bdc420f635e24b8432c30c5625d0f91c0
+X-Baki-Timestamp: 1790856001
+
+{"attachments":[{"color":"danger","fields":[{"short":true,"title":"Flow","value":"Invoice Bot"},{"short":true,"title":"New errors","value":"1"},{"short":true,"title":"New warnings","value":"1"}],"footer":"Baki PAD Flow Analyzer","text":"2 new finding(s) since baseline (1 error, 1 warning).","ts":1790856000}],"text":"New findings in Invoice Bot"}

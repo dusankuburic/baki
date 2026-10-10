@@ -24,6 +24,10 @@ type Options struct {
 	// right choice for containers, where the orchestrator collects stdout and
 	// the pod's ephemeral filesystem loses a file-based log on restart.
 	StdoutOnly bool
+	// BaseAttrs are written on every line, before the line's own attributes:
+	// what identifies the process (the server sets its replica's instance id)
+	// so the lines of several replicas in one stream can be told apart.
+	BaseAttrs []slog.Attr
 }
 
 // Init initialises logging with the legacy defaults: structured JSON to a file
@@ -43,32 +47,49 @@ func Init(appDataDir string, debug bool) error {
 }
 
 // InitWith installs a logger configured by opts. See the field comments.
+// When the log file cannot be opened it still installs the logger, on stderr
+// alone, so the level and the JSON format hold, and returns the error.
 func InitWith(opts Options) error {
-	var w io.Writer = os.Stdout
-	if !opts.StdoutOnly {
-		if opts.AppDataDir == "" {
-			return fmt.Errorf("logger: AppDataDir required when not StdoutOnly")
-		}
-		logDir := filepath.Join(opts.AppDataDir, "logs")
-		if err := os.MkdirAll(logDir, 0750); err != nil {
-			return err
-		}
-		rotateLogs(logDir)
-
-		logFile := filepath.Join(logDir, "pad-analyzer.log")
-		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec G304 -- log path under the app's own data dir
-		if err != nil {
-			return err
-		}
-		w = io.MultiWriter(f, os.Stderr)
+	w, err := sink(opts)
+	if err != nil {
+		w = os.Stderr
 	}
+	slog.SetDefault(slog.New(newHandler(w, opts)))
+	return err
+}
 
-	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{
+// sink opens where InitWith writes: stdout, or the log file plus stderr.
+func sink(opts Options) (io.Writer, error) {
+	if opts.StdoutOnly {
+		return os.Stdout, nil
+	}
+	if opts.AppDataDir == "" {
+		return nil, fmt.Errorf("logger: AppDataDir required when not StdoutOnly")
+	}
+	logDir := filepath.Join(opts.AppDataDir, "logs")
+	if err := os.MkdirAll(logDir, 0750); err != nil {
+		return nil, err
+	}
+	rotateLogs(logDir)
+
+	logFile := filepath.Join(logDir, "pad-analyzer.log")
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec G304 -- log path under the app's own data dir
+	if err != nil {
+		return nil, err
+	}
+	return io.MultiWriter(f, os.Stderr), nil
+}
+
+// newHandler is the JSON handler InitWith installs, writing to w.
+func newHandler(w io.Writer, opts Options) slog.Handler {
+	var h slog.Handler = slog.NewJSONHandler(w, &slog.HandlerOptions{
 		Level:     parseLevel(opts.Level),
 		AddSource: opts.AddSource,
 	})
-	slog.SetDefault(slog.New(handler))
-	return nil
+	if len(opts.BaseAttrs) > 0 {
+		h = h.WithAttrs(opts.BaseAttrs)
+	}
+	return h
 }
 
 // parseLevel maps a string level to slog.Level. Unknown / empty inputs

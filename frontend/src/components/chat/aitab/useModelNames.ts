@@ -40,7 +40,13 @@ export function useModelNames({providers}: ModelNamesDeps) {
     () =>
       providers
         .filter(p => p.configured)
-        .map(p => ({id: p.id, name: p.name, models: p.models, ...(p.shared ? {shared: true} : {})})),
+        .map(p => ({
+          id: p.id,
+          name: p.name,
+          models: p.models,
+          ...(p.shared ? {shared: true} : {}),
+          ...(p.icon ? {icon: p.icon} : {}),
+        })),
     [providers],
   )
 

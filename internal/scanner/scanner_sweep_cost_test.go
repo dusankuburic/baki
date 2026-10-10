@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"pad-analyzer/internal/notify"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -224,7 +223,7 @@ func TestScanOnce_ReadsAnOrgRosterOncePerSweep(t *testing.T) {
 	}
 
 	global := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, loopbackChannels(b))
 	sse := &fakeSSE{}
 	s.SetEventNotifier(sse)
 	s.ScanOnce(ctx)

@@ -2,10 +2,9 @@ package metrics
 
 import (
 	"maps"
+	"regexp"
 	"strings"
 	"testing"
-
-	dto "github.com/prometheus/client_model/go"
 
 	"pad-core/cache"
 )
@@ -29,13 +28,10 @@ var unboundedLabels = map[string]string{
 
 // closedLabelValues are labels that ARE allowed, but only over a fixed value
 // set: the value is client-controlled at the source, so anything outside the
-// set means a caller forgot to normalise it. net/http accepts any token as a
-// request method, so a verbatim r.Method is one series per invented method.
+// set means a caller forgot to normalise it. The sets of the metrics other
+// packages own are checked beside their recorders (the HTTP method label in
+// internal/api/middleware, the CI webhook labels in internal/service).
 var closedLabelValues = map[string]map[string]struct{}{
-	"method": {
-		"GET": {}, "HEAD": {}, "POST": {}, "PUT": {}, "PATCH": {}, "DELETE": {},
-		"CONNECT": {}, "OPTIONS": {}, "TRACE": {}, "OTHER": {},
-	},
 	"result": {cacheResultHit: {}, cacheResultMiss: {}, cacheResultRejected: {}},
 }
 
@@ -51,6 +47,37 @@ func closedLabelSets() map[string]map[string]struct{} {
 	return out
 }
 
+// constLabelName matches the names in Desc.String's constLabels list (name="value",…).
+var constLabelName = regexp.MustCompile(`(?:^|,)([a-zA-Z_][a-zA-Z0-9_]*)="`)
+
+// TestMetrics_NoUnboundedLabelNames reads the label names off the descriptor of every registered family, so it also
+// covers a metric nothing has recorded yet, which the sample walk below cannot see. This test binary links every
+// package that registers (TestRegistration_OnlyThroughThePackageRegistry), so these are all the families /metrics
+// serves.
+func TestMetrics_NoUnboundedLabelNames(t *testing.T) {
+	descs := 0
+	for _, reg := range registry.registrations() {
+		for _, d := range describe(reg.collector) {
+			descs++
+			name, _, _ := parseDesc(t, d)
+			labels := variableLabels(t, d)
+			if m := descPattern.FindStringSubmatch(d.String()); m != nil {
+				for _, c := range constLabelName.FindAllStringSubmatch(m[3], -1) {
+					labels = append(labels, c[1])
+				}
+			}
+			for _, l := range labels {
+				if why, bad := unboundedLabels[strings.ToLower(l)]; bad {
+					t.Errorf("metric %q declares unbounded label %q: %s", name, l, why)
+				}
+			}
+		}
+	}
+	if descs < len(onBehalf) {
+		t.Errorf("read %d descriptors, fewer than the central list holds: the walk is broken", descs)
+	}
+}
+
 // TestMetrics_NoUnboundedLabels walks the gathered metrics and fails on a label
 // whose cardinality the server does not control.
 //
@@ -62,15 +89,12 @@ func closedLabelSets() map[string]map[string]struct{} {
 // the walk was vacuous for exactly the metric it was written for.
 //
 // So: this catches an unbounded label on a metric something in the process has
-// already touched. The load-bearing guard for the specific regression is
-// TestMetrics_RegisteredAndGatherable below, which touches the recorder first
-// and then asserts the shape. A genuinely complete guard would walk Desc
-// descriptors rather than samples; that needs an enumeration of every collector,
-// which is its own way to go stale.
+// already touched; the label names of every family, touched or not, are read off
+// the descriptors by TestMetrics_NoUnboundedLabelNames above. The guard for the
+// regression that started this (a per-tenant label on the AI cost counter) is
+// TestAIUsageCost_GlobalAndUnlabelled in internal/ai, beside the recorder.
 func TestMetrics_NoUnboundedLabels(t *testing.T) {
-	// Touch the recorders most at risk so their series exist to be inspected.
-	RecordAIUsageCost(0.01)
-	HTTPRequestsTotal.WithLabelValues("GET", "/", "200").Inc()
+	RecordBackgroundDropped("cardinality-probe", "saturated")
 
 	families, err := registry.Gather()
 	if err != nil {
@@ -104,35 +128,5 @@ func TestMetrics_NoUnboundedLabels(t *testing.T) {
 	}
 	if cacheLabels == 0 {
 		t.Error("no cache series gathered (metricstest.cache is declared in this binary): the cache label went unchecked")
-	}
-}
-
-// TestMetrics_RegisteredAndGatherable is the vacuity guard for the test above:
-// a Gather that returns nothing would make the label walk pass trivially.
-func TestMetrics_RegisteredAndGatherable(t *testing.T) {
-	// Touch the metric whose labels caused this test to exist, so it is present
-	// in the gathered output rather than absent-and-therefore-clean.
-	RecordAIUsageCost(0.01)
-
-	families, err := registry.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	var found bool
-	for _, mf := range families {
-		if mf.GetName() == "pad_ai_usage_estimated_cost_total" {
-			found = true
-			if got := mf.GetType(); got != dto.MetricType_COUNTER {
-				t.Errorf("type = %v, want COUNTER", got)
-			}
-			for _, m := range mf.GetMetric() {
-				if len(m.GetLabel()) != 0 {
-					t.Errorf("expected an unlabelled global counter, got labels %v", m.GetLabel())
-				}
-			}
-		}
-	}
-	if !found {
-		t.Error("pad_ai_usage_estimated_cost_total was not gathered")
 	}
 }

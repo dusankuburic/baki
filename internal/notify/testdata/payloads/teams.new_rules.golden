@@ -1,0 +1,8 @@
+POST /webhookb2/x
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: new_rules
+X-Baki-Timestamp: 1790856001
+
+{"@context":"http://schema.org/extensions","@type":"MessageCard","sections":[{"activityTitle":"2 new rules report findings","facts":[{"name":"Flows","value":"3"}],"markdown":false,"text":"Rules newer than the flows' baselines report findings in 3 flow(s): rule-a, rule-b."}],"summary":"2 new rules report findings","themeColor":"FFB900"}

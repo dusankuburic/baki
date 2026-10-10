@@ -586,3 +586,26 @@ func TestClientMessageID_OnlyAcceptsCanonicalUUIDs(t *testing.T) {
 		}
 	}
 }
+
+// ADR 0028: a provider the policy refused at the factory reaches the stream's error event with its own code
+// and the policy's copy, and providerSetupError passes it through unlogged (the user's or the org admin's to
+// act on, not an incident).
+func TestClassifyFailure_ProviderNotAllowedHasCode(t *testing.T) {
+	ctl := &streamCtl{}
+	cause := fmt.Errorf("%w: xai is not on your organisation's list of allowed AI providers — pick one that is", ai.ErrProviderNotAllowed)
+	if got := providerSetupError("u1", "xai", cause); !errors.Is(got, cause) {
+		t.Errorf("providerSetupError replaced the refusal with %v", got)
+	}
+	code, msg := ctl.classifyFailure(context.Background(), cause)
+	if code != ChatErrProviderNotAllowed || ChatErrProviderNotAllowed != "PROVIDER_NOT_ALLOWED" {
+		t.Errorf("code = %q, want PROVIDER_NOT_ALLOWED", code)
+	}
+	if !strings.Contains(msg, "xai is not on your organisation's list") {
+		t.Errorf("message = %q, want the policy's copy", msg)
+	}
+	// Not a shared-credential class: the bubble must not send the member to Organizations for a credential.
+	ctl.sharedCredential.Store(true)
+	if _, _, shared := ctl.classifyFailureShared(context.Background(), cause); shared {
+		t.Error("a policy refusal was flagged as a shared-credential failure")
+	}
+}

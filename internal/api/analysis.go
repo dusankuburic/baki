@@ -33,18 +33,14 @@ type AnalysisHandler struct {
 	audit       *audit.Recorder
 	policies    *service.PolicyService
 	governance  *service.GovernanceAlertService
-	// email sends finding-assignment notifications; nil-safe (the log-only
-	// mailer is always non-nil even without SMTP).
+	// email queues the finding-assignment and comment emails on the mail
+	// runner; nil-safe (the log-only mailer is always non-nil even without SMTP).
 	email *mailer.Service
 	// webhook is best-effort / async via PAD_WEBHOOK_URL; no-op when unset.
 	// Injected for testability (was a package-global var).
 	webhook *service.WebhookNotifier
-	// ciSecret is the HMAC key for the inbound CI webhook (PAD_CI_WEBHOOK_SECRET).
-	// Empty disables the endpoint (503). Auth is via X-Baki-Signature, not JWT.
-	ciSecret CIWebhookSecret
-	// emails runs the detached finding-comment/assignment emails, bounded and
-	// drained on shutdown (a bare `go` per request would pile up unbounded).
-	emails *lifecycle.Bounded
+	// ci authenticates the inbound CI webhook (X-Baki-Signature, not JWT) and resolves the flow it may analyse.
+	ci *service.CIService
 	// alerts runs the detached in-app alert fan-outs: DB-only, kept apart from
 	// the SMTP pool so a stalled relay cannot make the badge drop.
 	alerts *lifecycle.Bounded
@@ -56,9 +52,6 @@ type AnalysisHandler struct {
 	exports *service.ExportService
 }
 
-// maxConcurrentFindingEmails caps the detached finding emails in flight.
-const maxConcurrentFindingEmails = 32
-
 // maxConcurrentFindingAlerts caps the detached alert fan-outs: cheap DB writes
 // that must not queue behind SMTP, so they have their own larger pool.
 const maxConcurrentFindingAlerts = 64
@@ -67,7 +60,7 @@ const maxConcurrentFindingAlerts = 64
 // (pad_background_dropped_total) and the next fresh analyze retries it.
 const maxConcurrentAnalysisRecords = 32
 
-func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig, webhook *service.WebhookNotifier, email *mailer.Service, ciSecret CIWebhookSecret, policies *service.PolicyService, governance *service.GovernanceAlertService, triage *service.TriageService, comments *service.CommentService, shares *service.ShareTokenService, recorder *audit.Recorder, exports *service.ExportService) *AnalysisHandler {
+func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.FlowService, dashboard *service.DashboardService, backend storageif.StorageBackend, security *SecurityConfig, webhook *service.WebhookNotifier, email *mailer.Service, ci *service.CIService, policies *service.PolicyService, governance *service.GovernanceAlertService, triage *service.TriageService, comments *service.CommentService, shares *service.ShareTokenService, recorder *audit.Recorder, exports *service.ExportService) *AnalysisHandler {
 	return &AnalysisHandler{
 		analysisSvc: analysisSvc,
 		flowSvc:     flowSvc,
@@ -82,23 +75,18 @@ func NewAnalysisHandler(analysisSvc *service.AnalysisService, flowSvc *service.F
 		governance:  governance,
 		webhook:     webhook,
 		email:       email,
-		ciSecret:    ciSecret,
+		ci:          ci,
 		exports:     exports,
-		emails:      lifecycle.NewBounded("finding_email", maxConcurrentFindingEmails),
 		alerts:      lifecycle.NewBounded("finding_alert", maxConcurrentFindingAlerts),
 		records:     lifecycle.NewBounded("analysis_record", maxConcurrentAnalysisRecords),
 	}
 }
 
-// DrainBackground stops starting new best-effort work (finding emails, alert
-// fan-outs, dashboard records, webhooks) and waits for the ones in flight.
+// DrainBackground stops starting new best-effort work (alert fan-outs,
+// dashboard records, webhooks) and waits for the ones in flight. The finding
+// emails are the shared mail runner's, drained with every runner at shutdown.
 func (h *AnalysisHandler) DrainBackground(ctx context.Context) error {
-	// Alerts first: an alert job enqueues its email once the actor's name is
-	// resolved, so draining emails before alerts would drop those sends.
 	err := h.alerts.Drain(ctx)
-	if eerr := h.emails.Drain(ctx); err == nil {
-		err = eerr
-	}
 	if rerr := h.records.Drain(ctx); err == nil {
 		err = rerr
 	}
@@ -425,7 +413,9 @@ func (h *AnalysisHandler) Mount(rb *route.Builder) {
 	// full analyzer walk: the analysis bucket. Share links live in the
 	// server-side store.
 	rb.Get("/api/shared", h.handleViewShared, route.Public(), route.RateLimit(route.RateAnalysis), route.Needs(capability.ServerStore))
-	rb.Post("/api/integrations/ci", h.handleCIWebhook, route.SelfAuthenticated()) // HMAC (X-Baki-Signature)
+	// HMAC (X-Baki-Signature), checked by the handler: a full analysis per call, on the analysis bucket. Credentials
+	// and flows live in the server store; the desktop has neither.
+	rb.Post("/api/integrations/ci", h.handleCIWebhook, route.SelfAuthenticated(), route.RateLimit(route.RateAnalysis), route.Needs(capability.ServerStore))
 
 	// Every POST in the tree rides the analysis bucket; the reads stay on general.
 	rb.Route("/api/analysis", func(rb *route.Builder) {

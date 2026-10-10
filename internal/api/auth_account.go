@@ -191,34 +191,36 @@ func (h *AuthHandler) handleAuthSessionRevoke(w http.ResponseWriter, r *http.Req
 // @Description  Returns a short-lived, single-use ticket the client exchanges for a WebSocket connection, keeping the access token out of the WS URL.
 // @Tags         auth
 // @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
+// @Success      200 {object} wsTicketResponse "OK"
 // @Failure      401 {object} map[string]string "Unauthorized"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/ws-ticket [post]
 func (h *AuthHandler) handleWSTicket(w http.ResponseWriter, r *http.Request) {
-	claims := auth.ClaimsFromContext(r.Context())
-	var userID, email string
-	var role auth.Role
-	// accessJTI/accessExp carry the authenticating access token's identity so the WebSocket
-	// connection can re-check revocation (logout) and expiry. Empty in local/static-token mode.
-	var accessJTI string
-	var accessExp time.Time
-	if claims != nil {
-		userID, email, role = claims.UserID, claims.Email, claims.Role
-		accessJTI = claims.ID
-		// Populated for both JWT access tokens and PATs; carrying them into the WS ticket lets the
-		// re-authz loop disconnect a revoked PAT's live socket and enforce its expiry.
-		if claims.ExpiresAt != nil {
-			accessExp = claims.ExpiresAt.Time
+	// Without accounts (local/static-token mode) there are no claims: the ticket names the local user, and its empty
+	// AccessJTI/AccessExp leave the socket without a revocation re-check or expiry.
+	src := auth.WSTicketSource{UserID: h.security.LocalUserID, Email: h.security.LocalName, Role: auth.RoleAdmin}
+	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+		// The ticket carries the credential's scopes, so a scoped PAT's socket acts with no more than the PAT may, and
+		// its JTI/expiry (populated for JWT access tokens and PATs alike), so the re-authz loop disconnects a revoked
+		// credential's live socket and enforces its expiry.
+		src = auth.WSTicketSource{
+			UserID: claims.UserID, Email: claims.Email, Role: claims.Role, Scopes: claims.Scopes, AccessJTI: claims.ID,
 		}
-	} else {
-		userID, email, role = h.security.LocalUserID, h.security.LocalName, auth.RoleAdmin
+		if claims.ExpiresAt != nil {
+			src.AccessExp = claims.ExpiresAt.Time
+		}
 	}
 
-	ticket, _, err := h.security.AuthMgr.IssueWSTicket(userID, email, role, accessJTI, accessExp)
+	ticket, expiresAt, err := h.security.AuthMgr.IssueWSTicket(src)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	render.JSON(w, map[string]string{"ticket": ticket})
+	render.JSON(w, wsTicketResponse{Ticket: ticket, ExpiresAt: expiresAt})
+}
+
+// wsTicketResponse is POST /api/ws-ticket's body: the one-time ticket and when it stops being accepted.
+type wsTicketResponse struct {
+	Ticket    string    `json:"ticket"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }

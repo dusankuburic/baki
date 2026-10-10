@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	mail "pad-analyzer/internal/mail"
@@ -59,7 +60,7 @@ func newOrgRosterRouter(t *testing.T, store collaboration.OrgStore, callerID str
 	orgSvc := collaboration.NewOrgService(store)
 	backend := testutil.NewFakeBackend()
 	h := NewOrgHandler(orgSvc, backend, nil, &SecurityConfig{LocalUserID: callerID},
-		mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(backend, backend, nil), nil, service.NewAuthzService(backend, orgSvc), service.NewChannelService(backend), service.NewUserDirectory(backend), testAuditRecorder(backend))
+		mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(backend, backend, nil), nil, service.NewAuthzService(backend, orgSvc), service.NewChannelService(backend), service.NewUserDirectory(backend), testAuditRecorder(backend), nil)
 	return mountedAs(h, callerID), orgSvc
 }
 

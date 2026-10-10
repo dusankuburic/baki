@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pad-analyzer/internal/metrics"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -66,14 +65,14 @@ func TestSpill_SizeCapDropsNewest(t *testing.T) {
 	oneLine := int64(len(sample) + 1) // + newline
 	s := newTestSpill(t, oneLine+1)   // one fits (with 1 byte slack), two don't
 
-	before := metrics.AuditSpillDroppedCount()
+	before := auditSpillDroppedCount()
 	if !s.Spill(ev("x")) {
 		t.Fatal("first Spill should fit under the cap")
 	}
 	if s.Spill(ev("y")) {
 		t.Error("second Spill over the cap should be rejected")
 	}
-	if n := metrics.AuditSpillDroppedCount() - before; n != 1 {
+	if n := auditSpillDroppedCount() - before; n != 1 {
 		t.Errorf("spill_dropped_total incremented by %v, want 1", n)
 	}
 }
@@ -89,9 +88,9 @@ func TestSpill_reSpillNoDoubleCount(t *testing.T) {
 		t.Fatalf("Drain = %d, want 2", len(drained))
 	}
 
-	spilledBefore := metrics.AuditSpilledCount()
+	spilledBefore := auditSpilledCount()
 	s.reSpill(drained)
-	if n := metrics.AuditSpilledCount() - spilledBefore; n != 0 {
+	if n := auditSpilledCount() - spilledBefore; n != 0 {
 		t.Errorf("reSpill bumped pad_audit_spilled_total by %v, want 0 (no double-count)", n)
 	}
 	got := s.Drain(2)
@@ -163,7 +162,7 @@ func TestSpill_DepthGauge(t *testing.T) {
 	if s.depth != 3 {
 		t.Errorf("depth after 3 spills = %d, want 3", s.depth)
 	}
-	if got := metrics.AuditSpillDepthCount(); got != 3 {
+	if got := auditSpillDepthCount(); got != 3 {
 		t.Errorf("pad_audit_spill_depth = %v, want 3", got)
 	}
 	if d := s.Drain(2); len(d) != 2 {
@@ -172,7 +171,7 @@ func TestSpill_DepthGauge(t *testing.T) {
 	if s.depth != 1 {
 		t.Errorf("depth after draining 2 = %d, want 1", s.depth)
 	}
-	if got := metrics.AuditSpillDepthCount(); got != 1 {
+	if got := auditSpillDepthCount(); got != 1 {
 		t.Errorf("pad_audit_spill_depth after drain = %v, want 1", got)
 	}
 }

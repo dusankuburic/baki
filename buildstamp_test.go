@@ -96,3 +96,19 @@ func declaresVar(t *testing.T, dir, symbol string) bool {
 	}
 	return false
 }
+
+// TestMainPackageIsMainGoAlone: the image (Dockerfile) and CI's go-build job build `.` now, but `go build main.go`
+// (which compiles that file alone) must keep working for anyone who runs it: a second non-test file in package main
+// broke both builds once (secret_reseal.go). The application's wiring lives in internal/app.
+func TestMainPackageIsMainGoAlone(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() && strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") && name != "main.go" {
+			t.Errorf("%s is a second file of package main, which `go build main.go` leaves out: move it to internal/app", name)
+		}
+	}
+}

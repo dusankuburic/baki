@@ -9,6 +9,7 @@ import (
 
 	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/platform/lock"
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
 
@@ -16,8 +17,19 @@ import (
 // ("bakiscan", "bakimigr", "bakiretn", "bakifenc").
 const orgBackfillLockKey int64 = 0x62616b696175646f // "bakiaudo"
 
+// orgBackfillJob is the backfill's identity across replicas: a replica that finds the lock held skips the run, the
+// holder does the work.
+var orgBackfillJob = lifecycle.DeclareJob(lifecycle.JobDecl{
+	Name:      "audit_org_backfill",
+	LegacyKey: orgBackfillLockKey,
+	Schedule:  "once per boot, in the background (server store)",
+})
+
 // orgBackfillTimeout bounds one run; stopping the app cancels it sooner.
 const orgBackfillTimeout = 10 * time.Minute
+
+// orgBackfillRetry is how soon a boot whose lock could not be asked for tries again, instead of at the next boot.
+const orgBackfillRetry = 5 * time.Minute
 
 // OrgBackfiller fills audit_events.org_id on the rows written without one: an org resource's row gets its
 // resource_id, a flow's the flow's organisation; other rows keep none. Batched, idempotent and resumable. The
@@ -26,56 +38,79 @@ type OrgBackfiller interface {
 	BackfillAuditOrgIDs(ctx context.Context) (int, error)
 }
 
-// BackfillOrgIDs runs the org_id backfill once, under the cross-replica lock when there is one: a replica that
-// finds the lock held skips the run, the holder does the work. It reports the rows filled and whether this call
-// ran the backfill; without a backfiller there is nothing to fill.
+// orgBackfill is the job's work; ran and filled report a run to BackfillOrgIDs (nil: logged only).
+func orgBackfill(bf OrgBackfiller, filled *int, ran *bool) func(context.Context) error {
+	return func(ctx context.Context) error {
+		n, err := bf.BackfillAuditOrgIDs(ctx)
+		if ran != nil {
+			*ran, *filled = true, n
+		}
+		if err == nil && n > 0 {
+			logger.Info("audit org_id backfill filled audit rows", "rows", n)
+		}
+		return err
+	}
+}
+
+// BackfillOrgIDs runs the org_id backfill once, now, under the cross-replica lock when there is one: a replica that
+// finds the lock held skips the run, the holder does the work, and a lock that cannot be asked for skips it with
+// the error. It reports the rows filled and whether this call ran the backfill; without a backfiller there is
+// nothing to fill.
 func BackfillOrgIDs(ctx context.Context, bf OrgBackfiller, locker lock.GlobalLocker) (filled int, ran bool, err error) {
 	if bf == nil {
 		return 0, false, nil
 	}
-	if locker != nil {
-		release, acquired, err := locker.TryGlobalLock(ctx, orgBackfillLockKey)
-		if err != nil || !acquired {
-			return 0, false, err
-		}
-		defer release()
+	job := lifecycle.NewSingleton(lifecycle.Job{Spec: orgBackfillJob, Run: orgBackfill(bf, &filled, &ran)},
+		lock.AsLeaser(locker), nil)
+	defer job.Stop()
+	err = job.RunOnce(ctx)
+	if errors.Is(err, lifecycle.ErrJobHeld) {
+		return 0, false, nil
 	}
-	filled, err = bf.BackfillAuditOrgIDs(ctx)
-	return filled, true, err
+	return filled, ran, err
 }
 
-// orgBackfill runs the boot-time backfill off the boot path; shutdown drains it.
-var orgBackfill = lifecycle.NewBounded("audit_org_backfill", 1)
+// BackfillDeps is what ScheduleOrgBackfill takes from the app graph; nil without a database. Leaser, when the app
+// provides one, replaces Locker: a run whose lock is lost is cancelled. Store keeps the job's run state.
+type BackfillDeps struct {
+	fx.In
+	Lifecycle  fx.Lifecycle
+	Backfiller OrgBackfiller            `optional:"true"`
+	Locker     lock.GlobalLocker        `optional:"true"`
+	Leaser     lock.Leaser              `optional:"true"`
+	Store      storageif.StorageBackend `optional:"true"`
+}
 
-// ScheduleOrgBackfill runs BackfillOrgIDs once per boot after the migrations, in the background. Invoke it
-// after the server is set up: its stop hook then runs first and cancels the run, so the shutdown drain of the
-// background runners does not wait for it. An interrupted run resumes on the next boot.
-func ScheduleOrgBackfill(lc fx.Lifecycle, bf OrgBackfiller, locker lock.GlobalLocker) {
-	if bf == nil {
+// ScheduleOrgBackfill runs the backfill job once per boot after the migrations, in the background (retrying a lock
+// that could not be asked for). Invoke it after the server is set up: its stop hook then runs first and cancels the
+// run, so the shutdown drain of the background runners does not wait for it. An interrupted run resumes on the next
+// boot.
+func ScheduleOrgBackfill(d BackfillDeps) {
+	if d.Backfiller == nil {
 		return
 	}
-	stopCtx, cancel := context.WithCancel(context.Background())
-	lc.Append(fx.Hook{
+	leaser := d.Leaser
+	if leaser == nil {
+		leaser = lock.AsLeaser(d.Locker)
+	}
+	var state lifecycle.JobState
+	if d.Store != nil {
+		state = d.Store
+	}
+	job := lifecycle.NewSingleton(lifecycle.Job{
+		Spec:             orgBackfillJob,
+		RunAtStart:       true,
+		Timeout:          orgBackfillTimeout,
+		RetryOnLockError: orgBackfillRetry,
+		Run:              orgBackfill(d.Backfiller, nil, nil),
+	}, leaser, state)
+	d.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error {
-			orgBackfill.Go(func() {
-				ctx, done := context.WithTimeout(stopCtx, orgBackfillTimeout)
-				defer done()
-				n, ran, err := BackfillOrgIDs(ctx, bf, locker)
-				switch {
-				case err != nil && !ran:
-					logger.Warn("audit org_id backfill skipped: lock unavailable", "error", err)
-				case errors.Is(err, context.Canceled):
-					logger.Info("audit org_id backfill interrupted by shutdown; it resumes on the next boot", "filled", n)
-				case err != nil:
-					logger.Error("audit org_id backfill stopped; it resumes on the next boot", "filled", n, "error", err)
-				case ran && n > 0:
-					logger.Info("audit org_id backfill filled audit rows", "rows", n)
-				}
-			})
+			job.Start()
 			return nil
 		},
 		OnStop: func(context.Context) error {
-			cancel()
+			job.Stop()
 			return nil
 		},
 	})

@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	"pad-analyzer/internal/metrics"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -14,7 +13,7 @@ import (
 // readable than the audit table, and a DB outage would otherwise dump every event's email/IP/meta into them —
 // masked values plus user_id keep the event attributable.
 func fallback(reason string, ev *storageif.AuditEvent) {
-	metrics.RecordAuditDropped(reason)
+	recordAuditDropped(reason)
 	slog.Error("audit event diverted to log fallback sink",
 		"reason", reason,
 		"audit_id", ev.ID,

@@ -119,10 +119,38 @@ func (s *SystemService) GetOrgSettings(ctx context.Context, orgID string) (setti
 	return settingsToModel(ifaceSettings), nil
 }
 
-func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, settings models.AppSettings) (err error) {
+// OrgSettingsWrite says which parts of an org settings write the client meant: the wire cannot tell an absent
+// ai.allowedProviders from an empty one (omitempty), so the handler reports whether the body named it.
+type OrgSettingsWrite struct {
+	// AllowedProvidersSet: the write names ai.allowedProviders (an empty list clears it). Unset, the stored list
+	// is kept — a partial write (the Rules panel posts {analysis:{rules}}) must not wipe the org's policy.
+	AllowedProvidersSet bool
+}
+
+// UpdateOrgSettings replaces the org's settings document with settings, keeping the stored allowed-provider
+// list unless the write names it (OrgSettingsWrite). A named list is validated: an id the registry does not
+// know is ErrProviderUnknown (the list is fail-closed, so a typo would lock the org out of every provider).
+func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, settings models.AppSettings, write OrgSettingsWrite) (err error) {
 	defer logger.Guard("SystemService.UpdateOrgSettings", &err)
+	if write.AllowedProvidersSet {
+		for _, id := range settings.AI.AllowedProviders {
+			if !ai.KnownProvider(id) {
+				return fmt.Errorf("%w: %q in allowedProviders", ErrProviderUnknown, id)
+			}
+		}
+	}
 	if s.backend == nil {
 		return s.UpdateSettings(ctx, settings)
+	}
+	if !write.AllowedProvidersSet {
+		stored, err := s.backend.LoadOrgSettings(ctx, orgID)
+		if err != nil {
+			return fmt.Errorf("load org settings: %w", err)
+		}
+		settings.AI.AllowedProviders = nil
+		if stored != nil {
+			settings.AI.AllowedProviders = stored.AI.AllowedProviders
+		}
 	}
 	if err := s.backend.SaveOrgSettings(ctx, orgID, settingsFromModel(&settings)); err != nil {
 		return err
@@ -195,11 +223,23 @@ func (s *SystemService) credentialChanged(ctx context.Context, scope, provider s
 	s.bus.Publish(ctx, events.CredentialChanged{Scope: scope, ProviderID: provider, Kind: kind})
 }
 
+// listingHook is provider's family hook: the registry this service was built with, else the one installed on
+// the spec (DI), else nil — the keystore row answers.
+func (s *SystemService) listingHook(provider string) ai.ListingHook {
+	if registryFamily(s.azure, provider) {
+		return azureListing{registry: s.azure}
+	}
+	if spec, ok := ai.SpecOf(provider); ok {
+		return spec.Listing
+	}
+	return nil
+}
+
 func (s *SystemService) HasApiKey(scope, provider string) (result bool, err error) {
 	defer logger.Guard("SystemService.HasApiKey", &err)
-	if provider == ai.AzureFoundryProviderID && s.azure != nil {
-		// Several Azure resources: any resource of the caller's own.
-		return s.azure.HasPersonalResources(context.Background(), scope)
+	if hook := s.listingHook(provider); hook != nil {
+		// A family (several Azure resources): any resource of the caller's own.
+		return hook.Configured(context.Background(), scope)
 	}
 	return s.secrets.Has(scope, provider)
 }
@@ -208,11 +248,11 @@ func (s *SystemService) HasApiKey(scope, provider string) (result bool, err erro
 // announces it like SaveApiKey.
 func (s *SystemService) DeleteApiKey(ctx context.Context, scope, provider string) (err error) {
 	defer logger.Guard("SystemService.DeleteApiKey", &err)
-	if provider == ai.AzureFoundryProviderID && s.azure != nil {
+	if l, ok := s.listingHook(provider).(azureListing); ok {
 		// Deprecated for the registry (one release): the key is resource
 		// "default"'s credential — the resource goes with its models, and
 		// its credential after the commit.
-		if err := s.azure.legacyDeleteDefault(context.Background(), s.azure.userOwner(scope), scope); err != nil {
+		if err := l.registry.legacyDeleteDefault(context.Background(), l.registry.userOwner(scope), scope); err != nil {
 			return err
 		}
 		s.credentialChanged(ctx, scope, provider, events.CredentialDeleted)

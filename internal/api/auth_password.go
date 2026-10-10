@@ -8,7 +8,6 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
 	"pad-core/logger"
 )
@@ -29,7 +28,7 @@ func (h *AuthHandler) handleAuthResendVerification(w http.ResponseWriter, r *htt
 		render.Error(w, fmt.Errorf("email verification not available in local mode"), http.StatusForbidden)
 		return
 	}
-	metrics.RecordAuthOp("resend_verification")
+	recordAuthOp("resend_verification")
 	var req struct {
 		Email string `json:"email"`
 	}
@@ -131,7 +130,7 @@ func (h *AuthHandler) handleAuthForgotPassword(w http.ResponseWriter, r *http.Re
 		render.Error(w, fmt.Errorf("password reset not available in local mode"), http.StatusForbidden)
 		return
 	}
-	metrics.RecordAuthOp("forgot_password")
+	recordAuthOp("forgot_password")
 	var req struct {
 		Email string `json:"email"`
 	}
@@ -173,7 +172,7 @@ func (h *AuthHandler) handleAuthResetPassword(w http.ResponseWriter, r *http.Req
 		render.Error(w, fmt.Errorf("password reset not available in local mode"), http.StatusForbidden)
 		return
 	}
-	metrics.RecordAuthOp("reset_password")
+	recordAuthOp("reset_password")
 	var req struct {
 		Token       string `json:"token"`
 		NewPassword string `json:"newPassword"`
@@ -227,7 +226,7 @@ func (h *AuthHandler) handleAuthVerifyEmail(w http.ResponseWriter, r *http.Reque
 		render.Error(w, fmt.Errorf("email verification not available in local mode"), http.StatusForbidden)
 		return
 	}
-	metrics.RecordAuthOp("verify_email")
+	recordAuthOp("verify_email")
 	var req struct {
 		Token string `json:"token"`
 	}

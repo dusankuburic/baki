@@ -95,10 +95,10 @@ type captureMailer struct {
 	sent []sentMail
 }
 
-func (m *captureMailer) Send(_ context.Context, to, subject, text, _ string) error {
+func (m *captureMailer) Send(_ context.Context, to string, msg mailer.Message) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.sent = append(m.sent, sentMail{to, subject, text})
+	m.sent = append(m.sent, sentMail{to, msg.Subject, msg.Text})
 	return nil
 }
 

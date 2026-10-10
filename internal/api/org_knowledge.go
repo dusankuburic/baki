@@ -30,6 +30,7 @@ const maxKnowledgeUploadBytes = 1 << 20 // 1 MiB
 const maxKnowledgeUploadBodyBytes = 4 << 20 // 4 MiB
 
 // @Summary      List knowledge base docs
+// @Description  The org's documents, newest first, each with its chunk counts: chunkCount, vectorIndexed (in the vector index at the deployment's width) and embeddingStranded (embedded under another embedding model than the caller's, so the caller's searches never return them; re-index converts them).
 // @Tags         org
 // @Param        id path string true "Org ID"
 // @Produce      json
@@ -49,7 +50,7 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	docs, err := h.knowledge.ListDocuments(r.Context(), chi.URLParam(r, "id"), limit, offset)
+	docs, err := h.knowledge.ListDocuments(r.Context(), h.security.KeyScope(r), chi.URLParam(r, "id"), limit, offset)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -64,7 +65,7 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 // @Accept       multipart/form-data
 // @Produce      json
 // @Success      201 {object} map[string]interface{} "Uploaded"
-// @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)"
+// @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), not allowed here (PROVIDER_NOT_ALLOWED: disabled in the deployment or off the organisation's allowed-provider list), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)"
 // @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED) or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)"
 // @Failure      413 {object} map[string]string "The document chunks to more passages than one upload may index (KNOWLEDGE_DOCUMENT_TOO_LARGE)"
 // @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED)"
@@ -135,9 +136,16 @@ func renderKnowledgeEmbeddingErrorDetails(w http.ResponseWriter, err error, deta
 		render.ErrorWithCodeAndDetails(w, err, http.StatusTooManyRequests, "BUDGET_EXCEEDED", details)
 	case errors.Is(err, service.ErrAIBudgetUnavailable):
 		render.ErrorWithCodeAndDetails(w, err, http.StatusServiceUnavailable, "BUDGET_UNAVAILABLE", details)
-	case errors.Is(err, ai.ErrOrgEmbeddingDeploymentMissing):
-		// Before ErrEmbeddingUnavailable, which wraps it: the org's shared credential names no embedding deployment.
+	case errors.Is(err, ai.ErrOrgEmbeddingDeploymentMissing), errors.Is(err, rag.ErrEmbeddingOrgCredentialRequired):
+		// Before ErrEmbeddingUnavailable, which wraps it: the org's shared credential names no embedding deployment,
+		// or a background re-index was asked for on a personal key.
 		render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, "EMBEDDING_ORG_NOT_CONFIGURED", details)
+	case errors.Is(err, ai.ErrProviderNotAllowed):
+		// Also before ErrEmbeddingUnavailable: the embedding provider is disabled here or off the org's list.
+		render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, service.ProviderCodeNotAllowed, details)
+	case errors.Is(err, ai.ErrProviderPolicyUnavailable):
+		// The org's policy could not be read: the operator's problem (logged there), the sentinel's copy only.
+		render.ErrorWithCodeAndDetails(w, ai.ErrProviderPolicyUnavailable, http.StatusServiceUnavailable, service.ProviderCodePolicyUnavailable, details)
 	case errors.Is(err, rag.ErrEmbeddingNotConfigured), errors.Is(err, rag.ErrEmbeddingUnavailable):
 		render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED", details)
 	case errors.Is(err, rag.ErrEmbeddingModelChanged):
@@ -152,6 +160,8 @@ func renderKnowledgeEmbeddingErrorDetails(w http.ResponseWriter, err error, deta
 	case errors.Is(err, rag.ErrEmbeddingSetupUnavailable):
 		// Which model embeds could not be decided (registry or key store unreadable, import pending): 503, masked message.
 		render.ErrorWithCodeAndDetails(w, err, http.StatusServiceUnavailable, "EMBEDDING_PROVIDER_UNAVAILABLE", details)
+	case errors.Is(err, rag.ErrReembedUnavailable):
+		render.ErrorWithCodeAndDetails(w, err, http.StatusServiceUnavailable, "KNOWLEDGE_JOB_UNAVAILABLE", details)
 	case errors.Is(err, ai.ErrRateLimited):
 		w.Header().Set("Retry-After", embeddingRetryAfter(err))
 		render.ErrorWithCodeAndDetails(w, err, http.StatusTooManyRequests, "EMBEDDING_RATE_LIMITED", details)
@@ -196,10 +206,12 @@ const maxKnowledgeReindexBodyBytes = 4 << 10
 const maxReindexCursorField = 128
 
 // knowledgeReindexRequest is the optional re-index body. Cursor is the previous answer's nextCursor
-// (opaque to clients); absent (or zero) starts from the beginning.
+// (opaque to clients); absent (or zero) starts from the beginning. Background runs the whole re-index as the
+// knowledge_reembed job instead (202), which resumes its own pages, so it takes no cursor.
 type knowledgeReindexRequest struct {
-	Force  bool                            `json:"force,omitempty"`
-	Cursor *storageif.KnowledgeChunkCursor `json:"cursor,omitempty"`
+	Force      bool                            `json:"force,omitempty"`
+	Cursor     *storageif.KnowledgeChunkCursor `json:"cursor,omitempty"`
+	Background bool                            `json:"background,omitempty"`
 }
 
 // decodeKnowledgeReindexRequest decodes the optional body strictly: empty is {}; unknown fields and bad cursors refused.
@@ -227,6 +239,9 @@ func decodeKnowledgeReindexRequest(body io.Reader) (knowledgeReindexRequest, err
 		req.Cursor = nil
 		return req, nil
 	}
+	if req.Background {
+		return req, fmt.Errorf("a background re-index resumes on its own; it takes no cursor")
+	}
 	if c.DocID == "" || c.ID == "" {
 		return req, fmt.Errorf("cursor needs both docId and id")
 	}
@@ -243,13 +258,14 @@ func decodeKnowledgeReindexRequest(body io.Reader) (knowledgeReindexRequest, err
 // @Tags         org
 // @Accept       json
 // @Param        id path string true "Org ID"
-// @Param        request body knowledgeReindexRequest false "Optional. force=true re-indexes even when the corpus was indexed with a different embedding model (first request of a run only); cursor = the previous answer's nextCursor resumes the run after it"
+// @Param        request body knowledgeReindexRequest false "Optional. force=true re-indexes even when the corpus was indexed with a different embedding model (first request of a run only); cursor = the previous answer's nextCursor resumes the run after it; background=true runs the whole re-index as the knowledge_reembed job (202; no cursor), on the organisation's shared embedding credential only"
 // @Produce      json
-// @Success      200 {object} rag.ReindexResult "Re-indexed this request's pages ({chunks, docs}); nextCursor (with truncated=true) means chunks remain — post again with {force, cursor: nextCursor}. Every page is committed as it completes, so a later failure keeps the earlier pages — a request that FAILS after committing pages answers its error code with details {nextCursor, chunks} to resume from"
-// @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body / cursor"
-// @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to) or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)"
+// @Success      200 {object} rag.ReindexResult "Re-indexed this request's pages ({chunks, docs}); nextCursor (with truncated=true) means chunks remain — post again with {force, cursor: nextCursor}. Every page is committed as it completes, so a later failure keeps the earlier pages — a request that FAILS after committing pages answers its error code with details {nextCursor, chunks} to resume from. Unforced, only the chunks not yet embedded under the caller's model are converted"
+// @Success      202 {object} map[string]string "background=true: the knowledge_reembed job was started ({status: accepted, job}); its progress is the job's run state (pad_job_* metrics, the job_runs row) and the document list's embeddingStranded counts"
+// @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment, or a background run was asked for on a personal key), not allowed here (PROVIDER_NOT_ALLOWED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body / cursor"
+// @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to) or another upload/re-index of this org — or a background re-index on any replica — is in flight (KNOWLEDGE_BUSY)"
 // @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED) or the daily AI budget is spent (BUDGET_EXCEEDED)"
-// @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE) or the budget could not be checked (BUDGET_UNAVAILABLE)"
+// @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE), the budget could not be checked (BUDGET_UNAVAILABLE) or the background job could not be started (KNOWLEDGE_JOB_UNAVAILABLE)"
 // @Failure      504 {object} map[string]string "The request's deadline ran out before a page was committed (KNOWLEDGE_TIMEOUT)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/orgs/{id}/knowledge/reindex [post]
@@ -265,6 +281,10 @@ func (h *OrgHandler) handleKnowledgeReindex(w http.ResponseWriter, r *http.Reque
 	req, err := decodeKnowledgeReindexRequest(body)
 	if err != nil {
 		render.Error(w, fmt.Errorf("invalid re-index request: %w", err), http.StatusBadRequest)
+		return
+	}
+	if req.Background {
+		h.handleKnowledgeReindexBackground(w, r, req.Force)
 		return
 	}
 	var after storageif.KnowledgeChunkCursor
@@ -306,6 +326,26 @@ func (h *OrgHandler) handleKnowledgeReindex(w http.ResponseWriter, r *http.Reque
 	}
 	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKnowledgeReindex, chi.URLParam(r, "id"), details))
 	render.JSON(w, res)
+}
+
+// handleKnowledgeReindexBackground is the reindex route's {"background": true} branch: the knowledge_reembed job
+// takes the run, the request answers 202 with the job's name, and the audit row says the run went to the
+// background.
+func (h *OrgHandler) handleKnowledgeReindexBackground(w http.ResponseWriter, r *http.Request, force bool) {
+	job, err := h.knowledge.ReindexInBackground(r.Context(), h.security.KeyScope(r), chi.URLParam(r, "id"), force)
+	if err != nil {
+		if renderKnowledgeEmbeddingError(w, withRequestContextErr(r, err)) {
+			return
+		}
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	details := map[string]string{"background": "true"}
+	if force {
+		details["force"] = "true"
+	}
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKnowledgeReindex, chi.URLParam(r, "id"), details))
+	render.JSONStatus(w, http.StatusAccepted, map[string]string{"status": "accepted", "job": job})
 }
 
 // registerKnowledgeRoutes wires the org knowledge-base sub-routes, which live in the server store. Members read,

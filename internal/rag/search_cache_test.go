@@ -347,13 +347,13 @@ func TestDeleteDocument_InvalidatesCorpusCount(t *testing.T) {
 	if err := svc.DeleteDocument(ctx, "u-1", "org-2", "d1"); err != nil {
 		t.Fatal(err)
 	}
-	if docs, err := svc.ListDocuments(ctx, "org-1", 0, 0); err != nil || len(docs) != 2 {
+	if docs, err := svc.ListDocuments(ctx, "u1", "org-1", 0, 0); err != nil || len(docs) != 2 {
 		t.Fatalf("another org's delete removed a document: %v, %v", docs, err)
 	}
 	if err := svc.DeleteDocument(ctx, "u-1", "org-1", "d1"); err != nil {
 		t.Fatal(err)
 	}
-	if docs, _ := svc.ListDocuments(ctx, "org-1", 0, 0); len(docs) != 1 || docs[0].ID != "d2" {
+	if docs, _ := svc.ListDocuments(ctx, "u1", "org-1", 0, 0); len(docs) != 1 || docs[0].ID != "d2" {
 		t.Errorf("ListDocuments after delete = %v, want [d2]", docs)
 	}
 	if svc.corpusEmpty(ctx, "org-1") {

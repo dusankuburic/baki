@@ -58,32 +58,43 @@ func TestOrgChannels_EncryptedAtRest(t *testing.T) {
 	if _, err := b.db.ExecContext(ctx, `UPDATE org_channels SET url = $1 WHERE id = 'ch-2'`, rawURL); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.ListOrgChannels(ctx, "org-fc", false); err == nil {
-		t.Error("a ciphertext moved to another row was accepted")
+	moved, err := b.ListOrgChannels(ctx, "org-fc", false)
+	if err != nil || len(moved) != 2 {
+		t.Fatalf("list after moving a ciphertext: %d channels, %v", len(moved), err)
+	}
+	for _, ch := range moved {
+		if ch.Unreadable != (ch.ID == "ch-2") || (ch.ID == "ch-2" && ch.URL != "") {
+			t.Errorf("a ciphertext moved to ch-2: %s listed %+v; want only ch-2 unreadable, without a URL", ch.ID, ch)
+		}
 	}
 	if _, err := b.db.ExecContext(ctx, `DELETE FROM org_channels WHERE id = 'ch-2'`); err != nil {
 		t.Fatal(err)
 	}
 
-	// A process without the key refuses rather than returning ciphertext as a URL.
+	// A process without the key refuses rather than returning ciphertext as a URL: the channel is listed unreadable.
 	keyless, err := New(ctx, DefaultConfig(dsn))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer keyless.Close()
-	if _, err := keyless.ListOrgChannels(ctx, "org-fc", false); !errors.Is(err, ErrFieldKeyMissing) {
-		t.Errorf("keyless read: err = %v, want ErrFieldKeyMissing", err)
+	if got, err := keyless.ListOrgChannels(ctx, "org-fc", false); err != nil || len(got) != 1 || !got[0].Unreadable || got[0].URL != "" || got[0].Secret != "" {
+		t.Errorf("keyless read: %+v, %v; want the channel unreadable, without its values", got, err)
+	}
+	if _, err := keyless.openField("org_channels", "url", "ch-1", rawURL); !errors.Is(err, ErrFieldKeyMissing) {
+		t.Errorf("keyless open: err = %v, want ErrFieldKeyMissing", err)
 	}
 }
 
 // TestEncryptOrgChannelsAtRest_SealsLegacyRowsOnce: rows written in plaintext before encryption was enabled stay
-// readable, and the backfill seals them, once. An empty secret stays empty.
+// readable, and the backfill seals them, once. An empty secret stays empty, and a row with nothing to seal (an empty
+// url, as a kind without a URL would store) is not counted, so it is not rewritten on every boot (B11).
 func TestEncryptOrgChannelsAtRest_SealsLegacyRowsOnce(t *testing.T) {
 	b, _ := openIsolatedMigrationDB(t)
 	ctx := context.Background()
 	if _, err := b.db.ExecContext(ctx, `INSERT INTO org_channels (id, org_id, name, kind, url, secret, created_at) VALUES
 		('legacy-1', 'org-bf', 'a', 'webhook', 'https://hooks.example.com/a', 's3cret', NOW() - INTERVAL '1 minute'),
-		('legacy-2', 'org-bf', 'b', 'teams',   'https://acme.webhook.office.com/b', '', NOW())`); err != nil {
+		('legacy-2', 'org-bf', 'b', 'teams',   'https://acme.webhook.office.com/b', '', NOW()),
+		('empty-3',  'org-bf-empty', 'c', 'future-kind', '', '', NOW())`); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.EnableFieldEncryption([]byte(testFieldKey)); err != nil {

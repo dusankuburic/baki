@@ -4,11 +4,14 @@ import {
   getAzureConnectionResponseSchema,
   getAzureDiscoverySchema,
   getAzureModelsListingSchema,
+  getDeviceAuthUserSchema,
   getGitHubUserSchema,
+  getProviderCatalogSchema,
   getProviderListSchema,
 } from './schemas'
 import type {
   ProviderInfo,
+  ProviderSpec,
   ProviderTestResult,
   DeviceAuthResponse,
   GitHubAuthResult,
@@ -44,6 +47,16 @@ export function azurePath(scope: AzureScope, ...segments: string[]): string {
   return segments.length > 0 ? `${base}/${segments.map(encodeURIComponent).join('/')}` : base
 }
 
+/**
+ * A route the catalogue names, if it is a path under /api/ (segments of
+ * letters, digits, `-`, `_` and `.`; no query, fragment or empty segment).
+ * Anything else — an absolute URL, a traversal — reads as "no route", and
+ * the section renders the generic card instead of calling it.
+ */
+export function apiPath(path: string | undefined): string | undefined {
+  return path && /^\/api(?:\/[A-Za-z0-9_.-]+)+$/.test(path) && !path.includes('..') ? path : undefined
+}
+
 // `?cascade=true&force=true` for the flags that are set; '' for none.
 function flagQuery(flags: Record<string, boolean | undefined>): string {
   const q = new URLSearchParams()
@@ -71,9 +84,28 @@ export const providersApi = {
       },
     ),
 
-  saveApiKey: (provider: string, key: string): Promise<void> => request('/api/keys/save', {body: {provider, key}}),
+  // GET /api/providers/catalog (Phase 4b): every provider the server
+  // registers for its profile, configured or not, in display order, with its
+  // credential form (types/providers ProviderSpec). A server older than this
+  // bundle has no such route: the 404 arrives as an ApiError and the caller
+  // renders its built-in sections. `noDedup` as for listProviders.
+  getProviderCatalog: async (opts?: {noDedup?: boolean}): Promise<ProviderSpec[]> =>
+    requestValidated('/api/providers/catalog', await getProviderCatalogSchema(), {
+      method: 'GET',
+      ...(opts?.noDedup ? {noDedup: true} : {}),
+    }).then(c => c.providers),
 
-  hasApiKey: (provider: string): Promise<boolean> => request('/api/keys/has', {body: {provider}}),
+  // `extra` carries an api_key schema's other fields by name; the body is
+  // {provider, key} alone for the usual one-field form.
+  saveApiKey: (provider: string, key: string, extra?: Record<string, string>): Promise<void> =>
+    request('/api/keys/save', {body: {...extra, provider, key}}),
+
+  // {has: boolean} on the wire; a bare boolean is read too, in case a server
+  // ever answered one. Anything else is "no key".
+  hasApiKey: (provider: string): Promise<boolean> =>
+    request<{has?: unknown} | boolean | null>('/api/keys/has', {body: {provider}}).then(r =>
+      typeof r === 'boolean' ? r : r?.has === true,
+    ),
 
   deleteApiKey: (provider: string): Promise<void> => request('/api/keys/delete', {body: {provider}}),
 
@@ -101,6 +133,25 @@ export const providersApi = {
   // See getGitHubUser: null means not connected.
   getCopilotUser: async (): Promise<GitHubUser | null> =>
     requestValidated('/api/providers/copilot/user', await getGitHubUserSchema(), {method: 'GET'}),
+
+  // The device-code flow at the routes a catalogue entry names
+  // (ProviderSpec.endpoints: start, poll, revoke, user), for a provider the
+  // bundle has no bespoke pair for. Each takes the path as the server sent
+  // it; the caller has checked it is a path under /api/ (apiPath).
+  startDeviceAuth: (path: string): Promise<DeviceAuthResponse> => request(path),
+
+  pollDeviceAuth: (path: string, deviceCode: string): Promise<GitHubAuthResult> => request(path, {body: {deviceCode}}),
+
+  revokeDeviceAuth: (path: string): Promise<void> => request(path),
+
+  // See getGitHubUser: null means not connected. The shape is the
+  // provider's own: its login, else its name, e-mail or id, names the user.
+  getDeviceAuthUser: async (path: string): Promise<GitHubUser | null> => {
+    const u = await requestValidated(path, await getDeviceAuthUserSchema(), {method: 'GET'})
+    if (!u) return null
+    const login = u.login || u.name || u.email || (u.id != null ? String(u.id) : '')
+    return {login, name: u.name || login}
+  },
 
   // The local OpenAI-compatible provider (Foundry Local / Ollama / LM Studio;
   // desktop only, no key). Removal and connection tests go through

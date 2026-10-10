@@ -1,0 +1,10 @@
+POST /services/T/B/X
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: new_rules
+X-Baki-Signature: sha256=0b3d06ddaa640cae1355ffae672ceb5da6a0b5d28d0cd94f08fd4a717841b094
+X-Baki-Signature-V2: sha256=33ada72890ab33a4acd96c97a7a79d93ba7be122031b2eab3934ce83dc46b106
+X-Baki-Timestamp: 1790856001
+
+{"attachments":[{"color":"warning","fields":[{"short":true,"title":"Flows","value":"3"}],"footer":"Baki PAD Flow Analyzer","text":"Rules newer than the flows' baselines report findings in 3 flow(s): rule-a, rule-b.","ts":1790856000}],"text":"2 new rules report findings"}

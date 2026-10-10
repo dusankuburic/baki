@@ -88,7 +88,7 @@ func TestReindexOrg_WalksEveryPage(t *testing.T) {
 	var walked []string
 	var cursor interfaces.KnowledgeChunkCursor
 	for {
-		page, err := store.ListKnowledgeChunkContents(context.Background(), "org-1", cursor, 7)
+		page, err := store.ListKnowledgeChunkContents(context.Background(), "org-1", cursor, 7, "")
 		if err != nil {
 			t.Fatal(err)
 		}

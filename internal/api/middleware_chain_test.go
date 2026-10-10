@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+
+	"pad-analyzer/internal/api/route"
 )
 
 // TestRateLimitGroup_AuthPathsInclusive is the regression test for the
@@ -61,6 +63,11 @@ func TestRateLimitGroup_OtherBuckets(t *testing.T) {
 		{"POST", "/api/orgs/o1/providers/azure-foundry/connections/default/discover", rlGroupAnalysis},
 		{"POST", "/api/providers/azure-foundry/connections", rlGroupGeneral},
 		{"POST", "/api/providers/azure-foundry/models", rlGroupGeneral},
+		// The channel test dials an admin-chosen URL: its own bucket; the channel CRUD stays on general.
+		{"POST", "/api/orgs/o1/channels/c1/test", route.RateChannelTest},
+		{"POST", "/api/v1/orgs/o1/channels/c1/test", route.RateChannelTest},
+		{"POST", "/api/orgs/o1/channels", rlGroupGeneral},
+		{"GET", "/api/orgs/o1/channels/c1/test", rlGroupGeneral},
 	}
 	for _, c := range cases {
 		if got := rateLimitGroup(c.method, &url.URL{Path: c.path}); got != c.want {

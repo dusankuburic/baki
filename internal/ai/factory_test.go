@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -22,7 +23,7 @@ func TestStorageKey_OtherProviders(t *testing.T) {
 
 func TestProviderFactory_For_Unknown(t *testing.T) {
 	f := NewProviderFactory(func(_, _ string) (string, error) { return "", nil }, nil, nil, nil)
-	_, err := f.For("", "nonexistent-provider")
+	_, err := f.For(context.Background(), "", "nonexistent-provider")
 	if err == nil {
 		t.Fatal("expected error for unknown provider ID, got nil")
 	}
@@ -32,7 +33,7 @@ func TestProviderFactory_For_KeyLookupError(t *testing.T) {
 	keyErr := errors.New("keyring unavailable")
 	f := NewProviderFactory(func(_, _ string) (string, error) { return "", keyErr }, nil, nil, nil)
 
-	_, err := f.For("", "claude")
+	_, err := f.For(context.Background(), "", "claude")
 	if err == nil {
 		t.Fatal("expected error when key lookup fails")
 	}
@@ -46,7 +47,7 @@ func TestProviderFactory_For_AllKnownProviders(t *testing.T) {
 	knownProviders := []string{"claude", "openai", "gemini", "xai", "glm", "github-models", "azure-foundry"}
 
 	for _, id := range knownProviders {
-		p, err := f.For("", id)
+		p, err := f.For(context.Background(), "", id)
 		if err != nil {
 			t.Errorf("For(%q): unexpected error: %v", id, err)
 			continue
@@ -63,7 +64,7 @@ func TestProviderFactory_For_Copilot_PATFallback(t *testing.T) {
 	}
 	f := NewProviderFactory(func(_, k string) (string, error) { return keys[k], nil }, NewCopilotAuth(), nil, nil)
 
-	p, err := f.For("", "copilot")
+	p, err := f.For(context.Background(), "", "copilot")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestProviderFactory_For_Copilot_PATFallback(t *testing.T) {
 func TestProviderFactory_For_Copilot_NotConfigured(t *testing.T) {
 	f := NewProviderFactory(func(_, _ string) (string, error) { return "", nil }, NewCopilotAuth(), nil, nil)
 
-	_, err := f.For("", "copilot")
+	_, err := f.For(context.Background(), "", "copilot")
 	if err == nil {
 		t.Fatal("expected error for unconfigured copilot")
 	}
@@ -98,11 +99,11 @@ func TestProviderFactory_For_GithubModels_PerUserScope(t *testing.T) {
 	f := NewProviderFactory(getKey, nil, nil, nil)
 
 	// u1 is configured.
-	if _, err := f.For("u1", "github-models"); err != nil {
+	if _, err := f.For(context.Background(), "u1", "github-models"); err != nil {
 		t.Errorf("For(u1): expected configured provider, got error: %v", err)
 	}
 	// u2 has no token and must report not-configured — NOT find u1's token.
-	_, err := f.For("u2", "github-models")
+	_, err := f.For(context.Background(), "u2", "github-models")
 	if err == nil {
 		t.Fatal("For(u2): expected not-configured error, got nil (u1's token leaked across users)")
 	}
@@ -110,7 +111,7 @@ func TestProviderFactory_For_GithubModels_PerUserScope(t *testing.T) {
 		t.Errorf("For(u2): expected ErrKeyNotConfigured, got: %v", err)
 	}
 	// Global scope "" must not see u1's per-user token either.
-	if _, err := f.For("", "github-models"); err == nil {
+	if _, err := f.For(context.Background(), "", "github-models"); err == nil {
 		t.Fatal("For(''): expected not-configured, got nil (per-user token leaked to global scope)")
 	}
 }
@@ -128,15 +129,15 @@ func TestProviderFactory_For_Copilot_PerUserScope(t *testing.T) {
 	f := NewProviderFactory(getKey, NewCopilotAuth(), nil, nil)
 
 	// u1's OAuth token resolves.
-	if _, err := f.For("u1", "copilot"); err != nil {
+	if _, err := f.For(context.Background(), "u1", "copilot"); err != nil {
 		t.Errorf("For(u1): expected configured provider, got error: %v", err)
 	}
 	// u2 must not find u1's token.
-	if _, err := f.For("u2", "copilot"); err == nil {
+	if _, err := f.For(context.Background(), "u2", "copilot"); err == nil {
 		t.Fatal("For(u2): expected not-configured, got nil (u1's OAuth token leaked across users)")
 	}
 	// Global scope "" must not see u1's per-user token.
-	if _, err := f.For("", "copilot"); err == nil {
+	if _, err := f.For(context.Background(), "", "copilot"); err == nil {
 		t.Fatal("For(''): expected not-configured, got nil (per-user OAuth token leaked to global scope)")
 	}
 }
@@ -152,10 +153,10 @@ func TestProviderFactory_For_Copilot_PAT_PerUserScope(t *testing.T) {
 	}
 	f := NewProviderFactory(getKey, NewCopilotAuth(), nil, nil)
 
-	if _, err := f.For("u1", "copilot"); err != nil {
+	if _, err := f.For(context.Background(), "u1", "copilot"); err != nil {
 		t.Errorf("For(u1): expected PAT provider, got error: %v", err)
 	}
-	if _, err := f.For("u2", "copilot"); err == nil {
+	if _, err := f.For(context.Background(), "u2", "copilot"); err == nil {
 		t.Fatal("For(u2): expected not-configured, got nil (u1's PAT leaked across users)")
 	}
 }

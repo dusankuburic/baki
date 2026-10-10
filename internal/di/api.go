@@ -8,6 +8,7 @@ import (
 	"go.uber.org/fx"
 	"pad-analyzer/internal/api"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/mail"
@@ -20,39 +21,37 @@ import (
 )
 
 // authzFlowChecker gates WebSocket room joins on read access to the flow,
-// using the same AuthzService policy as the HTTP API. It translates
-// service-layer errors into the websocket package's sentinels so that package
-// stays decoupled from the service layer.
+// using the same AuthzService policy as the HTTP API, for the socket's actor
+// (its ticket's credential, scopes included). It translates service-layer
+// errors into the websocket package's sentinels so that package stays
+// decoupled from the service layer.
 type authzFlowChecker struct {
 	authz *service.AuthzService
 }
 
-// socketActor is who a socket acts as: the user its ticket named. Tickets
-// carry no token scopes yet (R7, Phase 4c), so Can sees an unscoped user.
-func socketActor(userID string) *auth.Actor {
-	return &auth.Actor{Kind: auth.ActorUser, UserID: userID}
-}
-
-func (c *authzFlowChecker) CheckAccess(ctx context.Context, flowID, userID string) error {
-	err := c.authz.Can(ctx, socketActor(userID), service.FlowRead, service.FlowByID(flowID))
+// CheckAccess is Can(FlowRead) through AuthorizeFlow, whose header names the flow's owner and organisation for the
+// hub's access-change rechecks.
+func (c *authzFlowChecker) CheckAccess(ctx context.Context, flowID string, actor *auth.Actor) (wshub.FlowOwner, error) {
+	h, err := c.authz.AuthorizeFlow(ctx, actor, service.FlowRead, flowID)
 	switch {
 	case err == nil:
-		return nil
+		return wshub.FlowOwner{UserID: h.OwnerID, OrgID: h.OrganizationID}, nil
 	case errors.Is(err, storageif.ErrNotFound):
-		return wshub.ErrFlowNotFound
+		return wshub.FlowOwner{}, wshub.ErrFlowNotFound
 	case errors.Is(err, service.ErrPermissionDenied):
-		return wshub.ErrAccessDenied
+		return wshub.FlowOwner{}, wshub.ErrAccessDenied
 	default:
-		return err
+		return wshub.FlowOwner{}, err
 	}
 }
 
-// CanEdit reports whether the user holds the "editor" rank on the flow — the
-// same rank the HTTP write endpoints require. Room joins are deliberately
-// gated lower (at "viewer"), so this is what keeps a read-only collaborator
-// from sending block mutations over the socket.
-func (c *authzFlowChecker) CanEdit(ctx context.Context, flowID, userID string) bool {
-	return c.authz.Can(ctx, socketActor(userID), service.FlowEdit, service.FlowByID(flowID)) == nil
+// CanEdit reports whether the actor may edit the flow (FlowEdit): the
+// "editor" rank and the write scope the HTTP write endpoints require. Room
+// joins are deliberately gated lower (at "viewer"), so this is what keeps a
+// read-only collaborator or a read-scoped token from sending block mutations
+// over the socket. A scoped token without write is refused before any read.
+func (c *authzFlowChecker) CanEdit(ctx context.Context, flowID string, actor *auth.Actor) bool {
+	return c.authz.Can(ctx, actor, service.FlowEdit, service.FlowByID(flowID)) == nil
 }
 
 func ProvideFlowAccessChecker(authz *service.AuthzService, backend storageif.StorageBackend) wshub.FlowAccessChecker {
@@ -136,12 +135,7 @@ var APIModule = fx.Options(
 		api.NewDashboardHandler,
 		api.NewExportHandler,
 		api.NewAuthHandler,
-		func(cfg *config.Config) *mail.Service { return mail.NewService(cfg.Email, cfg.Mode) },
-		// CIWebhookSecret is sourced from PAD_CI_WEBHOOK_SECRET; empty disables
-		// the inbound /api/integrations/ci endpoint (it returns 503).
-		func(cfg *config.Config) api.CIWebhookSecret {
-			return api.CIWebhookSecret(cfg.Governance.InboundWebhookSecret)
-		},
+		func(cfg *config.Config) *mail.Service { return mail.NewService(cfg.Email, capability.Of(cfg)) },
 		api.NewAdminHandler,
 		api.NewProviderHandler,
 		api.NewOrgHandler,
@@ -175,8 +169,12 @@ func ProvideEventManager(shutdownCh chan struct{}, backend storageif.StorageBack
 
 // SubscribeRealtime subscribes what tells clients and people that something changed: all async, so each runs
 // once the write committed (a client refetching earlier read the old row) and never for a rolled-back one.
-func SubscribeRealtime(bus *eventbus.Bus, router *api.Router, analysis *api.AnalysisHandler) {
+func SubscribeRealtime(bus *eventbus.Bus, router *api.Router, analysis *api.AnalysisHandler, sse *api.EventManager) {
 	eventbus.Subscribe(bus, eventbus.Async, "ws-flow-changed", service.NotifyFlowViewers(router.FlowViewers()))
+	// An open socket whose access may have shrunk re-checks it at once, not at its 2-minute pass.
+	wshub.SubscribeAccessRechecks(bus, router.WebSocketHub())
+	// So does an event stream of a revoked token (a logout, a deleted API token): it ends at once.
+	sse.SubscribeRevocations(bus)
 	// The bell rows of a comment or an assignment must not be lost: when the bus's runner is full, the hand-off to
 	// the handler's own alert runner runs inline instead.
 	eventbus.Subscribe(bus, eventbus.Async, "finding-comment-fanout", analysis.OnFindingCommented, eventbus.InlineWhenSaturated())

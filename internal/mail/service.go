@@ -2,183 +2,218 @@ package mail
 
 import (
 	"context"
-	"fmt"
-	"html"
+	"errors"
+	"log/slog"
 	"strings"
-	"unicode/utf8"
+	"time"
+
+	"pad-analyzer/internal/capability"
+	"pad-core/logger"
 
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/errreport"
+	"pad-analyzer/internal/lifecycle"
+	"pad-analyzer/internal/metrics"
 )
 
-// Service renders and sends the app's transactional emails. It centralizes
-// templating and link construction so handlers just call SendX. A nil-safe,
-// always-usable value is returned by NewService even without SMTP (it falls back
-// to the log-only mailer).
+// Service renders the registered templates and sends them on one bounded runner, so no caller ever waits on SMTP:
+// a request answers before the relay is even dialled, and shutdown drains the sends in flight (lifecycle.DrainAll).
+// NewService always returns a usable value, with the log-only mailer when SMTP is not configured.
 type Service struct {
-	mailer  Mailer
-	baseURL string
+	mailer Mailer
+	env    Env
+	// runner sends every email; bulk caps the non-sensitive share of it (see reservedSensitiveSends).
+	runner *lifecycle.Bounded
+	bulk   chan struct{}
 }
 
+const (
+	// maxConcurrentSends caps the SMTP sessions in flight across every email the product sends.
+	maxConcurrentSends = 32
+	// reservedSensitiveSends of those slots only Sensitive mail (reset, verification, invite) may take, so a burst
+	// of finding notifications against a slow relay cannot crowd out a password reset.
+	reservedSensitiveSends = 8
+	// sendTimeout bounds one send: the 10 s dial and handshake plus smtpOpTimeout for the exchange.
+	sendTimeout = 45 * time.Second
+	// prepareTimeout bounds an EnqueueJob's prepare step (a token write).
+	prepareTimeout = 10 * time.Second
+	// runnerName is the runner's metric and log label.
+	runnerName = "mail"
+)
+
+// ErrNotQueued is returned by Enqueue and EnqueueJob when the mail runner is saturated or shutting down, and by
+// SendAlert when its context ends before a slot frees: the email was dropped (and logged and counted as a dropped
+// background task).
+var ErrNotQueued = errors.New("mail: not queued (the mail runner is saturated or shutting down)")
+
 // NewService builds the email service from config, choosing an SMTP or log-only
-// mailer automatically. mode is passed through so the log-only fallback never
-// writes token-bearing bodies to the log in cloud mode.
-func NewService(cfg config.EmailConfig, mode config.DeploymentMode) *Service {
-	return &Service{
-		mailer:  New(cfg, mode),
-		baseURL: strings.TrimRight(cfg.AppBaseURL, "/"),
-	}
+// mailer automatically. caps is passed through so the log-only fallback never
+// writes token-bearing bodies to the log in the cloud profile.
+func NewService(cfg config.EmailConfig, caps capability.Set) *Service {
+	return NewServiceWithMailer(New(cfg, caps), cfg.AppBaseURL)
 }
 
 // NewServiceWithMailer builds the email service around an explicit Mailer
 // (tests capture the rendered messages this way); baseURL as in NewService.
 func NewServiceWithMailer(m Mailer, baseURL string) *Service {
-	return &Service{mailer: m, baseURL: strings.TrimRight(baseURL, "/")}
+	return &Service{
+		mailer: m,
+		env:    Env{BaseURL: strings.TrimRight(baseURL, "/")},
+		runner: lifecycle.NewBounded(runnerName, maxConcurrentSends),
+		bulk:   make(chan struct{}, maxConcurrentSends-reservedSensitiveSends),
+	}
 }
 
 // Enabled reports whether real SMTP delivery is configured (vs log-only).
-func (s *Service) Enabled() bool { return s.mailer != nil && s.mailer.Enabled() }
+func (s *Service) Enabled() bool { return s != nil && s.mailer != nil && s.mailer.Enabled() }
 
-// link builds a frontend deep link carrying the token, or — when no public base
-// URL is configured — returns the bare token so it is still recoverable (e.g.
-// from the log-only mailer in development).
-func (s *Service) link(hashParam, token string) string {
-	if s.baseURL == "" {
-		return token
+// Enqueue renders m for to and hands the send to the mail runner; it never waits on SMTP. It returns an error when
+// the address is invalid, the template fails to render, or the runner refuses the send (ErrNotQueued); a failed
+// send is reported by the runner (errreport location "mail.send", with the template's ID, never the body). Inside
+// a transaction, call it from a txhook.Register hook: an email must not describe a write that is then rolled back.
+// ctx only lends its logger to a refusal. Nil-safe.
+func (s *Service) Enqueue(ctx context.Context, to string, m Mail) error {
+	if s == nil {
+		return nil
 	}
-	return fmt.Sprintf("%s/#%s=%s", s.baseURL, hashParam, token)
+	if _, err := parseAddress(to); err != nil {
+		return err
+	}
+	msg, err := m.render(s.env)
+	if err != nil {
+		return err
+	}
+	return s.enqueue(ctx, to, msg, false)
 }
 
-// appLink is the app's entry point, or "" when no public base URL is configured
-// (callers then omit the link rather than print a relative one).
-//
-// It is deliberately not a per-finding deep link: the frontend has no route
-// for one, and every finding email is paired with a targeted in-app alert
-// whose click opens the flow. Sending the reader to the app, where that alert
-// is waiting, is the link that actually works.
-func (s *Service) appLink() string {
-	if s.baseURL == "" {
-		return ""
+// EnqueueJob hands an email whose making must stay off the request too to the mail runner, as one task on the
+// share reserved for Sensitive mail: prepare (writing a one-time token, say) runs there with a context of its own,
+// then the Mail it returns is rendered and sent. The caller pays neither the write nor SMTP (B7). An error from
+// prepare sends nothing and is reported like a failed send. It returns an address error, or ErrNotQueued when the
+// runner refuses. Nil-safe.
+func (s *Service) EnqueueJob(ctx context.Context, to string, prepare func(context.Context) (Mail, error)) error {
+	if s == nil {
+		return nil
 	}
-	return s.baseURL + "/"
+	if _, err := parseAddress(to); err != nil {
+		return err
+	}
+	log := logger.FromContext(ctx)
+	started := s.runner.Go(func() {
+		msg, err := s.prepare(prepare)
+		if err != nil {
+			log.Warn("email not prepared", "err", err)
+			errreport.CaptureError(context.Background(), "mail.prepare", err, nil)
+			return
+		}
+		s.send(log, to, msg)
+	})
+	if !started {
+		return ErrNotQueued
+	}
+	return nil
 }
 
-// findingLinkText/HTML render the shared "view it" footer of the finding
-// emails; empty when there is no base URL to link to.
-func (s *Service) findingLinkText() string {
-	if url := s.appLink(); url != "" {
-		return fmt.Sprintf("\nView it in PAD Analyzer (it is waiting in your notifications):\n%s\n", url)
+// prepare runs an EnqueueJob's prepare step, bounded by prepareTimeout, and renders the Mail it returns.
+func (s *Service) prepare(prepare func(context.Context) (Mail, error)) (Message, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), prepareTimeout)
+	defer cancel()
+	m, err := prepare(ctx)
+	if err != nil {
+		return Message{}, err
 	}
-	return ""
+	return m.render(s.env)
 }
 
-func (s *Service) findingLinkHTML() string {
-	if url := s.appLink(); url != "" {
-		// The base URL is operator config, not user input, but it still lands
-		// in an href: escape it so a stray quote cannot break the attribute.
-		return fmt.Sprintf("<p><a href=\"%s\">View the finding</a> — it is waiting in your notifications.</p>", html.EscapeString(url))
-	}
-	return ""
-}
-
-// SendAlert delivers a generic governance alert email (the body is provided by
-// the notify package). It satisfies notify.EmailSender so the notify package can
-// route events to email without depending on mail directly.
+// SendAlert queues a governance alert rendered by the caller (RenderGovernanceAlert) on the mail runner. It
+// satisfies notify.EmailSender. Unlike Enqueue it waits for a slot while ctx lives, so a sweep's alerts are paced by
+// the relay instead of dropped (notify bounds ctx with its delivery timeout); it returns ErrNotQueued when ctx ends
+// first or the runner is draining. Under WithoutWaiting it queues like Enqueue. A failed send is reported by the
+// runner, not returned.
 func (s *Service) SendAlert(ctx context.Context, to, subject, plainBody, htmlBody string) error {
 	if s == nil {
 		return nil
 	}
-	return s.mailer.Send(ctx, to, subject, plainBody, htmlBody)
+	if _, err := parseAddress(to); err != nil {
+		return err
+	}
+	noWait, _ := ctx.Value(noWaitKey{}).(bool)
+	return s.enqueue(ctx, to, Message{
+		Template: GovernanceAlert.ID(),
+		Locale:   DefaultLocale,
+		Subject:  oneLine(subject),
+		Text:     plainBody,
+		HTML:     htmlBody,
+	}, !noWait)
 }
 
-func (s *Service) SendPasswordReset(ctx context.Context, to, rawToken string) error {
-	url := s.link("resetPassword", rawToken)
-	text := fmt.Sprintf(
-		"We received a request to reset your PAD Analyzer password.\n\n"+
-			"Use this link to choose a new password (valid for 1 hour):\n%s\n\n"+
-			"If you didn't request this, you can safely ignore this email.", url)
-	html := fmt.Sprintf(
-		"<p>We received a request to reset your PAD Analyzer password.</p>"+
-			"<p><a href=\"%s\">Reset your password</a> (valid for 1 hour).</p>"+
-			"<p>If you didn't request this, you can safely ignore this email.</p>", url)
-	return s.mailer.Send(ctx, to, "Reset your PAD Analyzer password", text, html)
+type noWaitKey struct{}
+
+// WithoutWaiting marks ctx so that SendAlert drops the alert (ErrNotQueued) when the notification share is full, as
+// Enqueue does, instead of waiting for a slot: for an alert raised once per request (analysis_complete), not a
+// sweep's.
+func WithoutWaiting(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noWaitKey{}, true)
 }
 
-func (s *Service) SendEmailVerification(ctx context.Context, to, rawToken string) error {
-	url := s.link("verifyEmail", rawToken)
-	text := fmt.Sprintf(
-		"Welcome to PAD Analyzer!\n\nConfirm your email address with this link (valid for 24 hours):\n%s", url)
-	html := fmt.Sprintf(
-		"<p>Welcome to PAD Analyzer!</p><p><a href=\"%s\">Confirm your email address</a> (valid for 24 hours).</p>", url)
-	return s.mailer.Send(ctx, to, "Confirm your PAD Analyzer email", text, html)
-}
-
-func (s *Service) SendOrgInvite(ctx context.Context, to, orgName, rawToken string) error {
-	url := s.link("invite", rawToken)
-	text := fmt.Sprintf(
-		"You've been invited to join the %q organization on PAD Analyzer.\n\nAccept the invitation:\n%s", orgName, url)
-	// orgName is user-controlled; escape it so a crafted org name cannot
-	// inject markup into the invite email.
-	htmlBody := fmt.Sprintf(
-		"<p>You've been invited to join the <strong>%s</strong> organization on PAD Analyzer.</p>"+
-			"<p><a href=\"%s\">Accept the invitation</a>.</p>", html.EscapeString(orgName), url)
-	return s.mailer.Send(ctx, to, "You've been invited to PAD Analyzer", text, htmlBody)
-}
-
-// SendFindingAssigned notifies a user that a finding was assigned to them.
-// findingTitle/flowName are user/content-controlled and HTML-escaped. The link
-// is built here from the configured base URL (see appLink) and omitted when
-// none is set.
-func (s *Service) SendFindingAssigned(ctx context.Context, to, assigneeName, assignerName, flowName, findingTitle string) error {
+// Drain stops the runner and waits for the sends in flight (or ctx). Shutdown drains every runner through
+// lifecycle.DrainAll; tests call this to wait for their sends.
+func (s *Service) Drain(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	text := fmt.Sprintf(
-		"Hi %s,\n\n%s assigned a finding to you on the flow %q:\n\n  %s\n",
-		assigneeName, assignerName, flowName, findingTitle) + s.findingLinkText()
-	htmlBody := fmt.Sprintf(
-		"<p>Hi %s,</p><p><strong>%s</strong> assigned a finding to you on the flow <strong>%s</strong>:</p>"+
-			"<blockquote>%s</blockquote>",
-		html.EscapeString(assigneeName), html.EscapeString(assignerName), html.EscapeString(flowName), html.EscapeString(findingTitle)) +
-		s.findingLinkHTML()
-	return s.mailer.Send(ctx, to, "A finding was assigned to you", text, htmlBody)
+	return s.runner.Drain(ctx)
 }
 
-// SendFindingComment notifies the assignee that someone commented on their
-// assigned finding. commentBody is user-controlled and HTML-escaped; long bodies
-// are truncated to a 300-char preview. Links back like SendFindingAssigned.
-func (s *Service) SendFindingComment(ctx context.Context, to, recipientName, commenterName, flowName, findingTitle, commentBody string) error {
-	if s == nil {
-		return nil
+// enqueue hands msg's send to the runner. Non-sensitive mail takes a slot of the notification share first. With
+// wait, a full share or runner is waited for while ctx lives; without it, the send is dropped.
+func (s *Service) enqueue(ctx context.Context, to string, msg Message, wait bool) error {
+	log := logger.FromContext(ctx)
+	release := func() {}
+	if !msg.Sensitive {
+		select {
+		case s.bulk <- struct{}{}:
+		default:
+			if !wait {
+				metrics.RecordBackgroundDropped(runnerName, "saturated")
+				log.Warn("email dropped: the mail runner's notification share is full", "template", msg.Template)
+				return ErrNotQueued
+			}
+			select {
+			case s.bulk <- struct{}{}:
+			case <-ctx.Done():
+				metrics.RecordBackgroundDropped(runnerName, "cancelled")
+				log.Warn("email dropped: no slot of the mail runner's notification share freed in time", "template", msg.Template)
+				return ErrNotQueued
+			}
+		}
+		release = func() { <-s.bulk }
 	}
-	preview := previewOf(commentBody)
-	text := fmt.Sprintf(
-		"Hi %s,\n\n%s commented on a finding assigned to you on the flow %q:\n\n  %s\n",
-		recipientName, commenterName, flowName, preview) + s.findingLinkText()
-	htmlBody := fmt.Sprintf(
-		"<p>Hi %s,</p><p><strong>%s</strong> commented on a finding assigned to you on the flow <strong>%s</strong>:</p>"+
-			"<blockquote>%s</blockquote>",
-		html.EscapeString(recipientName), html.EscapeString(commenterName), html.EscapeString(flowName), html.EscapeString(preview)) +
-		s.findingLinkHTML()
-	return s.mailer.Send(ctx, to, "New comment on your assigned finding", text, htmlBody)
+	task := func() {
+		defer release()
+		s.send(log, to, msg)
+	}
+	var started bool
+	if wait {
+		started = s.runner.GoWait(ctx, task)
+	} else {
+		started = s.runner.Go(task)
+	}
+	if !started {
+		release()
+		return ErrNotQueued
+	}
+	return nil
 }
 
-// commentPreviewBytes bounds the comment excerpt embedded in a notification
-// email.
-const commentPreviewBytes = 300
-
-// previewOf truncates a comment body to a preview, cutting on a RUNE boundary.
-//
-// A plain byte slice (s[:300]) splits a multi-byte UTF-8 character whenever
-// the boundary lands inside one, putting a mangled byte sequence into the
-// email body (html.EscapeString passes it straight through). Mirrors
-// ai.truncateResult's approach.
-func previewOf(s string) string {
-	if len(s) <= commentPreviewBytes {
-		return s
+// send runs one SMTP session, bounded by sendTimeout and detached from any request. A failure is logged in full
+// with log, and reported to the error sink as its phase and reply code only (reportable): a relay's reply text can
+// name the recipient.
+func (s *Service) send(log *slog.Logger, to string, msg Message) {
+	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
+	defer cancel()
+	if err := s.mailer.Send(ctx, to, msg); err != nil {
+		log.Warn("email send failed", "template", msg.Template, "err", err)
+		errreport.CaptureError(ctx, "mail.send", reportable(err), errreport.Attrs{"template": msg.Template})
 	}
-	cut := commentPreviewBytes
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + "…"
 }

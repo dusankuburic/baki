@@ -71,6 +71,9 @@ services:
       - PAD_EMBEDDING_DIM=${PAD_EMBEDDING_DIM:-}
       - PAD_EMBEDDING_PROVIDER=${PAD_EMBEDDING_PROVIDER:-}
       - PAD_ENCRYPTION_KEY=${PAD_ENCRYPTION_KEY:?PAD_ENCRYPTION_KEY must be set (a different value from PAD_AUTH_SECRET)}
+      # Key rotation: the keys PAD_ENCRYPTION_KEY replaced, comma-separated, newest
+      # first; set only while a rotation is under way (README, "Rotating the encryption key").
+      - PAD_ENCRYPTION_KEY_PREVIOUS=${PAD_ENCRYPTION_KEY_PREVIOUS:-}
       - PAD_BEHIND_PROXY=true
       # WITHOUT THIS, EVERY CLIENT SHARES ONE RATE-LIMIT BUCKET. The app trusts
       # X-Forwarded-For only from a listed proxy; with an empty list it falls
@@ -144,6 +147,10 @@ services:
           # Two cores match the floor; the memory limit is unchanged.
           cpus: '2'
           memory: 1G # GOMEMLIMIT above is ~80% of this
+    # Above the app's fx.StopTimeout so Docker does not SIGKILL a stop in
+    # progress (see the base file). Set here as well, so the production stack
+    # keeps it whatever the base file says.
+    stop_grace_period: 35s
   db:
     environment:
       # No default, unlike the base file's local-dev value: an unset variable

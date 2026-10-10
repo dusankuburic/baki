@@ -13,7 +13,7 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/events"
-	"pad-analyzer/internal/metrics"
+	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -136,8 +136,8 @@ func (h *AnalysisHandler) goFanOut(fanOut func()) {
 }
 
 // fanOutComment is the detached work of one comment: the actor's display name resolved ONCE, then
-// the targeted alerts recorded and the assignee emailed. Runs on h.alerts (the email hops to
-// h.emails so a stalled relay never holds the alert rows back), bounded by bestEffortTimeout.
+// the targeted alerts recorded and the assignee's email queued. Runs on h.alerts (the send itself is
+// the mail runner's, so a stalled relay never holds the alert rows back), bounded by bestEffortTimeout.
 func (h *AnalysisHandler) fanOutComment(flowID, findingKey, flowName, actorID, actorEmail, body, commentID string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -151,11 +151,7 @@ func (h *AnalysisHandler) fanOutComment(flowID, findingKey, flowName, actorID, a
 	defer cancel()
 	actorName := h.comments.AuthorName(ctx, actorID, actorEmail)
 	h.recordCommentAlerts(ctx, flowID, findingKey, flowName, actorID, actorName, commentID)
-	h.emails.Go(func() {
-		ectx, ecancel := context.WithTimeout(context.Background(), bestEffortTimeout)
-		defer ecancel()
-		h.notifyFindingComment(ectx, flowID, findingKey, flowName, actorID, actorName, body)
-	})
+	h.notifyFindingComment(ctx, flowID, findingKey, flowName, actorID, actorName, body)
 }
 
 // recordCommentAlerts delivers targeted comment_added alerts to the finding's assignee and everyone
@@ -193,8 +189,8 @@ func ruleIDFromFindingKey(key string) string {
 	return key
 }
 
-// notifyFindingComment emails the finding's assignee when someone else comments. Best-effort: any
-// error is logged and swallowed — the comment write already succeeded. The commenter's and flow's
+// notifyFindingComment queues an email to the finding's assignee when someone else comments. Best-effort:
+// any error is logged and swallowed — the comment write already succeeded. The commenter's and flow's
 // names arrive resolved (fanOutComment); re-resolving them is what the fan-out exists to avoid.
 func (h *AnalysisHandler) notifyFindingComment(ctx context.Context, flowID, findingKey, flowName, commenterID, commenterName, body string) {
 	defer func() {
@@ -211,23 +207,34 @@ func (h *AnalysisHandler) notifyFindingComment(ctx context.Context, flowID, find
 	if assignee == nil {
 		return
 	}
-	assigneeName := assignee.DisplayName
-	if assigneeName == "" {
-		assigneeName = assignee.Email
+	commented := mailer.FindingComment.With(mailer.FindingCommentData{
+		RecipientName: recipientName(assignee),
+		CommenterName: commenterName,
+		FlowName:      h.flowNameFor(ctx, assignee, flowID, flowName),
+		FindingTitle:  h.ruleDisplayName(ruleIDFromFindingKey(findingKey)), // the rule name from the key's prefix
+		Comment:       body,
+	})
+	if err := h.email.Enqueue(ctx, assignee.Email, commented); err != nil {
+		logger.Warn("finding-comment email not queued", "assignee", assignee.ID, "error", err)
 	}
-	// The flow name arrives resolved through the ACTOR's access; the email only names the flow when
-	// the assignee can read it themselves (an editor may assign a non-collaborator). Decided for the
-	// assignee as a signed-in user: their stored role, no token scopes.
-	if h.flowSvc != nil && h.flowSvc.CheckFlowPermission(auth.WithActor(ctx, assigneeActor(assignee)), flowID, service.FlowRead) != nil {
-		flowName = ""
-	}
+}
 
-	// Use the rule name (extracted from the findingKey prefix) as the title.
-	findingTitle := h.ruleDisplayName(ruleIDFromFindingKey(findingKey))
-
-	if err := h.email.SendFindingComment(ctx, assignee.Email, assigneeName, commenterName, flowName, findingTitle, body); err != nil {
-		logger.Warn("failed to send finding-comment notification", "assignee", assignee.ID, "error", err)
+// flowNameFor is the flow name a finding email may show its recipient. The name arrives resolved through the
+// ACTOR's access; the email only names the flow when the recipient can read it themselves (an editor may assign a
+// non-collaborator). Decided for the recipient as a signed-in user: their stored role, no token scopes.
+func (h *AnalysisHandler) flowNameFor(ctx context.Context, recipient *storageif.User, flowID, flowName string) string {
+	if h.flowSvc != nil && h.flowSvc.CheckFlowPermission(auth.WithActor(ctx, assigneeActor(recipient)), flowID, service.FlowRead) != nil {
+		return ""
 	}
+	return flowName
+}
+
+// recipientName greets a recipient by display name, else by address.
+func recipientName(u *storageif.User) string {
+	if u.DisplayName != "" {
+		return u.DisplayName
+	}
+	return u.Email
 }
 
 // assigneeActor is who a notification's flow check decides for: the assignee as a signed-in user with their stored
@@ -307,7 +314,7 @@ func (h *FlowHandler) handleCreateShare(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	metrics.RecordFlowOp("share_create")
+	service.RecordFlowOp("share_create")
 	// A public, unauthenticated link to the report: the one action a reviewer
 	// of the audit trail most needs to see.
 	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionShareLinkCreate, ResourceType: "flow", ResourceID: req.FlowID, Meta: map[string]string{"tokenId": t.ID}})

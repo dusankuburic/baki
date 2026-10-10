@@ -50,6 +50,7 @@ export function useChatStreamEngine() {
   const streamAccRef = useRef(new Map<string, StreamAcc>())
   const teardownRef = useRef<(streamId: string) => void>(() => {})
   const cancelRef = useRef<(streamId: string) => void>(() => {})
+  const autoResendRef = useRef<(streamId: string) => string | null>(() => null)
 
   const {onChunk, onReplace, onToolStatus, onToolResult, takeAcc, dropAcc, beginAcc, onAppend, getAccLength} =
     useStreamAccumulators({streamAccRef, teardownRef, updateStream, setStreamMeta, addToolCall})
@@ -64,6 +65,7 @@ export function useChatStreamEngine() {
     endStream,
     bumpProviderEpoch,
     appendMessage,
+    autoResendRef,
   })
 
   const {onFixProposal, onFixDecision, respondFixProposal, onResumeState} = useFixEvents({
@@ -103,7 +105,7 @@ export function useChatStreamEngine() {
     ],
   )
 
-  const {registerStream, cancel, teardownStream, resumeInto} = useStreamingMessage(handler)
+  const {registerStream, confirmStream, cancel, teardownStream, resumeInto} = useStreamingMessage(handler)
   useEffect(() => {
     teardownRef.current = teardownStream
   }, [teardownStream])
@@ -117,7 +119,9 @@ export function useChatStreamEngine() {
     toastRef,
     streamAccRef,
     teardownRef,
+    autoResendRef,
     registerStream,
+    confirmStream,
     resumeInto,
     cancelStream,
     dropAcc,
@@ -126,6 +130,7 @@ export function useChatStreamEngine() {
     notifyBudget,
     startStream,
     endStream,
+    updateStream,
     appendMessage,
     updateThread,
   })

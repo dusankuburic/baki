@@ -85,8 +85,8 @@ func TestServiceModule_BuildsInEveryMode(t *testing.T) {
 	}
 }
 
-// fakeKeyStore provides what main.go's provideKeyStore provides, on the test keystore: the keys and the listing of
-// their families (as the database keystore does), no organisation credential store.
+// fakeKeyStore provides what internal/app's provideKeyStore provides, on the test keystore: the keys and the listing
+// of their families (as the database keystore does), no organisation credential store.
 func fakeKeyStore() fx.Option {
 	keys := testutil.NewFakeSecretStore()
 	return fx.Provide(
@@ -96,7 +96,7 @@ func fakeKeyStore() fx.Option {
 	)
 }
 
-// noDatabase provides what main.go's provideStorageBackend provides beside the backend, as it does without a
+// noDatabase provides what internal/app's provideStorageBackend provides beside the backend, as it does without a
 // database: none of the database's own capabilities (the fake stands in for the backend's role interfaces only).
 func noDatabase() fx.Option {
 	return fx.Provide(

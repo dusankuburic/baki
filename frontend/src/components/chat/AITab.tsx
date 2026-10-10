@@ -123,7 +123,7 @@ export default function AITab() {
     retryHistoryLoad,
     contextPreview,
     pendingMessage,
-    fixProposals,
+    approvals,
     respondFixProposal,
     switchThread,
     handleSend,
@@ -226,7 +226,8 @@ export default function AITab() {
       },
       'ai.cancel.stream': e => {
         // An open @/slash menu or the find bar handles Escape first. Next a
-        // fix awaiting approval: it is declined and the reply itself goes on
+        // fix awaiting approval: the newest pending card (the one in view, as
+        // its own Escape would take) is declined and the reply itself goes on
         // (the card no longer takes focus while the user types, so its own
         // Escape handler is not in the path). A bare Escape stops the reply;
         // with nothing streaming it leaves focus mode. Escapes inside the
@@ -235,7 +236,7 @@ export default function AITab() {
         if (e.defaultPrevented || isImeKeydown(e)) return
         if (isCurrentThreadStreaming) {
           e.preventDefault()
-          const pendingCard = fixProposals.find(c => c.status === 'pending')
+          const pendingCard = [...approvals].reverse().find(c => c.status === 'pending')
           if (pendingCard && activeThreadId) {
             respondFixProposal(activeThreadId, false, pendingCard.proposalId)
             return
@@ -330,7 +331,7 @@ export default function AITab() {
   const streamFooter = useStreamFooter({
     showThinking,
     isCurrentThreadStreaming,
-    fixProposals,
+    approvals,
     activeThreadId,
     respondFixProposal,
   })

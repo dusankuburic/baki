@@ -1,12 +1,12 @@
 import {useTranslation} from 'react-i18next'
-import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react'
+import {useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentType} from 'react'
 import clsx from 'clsx'
 import {Check, ChevronDown, Cloud, HardDrive, Search, Settings, Users} from 'lucide-react'
 import {GithubMark} from '@/components/shared'
 import {Badge, Select} from '@/components/shared'
 import {AZURE_SECTION_ANCHOR} from '@/components/settings/azure/registryView'
 import {useAnchoredPosition} from '@/hooks/useAnchoredPosition'
-import {useChatStore, isProviderId} from '@/stores/chatStore'
+import {useChatStore} from '@/stores/chatStore'
 import {useUIStore} from '@/stores/uiStore'
 import {formatContextWindow} from '@/lib/format'
 import {isImeKeydown} from '@/lib/imeKey'
@@ -14,7 +14,7 @@ import {groupModels, isPickerModel, isRegistryEntry} from '@/lib/modelGroups'
 import {modelKind} from '@/lib/modelIds'
 import {modelKindLabelKey, purposeLabel, purposeLabelKey, type PurposeLabelOf} from '@/lib/modelPurpose'
 import {matchesQuery} from '@/lib/textMatch'
-import {PROVIDERS, type ModelDetail} from '@/types'
+import {PROVIDERS, isKnownProviderId, type ModelDetail} from '@/types'
 
 /** A configured provider as the picker lists it. */
 export interface PickerProvider {
@@ -22,6 +22,8 @@ export interface PickerProvider {
   name: string
   /** Its credentials come from the listing scope's organisation. */
   shared?: boolean
+  /** The catalogue's glyph name (ProviderSpec.icon); the id map applies without one. */
+  icon?: string
   models: ModelDetail[]
 }
 
@@ -82,9 +84,20 @@ function statusKey(status: string | undefined): StatusKey | null {
   }
 }
 
+// The glyphs a catalogue entry may name (ProviderSpec.icon).
+const PROVIDER_ICONS: Record<string, ComponentType<{size?: number}>> = {
+  cloud: Cloud,
+  'hard-drive': HardDrive,
+  github: GithubMark,
+}
+
 // The provider's glyph in the trigger (its name is the tooltip and part of
-// the trigger's accessible name).
-function ProviderGlyph({id}: {id: string}) {
+// the trigger's accessible name): the catalogue's icon when the listing
+// names one the bundle has, else by id.
+function ProviderGlyph({id, icon}: {id: string; icon?: string}) {
+  // An own key only: a name such as `constructor` must not resolve to Object.prototype.
+  const Icon = icon && Object.prototype.hasOwnProperty.call(PROVIDER_ICONS, icon) ? PROVIDER_ICONS[icon] : undefined
+  if (Icon) return <Icon size={12} />
   if (id === 'local') return <HardDrive size={12} />
   if (id === 'github-models' || id === 'copilot') return <GithubMark size={12} />
   return <Cloud size={12} />
@@ -372,7 +385,7 @@ export default function ModelPicker({
   const threadProvider = providers.find(p => p.id === provider)
   // A provider not configured here (the thread's own, while it falls back)
   // is not in the list: name it from the catalogue.
-  const providerName = threadProvider?.name || (isProviderId(provider) ? PROVIDERS[provider].label : provider)
+  const providerName = threadProvider?.name || (isKnownProviderId(provider) ? PROVIDERS[provider].label : provider)
   // Only a registry entry has a purpose (a catalogue model has none).
   const purpose = modelDetail && isRegistryEntry(modelDetail) ? purposeLabel(modelDetail, labelOf) : undefined
   const sharedModel = !!modelDetail?.shared
@@ -430,7 +443,7 @@ export default function ModelPicker({
           {label || t('picker.noModel')}
         </span>
         <span className="shrink-0 flex text-text-tertiary" title={providerName} aria-hidden="true">
-          <ProviderGlyph id={provider} />
+          <ProviderGlyph id={provider} icon={threadProvider?.icon} />
         </span>
         {sharedBadge}
         <ChevronDown size={12} className="shrink-0 text-text-tertiary" aria-hidden="true" />

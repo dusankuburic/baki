@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/auth"
 )
 
 // fixDeclinedMarker is the stable prefix of the model-facing result for a user-declined
@@ -30,8 +30,6 @@ func newLoopToolMemory() *loopToolMemory {
 	return &loopToolMemory{results: map[string]string{}, declined: map[string]bool{}}
 }
 
-func isFixTool(name string) bool { return name == "apply_fix" || name == "apply_fixes" }
-
 // exec runs one tool call through the repetition guard. Signature is the tool name +
 // raw input JSON: identical args means the model gained nothing since the last identical
 // call (docs are content-addressed per turn; only applies mutate the doc, and those
@@ -40,26 +38,33 @@ func (m *loopToolMemory) exec(name string, input json.RawMessage, tctx *ai.ToolC
 	sig := name + "\x00" + string(input)
 
 	m.mu.Lock()
-	if isFixTool(name) && m.declined[sig] {
+	if ai.ToolRequiresApproval(name) && m.declined[sig] {
 		m.mu.Unlock()
 		const out = "error: the user already DECLINED this exact fix — nothing was changed. Do not propose it again unless they explicitly ask; explain the change or move on."
-		metrics.RecordChatToolResult(metricToolLabel(name), false)
+		recordChatToolResult(metricToolLabel(name), false)
 		return out
 	}
 	cached, seen := m.results[sig]
 	m.mu.Unlock()
 
 	if seen {
-		metrics.RecordChatToolResult(metricToolLabel(name), !strings.HasPrefix(cached, "error:"))
+		recordChatToolResult(metricToolLabel(name), !strings.HasPrefix(cached, "error:"))
 		return cached + "\n(note: this exact call was already answered above — change tactic or give your final answer)"
 	}
 
+	// A call the session's gate refuses (ExecuteTool answers it) is counted by reason: a model that keeps
+	// calling a tool it was not offered is visible without reading transcripts.
+	if spec, ok := ai.ToolSpecOf(name); ok {
+		if reason := ai.ToolRefusal(spec, auth.ActorFromContext(tctx.Ctx), tctx.Fixes != nil); reason != "" {
+			recordChatToolRefused(name, reason)
+		}
+	}
 	result := ai.ExecuteTool(name, input, *tctx)
-	metrics.RecordChatToolResult(metricToolLabel(name), !strings.HasPrefix(result, "error:"))
+	recordChatToolResult(metricToolLabel(name), !strings.HasPrefix(result, "error:"))
 
 	m.mu.Lock()
 	m.results[sig] = result
-	if isFixTool(name) && strings.Contains(result, fixDeclinedMarker) {
+	if ai.ToolRequiresApproval(name) && strings.Contains(result, fixDeclinedMarker) {
 		m.declined[sig] = true
 	}
 	m.mu.Unlock()

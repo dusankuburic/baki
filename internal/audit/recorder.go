@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/reqinfo"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
@@ -393,7 +392,7 @@ func (r *Recorder) replaySpilled() {
 			if sent, _ := r.enqueue(ev); !sent {
 				failed = append(failed, ev)
 			} else {
-				metrics.RecordAuditSpillReplayed()
+				recordAuditSpillReplayed()
 			}
 		}
 		if len(failed) > 0 {

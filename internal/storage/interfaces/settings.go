@@ -67,7 +67,9 @@ type AISettings struct {
 	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
 	DailyBudget             float64                     `json:"dailyBudget"`
 	PerUserDailyBudget      float64                     `json:"perUserDailyBudget,omitempty"`
-	Prompts                 AIPromptsConfig             `json:"prompts"`
+	// AllowedProviders mirrors models.AISettings.AllowedProviders (an organisation's allowed-provider list).
+	AllowedProviders []string        `json:"allowedProviders,omitempty"`
+	Prompts          AIPromptsConfig `json:"prompts"`
 }
 
 type AIProviderConfig struct {

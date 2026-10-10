@@ -1,0 +1,9 @@
+POST /rest/api/3/issue
+Authorization: Basic Ym90QGV4YW1wbGUuY29tOmppcmEtdG9rZW4=
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: analysis_complete
+X-Baki-Timestamp: 1790856001
+
+{"fields":{"description":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Flow: Invoice Bot"}]},{"type":"paragraph","content":[{"type":"text","text":"Event: analysis_complete"}]},{"type":"paragraph","content":[{"type":"text","text":"1 error(s), 2 warning(s), 3 info finding(s)"}]},{"type":"paragraph","content":[{"type":"text","text":"Errors: 1"}]},{"type":"paragraph","content":[{"type":"text","text":"Warnings: 2"}]},{"type":"paragraph","content":[{"type":"text","text":"Info: 3"}]},{"type":"paragraph","content":[{"type":"text","text":"Health: 81/100"}]},{"type":"paragraph","content":[{"type":"text","text":"Time: 2026-10-01T12:00:00Z"}]}]},"issuetype":{"name":"Bug"},"project":{"key":"PAD"},"summary":"PAD Flow Analysis: Invoice Bot (errors)"}}

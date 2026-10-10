@@ -6,7 +6,7 @@ import {ApiError} from '@/api/client'
 import {AzureConflictError, selectAzureScope, useAzureFoundryStore} from '@/stores/azureFoundryStore'
 import type {AzureConnection, AzureFoundryAuthMode, AzureScope} from '@/types'
 import AzureFormDialog from './AzureFormDialog'
-import SecretField from './SecretField'
+import SecretField from '@/components/shared/SecretField'
 import TestStatus, {IDLE_TEST, type TestState} from './TestStatus'
 import {
   CONNECTION_FIELD_ORDER,

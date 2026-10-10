@@ -1,0 +1,10 @@
+POST /hook
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: health_regression
+X-Baki-Signature: sha256=ca7d0546095d30ad38d7b455ea1f84d2e899cad661ab320333dc5a509650cf0d
+X-Baki-Signature-V2: sha256=6c5b9e962eef3b2b290f4863bb33dcea21b9abb9600b959749036515e30ec63c
+X-Baki-Timestamp: 1790856001
+
+{"schemaVersion":1,"id":"evt_31f8e4e135e7f468e9111cad","deliveryId":"00000000-0000-4000-8000-000000000001","orgId":"org-1","type":"health_regression","flowId":"flow-1","flowName":"Invoice Bot","title":"Health regressed in Invoice Bot","message":"Health score dropped from 90 to 70.","healthScore":70,"prevHealth":90,"at":"2026-10-01T12:00:00Z"}

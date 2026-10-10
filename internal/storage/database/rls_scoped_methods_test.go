@@ -400,6 +400,7 @@ var tablesWithoutRLS = map[string]string{
 	"usage_metrics":      "written by the AI usage meter, read with explicit user_id or org_id predicates",
 	"provider_keys":      "keystore: sealed secrets keyed by their owner's id, on the keystore's own connection",
 	"org_provider_keys":  "keystore: sealed secrets keyed by org id, on the keystore's own connection",
+	"job_runs":           "background job state: written and read by the jobs on the pool, never inside a request; no tenant's data",
 }
 
 // TestRLS_TablesWithoutRowSecurityAreListed: every table of the schema has row-level security or is listed in

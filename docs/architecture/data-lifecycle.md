@@ -35,8 +35,9 @@ outcomes: a changed step changes the fake and the scenario with it.
 - **Account erasure** (`DeleteUser`, after `AccountLifecycleService`'s prepare and before its finalize): the
   conversations of the owned flows, the owned flows (with everything that cascades), the per-user rows, then the
   account. On rows kept for others the identity is cleared: comment author and name, triage updater and assignee,
-  version and baseline creator, share-link creator, invitation inviter, organisation owner, the editor of an
-  organisation credential lent by someone else; a teammate's comment or assignment notification that names the user
+  version and baseline creator, share-link creator, invitation inviter, organisation owner, the minter of an
+  organisation CI credential (the credential stays the organisation's), the editor of an organisation credential lent
+  by someone else; a teammate's comment or assignment notification that names the user
   exactly ("New comment from <name>", "Assigned to you by <name>", display name or email), on a flow the user reached
   (a grant or membership, or a comment or triage decision of theirs, so a flow they have since lost access to too),
   says "a teammate".
@@ -47,9 +48,11 @@ outcomes: a changed step changes the fake and the scenario with it.
 - **Organisation deletion** (`DeleteOrg`): the knowledge base, policies, channels and custom rules, then the row
   (members, invitations, settings, credentials and the Azure registry cascade). Its flows become their owners' own.
   Usage, alerts and the audit trail keep the id.
-- **Retention sweep** (`PurgeExpiredData`): expired sessions, tokens, invitations and share links; the token blacklist
-  and idempotency keys in batches; with an audit window, the audit trail, analysis history, usage and alerts older
-  than it.
+- **Retention sweep** (`PurgeExpiredData`; on the server store with accounts: cloud, and local mode with
+  `PAD_AUTH_ENABLED`): expired sessions, tokens, invitations and share links; organisation CI credentials 30 days
+  after they expired (listed until then, so an admin sees why a runner fails); the token blacklist, idempotency
+  keys and the CI webhook's delivery records older than an hour in batches; with an audit window, the audit trail,
+  analysis history, usage and alerts older than it.
 
 The erasure and deletion statements, and the export's comment read, run without the row-level-security user
 (`asSystem`): they are keyed by one id the caller is authorised for, and must reach its rows on any flow.

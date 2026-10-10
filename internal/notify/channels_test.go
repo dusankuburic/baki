@@ -145,7 +145,7 @@ func TestJiraNotifier_CleanEventIsTask(t *testing.T) {
 
 func TestNew_IncludesEmailChannelWhenSenderEnabled(t *testing.T) {
 	sender := &fakeEmailSender{}
-	d, err := New(Config{EmailSender: sender, EmailTo: "ops@example.com"})
+	d, err := New(Config{Mailer: sender, Channels: chans("email", "ops@example.com")})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestNew_IncludesEmailChannelWhenSenderEnabled(t *testing.T) {
 func TestNew_DisabledEmailWhenSenderNotEnabled(t *testing.T) {
 	// A sender reporting Enabled()==false (e.g. log-only mailer) must NOT register
 	// the email channel, so no spurious "delivered" events fire.
-	d, err := New(Config{EmailSender: offSender{}, EmailTo: "ops@example.com"})
+	d, err := New(Config{Mailer: offSender{}, Channels: chans("email", "ops@example.com")})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

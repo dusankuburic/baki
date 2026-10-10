@@ -1,0 +1,36 @@
+From: "PAD Analyzer" <no-reply@pad.example.com>
+To: <una@example.com>
+Subject: [DRIFT] New findings in Invoices & Payments "EU" <v2>
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Message-ID: <golden@pad.example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary=GOLDEN-BOUNDARY
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain; charset=UTF-8
+
+Flow: Invoices & Payments "EU" <v2>
+Event: drift
+
+2 new errors <since> the last scan & 1 warning
+
+New errors: 2
+New warnings: 1
+
+Time: 2026-10-10T12:00:00Z
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html; charset=UTF-8
+
+<table cellpadding=3D"0" cellspacing=3D"0" style=3D"font-family:sans-serif;=
+font-size:14px"><tr><td style=3D"color:#666;padding:2px 12px 2px 0">Flow</t=
+d><td>Invoices &amp; Payments &#34;EU&#34; &lt;v2&gt;</td></tr><tr><td styl=
+e=3D"color:#666;padding:2px 12px 2px 0">Event</td><td>drift</td></tr><tr><t=
+d style=3D"color:#666;padding:2px 12px 2px 0">New errors</td><td>2</td></tr=
+><tr><td style=3D"color:#666;padding:2px 12px 2px 0">New warnings</td><td>1=
+</td></tr></table><p>2 new errors &lt;since&gt; the last scan &amp; 1 warni=
+ng</p>
+--GOLDEN-BOUNDARY--

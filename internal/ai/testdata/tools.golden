@@ -1,0 +1,9 @@
+# name | label | timeout | approval | scope | previewKind
+apply_fix | Requesting fix approval | 2m0s | true | write | fix-patch
+apply_fixes | Requesting batch fix approval | 2m0s | true | write | fix-patch
+get_block | Reading block | default | false | - | -
+get_subflow_blocks | Listing subflow blocks | default | false | - | -
+get_variable_lineage | Tracing variable | default | false | - | -
+list_findings | Listing findings | default | false | - | -
+propose_fix | Previewing fix | default | false | - | -
+search_flow | Searching flow | default | false | - | -

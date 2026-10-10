@@ -122,7 +122,12 @@ describe('providersApi Azure registry: connections', () => {
   })
 
   it('reads a null connections slice (an empty Go list) as empty', async () => {
-    respond({connections: null, registryState: 'ok', limits: {connections: 10, models: 50}, knowledgeEmbeddingEnabled: false})
+    respond({
+      connections: null,
+      registryState: 'ok',
+      limits: {connections: 10, models: 50},
+      knowledgeEmbeddingEnabled: false,
+    })
     const {api} = await load()
     await expect(api.listAzureConnections(ORG)).resolves.toEqual({
       connections: [],
@@ -147,7 +152,12 @@ describe('providersApi Azure registry: connections', () => {
     })
     vi.restoreAllMocks()
     // The backend marshals recoveredCopyPath omitempty: absent when there is none.
-    respond({connections: [], registryState: 'recovered', limits: {connections: 10, models: 50}, knowledgeEmbeddingEnabled: false})
+    respond({
+      connections: [],
+      registryState: 'recovered',
+      limits: {connections: 10, models: 50},
+      knowledgeEmbeddingEnabled: false,
+    })
     await expect(api.listAzureConnections(USER)).resolves.not.toHaveProperty('recoveredCopyPath')
   })
 
@@ -365,5 +375,80 @@ describe('providersApi Azure registry: error codes', () => {
     const denied = await api.deleteAzureConnection(ORG, 'default').catch(e => e)
     expect(denied).toBeInstanceOf(client.PermissionDeniedError)
     expect(denied.code).toBe('FORBIDDEN')
+  })
+})
+
+// C2: POST /api/keys/has answers {has: boolean}. Read as a bare boolean the
+// envelope is truthy, and every unconfigured api_key provider showed "API key
+// configured". A bare boolean (a server before the envelope) still reads.
+describe('providersApi.hasApiKey', () => {
+  it('reads the {has} envelope, and a bare boolean', async () => {
+    const spy = respond({has: false})
+    const {api} = await load()
+    await expect(api.hasApiKey('openai')).resolves.toBe(false)
+    expect(call(spy)).toEqual({path: '/api/keys/has', method: 'POST', body: {provider: 'openai'}})
+    spy.mockImplementation(async () => Response.json({has: true}))
+    await expect(api.hasApiKey('openai')).resolves.toBe(true)
+    spy.mockImplementation(async () => Response.json(true))
+    await expect(api.hasApiKey('openai')).resolves.toBe(true)
+    spy.mockImplementation(async () => Response.json({}))
+    await expect(api.hasApiKey('openai')).resolves.toBe(false)
+  })
+})
+
+// F5: the only guard between a catalogue route and a same-session POST.
+describe('apiPath', () => {
+  it('accepts a path of plain segments under /api/ and nothing else', async () => {
+    const {apiPath} = await import('./providers')
+    expect(apiPath('/api/providers/acme/start')).toBe('/api/providers/acme/start')
+    expect(apiPath('/api/keys/v1.2_x-y')).toBe('/api/keys/v1.2_x-y')
+    for (const bad of [
+      undefined,
+      '',
+      '/api',
+      '/api/',
+      '/api//start',
+      '/api/x/',
+      '/apix/start',
+      '/v1/providers/acme/start',
+      'api/providers/acme/start',
+      'https://evil.example/api/providers/acme/start',
+      '//evil.example/api/providers/acme/start',
+      'javascript:alert(1)',
+      '/api/providers/../keys/delete',
+      '/api/providers/%2e%2e/keys/delete',
+      '/api/providers/acme/start?x=1',
+      '/api/providers/acme/start#x',
+      '/api/providers/acme start',
+      '/api/providers/acme/start\n',
+    ]) {
+      expect(apiPath(bad), String(bad)).toBeUndefined()
+    }
+  })
+})
+
+// F8: a device-flow provider other than GitHub may answer its `user` route
+// with another shape ({id, email}); the signed-in state must still read.
+describe('providersApi.getDeviceAuthUser', () => {
+  it('reads the GitHub shape, derives a login from another, and keeps null as "not connected"', async () => {
+    const spy = respond({login: 'octocat', name: 'Octo Cat'})
+    const {api} = await load()
+    await expect(api.getDeviceAuthUser('/api/providers/acme/user')).resolves.toEqual({
+      login: 'octocat',
+      name: 'Octo Cat',
+    })
+    expect(call(spy)).toMatchObject({path: '/api/providers/acme/user', method: 'GET'})
+    // Distinct routes: a GET is served from the 5 s micro-cache otherwise.
+    spy.mockImplementation(async () => Response.json({id: 7, email: 'ann@example.com'}))
+    await expect(api.getDeviceAuthUser('/api/providers/bcme/user')).resolves.toEqual({
+      login: 'ann@example.com',
+      name: 'ann@example.com',
+    })
+    spy.mockImplementation(async () => Response.json({name: 'Ann'}))
+    await expect(api.getDeviceAuthUser('/api/providers/ccme/user')).resolves.toEqual({login: 'Ann', name: 'Ann'})
+    spy.mockImplementation(async () => Response.json({id: 7}))
+    await expect(api.getDeviceAuthUser('/api/providers/dcme/user')).resolves.toEqual({login: '7', name: '7'})
+    spy.mockImplementation(async () => Response.json(null))
+    await expect(api.getDeviceAuthUser('/api/providers/ecme/user')).resolves.toBeNull()
   })
 })

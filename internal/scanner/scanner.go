@@ -7,13 +7,13 @@
 package scanner
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +50,16 @@ type RuleSetDigestFunc func(ctx context.Context, orgID string) string
 // interactive analysis or a CI run records, with the rule set it was scored under.
 type HealthRecorder func(ctx context.Context, doc *models.FlowDocument, report *models.AnalysisReport)
 
+// OrgChannels builds and delivers to an organisation's own notification channels (service.ChannelService): the
+// sweep builds an org's channels once and hands each delivery to its runner.
+type OrgChannels interface {
+	// OrgNotifiers builds the org's enabled channels.
+	OrgNotifiers(ctx context.Context, orgID string) ([]notify.AlertNotifier, error)
+	// Enqueue delivers ev to n in the background, waiting for a delivery slot while ctx lives; done runs when the
+	// delivery has ended, or at once when it was not started.
+	Enqueue(ctx context.Context, n notify.AlertNotifier, ev notify.Event, done func()) bool
+}
+
 // SSENotifier pushes real-time events to connected frontend clients; nil disables
 // push. Defined here so the scanner stays decoupled from the service layer.
 type SSENotifier interface {
@@ -59,7 +69,7 @@ type SSENotifier interface {
 // Scanner periodically scans stored flows for governance regressions.
 type Scanner struct {
 	backend  storageif.StorageBackend
-	locker   lock.GlobalLocker // one sweep at a time across replicas; nil (no database) sweeps alone
+	leaser   lock.Leaser // one sweep at a time across replicas; nil (no database) sweeps alone
 	analyze  AnalyzeFunc
 	notifier *notify.Dispatcher
 	interval time.Duration
@@ -99,47 +109,78 @@ type Scanner struct {
 	noticeMu sync.Mutex
 	notices  map[string]*pendingNotice
 
-	// notifyPolicy decides whether org-channel deliveries may reach loopback/
-	// private addresses; the zero value blocks them (safe default).
-	notifyPolicy notify.TargetPolicy
-	// channelClient is the one guarded HTTP client every org-channel notifier
-	// shares (D-25), so deliveries reuse a single connection pool.
-	channelClient *http.Client
+	// channels delivers to the organisations' own channels (nil: none are); its runner bounds the deliveries in
+	// flight, and deliveryWG lets Stop wait for the ones this scanner started.
+	channels   OrgChannels
+	deliveryWG sync.WaitGroup
+	// stopBudget overrides defaultStopBudget when non-zero (tests).
+	stopBudget time.Duration
 
-	// deliverySem bounds concurrent org-channel deliveries (backpressure
-	// instead of an unbounded fan-out); deliveryWG lets Stop wait for them.
-	deliverySem chan struct{}
-	deliveryWG  sync.WaitGroup
+	// job runs the sweeps, scheduled and on demand, on one replica at a time (ADR 0023).
+	job *lifecycle.Singleton
+}
 
-	loop lifecycle.TickerLoop
+// scanJob is the sweep's identity across replicas. Every pod runs its own schedule and the dedup signature is per
+// process, so without the lock N replicas would re-analyze every flow N times per interval.
+var scanJob = lifecycle.DeclareJob(lifecycle.JobDecl{
+	Name:      "scanner",
+	LegacyKey: scanLockKey,
+	Schedule:  "every PAD_SCAN_INTERVAL (cloud), and on demand (admin scan-now)",
+})
+
+// lockRetry is how soon a sweep skipped for a lock error is tried again, when sooner than the interval.
+const lockRetry = 5 * time.Minute
+
+// Option configures a Scanner.
+type Option func(*Scanner)
+
+// WithLeaser runs the sweeps under leases, which end a sweep whose lock was lost while it ran; it replaces New's
+// locker.
+func WithLeaser(l lock.Leaser) Option {
+	return func(s *Scanner) { s.leaser = l }
 }
 
 // New creates a Scanner. interval <= 0 disables periodic scanning (Start is a
 // no-op); ScanOnce can still be invoked directly. locker is the cross-replica
-// lock (nil without a database).
-func New(backend storageif.StorageBackend, locker lock.GlobalLocker, analyze AnalyzeFunc, notifier *notify.Dispatcher, interval time.Duration, notifyPolicy notify.TargetPolicy) *Scanner {
-	return &Scanner{
-		backend:       backend,
-		locker:        locker,
-		analyze:       analyze,
-		notifier:      notifier,
-		interval:      interval,
-		lastSig:       make(map[string]string),
-		lastScan:      make(map[string]string),
-		lastNotes:     make(map[string]*noticeNote),
-		notifyPolicy:  notifyPolicy,
-		channelClient: notify.NewChannelClient(notifyPolicy),
-		deliverySem:   make(chan struct{}, maxConcurrentDeliveries),
+// lock (nil without a database). notifier is the deployment's channels and
+// channels the organisations' (either may be nil). The backend keeps the
+// sweep's run state, which tells every replica when no sweep has succeeded
+// anywhere for too long.
+func New(backend storageif.StorageBackend, locker lock.GlobalLocker, analyze AnalyzeFunc, notifier *notify.Dispatcher, interval time.Duration, channels OrgChannels, opts ...Option) *Scanner {
+	s := &Scanner{
+		backend:   backend,
+		leaser:    lock.AsLeaser(locker),
+		analyze:   analyze,
+		notifier:  notifier,
+		interval:  interval,
+		lastSig:   make(map[string]string),
+		lastScan:  make(map[string]string),
+		lastNotes: make(map[string]*noticeNote),
+		channels:  channels,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	var state lifecycle.JobState
+	if backend != nil {
+		state = backend
+	}
+	s.job = lifecycle.NewSingleton(lifecycle.Job{
+		Spec:  scanJob,
+		Every: max(interval, 0),
+		// A sweep is bounded by the interval: the next one is due then.
+		Timeout:          max(interval, 0),
+		RetryOnLockError: lockRetry,
+		Run:              s.sweep,
+	}, s.leaser, state)
+	return s
 }
 
-// maxConcurrentDeliveries bounds in-flight org-channel POSTs: high enough that
-// a normal sweep never blocks, low enough not to exhaust file descriptors.
-const maxConcurrentDeliveries = 32
-
-// deliveryDrainBudget bounds how long Stop waits for in-flight deliveries,
-// mirroring lifecycle.stopDrainBudget so both stay inside the 25s fx.StopTimeout.
-const deliveryDrainBudget = 5 * time.Second
+// defaultStopBudget bounds Stop as a whole, the sweep's unwinding (within the job's own stop budget, which is no
+// longer) and then the deliveries it started: the scanner's row of the server's stop budget (ADR 0024), which must
+// leave the audit flush and the pool close inside fx.StopTimeout. A delivery still running at it is the "notify"
+// runner's, which the server's stop drains next.
+const defaultStopBudget = 5 * time.Second
 
 // SetEventNotifier injects an SSE push sink so new alerts reach connected
 // clients in real time; nil leaves push disabled.
@@ -175,59 +216,51 @@ func (s *Scanner) Start() {
 		return
 	}
 	logger.Info("scanner: starting", "interval", s.interval.String())
-	s.loop.Start(s.interval, false, func(ctx context.Context) {
-		// Derive the tick ctx from the loop's root ctx so Stop cancels an
-		// in-flight sweep; ScanOnce checks ctx.Err() between flows.
-		tickCtx, cancel := context.WithTimeout(ctx, s.interval)
-		defer cancel()
-		s.ScanOnce(tickCtx)
-	}, func(r any) {
-		logger.Error("scanner: loop panicked", "recover", r)
-	})
+	s.job.Start()
 }
 
-// Stop halts the scan loop and cancels any in-flight sweep; safe to call
-// multiple times or when Start was never invoked.
+// Stop halts the scan loop and cancels any in-flight sweep, also one an admin
+// started, within defaultStopBudget; safe to call multiple times or when Start
+// was never invoked.
 func (s *Scanner) Stop() {
-	s.loop.Stop()
+	budget := cmp.Or(s.stopBudget, defaultStopBudget)
+	deadline := time.Now().Add(budget)
+	s.job.Stop()
 
-	// Wait for deliveries the last sweep spawned: they are deliberately
+	// Wait for deliveries the last sweep spawned, for what is left of the budget: they are deliberately
 	// detached (cancelling mid-POST would abandon a half-sent alert).
 	done := make(chan struct{})
 	go func() {
 		s.deliveryWG.Wait()
 		close(done)
 	}()
+	left := time.NewTimer(time.Until(deadline))
+	defer left.Stop()
 	select {
 	case <-done:
-	case <-time.After(deliveryDrainBudget):
-		logger.Warn("scanner: gave up waiting for in-flight alert deliveries", "budget", deliveryDrainBudget)
+	case <-left.C:
+		// With nothing left of the budget both may be ready at once.
+		select {
+		case <-done:
+		default:
+			logger.Warn("scanner: gave up waiting for in-flight alert deliveries", "budget", budget)
+		}
 	}
 }
 
 // ScanOnce scans every stored flow once, paginating to cover the entire
-// library. Errors are logged, never returned — one bad flow doesn't abort the
-// sweep.
+// library, as the scan job: on one replica at a time (a replica that finds
+// the lock held, or cannot ask for it, skips), cancelled by Stop. Errors are
+// logged, never returned — one bad flow doesn't abort the sweep.
 func (s *Scanner) ScanOnce(ctx context.Context) {
 	if s.backend == nil || s.analyze == nil {
 		return
 	}
-	// One sweep at a time ACROSS replicas: every pod runs its own ticker and the
-	// dedup signature is per process, so N replicas would re-analyze every flow
-	// N times per interval. Postgres provides a session-level advisory lock;
-	// without a database there is one process and no lock.
-	if s.locker != nil {
-		release, acquired, err := s.locker.TryGlobalLock(ctx, scanLockKey)
-		switch {
-		case err != nil:
-			logger.Warn("scanner: advisory lock unavailable; sweeping without it", "err", err)
-		case !acquired:
-			logger.Info("scanner: sweep already running on another replica; skipping this tick")
-			return
-		default:
-			defer release()
-		}
-	}
+	_ = s.job.RunOnce(ctx) // the job logs and counts what it skipped or why it failed
+}
+
+// sweep is the scan job's run: the error is why the sweep did not complete.
+func (s *Scanner) sweep(ctx context.Context) error {
 	// Fresh per-sweep caches: a channel/member DELETED mid-sweep must stop
 	// receiving promptly; a mid-sweep rule change is seen by the next sweep.
 	s.orgChMu.Lock()
@@ -245,7 +278,7 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 	seen := make(map[string]struct{})
 	for {
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
 		lctx, lcancel := context.WithTimeout(ctx, pageReadTimeout)
 		flows, err := s.backend.ListFlows(lctx, storageif.FlowFilter{
@@ -264,8 +297,7 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 		})
 		lcancel()
 		if err != nil {
-			logger.Warn("scanner: list flows failed", "after", after, "err", err)
-			return
+			return fmt.Errorf("scanner: list flows after %q: %w", after, err)
 		}
 		if len(flows) == 0 {
 			break
@@ -275,13 +307,12 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 		// ids (ORDER BY id follows the column collation, not Go byte order).
 		// Stop; being incomplete, do not prune below.
 		if _, dup := seen[flows[0].ID]; dup {
-			logger.Warn("scanner: flow page did not advance; stopping sweep", "after", after, "first", flows[0].ID)
-			return
+			return fmt.Errorf("scanner: flow page after %q did not advance (first %q); sweep stopped", after, flows[0].ID)
 		}
 		page := s.loadPageInputs(ctx, flows)
 		for _, f := range flows {
 			if ctx.Err() != nil {
-				return
+				return ctx.Err()
 			}
 			seen[f.ID] = struct{}{}
 			fctx, cancel := context.WithTimeout(ctx, perFlowScanTimeout)
@@ -301,6 +332,7 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 	// Surface loop liveness so ops can alert on a hung scanner (time() -
 	// last_tick > 2 * interval), which /healthz cannot see.
 	metrics.RecordBackgroundLoopTick("scanner")
+	return nil
 }
 
 // scanLockKey namespaces the sweep's advisory lock: every replica must use the
@@ -399,6 +431,8 @@ func (s *Scanner) scanFlow(ctx context.Context, hdr *storageif.FlowDocument, pag
 		s.recordHealth(ctx, doc, report)
 	}
 	for _, ev := range events {
+		// Every channel, retry and replica sends the inbox row's event id.
+		ev.ID = notify.EventID(alertRowID(lf.ID, ev))
 		if !s.shouldAlert(lf.ID, ev) {
 			continue
 		}
@@ -700,7 +734,7 @@ func (s *Scanner) orgRoster(ctx context.Context, orgID string) []string {
 // sticks, and one delivery: only an inserted alert is dispatched.
 func (s *Scanner) recordAlert(ctx context.Context, lf *storageif.FlowDocument, ev notify.Event) (bool, error) {
 	alert := &storageif.GovernanceAlert{
-		ID:          fmt.Sprintf("%s|%s|%s", lf.ID, ev.Type, signature(ev)),
+		ID:          alertRowID(lf.ID, ev),
 		FlowID:      lf.ID,
 		FlowName:    lf.Name,
 		OrgID:       lf.OrganizationID,
@@ -719,6 +753,11 @@ func (s *Scanner) recordAlert(ctx context.Context, lf *storageif.FlowDocument, e
 		logger.Warn("scanner: persist governance alert failed", "flowId", lf.ID, "type", ev.Type, "err", err)
 	}
 	return inserted, err
+}
+
+// alertRowID is the inbox row of a flow's event: (flowID|type|signature), so a re-alert reuses the row.
+func alertRowID(flowID string, ev notify.Event) string {
+	return fmt.Sprintf("%s|%s|%s", flowID, ev.Type, signature(ev))
 }
 
 // alertSeverity maps an event to an inbox severity: drift with new errors (or
@@ -757,6 +796,7 @@ func (s *Scanner) events(ctx context.Context, lf *storageif.FlowDocument, report
 			if len(split.Drift) > 0 {
 				c := analyzer.CountGating(split.Drift)
 				events = append(events, notify.Event{
+					At:          time.Now().UTC(),
 					Type:        notify.EventDrift,
 					FlowID:      lf.ID,
 					FlowName:    name,
@@ -808,6 +848,7 @@ func (s *Scanner) events(ctx context.Context, lf *storageif.FlowDocument, report
 				msg = fmt.Sprintf("Health score dropped from %d to %d over the rules it was last recorded with (%d with the newer ones).", prior.HealthScore, cur, full)
 			}
 			events = append(events, notify.Event{
+				At:          time.Now().UTC(),
 				Type:        notify.EventHealthRegression,
 				FlowID:      lf.ID,
 				FlowName:    name,
@@ -926,40 +967,41 @@ func flowLabel(lf *storageif.FlowDocument) string {
 // channels (webhook/Teams/Slack), best-effort, parallel to the global dispatch;
 // per-channel failures are logged inside notify.Deliver.
 func (s *Scanner) dispatchOrgChannels(ctx context.Context, lf *storageif.FlowDocument, ev notify.Event) {
-	if s.backend == nil || lf.OrganizationID == "" {
+	if lf.OrganizationID == "" {
 		return
 	}
-	notifiers, ok := s.notifiersForOrg(ctx, lf.OrganizationID)
+	s.deliverToOrg(ctx, lf.OrganizationID, ev)
+}
+
+// deliverToOrg hands ev to each of the org's channels on the channel runner. At the runner's cap the sweep waits for
+// a slot (honouring its context, so shutdown stops queueing) instead of spawning a goroutine per alert; the delivery
+// itself is detached from the sweep, and Stop waits for it.
+func (s *Scanner) deliverToOrg(ctx context.Context, orgID string, ev notify.Event) {
+	notifiers, ok := s.notifiersForOrg(ctx, orgID)
 	if !ok {
 		return
 	}
+	// One id and time for every channel of the event.
+	ev = ev.Stamped(time.Now())
 	for _, n := range notifiers {
-		// Detach from the per-flow scan context: it is canceled the moment
-		// scanFlow returns, which would kill the delivery mid-POST; the
-		// dispatcher's own timeout bounds the work.
-		delivery := context.WithoutCancel(ctx)
-
-		// Acquire BEFORE spawning so a sweep with thousands of alerting flows
-		// slows down instead of spawning a goroutine per alert; honour the sweep
-		// context while waiting so shutdown stops queueing work.
-		select {
-		case s.deliverySem <- struct{}{}:
-		case <-ctx.Done():
-			return
+		// A channel subscribed to other events would take a delivery slot for nothing.
+		if !notify.Receives(n, ev.Type) {
+			continue
 		}
 		s.deliveryWG.Add(1)
-		go func(n notify.AlertNotifier) {
-			defer s.deliveryWG.Done()
-			defer func() { <-s.deliverySem }()
-			notify.Deliver(delivery, n, ev)
-		}(n)
+		if !s.channels.Enqueue(ctx, n, ev, s.deliveryWG.Done) {
+			return
+		}
 	}
 }
 
 // notifiersForOrg returns the org's built notifiers, at most once per sweep.
-// The BUILD is cached, not just the channel rows: BuildChannelNotifier clones
-// http.DefaultTransport, so one per event meant a fresh connection pool per alert.
+// The BUILD is cached, not just the channel rows: one build per event meant a
+// fresh validation lookup per alert.
 func (s *Scanner) notifiersForOrg(ctx context.Context, orgID string) ([]notify.AlertNotifier, bool) {
+	if s.channels == nil || s.backend == nil {
+		return nil, false
+	}
 	s.orgChMu.Lock()
 	cached, ok := s.orgNotifiers[orgID]
 	s.orgChMu.Unlock()
@@ -967,19 +1009,10 @@ func (s *Scanner) notifiersForOrg(ctx context.Context, orgID string) ([]notify.A
 		return cached, true
 	}
 
-	channels, err := s.backend.ListOrgChannels(ctx, orgID, true)
+	built, err := s.channels.OrgNotifiers(ctx, orgID)
 	if err != nil {
 		logger.Warn("scanner: list org channels failed", "orgId", orgID, "err", err)
 		return nil, false
-	}
-	built := make([]notify.AlertNotifier, 0, len(channels))
-	for _, ch := range channels {
-		n, err := notify.BuildChannelNotifierWith(ctx, s.channelClient, ch.Kind, ch.URL, ch.Secret, s.notifyPolicy)
-		if err != nil {
-			logger.Warn("scanner: invalid org channel", "orgId", orgID, "channel", ch.Name, "err", err)
-			continue
-		}
-		built = append(built, n)
 	}
 
 	s.orgChMu.Lock()

@@ -9,7 +9,6 @@ import (
 
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/metrics"
 )
 
 func TestRequestTimeout_StreamingPathsBypass(t *testing.T) {
@@ -290,10 +289,10 @@ func TestRequestTimeout_ShadowAppliesLegacyAndCountsDisagreement(t *testing.T) {
 		t.Errorf("shadow mode applied %v (set %v), want the legacy stream deadline", remaining.Round(time.Second), has)
 	}
 	h.ServeHTTP(httptest.NewRecorder(), withPolicy(httptest.NewRequest(http.MethodGet, "/api/shadow-deadline-405/stream", nil), notAllowed))
-	if n := metrics.RoutePolicyMismatchCount(endpoint.Label, DecisionDeadline); n != 1 {
+	if n := RoutePolicyMismatchCount(endpoint.Label, DecisionDeadline); n != 1 {
 		t.Errorf("endpoint deadline mismatches = %v, want 1", n)
 	}
-	if n := metrics.RoutePolicyMismatchCount(notAllowed.Label, DecisionDeadline); n != 0 {
+	if n := RoutePolicyMismatchCount(notAllowed.Label, DecisionDeadline); n != 0 {
 		t.Errorf("405 deadline mismatches = %v, want 0 (not compared)", n)
 	}
 }

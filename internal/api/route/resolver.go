@@ -214,8 +214,10 @@ func bucketRank(bucket string) int {
 		return 3
 	case RateChat:
 		return 4
-	case RateAuth:
+	case RateChannelTest:
 		return 5
+	case RateAuth:
+		return 6
 	}
 	return 1 // general, and "" (general)
 }

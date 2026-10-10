@@ -70,4 +70,6 @@ type PurgeResult struct {
 	GovAlerts           int `json:"govAlerts"`
 	RuleNotices         int `json:"ruleNotices"`
 	IdempotencyKeys     int `json:"idempotencyKeys"`
+	CICredentials       int `json:"ciCredentials"`
+	CIDeliveries        int `json:"ciDeliveries"`
 }

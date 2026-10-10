@@ -72,14 +72,16 @@ func toStorageMessages(msgs []models.ChatMessage) []storageif.ChatMessage {
 			proposals := make([]storageif.FixProposalSnapshot, len(m.FixProposals))
 			for j, fp := range m.FixProposals {
 				proposals[j] = storageif.FixProposalSnapshot{
-					ProposalID: fp.ProposalID,
-					RuleID:     fp.RuleID,
-					FixType:    fp.FixType,
-					BlockLabel: fp.BlockLabel,
-					Line:       fp.Line,
-					Summary:    fp.Summary,
-					Status:     fp.Status,
-					Message:    fp.Message,
+					ProposalID:  fp.ProposalID,
+					Tool:        fp.Tool,
+					PreviewKind: fp.PreviewKind,
+					RuleID:      fp.RuleID,
+					FixType:     fp.FixType,
+					BlockLabel:  fp.BlockLabel,
+					Line:        fp.Line,
+					Summary:     fp.Summary,
+					Status:      fp.Status,
+					Message:     fp.Message,
 				}
 				proposals[j].Items = convertItemsToStorage(fp.Items)
 			}
@@ -185,14 +187,16 @@ func toModelMessages(msgs []storageif.ChatMessage) []models.ChatMessage {
 			proposals := make([]models.FixProposalSnapshot, len(m.FixProposals))
 			for j, fp := range m.FixProposals {
 				proposals[j] = models.FixProposalSnapshot{
-					ProposalID: fp.ProposalID,
-					RuleID:     fp.RuleID,
-					FixType:    fp.FixType,
-					BlockLabel: fp.BlockLabel,
-					Line:       fp.Line,
-					Summary:    fp.Summary,
-					Status:     fp.Status,
-					Message:    fp.Message,
+					ProposalID:  fp.ProposalID,
+					Tool:        fp.Tool,
+					PreviewKind: fp.PreviewKind,
+					RuleID:      fp.RuleID,
+					FixType:     fp.FixType,
+					BlockLabel:  fp.BlockLabel,
+					Line:        fp.Line,
+					Summary:     fp.Summary,
+					Status:      fp.Status,
+					Message:     fp.Message,
 				}
 				proposals[j].Items = convertItemsToModel(fp.Items)
 			}

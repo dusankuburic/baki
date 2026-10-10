@@ -15,6 +15,7 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/egress"
@@ -127,7 +128,7 @@ func (f *orgProvidersFixture) orgModelDeployments(t *testing.T) []string {
 // router serves the org credential routes as caller.
 func (f *orgProvidersFixture) router(caller string) http.Handler {
 	security := &SecurityConfig{LocalUserID: caller, OrgSvc: f.orgSvc}
-	h := NewOrgHandler(f.orgSvc, f.backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(f.backend, f.backend, nil), f.svc, service.NewAuthzService(f.backend, f.orgSvc), service.NewChannelService(f.backend), service.NewUserDirectory(f.backend), testAuditRecorder(f.backend))
+	h := NewOrgHandler(f.orgSvc, f.backend, nil, security, mailer.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(f.backend, f.backend, nil), f.svc, service.NewAuthzService(f.backend, f.orgSvc), service.NewChannelService(f.backend), service.NewUserDirectory(f.backend), testAuditRecorder(f.backend), nil)
 	return mountedAs(h, caller)
 }
 
@@ -345,7 +346,7 @@ func TestOrgAzureFoundryConfig_NoOrgKeystore(t *testing.T) {
 		}
 	}
 	// A nil provider service (older test fixtures) degrades the same way.
-	h := NewOrgHandler(f.orgSvc, nil, nil, &SecurityConfig{LocalUserID: "u-admin"}, mailer.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(nil, nil, nil), nil, service.NewAuthzService(nil, f.orgSvc), service.NewChannelService(nil), service.NewUserDirectory(nil), nil)
+	h := NewOrgHandler(f.orgSvc, nil, nil, &SecurityConfig{LocalUserID: "u-admin"}, mailer.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(nil, nil, nil), nil, service.NewAuthzService(nil, f.orgSvc), service.NewChannelService(nil), service.NewUserDirectory(nil), nil, nil)
 	rr := httptest.NewRecorder()
 	h.handleOrgAzureFoundryConfigGet(rr, httptest.NewRequest(http.MethodGet, path, nil))
 	checkStatus(t, rr, http.StatusNotFound)

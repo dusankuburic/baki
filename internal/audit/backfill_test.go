@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"go.uber.org/fx/fxtest"
+
+	"pad-analyzer/internal/testutil"
 )
 
 // backfillStore is a backfiller that counts its runs.
@@ -72,14 +74,31 @@ func TestBackfillOrgIDs_RunsUnderTheLock(t *testing.T) {
 func TestScheduleOrgBackfill_RunsOnStartAndStopsWithTheApp(t *testing.T) {
 	store, lock := &backfillStore{block: true}, &testLocker{acquired: true}
 	lc := fxtest.NewLifecycle(t)
-	ScheduleOrgBackfill(lc, store, lock)
+	ScheduleOrgBackfill(BackfillDeps{Lifecycle: lc, Backfiller: store, Locker: lock})
 	lc.RequireStart()
 	waitFor(t, "the backfill to start", func() bool { return store.calls.Load() == 1 })
 	lc.RequireStop()
 	waitFor(t, "the cancelled run to release its lock", func() bool { return lock.released.Load() == 1 })
 
 	none := fxtest.NewLifecycle(t)
-	ScheduleOrgBackfill(none, nil, nil) // no database: nothing to fill, no hook
+	ScheduleOrgBackfill(BackfillDeps{Lifecycle: none}) // no database: nothing to fill, no hook
 	none.RequireStart()
 	none.RequireStop()
+}
+
+// TestScheduleOrgBackfill_RecordsTheJobState: the boot's run is recorded in the job state the backend keeps, so every
+// replica can tell when the backfill last succeeded anywhere.
+func TestScheduleOrgBackfill_RecordsTheJobState(t *testing.T) {
+	store, jobs := &backfillStore{filled: 2}, testutil.NewFakeBackend()
+	lc := fxtest.NewLifecycle(t)
+	ScheduleOrgBackfill(BackfillDeps{Lifecycle: lc, Backfiller: store, Store: jobs})
+	lc.RequireStart()
+	waitFor(t, "the backfill's recorded success", func() bool {
+		run, err := jobs.GetJobRun(context.Background(), "audit_org_backfill")
+		return err == nil && !run.LastSuccessAt.IsZero() && run.Holder != ""
+	})
+	lc.RequireStop()
+	if got := store.calls.Load(); got != 1 {
+		t.Errorf("the once-per-boot backfill ran %d times, want 1", got)
+	}
 }

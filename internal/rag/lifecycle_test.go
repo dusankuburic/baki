@@ -61,7 +61,7 @@ func TestAddDocument_ReplacesSameFilename(t *testing.T) {
 	if total != 1 {
 		t.Errorf("want 1 chunk (old version replaced), got %d", total)
 	}
-	contents, _ := store.ListKnowledgeChunkContents(ctx, "org-1", interfaces.KnowledgeChunkCursor{}, 0)
+	contents, _ := store.ListKnowledgeChunkContents(ctx, "org-1", interfaces.KnowledgeChunkCursor{}, 0, "")
 	if len(contents) != 1 || !strings.Contains(contents[0].Content, "second version") {
 		t.Errorf("surviving chunk is not the newest upload: %+v", contents)
 	}

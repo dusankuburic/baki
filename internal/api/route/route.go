@@ -98,6 +98,8 @@ const (
 	RateAnalysis = "analysis"
 	RateChat     = "chat"
 	RateUpload   = "upload"
+	// RateChannelTest: the notification channel test, which makes the server POST to an admin-chosen URL.
+	RateChannelTest = "channel_test"
 	// RateNone: not rate limited (content-hashed, immutable assets). An empty RateLimit means RateGeneral, so a
 	// policy built by hand fails toward the limiter.
 	RateNone = "none"

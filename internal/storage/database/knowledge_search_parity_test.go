@@ -74,11 +74,11 @@ func TestSearchKnowledge_PathParity(t *testing.T) {
 	}
 
 	query := []float32{1, 0, 0}
-	vec, err := b.searchKnowledgeVector(ctx, orgID, query, 10)
+	vec, err := b.searchKnowledgeVector(ctx, orgID, query, 10, "")
 	if err != nil {
 		t.Fatalf("searchKnowledgeVector: %v", err)
 	}
-	gos, err := b.searchKnowledgeGo(ctx, orgID, query, 10)
+	gos, err := b.searchKnowledgeGo(ctx, orgID, query, 10, "")
 	if err != nil {
 		t.Fatalf("searchKnowledgeGo: %v", err)
 	}

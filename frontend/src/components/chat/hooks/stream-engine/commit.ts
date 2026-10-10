@@ -116,25 +116,41 @@ export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
       if (slot && slot.toolCalls.length > 0) {
         msg.toolCalls = slot.toolCalls.map(tc => ({...tc}))
       }
-      // EVERY proposal card of the stream is pinned (sequential fixes stack),
-      // each with its per-item outcomes (batches).
-      if (slot && slot.fixProposals.length > 0) {
-        msg.fixProposals = slot.fixProposals.map(card => ({
+      // EVERY fix card of the stream is pinned (sequential fixes stack), each
+      // with its per-item outcomes (batches), in the shape the message has
+      // always persisted. A request of another kind (a later server's
+      // approval_request) lives only on the slot: the server keeps its own
+      // record, and the message has no persisted shape for it yet.
+      const fixCards = slot ? slot.approvals.filter(card => card.source === 'fix') : []
+      if (fixCards.length > 0) {
+        msg.fixProposals = fixCards.map(card => ({
           proposalId: card.proposalId,
-          ruleId: card.ruleId,
-          fixType: card.fixType,
-          blockLabel: card.blockLabel,
-          line: card.line,
-          summary: card.summary,
+          // As the server stamps its own record; a kind other than fix-patch
+          // is what lets the message render the card the way it was shown.
+          ...(card.tool ? {tool: card.tool} : {}),
+          ...(card.previewKind ? {previewKind: card.previewKind} : {}),
+          ruleId: card.ruleId ?? '',
+          fixType: card.fixType ?? '',
+          blockLabel: card.blockLabel ?? '',
+          line: card.line ?? 0,
+          summary: card.summary ?? '',
           status: card.status,
           message: card.message,
-          items: card.items.map(it => ({...it})),
+          items: card.items.map(it => ({
+            ruleId: it.ruleId ?? '',
+            fixType: it.fixType ?? '',
+            blockLabel: it.blockLabel ?? '',
+            line: it.line ?? 0,
+            summary: it.summary,
+            status: it.status,
+            message: it.message,
+          })),
         }))
       }
       appendMessage(threadId, msg)
       // Thread-tab badges: this conversation was agentic — flag it once
       // tools ran or a fix landed; updateThread is idempotent per flag.
-      if ((msg.toolCalls?.length ?? 0) > 0 || (msg.fixProposals?.length ?? 0) > 0) {
+      if ((msg.toolCalls?.length ?? 0) > 0 || (slot?.approvals.length ?? 0) > 0) {
         updateThread(threadId, {
           usedTools: true,
           appliedFixes:

@@ -115,8 +115,9 @@ type streamCtl struct {
 	// checks — usage rows land asynchronously, so N streams started together would all pass the same read.
 	inflightCost float64
 	// cancelReason is the client-facing explanation for a deliberate cancellation; it replaces the raw
-	// "context canceled" wrapping when the failure is reported.
+	// "context canceled" wrapping when the failure is reported. cancelCode is its class ("" = ChatErrStopped).
 	cancelReason string
+	cancelCode   string
 	// lastActivity is the UnixNano of the most recent provider chunk, read by the idle check in watchStream.
 	lastActivity atomic.Int64
 	// lastEmit is the UnixNano of the most recent event delivered to the client; distinct from lastActivity on
@@ -256,10 +257,14 @@ func (c *streamCtl) inflight() float64 {
 }
 
 // cancelWithReason records why the stream is being deliberately cancelled, then cancels it; first reason wins.
-func (c *streamCtl) cancelWithReason(reason string) {
+func (c *streamCtl) cancelWithReason(reason string) { c.cancelWithCode("", reason) }
+
+// cancelWithCode is cancelWithReason with the failure code the cancellation reports ("" = ChatErrStopped); the
+// first reason wins with its code, so a stream the user stopped stays stopped when the server then shuts down.
+func (c *streamCtl) cancelWithCode(code, reason string) {
 	c.mu.Lock()
 	if c.cancelReason == "" {
-		c.cancelReason = reason
+		c.cancelReason, c.cancelCode = reason, code
 	}
 	c.mu.Unlock()
 	c.cancel()
@@ -318,6 +323,18 @@ func (c *streamCtl) ensureTerminal(ctx context.Context) (code, msg string, set b
 	}
 	c.errCode, c.errMsg = code, msg
 	return code, msg, true
+}
+
+// recordTerminal records a failure with code and msg unless the stream already recorded a terminal state, and
+// reports whether it did: Shutdown's way of ending a stream whose worker is stuck past its cancellation.
+func (c *streamCtl) recordTerminal(code, msg string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.done || c.errMsg != "" {
+		return false
+	}
+	c.errCode, c.errMsg = code, msg
+	return true
 }
 
 // failureMessage returns the client-facing message for a stream error (the message half of classifyFailure).

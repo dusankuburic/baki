@@ -9,23 +9,42 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"pad-analyzer/internal/auth"
 )
+
+// testIdentity is a session's Identity: an unscoped user, no revocation re-check.
+func testIdentity(userID, displayName string) Identity {
+	return Identity{Actor: &auth.Actor{Kind: auth.ActorUser, UserID: userID}, DisplayName: displayName}
+}
 
 // rankChecker grants read access to everyone and write access only to the users
 // listed in editors — the shape of the real AuthzService adapter, which gates
-// the room join at "viewer" and the HTTP write endpoints at "editor".
+// the room join at "viewer" and the HTTP write endpoints at "editor". Like
+// AuthzService.Can, it asks the actor's scopes first: FlowRead takes read or
+// write, FlowEdit takes write.
 type rankChecker struct {
 	editors map[string]bool
 }
 
-func (c *rankChecker) CheckAccess(_ context.Context, _, _ string) error { return nil }
+func (c *rankChecker) CheckAccess(_ context.Context, _ string, actor *auth.Actor) (FlowOwner, error) {
+	if !actor.Allows(auth.ScopeRead) && !actor.Allows(auth.ScopeWrite) {
+		return FlowOwner{}, ErrAccessDenied
+	}
+	return FlowOwner{}, nil
+}
 
-func (c *rankChecker) CanEdit(_ context.Context, _, userID string) bool {
-	return c.editors[userID]
+func (c *rankChecker) CanEdit(_ context.Context, _ string, actor *auth.Actor) bool {
+	return actor.Allows(auth.ScopeWrite) && c.editors[actor.UserID]
 }
 
 func newRankServer(hub *Hub, userID string, checker FlowAccessChecker) *httptest.Server {
-	return httptest.NewServer(Handler(hub, userID, userID, nil, checker, "", time.Time{}, nil))
+	return httptest.NewServer(Handler(hub, testIdentity(userID, userID), nil, checker, nil))
+}
+
+// newActorServer serves the socket of actor, a PAT's or a session's.
+func newActorServer(hub *Hub, actor *auth.Actor, checker FlowAccessChecker) *httptest.Server {
+	return httptest.NewServer(Handler(hub, Identity{Actor: actor, DisplayName: actor.UserID}, nil, checker, nil))
 }
 
 // TestWS_ViewerCannotBroadcastBlockMutations is the regression gate for a write
@@ -160,15 +179,15 @@ type lookupCounter struct {
 	lookups    atomic.Int32
 }
 
-func (c *lookupCounter) CheckAccess(_ context.Context, _, _ string) error {
+func (c *lookupCounter) CheckAccess(_ context.Context, _ string, _ *auth.Actor) (FlowOwner, error) {
 	c.lookups.Add(1)
 	if !c.read.Load() {
-		return ErrAccessDenied
+		return FlowOwner{}, ErrAccessDenied
 	}
-	return nil
+	return FlowOwner{}, nil
 }
 
-func (c *lookupCounter) CanEdit(_ context.Context, _, _ string) bool {
+func (c *lookupCounter) CanEdit(_ context.Context, _ string, _ *auth.Actor) bool {
 	c.lookups.Add(1)
 	return c.edit.Load()
 }
@@ -204,7 +223,7 @@ func serverSideConn(t *testing.T) *websocket.Conn {
 // losing read access still disconnects.
 func TestRecheckAccess_OneLookupForAnEditor(t *testing.T) {
 	checker := &lookupCounter{}
-	c := NewClient(NewHub(), serverSideConn(t), "u1", "U1", "flow-1", true)
+	c := NewClient(NewHub(), serverSideConn(t), testIdentity("u1", "U1").Actor, "U1", "flow-1", true)
 
 	// Editor: one lookup, still connected and still an editor.
 	checker.read.Store(true)

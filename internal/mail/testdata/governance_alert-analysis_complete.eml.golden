@@ -1,0 +1,36 @@
+From: "PAD Analyzer" <no-reply@pad.example.com>
+To: <una@example.com>
+Subject: [ANALYSIS_COMPLETE] Analysis complete: Invoices
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Message-ID: <golden@pad.example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary=GOLDEN-BOUNDARY
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain; charset=UTF-8
+
+Flow: Invoices
+Event: analysis_complete
+
+Errors: 3
+Warnings: 5
+Info: 7
+Health: 72/100
+
+Time: 2026-10-10T12:00:00Z
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html; charset=UTF-8
+
+<table cellpadding=3D"0" cellspacing=3D"0" style=3D"font-family:sans-serif;=
+font-size:14px"><tr><td style=3D"color:#666;padding:2px 12px 2px 0">Flow</t=
+d><td>Invoices</td></tr><tr><td style=3D"color:#666;padding:2px 12px 2px 0"=
+>Event</td><td>analysis_complete</td></tr><tr><td style=3D"color:#666;paddi=
+ng:2px 12px 2px 0">Errors</td><td>3</td></tr><tr><td style=3D"color:#666;pa=
+dding:2px 12px 2px 0">Warnings</td><td>5</td></tr><tr><td style=3D"color:#6=
+66;padding:2px 12px 2px 0">Info</td><td>7</td></tr><tr><td style=3D"color:#=
+666;padding:2px 12px 2px 0">Health</td><td>72/100</td></tr></table>
+--GOLDEN-BOUNDARY--

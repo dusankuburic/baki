@@ -30,6 +30,10 @@ export interface FixItemSnapshot {
 // decision outlives the stream's transient approval card.
 export interface FixProposalSnapshot {
   proposalId: string
+  // The tool behind the proposal and how it was previewed, as the server
+  // stamps them; absent on older records, which were always a fix patch.
+  tool?: string
+  previewKind?: string
   ruleId: string
   fixType: string
   blockLabel: string
@@ -38,6 +42,30 @@ export interface FixProposalSnapshot {
   status: string
   message?: string
   items?: FixItemSnapshot[]
+}
+
+// ApprovalItemSnapshot is one item of a persisted approval of another kind:
+// its label and summary are the server's rendering, kept as text.
+export interface ApprovalItemSnapshot {
+  id: string
+  label: string
+  summary: string
+  status: string
+  message?: string
+}
+
+// ApprovalSnapshot is the persisted record of an approval that was not a fix
+// (a later server's message.approvals[]): the tool, how it was previewed and
+// how it resolved. Read as sent and re-saved as read; this bundle never
+// writes one itself — the server keeps the record.
+export interface ApprovalSnapshot {
+  proposalId: string
+  tool?: string
+  previewKind?: string
+  requiredScope?: string
+  status: string
+  message?: string
+  items: ApprovalItemSnapshot[]
 }
 
 export interface ChatMessage {
@@ -75,6 +103,7 @@ export interface ChatMessage {
   toolCalls?: ToolCallRecord[]
   fixProposal?: FixProposalSnapshot
   fixProposals?: FixProposalSnapshot[]
+  approvals?: ApprovalSnapshot[]
 }
 
 export interface ChatRequest {

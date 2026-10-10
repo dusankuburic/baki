@@ -119,6 +119,16 @@ func TestApplyFixes_BatchEndToEnd(t *testing.T) {
 			t.Errorf("item %v not applied", it)
 		}
 	}
+	// Phase 4b review F1: both items fix the SAME rule on different blocks, so ruleId cannot tell them apart;
+	// every request item and every decision item carries id = blockId:ruleId, in the same order.
+	for i, want := range []string{"b1:unhandled-error", "b2:unhandled-error"} {
+		if len(evs[0].items) == 2 && evs[0].items[i]["id"] != want {
+			t.Errorf("proposal item %d id = %v, want %s", i, evs[0].items[i]["id"], want)
+		}
+		if len(evs[2].items) == 2 && evs[2].items[i]["id"] != want {
+			t.Errorf("decision item %d id = %v, want %s", i, evs[2].items[i]["id"], want)
+		}
+	}
 	// The proposal event is batch-shaped.
 	if evs[0].batch != true || evs[0].count != 2 {
 		t.Errorf("proposal event not batch-shaped: batch=%v count=%v", evs[0].batch, evs[0].count)

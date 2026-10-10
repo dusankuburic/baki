@@ -23,6 +23,7 @@ vi.mock('@/hooks/useStreamingMessage', () => ({
     capturedHandler = handler
     return {
       registerStream: () => registerStreamImpl(),
+      confirmStream: vi.fn(),
       cancel: vi.fn(),
       teardownStream: vi.fn(),
       resumeInto: (streamId: string, opts?: {mode?: 'delta' | 'full'; onGone?: () => void}) => {
@@ -39,6 +40,7 @@ vi.mock('@/api', () => ({
     cancelStream: vi.fn(),
     saveConversation: vi.fn().mockResolvedValue(undefined),
     respondFixDecision: vi.fn().mockResolvedValue(undefined),
+    respondApprovalDecision: vi.fn().mockResolvedValue(undefined),
   },
   flowApi: {
     loadFlowFromPath: vi.fn().mockResolvedValue(null),
@@ -105,7 +107,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
             threadB: {
               streamId: 'streamB',
@@ -115,7 +117,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -144,7 +146,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -198,7 +200,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -243,7 +245,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -285,7 +287,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -328,7 +330,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -373,7 +375,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -456,7 +458,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -515,7 +517,7 @@ describe('useChatStreamEngine', () => {
                 tokens: 0,
                 toolStatus: null,
                 toolCalls: [],
-                fixProposals: [],
+                approvals: [],
               },
             },
           })
@@ -564,7 +566,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -578,9 +580,14 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onFixProposal!(
           {
             kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
             proposalId: 'p1',
             items: [
               {
+                id: 'unhandled-error',
+                label: 'Call API',
                 ruleId: 'unhandled-error',
                 fixType: 'wrap-error-handler',
                 blockLabel: 'Call API',
@@ -593,8 +600,8 @@ describe('useChatStreamEngine', () => {
         )
       })
       const slot = useChatStore.getState().streams.threadA!
-      expect(slot.fixProposals).toHaveLength(1)
-      expect(slot.fixProposals[0]!).toMatchObject({
+      expect(slot.approvals).toHaveLength(1)
+      expect(slot.approvals[0]!).toMatchObject({
         proposalId: 'p1',
         ruleId: 'unhandled-error',
         fixType: 'wrap-error-handler',
@@ -603,8 +610,8 @@ describe('useChatStreamEngine', () => {
         summary: 'wrap lines 3-3',
         status: 'pending',
       })
-      expect(slot.fixProposals[0]!.items).toHaveLength(1)
-      expect(slot.fixProposals[0]!.items[0]!).toMatchObject({ruleId: 'unhandled-error', status: 'pending'})
+      expect(slot.approvals[0]!.items).toHaveLength(1)
+      expect(slot.approvals[0]!.items[0]!).toMatchObject({ruleId: 'unhandled-error', status: 'pending'})
     })
 
     // U2: sequential proposals STACK — the model can propose a second fix
@@ -615,8 +622,11 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onFixProposal!(
           {
             kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
             proposalId: 'p1',
-            items: [{ruleId: 'r1', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+            items: [{id: 'r1', label: 'b', ruleId: 'r1', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
           },
           'streamA',
         )
@@ -628,18 +638,21 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onFixProposal!(
           {
             kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
             proposalId: 'p2',
-            items: [{ruleId: 'r2', fixType: 'f2', blockLabel: 'b2', line: 5, summary: 's2'}],
+            items: [{id: 'r2', label: 'b2', ruleId: 'r2', fixType: 'f2', blockLabel: 'b2', line: 5, summary: 's2'}],
           },
           'streamA',
         )
       })
       const slot = useChatStore.getState().streams.threadA!
-      expect(slot.fixProposals).toHaveLength(2)
-      expect(slot.fixProposals[0]!.status).toBe('applied')
-      expect(slot.fixProposals[0]!.proposalId).toBe('p1')
-      expect(slot.fixProposals[1]!.status).toBe('pending')
-      expect(slot.fixProposals[1]!.proposalId).toBe('p2')
+      expect(slot.approvals).toHaveLength(2)
+      expect(slot.approvals[0]!.status).toBe('applied')
+      expect(slot.approvals[0]!.proposalId).toBe('p1')
+      expect(slot.approvals[1]!.status).toBe('pending')
+      expect(slot.approvals[1]!.proposalId).toBe('p2')
     })
 
     // Replaying a proposalId already on the slot is a no-op (journal replay
@@ -648,8 +661,11 @@ describe('useChatStreamEngine', () => {
       setupFixStream()
       const payload = {
         kind: 'fix-proposal' as const,
+        source: 'fix' as const,
+        tool: 'apply_fix',
+        previewKind: 'fix-patch',
         proposalId: 'p1',
-        items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+        items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
       }
       act(() => {
         capturedHandler!.onFixProposal!(payload, 'streamA')
@@ -657,7 +673,7 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onFixProposal!(payload, 'streamA')
       })
-      expect(useChatStore.getState().streams.threadA!.fixProposals).toHaveLength(1)
+      expect(useChatStore.getState().streams.threadA!.approvals).toHaveLength(1)
     })
 
     // Batch decisions patch per-item statuses.
@@ -667,10 +683,13 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onFixProposal!(
           {
             kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
             proposalId: 'batch-1',
             items: [
-              {ruleId: 'r1', fixType: 'f', blockLabel: 'b1', line: 1, summary: 's'},
-              {ruleId: 'r2', fixType: 'f', blockLabel: 'b2', line: 2, summary: 's'},
+              {id: 'r1', label: 'b1', ruleId: 'r1', fixType: 'f', blockLabel: 'b1', line: 1, summary: 's'},
+              {id: 'r2', label: 'b2', ruleId: 'r2', fixType: 'f', blockLabel: 'b2', line: 2, summary: 's'},
             ],
           },
           'streamA',
@@ -682,7 +701,7 @@ describe('useChatStreamEngine', () => {
           {ruleId: 'r2', status: 'applied-unresolved', message: 'still appears'},
         ])
       })
-      const card = useChatStore.getState().streams.threadA!.fixProposals[0]!
+      const card = useChatStore.getState().streams.threadA!.approvals[0]!
       expect(card.status).toBe('applied-unresolved')
       expect(card.items[0]!.status).toBe('applied')
       expect(card.items[1]!.status).toBe('applied-unresolved')
@@ -699,8 +718,11 @@ describe('useChatStreamEngine', () => {
           [
             {
               kind: 'fix-proposal',
+              source: 'fix',
+              tool: 'apply_fix',
+              previewKind: 'fix-patch',
               proposalId: 'p1',
-              items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+              items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
             },
             {
               kind: 'tool-result',
@@ -710,7 +732,7 @@ describe('useChatStreamEngine', () => {
               durationMs: 4,
               summary: '2 matches',
             },
-            {kind: 'fix-decision', proposalId: 'p1', status: 'applied', message: 'verified'},
+            {kind: 'fix-decision', source: 'fix', proposalId: 'p1', status: 'applied', message: 'verified'},
           ],
           'streamA',
         )
@@ -719,8 +741,8 @@ describe('useChatStreamEngine', () => {
       expect(slot.toolCalls).toEqual([
         {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 4, summary: '2 matches'},
       ])
-      expect(slot.fixProposals).toHaveLength(1)
-      expect(slot.fixProposals[0]!.status).toBe('applied')
+      expect(slot.approvals).toHaveLength(1)
+      expect(slot.approvals[0]!.status).toBe('applied')
 
       // Idempotent: replaying the same journal must not duplicate state.
       act(() => {
@@ -728,15 +750,18 @@ describe('useChatStreamEngine', () => {
           [
             {
               kind: 'fix-proposal',
+              source: 'fix',
+              tool: 'apply_fix',
+              previewKind: 'fix-patch',
               proposalId: 'p1',
-              items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+              items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
             },
           ],
           'streamA',
         )
       })
       expect(useChatStore.getState().streams.threadA!.toolCalls).toHaveLength(0)
-      expect(useChatStore.getState().streams.threadA!.fixProposals).toHaveLength(1)
+      expect(useChatStore.getState().streams.threadA!.approvals).toHaveLength(1)
     })
 
     it('onFixDecision applied patches the card and re-analyzes the flow', async () => {
@@ -745,8 +770,11 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onFixProposal!(
           {
             kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
             proposalId: 'p1',
-            items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+            items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
           },
           'streamA',
         )
@@ -754,7 +782,7 @@ describe('useChatStreamEngine', () => {
       act(() => {
         capturedHandler!.onFixDecision!('p1', 'applied', undefined, 'streamA')
       })
-      expect(useChatStore.getState().streams.threadA!.fixProposals[0]?.status).toBe('applied')
+      expect(useChatStore.getState().streams.threadA!.approvals[0]?.status).toBe('applied')
       // The refresh fires asynchronously; flush microtasks.
       await act(async () => {
         await Promise.resolve()
@@ -769,8 +797,11 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onFixProposal!(
           {
             kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
             proposalId: 'p1',
-            items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+            items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
           },
           'streamA',
         )
@@ -779,7 +810,7 @@ describe('useChatStreamEngine', () => {
         result.current.respondFixProposal('threadA', true)
       })
       expect(chatApi.respondFixDecision).toHaveBeenCalledWith('streamA', 'p1', true, undefined)
-      expect(useChatStore.getState().streams.threadA!.fixProposals[0]?.status).toBe('applying')
+      expect(useChatStore.getState().streams.threadA!.approvals[0]?.status).toBe('applying')
 
       // Second click while no longer pending must not re-send.
       await act(async () => {
@@ -796,8 +827,11 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onFixProposal!(
           {
             kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
             proposalId: 'p1',
-            items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+            items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
           },
           'streamA',
         )
@@ -805,7 +839,329 @@ describe('useChatStreamEngine', () => {
       await act(async () => {
         result.current.respondFixProposal('threadA', true)
       })
-      expect(useChatStore.getState().streams.threadA!.fixProposals[0]?.status).toBe('error')
+      expect(useChatStore.getState().streams.threadA!.approvals[0]?.status).toBe('error')
+    })
+
+    // Phase 4b: the card carries what the server said about the request; an
+    // older server's proposal (no tool, kind or scope) is a fix card.
+    it('keeps tool, previewKind and requiredScope on the card; an older server defaults to fix-patch', () => {
+      setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            source: 'fix',
+            proposalId: 'p1',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
+            requiredScope: 'write',
+            items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+          },
+          'streamA',
+        )
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            source: 'fix',
+            proposalId: 'p2',
+            tool: '',
+            previewKind: 'fix-patch',
+            items: [{id: 'r2', label: 'b', ruleId: 'r2', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+          },
+          'streamA',
+        )
+      })
+      const slot = useChatStore.getState().streams.threadA!
+      expect(slot.approvals[0]).toMatchObject({
+        source: 'fix',
+        tool: 'apply_fix',
+        previewKind: 'fix-patch',
+        requiredScope: 'write',
+      })
+      expect(slot.approvals[1]).toMatchObject({source: 'fix', tool: '', previewKind: 'fix-patch'})
+      expect(slot.approvals[1]).not.toHaveProperty('requiredScope')
+    })
+
+    it('routes the decision to /api/chat/approval-decision for an approval_request and to /api/chat/fix-decision for a fix_proposal', async () => {
+      const {result} = setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            source: 'approval',
+            proposalId: 'a1',
+            tool: 'rename_variable',
+            previewKind: 'something-new',
+            items: [
+              {
+                id: 'v1',
+                label: 'Variable %A%',
+                ruleId: '',
+                fixType: '',
+                blockLabel: '',
+                line: 0,
+                summary: 'to %Alpha%',
+              },
+            ],
+          },
+          'streamA',
+        )
+      })
+      await act(async () => {
+        result.current.respondFixProposal('threadA', true, 'a1')
+      })
+      expect(chatApi.respondApprovalDecision).toHaveBeenCalledWith('streamA', 'a1', true, undefined)
+      expect(chatApi.respondFixDecision).not.toHaveBeenCalled()
+      expect(useChatStore.getState().streams.threadA!.approvals[0]?.status).toBe('applying')
+
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            source: 'fix',
+            proposalId: 'p1',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
+            items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+          },
+          'streamA',
+        )
+      })
+      await act(async () => {
+        result.current.respondFixProposal('threadA', false, 'p1')
+      })
+      expect(chatApi.respondFixDecision).toHaveBeenCalledWith('streamA', 'p1', false, undefined)
+      expect(chatApi.respondApprovalDecision).toHaveBeenCalledTimes(1)
+    })
+
+    // The stream ended before a decision (the server is restarting): the
+    // card reads as cancelled with the server's words — not as a failed fix.
+    it('shows a cancelled decision as cancelled, with the server message', async () => {
+      setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            source: 'fix',
+            proposalId: 'p1',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
+            items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+          },
+          'streamA',
+        )
+      })
+      act(() => {
+        capturedHandler!.onFixDecision!('p1', 'cancelled', 'the server is restarting', 'streamA')
+      })
+      const card = useChatStore.getState().streams.threadA!.approvals[0]!
+      expect(card.status).toBe('cancelled')
+      expect(card.message).toBe('the server is restarting')
+      await act(async () => {
+        await Promise.resolve()
+      })
+      const {analysisApi} = await import('@/api')
+      expect(analysisApi.analyzeFlowById).not.toHaveBeenCalled()
+    })
+
+    // A generic request's items are keyed by the id the server stamped on
+    // both the request and the decision, and its outcome never re-analyses
+    // the flow.
+    it("patches a generic request's items by id", () => {
+      setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            source: 'approval',
+            proposalId: 'a1',
+            tool: 'rename_variable',
+            previewKind: 'something-new',
+            items: [
+              {id: 'v1', label: 'A', ruleId: '', fixType: '', blockLabel: '', line: 0, summary: 's'},
+              {id: 'v2', label: 'B', ruleId: '', fixType: '', blockLabel: '', line: 0, summary: 's'},
+            ],
+          },
+          'streamA',
+        )
+      })
+      act(() => {
+        capturedHandler!.onFixDecision!('a1', 'applied', undefined, 'streamA', [
+          {id: 'v2', status: 'error', message: 'skipped'},
+        ])
+      })
+      const card = useChatStore.getState().streams.threadA!.approvals[0]!
+      expect(card.status).toBe('applied')
+      expect(card.items[0]!.status).toBe('pending')
+      expect(card.items[1]).toMatchObject({status: 'error', message: 'skipped'})
+    })
+
+    // F1: the same rule fixed on two blocks (the common apply_fixes case). A
+    // server that stamps ids (blockId:ruleId) is matched by id, in any
+    // order; one that sends ruleId alone is matched by position — never the
+    // first row with that rule, which showed A's outcome on B.
+    it('matches a batch decision to rows sharing a rule by id, else by position', () => {
+      setupFixStream()
+      const sameRule = (id: string, label: string) => ({
+        id,
+        label,
+        ruleId: 'unhandled-error',
+        fixType: 'f',
+        blockLabel: label,
+        line: 1,
+        summary: 's',
+      })
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fixes',
+            previewKind: 'fix-patch',
+            proposalId: 'batch-2',
+            items: [sameRule('unhandled-error', 'Call A'), sameRule('unhandled-error', 'Call B')],
+          },
+          'streamA',
+        )
+        capturedHandler!.onFixDecision!('batch-2', 'applied-unresolved', undefined, 'streamA', [
+          {ruleId: 'unhandled-error', status: 'applied'},
+          {ruleId: 'unhandled-error', status: 'error', message: 'block changed'},
+        ])
+      })
+      const legacy = useChatStore.getState().streams.threadA!.approvals[0]!
+      expect(legacy.items[0]).toMatchObject({label: 'Call A', status: 'applied'})
+      expect(legacy.items[1]).toMatchObject({label: 'Call B', status: 'error', message: 'block changed'})
+
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fixes',
+            previewKind: 'fix-patch',
+            proposalId: 'batch-3',
+            items: [sameRule('b1:unhandled-error', 'Call A'), sameRule('b2:unhandled-error', 'Call B')],
+          },
+          'streamA',
+        )
+        capturedHandler!.onFixDecision!('batch-3', 'applied-unresolved', undefined, 'streamA', [
+          {id: 'b2:unhandled-error', ruleId: 'unhandled-error', status: 'error', message: 'block changed'},
+          {id: 'b1:unhandled-error', ruleId: 'unhandled-error', status: 'applied'},
+        ])
+      })
+      const stamped = useChatStore.getState().streams.threadA!.approvals[1]!
+      expect(stamped.items[0]).toMatchObject({label: 'Call A', status: 'applied'})
+      expect(stamped.items[1]).toMatchObject({label: 'Call B', status: 'error', message: 'block changed'})
+    })
+
+    it('replays a journaled batch decision onto rows sharing a rule by position', () => {
+      setupFixStream()
+      const sameRule = (label: string) => ({
+        id: 'unhandled-error',
+        label,
+        ruleId: 'unhandled-error',
+        fixType: 'f',
+        blockLabel: label,
+        line: 1,
+        summary: 's',
+      })
+      act(() => {
+        capturedHandler!.onResumeState!(
+          [
+            {
+              kind: 'fix-proposal',
+              source: 'fix',
+              tool: 'apply_fixes',
+              previewKind: 'fix-patch',
+              proposalId: 'batch-2',
+              items: [sameRule('Call A'), sameRule('Call B')],
+            },
+            {
+              kind: 'fix-decision',
+              source: 'fix',
+              proposalId: 'batch-2',
+              status: 'applied-unresolved',
+              items: [
+                {ruleId: 'unhandled-error', status: 'applied'},
+                {ruleId: 'unhandled-error', status: 'error', message: 'block changed'},
+              ],
+            },
+          ],
+          'streamA',
+        )
+      })
+      const card = useChatStore.getState().streams.threadA!.approvals[0]!
+      expect(card.status).toBe('applied-unresolved')
+      expect(card.items[0]).toMatchObject({label: 'Call A', status: 'applied'})
+      expect(card.items[1]).toMatchObject({label: 'Call B', status: 'error', message: 'block changed'})
+    })
+
+    // F4: only a fix changed the flow. Another tool's applied outcome is the
+    // model's to report; nothing re-analyses.
+    it('does not refresh the flow when an approval of another kind is applied', async () => {
+      setupFixStream()
+      act(() => {
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            source: 'approval',
+            proposalId: 'a1',
+            tool: 'rename_variable',
+            previewKind: 'something-new',
+            items: [{id: 'v1', label: 'A', ruleId: '', fixType: '', blockLabel: '', line: 0, summary: 's'}],
+          },
+          'streamA',
+        )
+        capturedHandler!.onFixDecision!('a1', 'applied', undefined, 'streamA')
+      })
+      expect(useChatStore.getState().streams.threadA!.approvals[0]).toMatchObject({
+        status: 'applied',
+        items: [{status: 'applied'}],
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+      const {analysisApi} = await import('@/api')
+      expect(analysisApi.analyzeFlowById).not.toHaveBeenCalled()
+    })
+
+    // C8: a later server that emits approval_request while keeping
+    // /api/chat/fix-decision as its one decision route (ADR 0026, Open)
+    // answers 404 on the new route; the decision goes to the old one, once.
+    it('falls back to /api/chat/fix-decision once when /api/chat/approval-decision is 404', async () => {
+      const {result} = setupFixStream()
+      const {ApiError} = await import('@/api')
+      const request = {
+        kind: 'fix-proposal' as const,
+        source: 'approval' as const,
+        tool: 'rename_variable',
+        previewKind: 'something-new',
+        items: [{id: 'v1', label: 'A', ruleId: '', fixType: '', blockLabel: '', line: 0, summary: 's'}],
+      }
+      act(() => {
+        capturedHandler!.onFixProposal!({...request, proposalId: 'a1'}, 'streamA')
+        capturedHandler!.onFixProposal!({...request, proposalId: 'a2'}, 'streamA')
+      })
+      vi.mocked(chatApi.respondApprovalDecision).mockRejectedValueOnce(
+        Object.assign(new ApiError('not found', 404), {status: 404}),
+      )
+      await act(async () => {
+        result.current.respondFixProposal('threadA', true, 'a1', [0])
+      })
+      expect(chatApi.respondApprovalDecision).toHaveBeenCalledWith('streamA', 'a1', true, [0])
+      expect(chatApi.respondFixDecision).toHaveBeenCalledTimes(1)
+      expect(chatApi.respondFixDecision).toHaveBeenCalledWith('streamA', 'a1', true, [0])
+      expect(useChatStore.getState().streams.threadA!.approvals[0]?.status).toBe('applying')
+
+      // Any other failure of the new route is a failed decision, not a retry.
+      vi.mocked(chatApi.respondApprovalDecision).mockRejectedValueOnce(
+        Object.assign(new ApiError('boom', 500), {status: 500}),
+      )
+      await act(async () => {
+        result.current.respondFixProposal('threadA', false, 'a2')
+      })
+      expect(chatApi.respondFixDecision).toHaveBeenCalledTimes(1)
+      expect(useChatStore.getState().streams.threadA!.approvals[1]?.status).toBe('error')
     })
   })
 
@@ -842,7 +1198,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -898,7 +1254,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: 'Searching flow',
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -967,9 +1323,14 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onFixProposal!(
           {
             kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
             proposalId: 'p1',
             items: [
               {
+                id: 'unhandled-error',
+                label: 'Call API',
                 ruleId: 'unhandled-error',
                 fixType: 'wrap-error-handler',
                 blockLabel: 'Call API',
@@ -1017,6 +1378,65 @@ describe('useChatStreamEngine', () => {
       expect(useChatStore.getState().streams.threadA).toBeUndefined()
     })
 
+    // F5: the persisted snapshot's exact shape, tool and previewKind
+    // included — the generic strip reads them back after a reload.
+    it('done writes tool and previewKind onto the persisted fix snapshot', () => {
+      setupToolStream()
+      act(() => {
+        capturedHandler!.onChunk('Done', 'streamA')
+        capturedHandler!.onFixProposal!(
+          {
+            kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
+            requiredScope: 'write',
+            proposalId: 'p1',
+            items: [
+              {
+                id: 'b1:r',
+                label: 'Call API',
+                ruleId: 'r',
+                fixType: 'f',
+                blockLabel: 'Call API',
+                line: 3,
+                summary: 'wrap',
+              },
+            ],
+          },
+          'streamA',
+        )
+        capturedHandler!.onFixDecision!('p1', 'applied', 'verified gone', 'streamA')
+        capturedHandler!.onDone(9, 4, 'streamA')
+      })
+      const committed = useChatStore.getState().conversations.get('threadA')![0]!
+      expect(committed.fixProposals).toEqual([
+        {
+          proposalId: 'p1',
+          tool: 'apply_fix',
+          previewKind: 'fix-patch',
+          ruleId: 'r',
+          fixType: 'f',
+          blockLabel: 'Call API',
+          line: 3,
+          summary: 'wrap',
+          status: 'applied',
+          message: 'verified gone',
+          items: [
+            {
+              ruleId: 'r',
+              fixType: 'f',
+              blockLabel: 'Call API',
+              line: 3,
+              summary: 'wrap',
+              status: 'applied',
+              message: 'verified gone',
+            },
+          ],
+        },
+      ])
+    })
+
     // F10: commit flags the thread as agentic so the tab shows badges.
     it('done flags the thread usedTools/appliedFixes for tab badges', () => {
       setupToolStream()
@@ -1036,8 +1456,11 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onFixProposal!(
           {
             kind: 'fix-proposal',
+            source: 'fix',
+            tool: 'apply_fix',
+            previewKind: 'fix-patch',
             proposalId: 'p1',
-            items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+            items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
           },
           'streamA',
         )
@@ -1097,7 +1520,7 @@ describe('useChatStreamEngine', () => {
             tokens: 0,
             toolStatus: null,
             toolCalls: [],
-            fixProposals: [],
+            approvals: [],
           },
         },
       })
@@ -1163,7 +1586,7 @@ describe('useChatStreamEngine', () => {
               tokens: 0,
               toolStatus: null,
               toolCalls: [],
-              fixProposals: [],
+              approvals: [],
             },
           },
         })
@@ -1264,7 +1687,7 @@ function seedSlotThread(threadId: string, streamId: string, provider: string) {
         tokens: 0,
         toolStatus: null,
         toolCalls: [],
-        fixProposals: [],
+        approvals: [],
       },
     },
   })
@@ -1537,7 +1960,7 @@ describe('useChatStreamEngine served-model refetch key', () => {
             tokens: 0,
             toolStatus: null,
             toolCalls: [],
-            fixProposals: [],
+            approvals: [],
           },
         },
       })
@@ -1560,7 +1983,7 @@ describe('useChatStreamEngine served-model refetch key', () => {
             tokens: 0,
             toolStatus: null,
             toolCalls: [],
-            fixProposals: [],
+            approvals: [],
           },
         },
       })
@@ -1581,7 +2004,7 @@ describe('useChatStreamEngine served-model refetch key', () => {
             tokens: 0,
             toolStatus: null,
             toolCalls: [],
-            fixProposals: [],
+            approvals: [],
           },
         },
       })
@@ -1604,7 +2027,7 @@ describe('useChatStreamEngine served-model refetch key', () => {
             tokens: 0,
             toolStatus: null,
             toolCalls: [],
-            fixProposals: [],
+            approvals: [],
           },
         },
       })

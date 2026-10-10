@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	"pad-analyzer/internal/metrics"
 	"time"
 )
 
@@ -151,7 +150,7 @@ func (rp *RetryingProvider) Chat(ctx context.Context, req Request) (*Response, e
 	var lastErr error
 	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
-			metrics.RecordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
+			recordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
 			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
 				return nil, err
 			}
@@ -186,7 +185,7 @@ func (rp *RetryingProvider) Embed(ctx context.Context, text []string) ([][]float
 	var lastErr error
 	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
-			metrics.RecordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
+			recordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
 			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
 				return nil, err
 			}
@@ -244,7 +243,7 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 	var lastErr error
 	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
-			metrics.RecordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
+			recordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
 			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
 				return err
 			}

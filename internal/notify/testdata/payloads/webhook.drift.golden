@@ -1,0 +1,10 @@
+POST /hook
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: drift
+X-Baki-Signature: sha256=351f8cb159c9cc1deee99c5fe8252135e5b74d858cc81a59dd400a1227fe004c
+X-Baki-Signature-V2: sha256=f8ac1db7663f04f2ad2a9217d56651967ed0d9a677f6a3b9c7275587e172d7b8
+X-Baki-Timestamp: 1790856001
+
+{"schemaVersion":1,"id":"evt_8b26b52dca786c5f56fe0430","deliveryId":"00000000-0000-4000-8000-000000000001","orgId":"org-1","type":"drift","flowId":"flow-1","flowName":"Invoice Bot","title":"New findings in Invoice Bot","message":"2 new finding(s) since baseline (1 error, 1 warning).","newErrors":1,"newWarnings":1,"at":"2026-10-01T12:00:00Z"}

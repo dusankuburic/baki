@@ -12,7 +12,6 @@ import (
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/reqinfo"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
@@ -131,9 +130,9 @@ func TestRecorder_StopDrainsTheQueue(t *testing.T) {
 		t.Errorf("%d batch writes for %d events: not batched", calls, n)
 	}
 
-	before := metrics.AuditDroppedCount("closed")
+	before := auditDroppedCount("closed")
 	r.Record(context.Background(), Entry{Action: ActionFlowSave})
-	if got := metrics.AuditDroppedCount("closed") - before; got != 1 {
+	if got := auditDroppedCount("closed") - before; got != 1 {
 		t.Errorf("closed drops after Stop = %v, want 1", got)
 	}
 	r.Stop() // idempotent
@@ -231,9 +230,9 @@ func TestNewWithSink_CapturesWhileTheSinkNamesAChannel(t *testing.T) {
 	current.Store(&ch)
 	r.Record(context.Background(), Entry{Action: "first"})
 	r.Record(context.Background(), Entry{Action: "second"})
-	before := metrics.AuditDroppedCount("full")
+	before := auditDroppedCount("full")
 	r.Record(context.Background(), Entry{Action: "third"})
-	if got := metrics.AuditDroppedCount("full") - before; got != 1 {
+	if got := auditDroppedCount("full") - before; got != 1 {
 		t.Errorf("full drops = %v, want 1", got)
 	}
 	if a, b := <-ch, <-ch; a.Action != "first" || b.Action != "second" {

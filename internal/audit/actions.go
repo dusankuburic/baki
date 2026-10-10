@@ -70,6 +70,12 @@ const (
 	ActionAzureConnectionDelete = "azure.connection_delete"
 	ActionAzureModelSave        = "azure.model_save"
 	ActionAzureModelDelete      = "azure.model_delete"
+	// Organisation CI credentials (ADR 0019): an org admin minted or revoked one (Meta: keyId, name; never the
+	// secret), and a CI runner's webhook call analysed a flow (actor kind "integration", the credential's key id as
+	// the token id; Meta: method, format, gate, passed).
+	ActionOrgCICredentialCreate = "org.ci_credential_create" // #nosec G101 -- an audit action name, not a credential
+	ActionOrgCICredentialRevoke = "org.ci_credential_revoke" // #nosec G101 -- an audit action name, not a credential
+	ActionCIWebhookRun          = "ci.webhook_run"
 )
 
 // AllActions is the closed set of audit action strings the server emits; the admin audit UI builds its filter
@@ -94,5 +100,6 @@ func AllActions() []string {
 		ActionSSOLink, ActionSSOUnlink, ActionProvidersTest,
 		ActionAzureConnectionSave, ActionAzureConnectionDelete,
 		ActionAzureModelSave, ActionAzureModelDelete,
+		ActionOrgCICredentialCreate, ActionOrgCICredentialRevoke, ActionCIWebhookRun,
 	}
 }

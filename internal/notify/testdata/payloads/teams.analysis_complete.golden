@@ -1,0 +1,8 @@
+POST /webhookb2/x
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: analysis_complete
+X-Baki-Timestamp: 1790856001
+
+{"@context":"http://schema.org/extensions","@type":"MessageCard","sections":[{"activityTitle":"PAD Flow Analysis: Invoice Bot (errors)","facts":[{"name":"Flow","value":"Invoice Bot"},{"name":"Errors","value":"1"},{"name":"Warnings","value":"2"},{"name":"Info","value":"3"},{"name":"Health","value":"81/100"}],"markdown":false,"text":"1 error(s), 2 warning(s), 3 info finding(s)"}],"summary":"PAD Flow Analysis: Invoice Bot (errors)","themeColor":"D13438"}

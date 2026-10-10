@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/testutil"
@@ -25,7 +24,7 @@ func newFastRetryProviderService(t *testing.T, secrets *testutil.FakeSecretStore
 		v, _ := secrets.Get(scope, provider)
 		return v, nil
 	}
-	rt := &config.RuntimeConfig{RetryMaxAttempts: 3, RetryBaseDelay: "1ms", CircuitBreakerFailures: 100, CircuitBreakerOpenDur: "1s"}
+	rt := &ai.ResilienceConfig{Attempts: 3, BaseDelay: time.Millisecond, Threshold: 100, OpenFor: time.Second}
 	factory := ai.NewProviderFactory(getKey, ai.NewCopilotAuth(), nil, rt)
 	return NewProviderService(ai.NewGitHubAuth(), ai.NewCopilotAuth(), factory, secrets, nil, nil)
 }

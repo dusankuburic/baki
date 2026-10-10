@@ -1,0 +1,8 @@
+POST /webhookb2/x
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: test
+X-Baki-Timestamp: 1790856001
+
+{"@context":"http://schema.org/extensions","@type":"MessageCard","sections":[{"activityTitle":"baki channel test","facts":[{"name":"Flow","value":""}],"markdown":false,"text":"This is a test delivery to \"ops\" (webhook). If you can read this, the channel works."}],"summary":"baki channel test","themeColor":"FFB900"}

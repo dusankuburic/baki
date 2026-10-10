@@ -171,3 +171,73 @@ describe('parseConversationPayload', () => {
     expect(() => parseConversationPayload('oops')).toThrow()
   })
 })
+
+describe('persisted approvals', () => {
+  const fix = {
+    proposalId: 'p1',
+    ruleId: 'unhandled-error',
+    fixType: 'wrap-error-handler',
+    blockLabel: 'Call API',
+    line: 3,
+    summary: 'wrap lines 3-3',
+    status: 'applied',
+  }
+  const approval = {
+    proposalId: 'a1',
+    tool: 'rename_variable',
+    previewKind: 'something-new',
+    requiredScope: 'write',
+    status: 'applied',
+    message: 'renamed',
+    items: [{id: 'v1', label: 'Rename x', summary: 'x → total', status: 'applied'}],
+  }
+  const wire = (messages: ChatMessage[]) => JSON.parse(JSON.stringify({messages})).messages as unknown
+
+  it("keeps a fix proposal's tool and previewKind, and leaves both absent on an older record", () => {
+    const m = parseChatMessage({
+      id: 'm1',
+      role: 'assistant',
+      content: '',
+      timestamp: 't',
+      fixProposals: [
+        {...fix, tool: 'apply_fix', previewKind: 'fix-patch'},
+        {...fix, proposalId: 'p0'},
+      ],
+    })
+    expect(m?.fixProposals?.[0]).toMatchObject({tool: 'apply_fix', previewKind: 'fix-patch'})
+    expect(m?.fixProposals?.[1]).not.toHaveProperty('tool')
+    expect(m?.fixProposals?.[1]).not.toHaveProperty('previewKind')
+  })
+
+  it('reads message.approvals[] when present and tolerates its absence', () => {
+    const m = parseChatMessage({
+      id: 'm1',
+      role: 'assistant',
+      content: '',
+      timestamp: 't',
+      approvals: [approval, {tool: 'no-id', status: 'applied'}, 'junk', null],
+    })
+    expect(m?.approvals).toEqual([approval])
+    expect(parseChatMessage({id: 'm2', role: 'assistant', content: '', timestamp: 't'})).not.toHaveProperty('approvals')
+    expect(
+      parseChatMessage({id: 'm3', role: 'assistant', content: '', timestamp: 't', approvals: 'x'}),
+    ).not.toHaveProperty('approvals')
+  })
+
+  it('keeps both through save → get → save', () => {
+    const thread: ChatMessage[] = [
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'done',
+        timestamp: 't',
+        fixProposals: [{...fix, tool: 'apply_fix', previewKind: 'fix-patch'}],
+        approvals: [approval],
+      },
+    ]
+    const stored = wire(thread)
+    const loaded = parseConversationPayload(stored)
+    expect(loaded).toEqual(thread)
+    expect(wire(loaded)).toEqual(stored)
+  })
+})

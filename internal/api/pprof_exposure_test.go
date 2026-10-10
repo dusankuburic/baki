@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/platform/secret"
 	"pad-analyzer/internal/testutil"
 )
 
@@ -67,7 +68,7 @@ func TestPprof_EnabledRequiresToken(t *testing.T) {
 	const token = "s3cret-metrics-token"
 	rt := newTestRouterSSO(testutil.NewFakeBackend(), true, nil, nil, func(c *config.Config) {
 		c.Server.PprofEnabled = true
-		c.Server.MetricsToken = token
+		c.Server.MetricsToken = secret.New(token)
 	})
 
 	tests := []struct {
@@ -96,7 +97,7 @@ func TestPprof_EnabledStillBlocksPublicIP(t *testing.T) {
 	const token = "s3cret-metrics-token"
 	rt := newTestRouterSSO(testutil.NewFakeBackend(), true, nil, nil, func(c *config.Config) {
 		c.Server.PprofEnabled = true
-		c.Server.MetricsToken = token
+		c.Server.MetricsToken = secret.New(token)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/heap", nil)

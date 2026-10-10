@@ -8,7 +8,6 @@ import (
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
@@ -48,7 +47,7 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("patch_fix")
+	service.RecordFlowOp("patch_fix")
 	updated, err := h.flowSvc.ApplyFix(r.Context(), doc, req.BlockID, req.FixType, req.RuleID, req.Variable, req.Property, req.Unsafe)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {
@@ -129,7 +128,7 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("patch_fix_batch")
+	service.RecordFlowOp("patch_fix_batch")
 	var ruleFilter map[string]bool
 	if len(req.Rules) > 0 {
 		ruleFilter = make(map[string]bool, len(req.Rules))

@@ -1,9 +1,9 @@
 import {useMemo} from 'react'
-import {MessageBubble, FixProposalCard} from '..'
+import {MessageBubble, ApprovalCard} from '..'
 import LiveToolTrail from '../LiveToolTrail'
 import StreamingBubble from '../StreamingBubble'
 import type {ChatStreamEngine} from '../hooks/useChatStreamEngine'
-import type {FixProposalCard as FixProposalCardState} from '@/stores/chatStore'
+import type {ApprovalCard as ApprovalCardState} from '@/stores/chatStore'
 
 // The footer of the message list while a reply streams in: the thinking
 // bubble, the streaming indicator, the live tool trail and the approval
@@ -12,11 +12,11 @@ import type {FixProposalCard as FixProposalCardState} from '@/stores/chatStore'
 export function useStreamFooter(deps: {
   showThinking: boolean
   isCurrentThreadStreaming: boolean
-  fixProposals: FixProposalCardState[]
+  approvals: ApprovalCardState[]
   activeThreadId: string | null
   respondFixProposal: ChatStreamEngine['respondFixProposal']
 }) {
-  const {showThinking, isCurrentThreadStreaming, fixProposals, activeThreadId, respondFixProposal} = deps
+  const {showThinking, isCurrentThreadStreaming, approvals, activeThreadId, respondFixProposal} = deps
   return useMemo(
     () => (
       <>
@@ -33,10 +33,10 @@ export function useStreamFooter(deps: {
         {isCurrentThreadStreaming && <LiveToolTrail />}
         {isCurrentThreadStreaming &&
           activeThreadId &&
-          fixProposals.map(card => (
-            <FixProposalCard
+          approvals.map(card => (
+            <ApprovalCard
               key={card.proposalId}
-              proposal={card}
+              approval={card}
               onRespond={(approved, proposalId, excludedItemIndices) =>
                 respondFixProposal(activeThreadId, approved, proposalId, excludedItemIndices)
               }
@@ -44,6 +44,6 @@ export function useStreamFooter(deps: {
           ))}
       </>
     ),
-    [showThinking, isCurrentThreadStreaming, fixProposals, activeThreadId, respondFixProposal],
+    [showThinking, isCurrentThreadStreaming, approvals, activeThreadId, respondFixProposal],
   )
 }

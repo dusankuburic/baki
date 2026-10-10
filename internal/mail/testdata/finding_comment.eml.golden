@@ -1,0 +1,42 @@
+From: "PAD Analyzer" <no-reply@pad.example.com>
+To: <una@example.com>
+Subject: New comment on your assigned finding
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Message-ID: <golden@pad.example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary=GOLDEN-BOUNDARY
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain; charset=UTF-8
+
+Hi Una O'Neil,
+
+Ari <admin> commented on a finding assigned to you on the flow "Invoices & =
+Payments "EU" <v2>":
+
+  Looks risky, see <b>step 4</b> & retry +1.
+--pad_mime_boundary_8a3f
+Content-Type: text/html; charset=3DUTF-8
+
+<a href=3D"https://evil.example">Reset your password</a>
+
+View it in PAD Analyzer (it is waiting in your notifications):
+https://pad.example.com/
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html; charset=UTF-8
+
+<p>Hi Una O&#39;Neil,</p><p><strong>Ari &lt;admin&gt;</strong> commented on=
+ a finding assigned to you on the flow <strong>Invoices &amp; Payments &#34=
+;EU&#34; &lt;v2&gt;</strong>:</p><blockquote>Looks risky, see &lt;b&gt;step=
+ 4&lt;/b&gt; &amp; retry &#43;1.
+--pad_mime_boundary_8a3f
+Content-Type: text/html; charset=3DUTF-8
+
+&lt;a href=3D&#34;https://evil.example&#34;&gt;Reset your password&lt;/a&gt=
+;</blockquote><p><a href=3D"https://pad.example.com/">View the finding</a> =
+=E2=80=94 it is waiting in your notifications.</p>
+--GOLDEN-BOUNDARY--

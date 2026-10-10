@@ -18,6 +18,10 @@ interface KnowledgeDoc {
   createdAt: string
   chunkCount?: number
   vectorIndexed?: number
+  // Chunks embedded under another embedding model than the viewer's: the
+  // same width, so counted as searchable, but never found by their searches
+  // (ADR 0027). Absent when none.
+  embeddingStranded?: number
 }
 
 // POST /api/orgs/{id}/knowledge/reindex. `truncated`: the request exhausted
@@ -178,8 +182,7 @@ export default function KnowledgeBasePanel() {
       // the envelope's machine-readable code first (stable across message
       // rewording), with the message regex as a fallback for older backends.
       const verdict = providerVerdict(e)
-      const embeddingMissing =
-        (getErrorCode(e) === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
+      const embeddingMissing = getErrorCode(e) === 'EMBEDDING_NOT_CONFIGURED' || /embedding provider/i.test(String(e))
       if (verdict) {
         // Before the message regex: a provider verdict's message mentions
         // the embedding provider too, and it is not a missing key.
@@ -324,8 +327,7 @@ export default function KnowledgeBasePanel() {
       // committed by the run it resumes.
       const midRunModelChange = (pages > 0 || !!resume) && getErrorCode(e) === 'EMBEDDING_MODEL_CHANGED'
       const verdict = midRunModelChange ? t('knowledge.reindexModelChangedMidRun') : providerVerdict(e)
-      const embeddingMissing =
-        (getErrorCode(e) === 'EMBEDDING_NOT_CONFIGURED') || /embedding provider/i.test(String(e))
+      const embeddingMissing = getErrorCode(e) === 'EMBEDDING_NOT_CONFIGURED' || /embedding provider/i.test(String(e))
       toastError(verdict ?? (embeddingMissing ? t('knowledge.embeddingMissingReindex') : t('knowledge.reindexFailed')))
       // Earlier pages of a resumable run were committed before the failure.
       if (pages > 0) loadDocs()
@@ -489,6 +491,11 @@ export default function KnowledgeBasePanel() {
                     </div>
                     {(doc.chunkCount ?? 0) > 0 && (doc.vectorIndexed ?? 0) === 0 && (
                       <div className="text-xs text-amber-400">{t('knowledge.dimensionMismatch')}</div>
+                    )}
+                    {(doc.embeddingStranded ?? 0) > 0 && (
+                      <div className="text-xs text-amber-400">
+                        {t('knowledge.identityMismatch', {count: doc.embeddingStranded})}
+                      </div>
                     )}
                   </div>
                 </div>

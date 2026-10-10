@@ -126,7 +126,7 @@ func tokenActor(userID string, role auth.Role, scopes ...string) *auth.Actor {
 }
 
 var (
-	flowActions     = []Action{FlowRead, FlowEdit, FlowShare, FlowDelete, ChatUse}
+	flowActions     = []Action{FlowRead, FlowEdit, FlowShare, FlowDelete, ChatUse, CIRun}
 	orgActions      = []Action{OrgRead, OrgUse, OrgWrite, OrgAdmin}
 	instanceActions = []Action{InstanceAdmin, InstanceWrite}
 	allActions      = slices.Concat(flowActions, orgActions, instanceActions)
@@ -152,6 +152,7 @@ func TestCan_TokenScopes(t *testing.T) {
 		{"read+write token", tokenActor("u-orgadmin", auth.RoleAdmin, auth.ScopeRead, auth.ScopeWrite), writeActions},
 		{"chat token", tokenActor("u-orgadmin", auth.RoleAdmin, auth.ScopeChat), []Action{ChatUse}},
 		{"chat+write token", tokenActor("u-orgadmin", auth.RoleAdmin, auth.ScopeChat, auth.ScopeWrite), append([]Action{ChatUse}, writeActions...)},
+		{"ci token", tokenActor("u-orgadmin", auth.RoleAdmin, auth.ScopeCI), []Action{CIRun}},
 		{"admin token", tokenActor("u-orgadmin", auth.RoleAdmin, auth.ScopeAdmin), []Action{InstanceAdmin}},
 		{"system", auth.SystemActor("test"), allActions},
 	}
@@ -201,22 +202,22 @@ func TestCan_FlowAccess(t *testing.T) {
 		allowed    []Action
 	}{
 		{"f-personal", "u-owner", auth.RoleMember, flowActions},
-		{"f-personal", "u-cviewer", auth.RoleMember, []Action{FlowRead, ChatUse}},
-		{"f-personal", "u-ceditor", auth.RoleMember, []Action{FlowRead, FlowEdit, ChatUse}},
+		{"f-personal", "u-cviewer", auth.RoleMember, []Action{FlowRead, ChatUse, CIRun}},
+		{"f-personal", "u-ceditor", auth.RoleMember, []Action{FlowRead, FlowEdit, ChatUse, CIRun}},
 		// An admin-tier collaborator manages sharing but never deletes.
-		{"f-personal", "u-cadmin", auth.RoleMember, []Action{FlowRead, FlowEdit, FlowShare, ChatUse}},
+		{"f-personal", "u-cadmin", auth.RoleMember, []Action{FlowRead, FlowEdit, FlowShare, ChatUse, CIRun}},
 		{"f-personal", "u-orgadmin", auth.RoleMember, nil},
 		{"f-personal", "u-outsider", auth.RoleMember, nil},
 		// The global admin role grants nothing on someone's flow.
 		{"f-personal", "u-root", auth.RoleAdmin, nil},
 		{"f-org", "u-owner", auth.RoleMember, flowActions},
 		{"f-org", "u-orgadmin", auth.RoleMember, flowActions},
-		{"f-org", "u-orgmember", auth.RoleMember, []Action{FlowRead, FlowEdit, ChatUse}},
-		{"f-org", "u-orgviewer", auth.RoleMember, []Action{FlowRead, ChatUse}},
+		{"f-org", "u-orgmember", auth.RoleMember, []Action{FlowRead, FlowEdit, ChatUse, CIRun}},
+		{"f-org", "u-orgviewer", auth.RoleMember, []Action{FlowRead, ChatUse, CIRun}},
 		{"f-org", "u-cadmin", auth.RoleMember, nil},
 		{"f-org", "u-outsider", auth.RoleMember, nil},
 		// Ownerless legacy flows: readable by an instance admin (by the stored user role), writable by nobody.
-		{"f-ownerless", "u-root", auth.RoleAdmin, []Action{FlowRead, ChatUse}},
+		{"f-ownerless", "u-root", auth.RoleAdmin, []Action{FlowRead, ChatUse, CIRun}},
 		{"f-ownerless", "u-owner", auth.RoleMember, nil},
 	}
 	f := newCanFixture(t)
@@ -248,6 +249,19 @@ func TestCan_FlowAccess(t *testing.T) {
 		if err := f.authz.Can(ctx, userActor("u-owner", auth.RoleMember), action, FlowByID("f-missing")); !errors.Is(err, storageif.ErrNotFound) {
 			t.Errorf("%s on a missing flow: err = %v, want ErrNotFound", action, err)
 		}
+	}
+
+	// An organisation's flow shared with someone outside the organisation: they read and edit it, but CIRun needs
+	// membership too.
+	f.backend.collabs["f-org"] = []*storageif.Collaborator{{UserID: "u-cviewer", Permission: "editor"}}
+	outsider := userActor("u-cviewer", auth.RoleMember)
+	for _, action := range []Action{FlowRead, FlowEdit} {
+		if err := f.authz.Can(ctx, outsider, action, FlowByID("f-org")); err != nil {
+			t.Errorf("a collaborator outside the org, %s: %v", action, err)
+		}
+	}
+	if err := f.authz.Can(ctx, outsider, CIRun, FlowByID("f-org")); !errors.Is(err, ErrPermissionDenied) {
+		t.Errorf("a collaborator outside the org, %s: %v, want a refusal", CIRun, err)
 	}
 }
 

@@ -134,7 +134,7 @@ describe('ChatInput', () => {
           tokens: 0,
           toolStatus: null,
           toolCalls: [],
-          fixProposals: [],
+          approvals: [],
         },
       },
     })
@@ -302,7 +302,7 @@ describe("ChatInput keeps the user's text", () => {
     tokens: 0,
     toolStatus: null,
     toolCalls: [],
-    fixProposals: [],
+    approvals: [],
   })
 
   it('does not clear the composer when Enter hits the concurrency cap', async () => {

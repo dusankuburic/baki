@@ -53,7 +53,7 @@ func Of(cfg *config.Config) Set {
 	s.has[Accounts] = cfg.Auth.Enabled
 	// The RLS middleware needs both a store and authenticated callers to scope to.
 	s.has[RowLevelSecurity] = store && cfg.Auth.Enabled
-	s.has[SharedState] = cfg.Redis.URL != ""
+	s.has[SharedState] = cfg.Redis.URL.IsSet()
 	return s
 }
 

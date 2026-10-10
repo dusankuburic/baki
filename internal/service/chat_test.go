@@ -36,7 +36,7 @@ func TestStreamChatMessage_PreStreamFailureFailsFast(t *testing.T) {
 		factory:       factory,
 	}
 
-	id, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "unknown"})
+	id, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "claude"})
 	if err != nil {
 		t.Fatalf("StreamChatMessage: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestStreamChatMessage_ParentCancelBeforeBegin_StillRuns(t *testing.T) {
 
 	// Simulate the HTTP create handler: pass the request context, then cancel it on return.
 	parent, cancelParent := context.WithCancel(context.Background())
-	id, err := svc.StreamChatMessage(parent, "test", nil, nil, models.ChatRequest{Provider: "unknown"})
+	id, err := svc.StreamChatMessage(parent, "test", nil, nil, models.ChatRequest{Provider: "claude"})
 	if err != nil {
 		t.Fatalf("StreamChatMessage: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestBeginStream_ConcurrentCalls_NoPanic(t *testing.T) {
 		factory:       factory,
 	}
 
-	id, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "unknown"})
+	id, err := svc.StreamChatMessage(context.Background(), "test", nil, nil, models.ChatRequest{Provider: "claude"})
 	if err != nil {
 		t.Fatalf("StreamChatMessage: %v", err)
 	}

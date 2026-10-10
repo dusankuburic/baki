@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/api/route"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/reqinfo"
 )
 
@@ -127,10 +126,10 @@ func TestReportPolicyMismatch_CountsEveryTimeLogsOnce(t *testing.T) {
 		ReportPolicyMismatch(r, p, DecisionTx, "tx", "none")
 	}
 	ReportPolicyMismatch(r, p, DecisionAuth, "jwt", "none")
-	if got := metrics.RoutePolicyMismatchCount(p.Label, DecisionTx); got != 3 {
+	if got := RoutePolicyMismatchCount(p.Label, DecisionTx); got != 3 {
 		t.Errorf("tx mismatches counted %v, want 3", got)
 	}
-	if got := metrics.RoutePolicyMismatchCount(p.Label, DecisionAuth); got != 1 {
+	if got := RoutePolicyMismatchCount(p.Label, DecisionAuth); got != 1 {
 		t.Errorf("auth mismatches counted %v, want 1", got)
 	}
 	logged := buf.String()
@@ -158,7 +157,7 @@ func TestReportGuardMismatch_RedactsInvites(t *testing.T) {
 	if strings.Contains(buf.String(), "s3cret-invite") {
 		t.Errorf("the invite credential reached the log:\n%s", buf.String())
 	}
-	if got := metrics.RouteGuardMismatchCount("/api/invites/{token}/accept"); got != 1 {
+	if got := RouteGuardMismatchCount("/api/invites/{token}/accept"); got != 1 {
 		t.Errorf("guard mismatches counted %v, want 1", got)
 	}
 }

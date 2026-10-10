@@ -165,9 +165,9 @@ func TestPlan_KnowledgeChunks_PolicyIsHashedSubplan(t *testing.T) {
 		args []any
 	}{
 		{"CountKnowledgeChunks", `SELECT COUNT(c.id), COUNT(c.id) FILTER (WHERE c.embedding_vec IS NOT NULL) FROM knowledge_chunks c WHERE c.org_id = $1`, []any{f.orgA}},
-		{"ListKnowledgeChunkContents", `SELECT c.id, c.doc_id, c.content FROM knowledge_chunks c WHERE c.org_id = $1 AND (c.doc_id, c.id) > ($2::text, $3::text) ORDER BY c.doc_id, c.id LIMIT $4`, []any{f.orgA, "", "", 2000}},
-		{"exact vector search", knowledgeVectorSearchExactSQL, []any{f.orgA, FormatVector(make([]float32, vectorIndexTestDims)), 5, knowledgeMaxCosineDistance, vectorIndexTestDims}},
-		{"indexed vector search", knowledgeVectorSearchSQL(vectorIndexTestDims), []any{f.orgA, FormatVector(make([]float32, vectorIndexTestDims)), 5, knowledgeMaxCosineDistance}},
+		{"ListKnowledgeChunkContents", `SELECT c.id, c.doc_id, c.content FROM knowledge_chunks c WHERE c.org_id = $1 AND (c.doc_id, c.id) > ($2::text, $3::text) AND ($5::text = '' OR c.embedding_identity IS DISTINCT FROM $5::text) ORDER BY c.doc_id, c.id LIMIT $4`, []any{f.orgA, "", "", 2000, "ident"}},
+		{"exact vector search", knowledgeVectorSearchExactSQL, []any{f.orgA, FormatVector(make([]float32, vectorIndexTestDims)), 5, knowledgeMaxCosineDistance, vectorIndexTestDims, "ident"}},
+		{"indexed vector search", knowledgeVectorSearchSQL(vectorIndexTestDims), []any{f.orgA, FormatVector(make([]float32, vectorIndexTestDims)), 5, knowledgeMaxCosineDistance, "ident"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -187,7 +187,7 @@ func TestPlan_KnowledgeChunks_PolicyIsHashedSubplan(t *testing.T) {
 func TestPlan_KnowledgeVectorSearch_HNSWWithOrgFilter(t *testing.T) {
 	f := knowledgePlanFixture(t)
 	q := FormatVector(make([]float32, vectorIndexTestDims))
-	nodes := explainAsUser(t, f.b, f.user, knowledgeVectorSearchSQL(vectorIndexTestDims), []any{f.orgA, q, 5, knowledgeMaxCosineDistance})
+	nodes := explainAsUser(t, f.b, f.user, knowledgeVectorSearchSQL(vectorIndexTestDims), []any{f.orgA, q, 5, knowledgeMaxCosineDistance, "ident"})
 	hnsw := knowledgeVectorIndexName(vectorIndexTestDims)
 	t.Logf("indexed knowledge search plan:\n%s", describePlan(nodes))
 	assertIndexUsed(t, nodes, hnsw, "indexed knowledge search")

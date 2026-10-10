@@ -18,7 +18,6 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/reqinfo"
 	"pad-analyzer/internal/testutil"
 )
@@ -180,7 +179,7 @@ func TestGuard_EndpointMismatch(t *testing.T) {
 			if rr.Code != want || probe.hits.Load() != wantHits {
 				t.Errorf("mismatched request = %d with %d handler run(s), want %d with %d", rr.Code, probe.hits.Load(), want, wantHits)
 			}
-			if got := metrics.RouteGuardMismatchCount(label); got != 1 {
+			if got := middleware.RouteGuardMismatchCount(label); got != 1 {
 				t.Errorf("guard mismatches for %s = %v, want 1", label, got)
 			}
 		})
@@ -226,8 +225,8 @@ func TestGuard_FallbacksCheckTheResolvedKind(t *testing.T) {
 				rt.ServeHTTP(rr, r)
 				return rr.Code
 			}
-			notFound := metrics.RouteGuardMismatchCount(dispatchedNotFound)
-			notAllowed := metrics.RouteGuardMismatchCount(dispatchedMethodNotAllowed)
+			notFound := middleware.RouteGuardMismatchCount(dispatchedNotFound)
+			notAllowed := middleware.RouteGuardMismatchCount(dispatchedMethodNotAllowed)
 
 			want404, want405 := http.StatusNotFound, http.StatusMethodNotAllowed
 			if mode == config.RoutePolicyDeclarative {
@@ -239,10 +238,10 @@ func TestGuard_FallbacksCheckTheResolvedKind(t *testing.T) {
 			if got := serveAs(http.MethodPut, "/api/library", library); got != want405 {
 				t.Errorf("405 resolved as a route = %d, want %d", got, want405)
 			}
-			if d := metrics.RouteGuardMismatchCount(dispatchedNotFound) - notFound; d != 1 {
+			if d := middleware.RouteGuardMismatchCount(dispatchedNotFound) - notFound; d != 1 {
 				t.Errorf("404 guard mismatches +%v, want +1", d)
 			}
-			if d := metrics.RouteGuardMismatchCount(dispatchedMethodNotAllowed) - notAllowed; d != 1 {
+			if d := middleware.RouteGuardMismatchCount(dispatchedMethodNotAllowed) - notAllowed; d != 1 {
 				t.Errorf("405 guard mismatches +%v, want +1", d)
 			}
 		})
@@ -376,7 +375,7 @@ func TestRoutePolicyModes_DecideAndCountDisagreements(t *testing.T) {
 				if mode != config.RoutePolicyShadow {
 					want = 0
 				}
-				if got := metrics.RoutePolicyMismatchCount(prefix+c.route, c.decision); got != want {
+				if got := middleware.RoutePolicyMismatchCount(prefix+c.route, c.decision); got != want {
 					t.Errorf("%s mismatches on %s = %v, want %v", c.decision, prefix+c.route, got, want)
 				}
 			}

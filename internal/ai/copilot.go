@@ -94,15 +94,12 @@ func NewCopilotProviderWithAuth(auth *CopilotAuth, githubToken string) *CopilotP
 
 func (p *CopilotProvider) SupportsTools() bool { return false }
 
-func (p *CopilotProvider) ID() string           { return "copilot" }
-func (p *CopilotProvider) Name() string         { return "GitHub Copilot" }
-func (p *CopilotProvider) ContextLimit() int    { return 128000 }
-func (p *CopilotProvider) DefaultModel() string { return "gpt-4o" }
-func (p *CopilotProvider) FreeModel() string    { return "" }
-
-func (c *CopilotProvider) PricePerMillionTokens() Pricing {
-	return Pricing{InputCostPerM: 0.0, OutputCostPerM: 0.0}
-}
+func (p *CopilotProvider) ID() string                     { return copilotSpec.ID }
+func (p *CopilotProvider) Name() string                   { return copilotSpec.Name }
+func (p *CopilotProvider) ContextLimit() int              { return 128000 }
+func (p *CopilotProvider) DefaultModel() string           { return copilotSpec.DefaultModel }
+func (p *CopilotProvider) FreeModel() string              { return "" }
+func (p *CopilotProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(copilotSpec) }
 
 func (c *CopilotProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	return nil, fmt.Errorf("embeddings not supported by Copilot provider")
@@ -130,7 +127,7 @@ func (p *CopilotProvider) fetchModels(ctx context.Context) (models []ModelInfo, 
 	// (GetMetadataProvider, initial UI load) instead of a guaranteed 401.
 	token, _ := p.tokenFn(ctx)
 	if token == "" {
-		return catalogModels("copilot"), false, nil
+		return catalogModels(copilotSpec.Catalog), false, nil
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", copilotModelsURL, nil)

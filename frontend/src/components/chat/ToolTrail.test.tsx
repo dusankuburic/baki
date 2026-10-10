@@ -1,7 +1,7 @@
 import {describe, it, expect} from 'vitest'
 import {render, screen, fireEvent} from '@testing-library/react'
-import {ToolTrail, FixOutcomeStrip} from './ToolTrail'
-import type {ToolCallRecord, FixProposalSnapshot} from '@/types'
+import {ToolTrail, FixOutcomeStrip, ApprovalOutcomeStrip} from './ToolTrail'
+import type {ApprovalSnapshot, ToolCallRecord, FixProposalSnapshot} from '@/types'
 
 const calls: ToolCallRecord[] = [
   {name: 'search_flow', label: 'Searching flow', ok: true, durationMs: 12, summary: '3 matches for "xav"'},
@@ -89,5 +89,82 @@ describe('FixOutcomeStrip', () => {
     expect(strip).toHaveTextContent('Call API')
     expect(strip).toHaveTextContent('Sync API')
     expect(strip).toHaveTextContent('still appears')
+  })
+})
+
+describe('FixOutcomeStrip by previewKind', () => {
+  const base: FixProposalSnapshot = {
+    proposalId: 'p1',
+    ruleId: 'unhandled-error',
+    fixType: 'wrap-error-handler',
+    blockLabel: 'Call API',
+    line: 3,
+    summary: 'wrap lines 3-3',
+    status: 'applied',
+  }
+
+  it('a persisted proposal without previewKind renders as fix-patch', () => {
+    render(<FixOutcomeStrip snapshot={base} />)
+    const strip = screen.getByTestId('fix-outcome')
+    expect(strip).toHaveAttribute('data-preview-kind', 'fix-patch')
+    expect(strip).toHaveTextContent('wrap-error-handler')
+    expect(screen.queryByTestId('approval-outcome')).not.toBeInTheDocument()
+  })
+
+  it('a persisted approval with an unknown previewKind renders the generic strip', () => {
+    render(
+      <FixOutcomeStrip
+        snapshot={{...base, tool: 'rename_variable', previewKind: 'something-new', message: 'renamed'}}
+      />,
+    )
+    expect(screen.queryByTestId('fix-outcome')).not.toBeInTheDocument()
+    const strip = screen.getByTestId('approval-outcome')
+    expect(strip).toHaveAttribute('data-preview-kind', 'something-new')
+    expect(strip).toHaveTextContent('rename_variable')
+    // The item is the block label, not "Fix <type>".
+    expect(strip).toHaveTextContent('Call API')
+    expect(strip).not.toHaveTextContent('Fix applied')
+    expect(strip).toHaveTextContent('Done.')
+    expect(strip).toHaveTextContent('renamed')
+  })
+})
+
+describe('ApprovalOutcomeStrip', () => {
+  const approval: ApprovalSnapshot = {
+    proposalId: 'a1',
+    tool: 'rename_variable',
+    previewKind: 'something-new',
+    requiredScope: 'write',
+    status: 'applied-unresolved',
+    message: 'one failed',
+    items: [
+      {id: 'v1', label: 'Rename x', summary: 'x → total', status: 'applied'},
+      {id: 'v2', label: 'Rename y', summary: 'y → count', status: 'error', message: 'in use'},
+    ],
+  }
+
+  it('renders the tool, the overall outcome and a per-item row list for a batch', () => {
+    render(<ApprovalOutcomeStrip snapshot={approval} />)
+    const strip = screen.getByTestId('approval-outcome')
+    expect(strip).toHaveTextContent('rename_variable')
+    expect(strip).toHaveTextContent('Done — review recommended.')
+    expect(strip).toHaveTextContent('one failed')
+    expect(strip).toHaveTextContent('Rename x')
+    expect(strip).toHaveTextContent('done')
+    expect(strip).toHaveTextContent('Rename y')
+    expect(strip).toHaveTextContent('failed')
+    expect(strip).toHaveTextContent('in use')
+  })
+
+  it('names a single item inline and falls back to the raw status', () => {
+    render(
+      <ApprovalOutcomeStrip
+        snapshot={{...approval, status: 'mystery', message: undefined, items: [approval.items[0]!]}}
+      />,
+    )
+    const strip = screen.getByTestId('approval-outcome')
+    expect(strip).toHaveTextContent('Rename x')
+    expect(strip).toHaveTextContent('mystery')
+    expect(strip.querySelector('ul')).toBeNull()
   })
 })

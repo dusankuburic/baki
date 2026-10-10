@@ -24,10 +24,10 @@ About 24 call sites found out what the storage backend could do by type-assertin
   interfaces `RefreshTokenStore` and `IdentityLinkStore`. Every backend implements them (Postgres and the test fake),
   the storage contract holds all of them to Postgres's semantics, and the fallback branches are gone. A service
   declares the slice it uses on its field (the chat store names `LoadUserSettings` and `OrgMemberRole`).
-- **Database-only capabilities are fx values.** `provideStorageBackend` in `main.go` provides each from the concrete
-  backend as a value of its own (`StorageResult`), nil without a database; the request transaction and the
-  Idempotency-Key store are also nil without row-level security. Consumers take the narrow value they need and test
-  it for nil:
+- **Database-only capabilities are fx values.** `provideStorageBackend` in `internal/app` (in `main.go` until Phase 5a
+  split it into fx modules) provides each from the concrete backend as a value of its own (`StorageResult`), nil
+  without a database; the request transaction and the Idempotency-Key store are also nil without row-level security.
+  Consumers take the narrow value they need and test it for nil:
 
   | Value | Consumers |
   |---|---|
@@ -57,8 +57,9 @@ capability is a field of `StorageResult` and a parameter of its consumer.
 The assertions left after the first pass are gone too (Phase 3 wave 2), and the ratchet allows none:
 
 - The organisation service's store is a slice of `StorageBackend`: `OrgStore.MutateOrg` and the new role
-  `OrgInviteStore`, held to Postgres's semantics by the contract (`contract/lifecycle.go`). `main.go` gives the service
-  the backend when the deployment has a server store (`capability.ServerStore`), the in-memory store otherwise.
+  `OrgInviteStore`, held to Postgres's semantics by the contract (`contract/lifecycle.go`). `internal/app` gives the
+  service the backend when the deployment has a server store (`capability.ServerStore`), the in-memory store
+  otherwise.
 - The keystore's capabilities are fx values of `provideKeyStore` (`KeyStoreResult`): the keys, the organisation
   credential store (`service.OrgKeyStore`, whose key families and restorer are part of it, since only the encrypted
   database keystore holds organisation credentials) and the personal key-family lister

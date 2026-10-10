@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -73,7 +74,7 @@ func TestProviderFactory_ForOrg_MemberFirst(t *testing.T) {
 	registerOrgStub()
 	f := orgTestFactory(map[string]string{"u-own": "member-key"}, map[string]string{"org-1": "org-key"})
 
-	p, err := f.ForOrg("u-own", "org-1", "org-stub")
+	p, err := f.ForOrg(context.Background(), "u-own", "org-1", "org-stub")
 	if err != nil {
 		t.Fatalf("ForOrg member: %v", err)
 	}
@@ -81,7 +82,7 @@ func TestProviderFactory_ForOrg_MemberFirst(t *testing.T) {
 		t.Errorf("member with own key: key=%q memo=%q, want member-key under the member scope", key, memo)
 	}
 
-	p, err = f.ForOrg("u-none", "org-1", "org-stub")
+	p, err = f.ForOrg(context.Background(), "u-none", "org-1", "org-stub")
 	if err != nil {
 		t.Fatalf("ForOrg org fallback: %v", err)
 	}
@@ -92,17 +93,17 @@ func TestProviderFactory_ForOrg_MemberFirst(t *testing.T) {
 		t.Errorf("usage scope = %q, want the member's (usage is attributed to the member, not the org scope)", ap.scope)
 	}
 
-	_, err = f.ForOrg("u-none", "org-2", "org-stub")
+	_, err = f.ForOrg(context.Background(), "u-none", "org-2", "org-stub")
 	if !errors.Is(err, ErrKeyNotConfigured) {
 		t.Errorf("no member key, no org key: err = %v, want ErrKeyNotConfigured", err)
 	}
-	_, err = f.ForOrg("u-none", "", "org-stub")
+	_, err = f.ForOrg(context.Background(), "u-none", "", "org-stub")
 	if !errors.Is(err, ErrKeyNotConfigured) {
 		t.Errorf("personal flow without a key: err = %v, want ErrKeyNotConfigured", err)
 	}
 
 	noStore := orgTestFactory(map[string]string{}, nil)
-	if _, err := noStore.ForOrg("u-none", "org-1", "org-stub"); !errors.Is(err, ErrKeyNotConfigured) {
+	if _, err := noStore.ForOrg(context.Background(), "u-none", "org-1", "org-stub"); !errors.Is(err, ErrKeyNotConfigured) {
 		t.Errorf("no org store: err = %v, want ErrKeyNotConfigured", err)
 	}
 }
@@ -114,14 +115,14 @@ func TestProviderFactory_ForOrg_LookupErrorsSurface(t *testing.T) {
 	memberErr := errors.New("keystore: open: message authentication failed")
 	f := NewProviderFactory(func(_, _ string) (string, error) { return "", memberErr }, nil, nil, nil)
 	f.SetOrgKeyLookup(func(_, _ string) (string, error) { return "org-key", nil })
-	if _, err := f.ForOrg("u1", "org-1", "org-stub"); !errors.Is(err, memberErr) {
+	if _, err := f.ForOrg(context.Background(), "u1", "org-1", "org-stub"); !errors.Is(err, memberErr) {
 		t.Errorf("member lookup error must surface, got %v", err)
 	}
 
 	orgErr := errors.New("db down")
 	f = orgTestFactory(map[string]string{}, nil)
 	f.SetOrgKeyLookup(func(_, _ string) (string, error) { return "", orgErr })
-	if _, err := f.ForOrg("u1", "org-1", "org-stub"); !errors.Is(err, orgErr) || !strings.Contains(err.Error(), "org key") {
+	if _, err := f.ForOrg(context.Background(), "u1", "org-1", "org-stub"); !errors.Is(err, orgErr) || !strings.Contains(err.Error(), "org key") {
 		t.Errorf("org lookup error must surface and say so, got %v", err)
 	}
 }
@@ -131,7 +132,7 @@ func TestProviderFactory_ForOrg_CopilotIgnoresOrg(t *testing.T) {
 	orgCalls := 0
 	f := NewProviderFactory(func(_, _ string) (string, error) { return "", nil }, nil, nil, nil)
 	f.SetOrgKeyLookup(func(_, _ string) (string, error) { orgCalls++; return "org-pat", nil })
-	if _, err := f.ForOrg("u1", "org-1", "copilot"); err == nil {
+	if _, err := f.ForOrg(context.Background(), "u1", "org-1", "copilot"); err == nil {
 		t.Error("copilot without a member credential must fail even with an org key")
 	}
 	if orgCalls != 0 {
@@ -145,7 +146,7 @@ func TestProviderFactory_ForEmbeddingOrg_OrgFirst(t *testing.T) {
 	registerOrgStub()
 	f := orgTestFactory(map[string]string{"u-own": "member-key"}, map[string]string{"org-1": "org-key"})
 
-	p, err := f.ForEmbeddingOrg("u-own", "org-1", "org-stub", "")
+	p, err := f.ForEmbeddingOrg(context.Background(), "u-own", "org-1", "org-stub", "")
 	if err != nil {
 		t.Fatalf("ForEmbeddingOrg: %v", err)
 	}
@@ -153,7 +154,7 @@ func TestProviderFactory_ForEmbeddingOrg_OrgFirst(t *testing.T) {
 		t.Errorf("org credential present: key=%q memo=%q, want the org's", key, memo)
 	}
 
-	p, err = f.ForEmbeddingOrg("u-own", "org-2", "org-stub", "")
+	p, err = f.ForEmbeddingOrg(context.Background(), "u-own", "org-2", "org-stub", "")
 	if err != nil {
 		t.Fatalf("ForEmbeddingOrg fallback: %v", err)
 	}
@@ -161,7 +162,7 @@ func TestProviderFactory_ForEmbeddingOrg_OrgFirst(t *testing.T) {
 		t.Errorf("no org credential: key=%q memo=%q, want the member's", key, memo)
 	}
 
-	if _, err := f.ForEmbeddingOrg("u-none", "org-2", "org-stub", ""); !errors.Is(err, ErrKeyNotConfigured) {
+	if _, err := f.ForEmbeddingOrg(context.Background(), "u-none", "org-2", "org-stub", ""); !errors.Is(err, ErrKeyNotConfigured) {
 		t.Errorf("nothing configured: err = %v, want ErrKeyNotConfigured", err)
 	}
 }
@@ -172,7 +173,7 @@ func TestProviderFactory_ForEmbeddingOrg_OrgFirst(t *testing.T) {
 func TestProviderFactory_ForOrg_AzureMemoScope(t *testing.T) {
 	doc := `{"endpoint":"https://shared-res.openai.azure.com","auth":{"mode":"api_key","key":"k"},"chatDeployment":"c"}`
 	f := orgTestFactory(map[string]string{}, map[string]string{"org-1": doc})
-	p, err := f.ForOrg("u1", "org-1", azureFoundryProviderID)
+	p, err := f.ForOrg(context.Background(), "u1", "org-1", azureFoundryProviderID)
 	if err != nil {
 		t.Fatalf("ForOrg azure: %v", err)
 	}

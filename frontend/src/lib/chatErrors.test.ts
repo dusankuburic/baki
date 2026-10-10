@@ -1,5 +1,12 @@
 import {describe, it, expect} from 'vitest'
-import {classifyChatFailure, budgetDetail, providerErrorInfo} from './chatErrors'
+import {
+  classifyChatFailure,
+  budgetDetail,
+  providerErrorInfo,
+  isStreamGone,
+  retryAfterHint,
+  serverRestartDelayMs,
+} from './chatErrors'
 
 describe('classifyChatFailure', () => {
   it('trusts the machine-readable code first', () => {
@@ -24,6 +31,56 @@ describe('classifyChatFailure', () => {
   it('classifies MODEL_NOT_AVAILABLE by its code', () => {
     expect(classifyChatFailure('model not available', 'MODEL_NOT_AVAILABLE')).toBe('modelNotAvailable')
     expect(classifyChatFailure('model not available')).toBe('generic')
+  })
+
+  // A deploy: the draining server ends the stream (or refuses its create)
+  // with SERVER_RESTARTING, and the engine sends the turn again once.
+  it('classifies SERVER_RESTARTING by its code', () => {
+    expect(classifyChatFailure('the server is restarting', 'SERVER_RESTARTING')).toBe('serverRestarting')
+    expect(classifyChatFailure('the server is restarting')).toBe('generic')
+    expect(classifyChatFailure('lost', 'STREAM_INTERRUPTED')).toBe('generic')
+  })
+})
+
+describe('isStreamGone', () => {
+  // What /api/chat/resume answers for a stream this server does not know:
+  // 403 under JWT (an unknown stream is "not yours"), 404 without.
+  it('is true for 403, 404 and 410', () => {
+    for (const status of [403, 404, 410]) expect(isStreamGone({status})).toBe(true)
+  })
+
+  it('is false for transient failures and non-errors', () => {
+    for (const status of [0, 401, 429, 500, 502, 503]) expect(isStreamGone({status})).toBe(false)
+    expect(isStreamGone(new Error('network'))).toBe(false)
+    expect(isStreamGone(undefined)).toBe(false)
+    expect(isStreamGone('404')).toBe(false)
+  })
+})
+
+describe('retryAfterHint', () => {
+  it("reads the envelope's details.retryAfterSeconds", () => {
+    expect(retryAfterHint({status: 503, details: {retryAfterSeconds: 5}})).toBe(5)
+  })
+
+  it('is undefined without a usable hint', () => {
+    expect(retryAfterHint({status: 503})).toBeUndefined()
+    expect(retryAfterHint({details: {retryAfterSeconds: '5'}})).toBeUndefined()
+    expect(retryAfterHint({details: {retryAfterSeconds: -1}})).toBeUndefined()
+    expect(retryAfterHint({details: {retryAfterSeconds: Number.NaN}})).toBeUndefined()
+    expect(retryAfterHint(null)).toBeUndefined()
+  })
+})
+
+describe('serverRestartDelayMs', () => {
+  it('waits the default 2 s plus up to 1 s of jitter without a hint', () => {
+    expect(serverRestartDelayMs(undefined, () => 0)).toBe(2_000)
+    expect(serverRestartDelayMs(undefined, () => 0.999)).toBe(2_999)
+  })
+
+  it("honours the server's Retry-After, capped", () => {
+    expect(serverRestartDelayMs(5, () => 0)).toBe(5_000)
+    expect(serverRestartDelayMs(3_600, () => 0)).toBe(10_000)
+    expect(serverRestartDelayMs(0, () => 0)).toBe(2_000)
   })
 })
 
@@ -66,11 +123,33 @@ describe('providerErrorInfo', () => {
     expect(providerErrorInfo('PROVIDER_AUTH')?.action).toBeUndefined()
   })
 
+  it('maps PROVIDER_NOT_ALLOWED (the deployment or org policy) to "Choose another model" and a relist', () => {
+    expect(providerErrorInfo('PROVIDER_NOT_ALLOWED')).toEqual({
+      titleKey: 'errors.providerNotAllowedTitle',
+      settingsSection: 'accounts',
+      refreshProviders: true,
+      action: 'chooseModel',
+    })
+  })
+
   it('is null for other or missing codes', () => {
     expect(providerErrorInfo('AI_BUDGET_EXCEEDED')).toBeNull()
     expect(providerErrorInfo('PROVIDER_RATE_LIMITED')).toBeNull()
     expect(providerErrorInfo('toString')).toBeNull()
     expect(providerErrorInfo(undefined)).toBeNull()
     expect(providerErrorInfo(null)).toBeNull()
+  })
+})
+
+// PROVIDER_UNKNOWN (Phase 4b): the thread's provider is not in this server's
+// registry — a newer bundle's pin, or a provider the deployment dropped.
+describe('providerErrorInfo: PROVIDER_UNKNOWN', () => {
+  it('maps it to a title, a listing refresh and "Choose another model"', () => {
+    expect(providerErrorInfo('PROVIDER_UNKNOWN')).toEqual({
+      titleKey: 'errors.providerUnknownTitle',
+      settingsSection: 'accounts',
+      refreshProviders: true,
+      action: 'chooseModel',
+    })
   })
 })

@@ -16,8 +16,12 @@ import (
 // shape semantics (nil vs empty slice, ErrNotFound vs nil, etc.). The
 // same suite runs against the fake in
 // `internal/testutil/fakebackend_contract_test.go::TestFakeBackend_Contract`.
+// Field encryption is on, as in every deployment with accounts: the CI credential store refuses secrets without it.
 func TestPostgres_Contract(t *testing.T) {
 	b := openTestDB(t)
+	if err := b.EnableFieldEncryption([]byte("contract-field-encryption-key-0123456789")); err != nil {
+		t.Fatalf("EnableFieldEncryption: %v", err)
+	}
 	contract.RunSuite(t, b)
 }
 

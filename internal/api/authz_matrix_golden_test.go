@@ -43,13 +43,16 @@ func TestAuthzMatrix_Golden(t *testing.T) {
 		{name: "pat:read", user: "u-owner", role: auth.RoleMember, scopes: []string{auth.ScopeRead}},
 		{name: "pat:read+write", user: "u-owner", role: auth.RoleMember, scopes: []string{auth.ScopeRead, auth.ScopeWrite}},
 		{name: "pat:chat", user: "u-owner", role: auth.RoleMember, scopes: []string{auth.ScopeChat}},
+		{name: "pat:chat+write", user: "u-owner", role: auth.RoleMember, scopes: []string{auth.ScopeChat, auth.ScopeWrite}},
 		{name: "pat:admin", user: "u-admin", role: auth.RoleAdmin, scopes: []string{auth.ScopeAdmin}},
+		{name: "pat:ci", user: "u-owner", role: auth.RoleMember, scopes: []string{auth.ScopeCI}},
 	}
 	endpoints := []authzEndpoint{
 		{http.MethodGet, "/api/auth/me", nil},
 		{http.MethodGet, "/api/auth/tokens", nil},
 		{http.MethodGet, "/api/auth/sessions", nil},
 		{http.MethodPost, "/api/auth/tokens", map[string]any{"name": "matrix"}},
+		{http.MethodPost, "/api/ws-ticket", nil},
 		{http.MethodGet, "/api/admin/users/list", nil},
 		{http.MethodGet, "/api/admin/audit", nil},
 		{http.MethodGet, "/api/admin/system/health", nil},
@@ -63,14 +66,20 @@ func TestAuthzMatrix_Golden(t *testing.T) {
 		{http.MethodGet, "/api/system/settings", nil},
 		{http.MethodGet, "/api/system/settings/org/{org}", nil},
 		{http.MethodGet, "/api/providers/list", nil},
+		{http.MethodGet, "/api/providers/catalog", nil},
 		{http.MethodGet, "/api/orgs/{org}/channels", nil},
+		{http.MethodGet, "/api/orgs/{org}/channels/options", nil},
 		{http.MethodPost, "/api/orgs/{org}/channels", map[string]any{"kind": "webhook", "url": "https://hooks.example.com/x"}},
 		{http.MethodDelete, "/api/orgs/{org}/channels/no-such-channel", nil},
+		{http.MethodGet, "/api/orgs/{org}/ci-credentials", nil},
+		{http.MethodPost, "/api/orgs/{org}/ci-credentials", map[string]any{"name": "matrix"}},
+		{http.MethodDelete, "/api/orgs/{org}/ci-credentials/no-such-credential", nil},
 		{http.MethodGet, "/api/orgs/{org}/rules/export", nil},
 		{http.MethodPost, "/api/analysis/triage/list", map[string]any{"flowId": "{orgflow}"}},
 		{http.MethodPost, "/api/analysis/comments/list", map[string]any{"flowId": "{orgflow}", "findingKey": "k-1"}},
 		{http.MethodPost, "/api/chat/fix-decision", map[string]any{"streamId": "s-1", "proposalId": "p-1", "approved": true}},
 		{http.MethodPost, "/api/admin/scanner/scan", map[string]any{}},
+		{http.MethodPost, "/api/integrations/ci", map[string]any{"flowId": "{orgflow}"}},
 	}
 
 	var b strings.Builder
@@ -84,6 +93,8 @@ func TestAuthzMatrix_Golden(t *testing.T) {
 		}
 		orgID := seedOrg(t, rt, "Acme", "u-owner")
 		addOrgMember(t, rt, orgID, "u-viewer", auth.RoleViewer)
+		// In the store as on Postgres: the CI credentials' foreign key needs the organisation there.
+		mirrorOrg(t, rt, orgID)
 		seedFlow("f-mine", "u-owner")
 		seedOrgFlow(t, rt, "f-org", "u-owner", orgID)
 		fill := strings.NewReplacer("{org}", orgID, "{mine}", "f-mine", "{orgflow}", "f-org")

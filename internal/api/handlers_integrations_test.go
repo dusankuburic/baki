@@ -3,9 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -16,41 +13,76 @@ import (
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
+	"pad-analyzer/internal/platform/hmacsig"
+	secretv "pad-analyzer/internal/platform/secret"
+	"pad-analyzer/internal/service"
+	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil"
 	"pad-core/analyzer"
 	"pad-core/models"
+	"pad-core/parser"
 )
 
-// signBody computes the X-Baki-Signature value the CI runner would send (legacy
-// form: no timestamp, body-only).
+// signBody computes the legacy X-Baki-Signature (no timestamp, body-only).
 func signBody(secret string, body []byte) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	return hmacsig.SignUntimed([]byte(secret), body)
 }
 
-// signBodyWithTimestamp computes the X-Baki-Signature including a timestamp in
-// the signed payload (replay-protected form). The timestamp must also be sent
-// in the X-Baki-Timestamp header.
+// signBodyWithTimestamp computes the X-Baki-Signature including a timestamp in the signed payload (the
+// replay-protected form); the timestamp must also be sent in X-Baki-Timestamp.
 func signBodyWithTimestamp(secret string, body []byte, ts int64) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(strconv.FormatInt(ts, 10) + "."))
-	mac.Write(body)
-	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	return hmacsig.Sign([]byte(secret), ts, body)
 }
 
-// The CI webhook is in publicRoutes, so it bypasses jwtAuth entirely — these
-// tests hit it with no Authorization header. Auth is the HMAC signature alone.
+// setCIGlobalSecret configures the deployment-wide PAD_CI_WEBHOOK_SECRET on rt's webhook, keeping what the
+// router's deployment offers (organisation credentials with accounts).
+func setCIGlobalSecret(t testing.TB, rt *Router, secret string) {
+	t.Helper()
+	h := moduleOf[*AnalysisHandler](t, rt)
+	h.ci = service.NewCIService(h.backend, h.flowSvc.DocProvider(), service.NewAuthzService(h.backend, rt.security.OrgSvc), service.CIOptions{GlobalSecret: secretv.New(secret), OrgCredentials: rt.caps.Has(capability.Accounts)})
+}
 
-func TestCIWebhook_Unconfigured_Returns503(t *testing.T) {
-	rt := newJWTTestRouter(t)
-	// Default test router wires ciSecret="" → endpoint disabled.
+// ciCall is a webhook request for body signed with key; keyID goes in X-Baki-Key-Id when set.
+func ciCall(t *testing.T, key, keyID string, body map[string]string) *http.Request {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Now().Unix()
+	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(raw))
+	req.Header.Set(hmacsig.SignatureHeader, hmacsig.Sign([]byte(key), ts, raw))
+	req.Header.Set(hmacsig.TimestampHeader, strconv.FormatInt(ts, 10))
+	if keyID != "" {
+		req.Header.Set(hmacsig.KeyIDHeader, keyID)
+	}
+	return req
+}
 
-	body, _ := json.Marshal(map[string]string{"flowId": "x"})
-	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(body))
+func serveCI(rt *Router, req *http.Request) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
 	rt.ServeHTTP(rr, req)
+	return rr
+}
+
+// Without accounts and without PAD_CI_WEBHOOK_SECRET nothing can authenticate a call: 503.
+func TestCIWebhook_Unconfigured_Returns503(t *testing.T) {
+	rt := newTestRouter(testutil.NewFakeBackend(), false)
+	rr := serveCI(rt, httptest.NewRequest(http.MethodPost, "/api/integrations/ci", strings.NewReader(`{"flowId":"x"}`)))
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503 when CI webhook unconfigured, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// The desktop has no server store: the route itself answers 503 (route.Needs), even with a secret configured.
+func TestCIWebhook_Desktop_Returns503(t *testing.T) {
+	rt := newTestRouter(nil, false)
+	setCIGlobalSecret(t, rt, "topsecret")
+	rr := serveCI(rt, ciCall(t, "topsecret", "", map[string]string{"flowId": "x"}))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "SERVICE_UNAVAILABLE") {
+		t.Errorf("desktop: %d %s, want 503", rr.Code, rr.Body.String())
 	}
 }
 
@@ -83,7 +115,7 @@ func (h *recordingHandler) snapshot() []slog.Record {
 // request. Every call must still get the byte-identical 503 envelope it got
 // before, with no ERROR record and a single WARN for the process.
 func TestCIWebhook_Unconfigured_NoErrorLogFlood(t *testing.T) {
-	rt := newJWTTestRouter(t)
+	rt := newTestRouter(testutil.NewFakeBackend(), false)
 	// The WARN is once per process; start from a fresh gate so the count
 	// below does not depend on which test reached the endpoint first.
 	ciWebhookUnconfiguredWarn = sync.Once{}
@@ -99,8 +131,7 @@ func TestCIWebhook_Unconfigured_NoErrorLogFlood(t *testing.T) {
 	const wantBody = `{"code":"SERVICE_UNAVAILABLE","message":"internal server error"}` + "\n"
 	for i := 0; i < 50; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader([]byte(`{"flowId":"x"}`)))
-		rr := httptest.NewRecorder()
-		rt.ServeHTTP(rr, req)
+		rr := serveCI(rt, req)
 		if rr.Code != http.StatusServiceUnavailable || rr.Body.String() != wantBody || rr.Header().Get("Content-Type") != "application/json" {
 			t.Fatalf("call %d: got %d %q (Content-Type %q), want 503 %q (application/json)",
 				i, rr.Code, rr.Body.String(), rr.Header().Get("Content-Type"), wantBody)
@@ -122,151 +153,305 @@ func TestCIWebhook_Unconfigured_NoErrorLogFlood(t *testing.T) {
 	}
 }
 
+// With accounts the webhook is always configured (organisation credentials): a call nothing verifies is a 401.
+func TestCIWebhook_WithAccounts_UnsignedIs401(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	rr := serveCI(rt, httptest.NewRequest(http.MethodPost, "/api/integrations/ci", strings.NewReader(`{"flowId":"x"}`)))
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("got %d (%s), want 401", rr.Code, rr.Body.String())
+	}
+}
+
 func TestCIWebhook_MissingSignature_Returns401(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	moduleOf[*AnalysisHandler](t, rt).ciSecret = "topsecret"
+	setCIGlobalSecret(t, rt, "topsecret")
 
 	body, _ := json.Marshal(map[string]string{"flowId": "x"})
 	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(body))
-	rr := httptest.NewRecorder()
-	rt.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
+	if rr := serveCI(rt, req); rr.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401 for missing signature, got %d (body: %s)", rr.Code, rr.Body.String())
 	}
 }
 
 func TestCIWebhook_InvalidSignature_Returns401(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	moduleOf[*AnalysisHandler](t, rt).ciSecret = "topsecret"
+	setCIGlobalSecret(t, rt, "topsecret")
 
 	body, _ := json.Marshal(map[string]string{"flowId": "x"})
 	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(body))
 	req.Header.Set("X-Baki-Signature", "sha256=deadbeef")
-	rr := httptest.NewRecorder()
-	rt.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
+	req.Header.Set("X-Baki-Timestamp", strconv.FormatInt(time.Now().Unix(), 10))
+	if rr := serveCI(rt, req); rr.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401 for invalid signature, got %d (body: %s)", rr.Code, rr.Body.String())
 	}
 }
 
 func TestCIWebhook_ValidSignature_MissingFlowID_Returns400(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	moduleOf[*AnalysisHandler](t, rt).ciSecret = "topsecret"
-
-	body, _ := json.Marshal(map[string]string{}) // no flowId
-	ts := time.Now().Unix()
-	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(body))
-	req.Header.Set("X-Baki-Signature", signBodyWithTimestamp("topsecret", body, ts))
-	req.Header.Set("X-Baki-Timestamp", strconv.FormatInt(ts, 10))
-	rr := httptest.NewRecorder()
-	rt.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
+	setCIGlobalSecret(t, rt, "topsecret")
+	if rr := serveCI(rt, ciCall(t, "topsecret", "", map[string]string{})); rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for missing flowId, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// An unknown format is refused instead of falling back to the summary; bakicli gates every value but sarif, so no
+// release of it sends one expecting a verdict.
+func TestCIWebhook_UnknownFormat_Returns400(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	setCIGlobalSecret(t, rt, "topsecret")
+	seedCloudFlowWithSource(t, rt, "flow-ci-format", "alice", rawSampleFlow)
+	for _, format := range []string{"json", "junit", "Summary2"} {
+		rr := serveCI(rt, ciCall(t, "topsecret", "", map[string]string{"flowId": "flow-ci-format", "format": format}))
+		if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "unknown format") {
+			t.Errorf("format %q: %d %s, want 400", format, rr.Code, rr.Body.String())
+		}
+	}
+	for _, format := range []string{"", "SUMMARY", " report "} {
+		if rr := serveCI(rt, ciCall(t, "topsecret", "", map[string]string{"flowId": "flow-ci-format", "format": format})); rr.Code != http.StatusOK {
+			t.Errorf("format %q: %d %s, want 200", format, rr.Code, rr.Body.String())
+		}
 	}
 }
 
 // B1.9: a legacy (timestamp-less) signature is refused — replay protection.
 func TestCIWebhook_LegacyNoTimestamp_Refused(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	moduleOf[*AnalysisHandler](t, rt).ciSecret = "topsecret"
+	setCIGlobalSecret(t, rt, "topsecret")
 
 	body, _ := json.Marshal(map[string]string{"flowId": "x"})
 	req := httptest.NewRequest(http.MethodPost, "/api/integrations/ci", bytes.NewReader(body))
 	req.Header.Set("X-Baki-Signature", signBody("topsecret", body))
-	rr := httptest.NewRecorder()
-	rt.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 for legacy timestamp-less signature, got %d (body: %s)", rr.Code, rr.Body.String())
+	rr := serveCI(rt, req)
+	if rr.Code != http.StatusUnauthorized || !strings.Contains(rr.Body.String(), "X-Baki-Timestamp") {
+		t.Errorf("expected 401 naming the missing timestamp, got %d (body: %s)", rr.Code, rr.Body.String())
 	}
 }
 
-func TestVerifySignature_MatchesSignedBody(t *testing.T) {
-	secret := "k"
-	body := []byte(`{"flowId":"abc"}`)
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	req.Header.Set("X-Baki-Signature", signBody(secret, body))
-	ok, err := verifySignature(req, secret)
+// ciOrgFixture is a cloud router with an organisation (mirrored into the store, as on Postgres), its admin, a flow
+// of it, another organisation's flow and a personal flow.
+type ciOrgFixture struct {
+	rt                     *Router
+	store                  *testutil.FakeBackend
+	org, other, admin      string
+	orgFlow, otherFlow     string
+	personalFlow, adminJWT string
+}
+
+func newCIOrgFixture(t *testing.T) *ciOrgFixture {
+	t.Helper()
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, true)
+	f := &ciOrgFixture{rt: rt, store: store, admin: "u-ci-admin", orgFlow: "flow-ci-org", otherFlow: "flow-ci-other", personalFlow: "flow-ci-personal"}
+	seedUserWithRole(t, rt, f.admin, "ci-admin@acme.io", auth.RoleMember)
+	f.org = seedOrg(t, rt, "Acme", f.admin)
+	f.other = seedOrg(t, rt, "Other", "u-other")
+	mirrorOrg(t, rt, f.org)
+	mirrorOrg(t, rt, f.other)
+	for id, org := range map[string]string{f.orgFlow: f.org, f.otherFlow: f.other, f.personalFlow: ""} {
+		doc, err := parser.ParseText(rawSampleFlow, id+".txt", int64(len(rawSampleFlow)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SaveFlow(context.Background(), &storageif.FlowDocument{ID: id, Name: id, OwnerID: f.admin, OrganizationID: org,
+			Content: content, Source: rawSampleFlow}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.adminJWT = sessionBearer(t, rt, f.admin, auth.RoleMember)
+	return f
+}
+
+// mint creates a credential through the API as the org admin.
+func (f *ciOrgFixture) mint(t *testing.T, org, name string) ciCredentialCreated {
+	t.Helper()
+	rr := doRequestWithAuth(t, f.rt, http.MethodPost, "/api/orgs/"+org+"/ci-credentials", f.adminJWT, map[string]any{"name": name})
+	checkStatus(t, rr, http.StatusCreated)
+	var out ciCredentialCreated
+	decodeJSON(t, rr, &out)
+	if out.Credential == "" || out.ID == "" {
+		t.Fatalf("create answer = %+v", out)
+	}
+	return out
+}
+
+func TestCIWebhook_OrgCredential(t *testing.T) {
+	f := newCIOrgFixture(t)
+	cred := f.mint(t, f.org, "pipeline")
+	body := map[string]string{"flowId": f.orgFlow, "format": "summary"}
+
+	// New bakicli: the key id in X-Baki-Key-Id.
+	rr := serveCI(f.rt, ciCall(t, cred.Credential, cred.ID, body))
+	checkStatus(t, rr, http.StatusOK)
+	var v ciWebhookResponse
+	decodeJSON(t, rr, &v)
+	if v.FlowID != f.orgFlow || v.Gate != "error" {
+		t.Errorf("verdict = %+v", v)
+	}
+	if rr.Header().Get("Deprecation") != "" {
+		t.Error("an org credential's answer is marked deprecated")
+	}
+	// Old bakicli: no key id; the credential is found through the flow's organisation.
+	checkStatus(t, serveCI(f.rt, ciCall(t, cred.Credential, "", body)), http.StatusOK)
+
+	// The credential reaches its organisation's flows only: after authentication, the same 404 as an unknown flow.
+	for _, flow := range []string{f.otherFlow, f.personalFlow, "flow-missing"} {
+		rr := serveCI(f.rt, ciCall(t, cred.Credential, cred.ID, map[string]string{"flowId": flow}))
+		if rr.Code != http.StatusNotFound || !strings.Contains(rr.Body.String(), "flow not found") {
+			t.Errorf("%s through another organisation's credential: %d %s, want the static 404", flow, rr.Code, rr.Body.String())
+		}
+	}
+	// Without a key id, another organisation's flow cannot even pick the credential: 401.
+	if rr := serveCI(f.rt, ciCall(t, cred.Credential, "", map[string]string{"flowId": f.otherFlow})); rr.Code != http.StatusUnauthorized {
+		t.Errorf("fallback onto another organisation's flow: %d, want 401", rr.Code)
+	}
+
+	// A second credential works alongside; revoking the first leaves the second.
+	second := f.mint(t, f.org, "second")
+	checkStatus(t, doRequestWithAuth(t, f.rt, http.MethodDelete, "/api/orgs/"+f.org+"/ci-credentials/"+cred.ID, f.adminJWT, nil), http.StatusNoContent)
+	for _, keyID := range []string{cred.ID, ""} {
+		if rr := serveCI(f.rt, ciCall(t, cred.Credential, keyID, body)); rr.Code != http.StatusUnauthorized {
+			t.Errorf("revoked credential (key id %q): %d, want 401", keyID, rr.Code)
+		}
+	}
+	checkStatus(t, serveCI(f.rt, ciCall(t, second.Credential, second.ID, body)), http.StatusOK)
+	checkStatus(t, serveCI(f.rt, ciCall(t, second.Credential, "", body)), http.StatusOK)
+}
+
+// Every pre-authentication failure is the same 401, whatever was wrong.
+func TestCIWebhook_PreAuthFailuresAreOne401(t *testing.T) {
+	f := newCIOrgFixture(t)
+	cred := f.mint(t, f.org, "pipeline")
+	expired := f.mint(t, f.org, "expired")
+	c, err := f.store.GetCICredential(context.Background(), expired.ID)
 	if err != nil {
-		t.Fatalf("verifySignature: %v", err)
+		t.Fatal(err)
 	}
-	if !ok {
-		t.Error("expected signature to verify")
+	past := time.Now().Add(-time.Minute)
+	c.ExpiresAt = &past
+	if err := f.store.DeleteCICredential(context.Background(), f.org, c.ID); err != nil {
+		t.Fatal(err)
 	}
-	// Body must still be readable after verification (restored for the handler).
-	buf := make([]byte, 64)
-	n, _ := req.Body.Read(buf)
-	if n == 0 {
-		t.Error("body was not restored after signature verification")
+	if err := f.store.CreateCICredential(context.Background(), c, service.MaxActiveCICredentials); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := ciCall(t, cred.Credential, cred.ID, map[string]string{"flowId": f.orgFlow})
+	stale.Header.Set(hmacsig.TimestampHeader, strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10))
+	cases := map[string]*http.Request{
+		"unknown key id":       ciCall(t, cred.Credential, "aaaaaaaaaaaaaaaa", map[string]string{"flowId": f.orgFlow}),
+		"bad signature":        ciCall(t, cred.Credential+"x", cred.ID, map[string]string{"flowId": f.orgFlow}),
+		"expired by key id":    ciCall(t, expired.Credential, expired.ID, map[string]string{"flowId": f.orgFlow}),
+		"expired via the flow": ciCall(t, expired.Credential, "", map[string]string{"flowId": f.orgFlow}),
+		"unknown flow":         ciCall(t, cred.Credential, "", map[string]string{"flowId": "flow-missing"}),
+		"personal flow":        ciCall(t, cred.Credential, "", map[string]string{"flowId": f.personalFlow}),
+		"stale timestamp":      stale,
+	}
+	var want string
+	for name, req := range cases {
+		rr := serveCI(f.rt, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("%s: %d %s, want 401", name, rr.Code, rr.Body.String())
+			continue
+		}
+		if want == "" {
+			want = rr.Body.String()
+		} else if rr.Body.String() != want {
+			t.Errorf("%s answers %q, another failure %q: the failures must not be told apart", name, rr.Body.String(), want)
+		}
 	}
 }
 
-func TestVerifySignature_RejectsTamperedBody(t *testing.T) {
-	secret := "k"
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(`{"flowId":"tampered"}`)))
-	req.Header.Set("X-Baki-Signature", signBody(secret, []byte(`{"flowId":"original"}`)))
-	ok, err := verifySignature(req, secret)
-	if err != nil {
-		t.Fatalf("verifySignature: %v", err)
+// The deployment secret keeps working where organisations have credentials, marked deprecated; without accounts it
+// is the only key and is not.
+func TestCIWebhook_GlobalSecretDeprecation(t *testing.T) {
+	f := newCIOrgFixture(t)
+	setCIGlobalSecret(t, f.rt, "topsecret")
+	rr := serveCI(f.rt, ciCall(t, "topsecret", "", map[string]string{"flowId": f.otherFlow}))
+	checkStatus(t, rr, http.StatusOK)
+	if rr.Header().Get("Deprecation") != "true" || !strings.Contains(rr.Header().Get("Link"), `rel="deprecation"`) {
+		t.Errorf("deprecation headers = %q / %q", rr.Header().Get("Deprecation"), rr.Header().Get("Link"))
 	}
-	if ok {
-		t.Error("expected signature verification to fail for a tampered body")
+
+	local := newTestRouter(testutil.NewFakeBackend(), false)
+	setCIGlobalSecret(t, local, "topsecret")
+	seedCloudFlowWithSource(t, local, "flow-local", "local", rawSampleFlow)
+	rr = serveCI(local, ciCall(t, "topsecret", "", map[string]string{"flowId": "flow-local"}))
+	checkStatus(t, rr, http.StatusOK)
+	if rr.Header().Get("Deprecation") != "" {
+		t.Error("the single-tenant secret is marked deprecated")
 	}
 }
 
-// Replay protection: a fresh X-Baki-Timestamp folded into the signed payload is
-// accepted.
-func TestVerifySignature_AcceptsFreshTimestamp(t *testing.T) {
-	secret := "k"
-	body := []byte(`{"flowId":"abc"}`)
-	ts := time.Now().Unix()
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	req.Header.Set("X-Baki-Timestamp", strconv.FormatInt(ts, 10))
-	req.Header.Set("X-Baki-Signature", signBodyWithTimestamp(secret, body, ts))
-	ok, err := verifySignature(req, secret)
-	if err != nil {
-		t.Fatalf("verifySignature: %v", err)
+// local+db resolves the flow the call names from the store; it used to analyse whatever the process had open.
+func TestCIWebhook_LocalDB_ResolvesByID(t *testing.T) {
+	rt := newTestRouter(testutil.NewFakeBackend(), false)
+	setCIGlobalSecret(t, rt, "topsecret")
+	seedCloudFlowWithSource(t, rt, "flow-stored", "local", rawSampleFlow)
+	moduleOf[*AnalysisHandler](t, rt).flowSvc.DocProvider().SetCurrentDoc(&models.FlowDocument{ID: "open", Name: "Open flow"})
+
+	rr := serveCI(rt, ciCall(t, "topsecret", "", map[string]string{"flowId": "flow-stored"}))
+	checkStatus(t, rr, http.StatusOK)
+	var v ciWebhookResponse
+	decodeJSON(t, rr, &v)
+	if v.FlowID != "flow-stored" || v.FlowName != "flow-stored" {
+		t.Errorf("verdict = %+v; want the stored flow, not the open one", v)
 	}
-	if !ok {
-		t.Error("expected signature with a fresh timestamp to verify")
+	if rr := serveCI(rt, ciCall(t, "topsecret", "", map[string]string{"flowId": "open"})); rr.Code != http.StatusNotFound {
+		t.Errorf("the open document is no stored flow: %d", rr.Code)
 	}
 }
 
-// A timestamp outside the ±5min skew window is rejected even with a matching
-// signature — so a captured request can't be replayed later.
-func TestVerifySignature_RejectsStaleTimestamp(t *testing.T) {
-	secret := "k"
-	body := []byte(`{"flowId":"abc"}`)
-	stale := time.Now().Add(-(ciWebhookMaxSkew + time.Minute)).Unix()
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	req.Header.Set("X-Baki-Timestamp", strconv.FormatInt(stale, 10))
-	req.Header.Set("X-Baki-Signature", signBodyWithTimestamp(secret, body, stale))
-	ok, err := verifySignature(req, secret)
-	if err != nil {
-		t.Fatalf("verifySignature: %v", err)
-	}
-	if ok {
-		t.Error("expected signature with a stale timestamp to be rejected")
-	}
-}
+// Each call is audited as the integration (never a user); the dashboard is recorded once per report, detached, not
+// on every poll of an unchanged flow; the credential's use is recorded off the response path.
+func TestCIWebhook_AuditRecordAndTouch(t *testing.T) {
+	f := newCIOrgFixture(t)
+	cred := f.mint(t, f.org, "pipeline")
+	h := moduleOf[*AnalysisHandler](t, f.rt)
+	baseline := len(f.store.SavedAuditEvents())
 
-// Refreshing just the timestamp on a captured request breaks the signature
-// (the timestamp is part of the signed payload).
-func TestVerifySignature_RejectsTamperedTimestamp(t *testing.T) {
-	secret := "k"
-	body := []byte(`{"flowId":"abc"}`)
-	old := time.Now().Add(-(ciWebhookMaxSkew + time.Minute)).Unix()
-	fresh := time.Now().Unix()
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	// Signature computed over the OLD timestamp, header carries the FRESH one.
-	req.Header.Set("X-Baki-Timestamp", strconv.FormatInt(fresh, 10))
-	req.Header.Set("X-Baki-Signature", signBodyWithTimestamp(secret, body, old))
-	ok, err := verifySignature(req, secret)
-	if err != nil {
-		t.Fatalf("verifySignature: %v", err)
+	for range 2 {
+		checkStatus(t, serveCI(f.rt, ciCall(t, cred.Credential, cred.ID, map[string]string{"flowId": f.orgFlow, "failOn": "none"})), http.StatusOK)
 	}
-	if ok {
-		t.Error("expected signature with a tampered timestamp to be rejected")
+	if err := h.records.Drain(context.Background()); err != nil {
+		t.Fatal(err)
 	}
+	var runs []*storageif.AuditEvent
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runs = runs[:0]
+		for _, ev := range f.store.SavedAuditEvents()[baseline:] {
+			if ev.Action == "ci.webhook_run" {
+				runs = append(runs, ev)
+			}
+		}
+		if len(runs) == 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("%d ci.webhook_run rows for 2 calls", len(runs))
+	}
+	for _, ev := range runs {
+		if ev.ActorKind != "integration" || ev.TokenID != cred.ID || ev.UserID != "" || ev.OrgID != f.org || ev.ResourceID != f.orgFlow ||
+			ev.Meta["method"] != "key_id" || ev.Meta["gate"] != "none" || ev.Meta["passed"] != "true" || ev.Meta["format"] != "summary" {
+			t.Errorf("audit row = %+v", ev)
+		}
+	}
+	if snap := f.store.FlowHealth[f.orgFlow]; snap == nil {
+		t.Error("the CI run was not recorded on the dashboard")
+	}
+	for time.Now().Before(deadline) {
+		if c, _ := f.store.GetCICredential(context.Background(), cred.ID); c.LastUsedAt != nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("the credential's use was never recorded")
 }
 
 func TestGatePasses(t *testing.T) {

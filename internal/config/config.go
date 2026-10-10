@@ -1,6 +1,11 @@
 package config
 
-import "pad-core/models"
+import (
+	"time"
+
+	"pad-analyzer/internal/platform/secret"
+	"pad-core/models"
+)
 
 // DeploymentMode indicates how the application is deployed
 type DeploymentMode string
@@ -50,7 +55,11 @@ func (s StorageConfig) EffectiveEmbeddingDim() int {
 	return DefaultEmbeddingDim
 }
 
-// Config holds the complete application configuration
+// Config holds the complete application configuration.
+//
+// Every credential, and every value that carries one (a DSN's password, a webhook URL's token), is a secret.Value:
+// it prints, marshals and logs as "[redacted]", and only Reveal() at the boundary that needs the plain text (the
+// driver, the signer, the keystore) reads it. A config file holds it as a plain JSON string under the same name.
 type Config struct {
 	Mode       DeploymentMode
 	Server     ServerConfig
@@ -81,7 +90,7 @@ type FeatureFlags struct {
 type RedisConfig struct {
 	// URL is a redis://[user:pass@]host:port/[db] connection string. Empty =
 	// backplane disabled (in-memory, single-replica).
-	URL string
+	URL secret.Value
 	// PoolSize overrides go-redis's default (10 × GOMAXPROCS). 0 = default.
 	PoolSize int
 	// MinIdleConns sets the minimum number of idle connections. 0 = default.
@@ -96,9 +105,12 @@ type EmailConfig struct {
 	SMTPHost   string
 	SMTPPort   int
 	Username   string
-	Password   string
+	Password   secret.Value
 	From       string
 	AppBaseURL string
+	// MaxConnections caps the SMTP sessions open to the relay at once (PAD_SMTP_MAX_CONNECTIONS); 0 leaves only the
+	// mail runner's bound of 32.
+	MaxConnections int
 }
 
 // Enabled reports whether SMTP delivery is configured.
@@ -111,27 +123,46 @@ func (e EmailConfig) Enabled() bool {
 // (scanning is opt-in). Cloud mode only — the scanner needs a storage backend.
 type GovernanceConfig struct {
 	// ScanInterval is how often to re-scan stored flows for drift/regressions
-	// (a duration string like "1h"; empty or non-positive disables scanning).
-	ScanInterval string
+	// (PAD_SCAN_INTERVAL, e.g. "1h"); 0, the default, disables scanning.
+	ScanInterval Duration
 	// NotifyWebhookURL receives raw JSON alert events (generic webhook).
-	NotifyWebhookURL string
+	NotifyWebhookURL secret.Value
 	// NotifyWebhookSecret is the HMAC-SHA256 key for webhook payload signing
 	// (X-Baki-Signature header); empty = no signature.
-	NotifyWebhookSecret string
-	// NotifyTeamsURL is a Microsoft Teams incoming-webhook URL (MessageCard).
-	NotifyTeamsURL string
+	NotifyWebhookSecret secret.Value
+	// NotifyTeamsURL is a Microsoft Teams incoming-webhook URL (MessageCard). Microsoft is retiring the Office 365
+	// connectors behind it; NotifyTeamsWorkflowURL is the replacement.
+	NotifyTeamsURL secret.Value
+	// NotifyTeamsWorkflowURL is a Microsoft Teams Workflows webhook URL (an Adaptive Card message).
+	NotifyTeamsWorkflowURL secret.Value
 	// NotifySlackURL is a Slack incoming-webhook URL. The Slack payload format
 	// is also compatible with Discord, Mattermost, and Teams. PAD_WEBHOOK_URL
 	// is treated as an alias for this channel when NotifySlackURL is unset.
-	NotifySlackURL string
+	NotifySlackURL secret.Value
 	// NotifySlackSecret is an optional HMAC key for Slack payload signing.
-	NotifySlackSecret string
-	// InboundWebhookSecret is the HMAC key used to verify inbound CI webhooks
-	// (POST /api/integrations/ci). The CI runner signs the request body with
-	// HMAC-SHA256 and sends X-Baki-Signature: sha256=<hex>. Empty disables the
-	// endpoint (503). Separate from the outbound signing secrets so rotating
-	// one doesn't break the other.
-	InboundWebhookSecret string
+	NotifySlackSecret secret.Value
+	// NotifyAllowedHosts restricts the hosts an organisation's channels may point at (PAD_NOTIFY_ALLOWED_HOSTS):
+	// exact hosts or "*.suffix" globs, checked when a channel is saved and again when it is delivered to; empty
+	// allows any public host. The deployment's own channels (PAD_NOTIFY_*) are not restricted. Globs over public
+	// suffixes and multi-tenant zones are refused at boot.
+	NotifyAllowedHosts []string
+	// NotifyAllowedHostsVisible (PAD_NOTIFY_ALLOWED_HOSTS_VISIBLE) shows NotifyAllowedHosts to organisation admins in
+	// the channel form. Off by default: the list may name other customers' hosts, so admins learn only that one
+	// applies. Turn it on when the list names only shared service hosts (hooks.slack.com, *.logic.azure.com).
+	NotifyAllowedHostsVisible bool
+	// InboundWebhookSecret is the deployment-wide HMAC key of the inbound CI
+	// webhook (POST /api/integrations/ci): the CI runner signs
+	// "<X-Baki-Timestamp>." + body with HMAC-SHA256 and sends X-Baki-Signature:
+	// sha256=<hex>. Separate from the outbound signing secrets so rotating one
+	// doesn't break the other. With accounts, organisations mint their own CI
+	// credentials (ADR 0019) and this secret is deprecated; without accounts,
+	// empty disables the endpoint (503).
+	InboundWebhookSecret secret.Value
+	// InboundWebhookAllowNoTimestamp (PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP=1) lets
+	// InboundWebhookSecret verify the legacy signature over the body alone,
+	// without X-Baki-Timestamp, so a captured request replays forever.
+	// Deprecated; organisation CI credentials never accept that form.
+	InboundWebhookAllowNoTimestamp bool
 	// NotifyEmailTo is the recipient address for governance alert emails (an ops
 	// alias or team list); empty disables the email channel even with SMTP set.
 	NotifyEmailTo string
@@ -140,13 +171,13 @@ type GovernanceConfig struct {
 	NotifyJiraBaseURL string
 	// JiraEmail + JiraAPIToken form the Basic-auth credential (API token).
 	NotifyJiraEmail    string
-	NotifyJiraAPIToken string
+	NotifyJiraAPIToken secret.Value
 	// JiraProject is the target project key (e.g. "PAD").
 	NotifyJiraProject string
 	// RetentionPurgeInterval is how often to purge expired tokens/invites and
-	// aged-out audit rows (a duration string like "24h"; empty or non-positive
-	// disables). Cloud mode only — the purge needs a DB.
-	RetentionPurgeInterval string
+	// aged-out audit rows (PAD_RETENTION_PURGE_INTERVAL, default 24h; "0s"
+	// disables). With accounts on the database only — the purge needs a DB.
+	RetentionPurgeInterval Duration
 	// AuditRetentionDays is how long audit_events are kept before the purge
 	// deletes them (0 = keep audit history indefinitely).
 	AuditRetentionDays int
@@ -170,7 +201,7 @@ type ServerConfig struct {
 	// The IP allowlist alone is NOT sufficient behind a reverse proxy: it keys
 	// off r.RemoteAddr, which is the proxy's own (private) address for every
 	// external request — set this whenever BehindProxy is true.
-	MetricsToken string
+	MetricsToken secret.Value
 	// LocalConfigEndpoint serves the session token from GET /api/local-config in
 	// local mode. Default false, and it must stay that way for the desktop app.
 	//
@@ -217,19 +248,28 @@ type StorageConfig struct {
 	DataDir string
 	Backend StorageBackend
 	// DatabaseURL is used when Backend == StorageDatabase
-	DatabaseURL string
+	DatabaseURL secret.Value
 
-	// Connection pool settings for the PostgreSQL backend. Zero values mean
-	// "use driver defaults" (see database.DefaultConfig). Configure via
-	// PAD_DB_MAX_OPEN_CONNS, PAD_DB_MAX_IDLE_CONNS, PAD_DB_CONN_MAX_LIFETIME.
+	// Connection pool settings for the PostgreSQL backend: PAD_DB_MAX_OPEN_CONNS
+	// and PAD_DB_MAX_IDLE_CONNS (0 = the backend's default, see
+	// database.DefaultConfig), PAD_DB_CONN_MAX_LIFETIME (default 1h, "0s" =
+	// connections are never retired for age) and PAD_DB_CONN_MAX_IDLE_TIME
+	// (default 5m; 0 is the backend's 5m too).
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
-	DBConnMaxLifetime string // duration string, e.g. "1h"
-	DBConnMaxIdleTime string // duration string, e.g. "5m"
+	DBConnMaxLifetime Duration
+	DBConnMaxIdleTime Duration
 	// DBStatementTimeout bounds every statement (and lock wait) server-side:
-	// PAD_DB_STATEMENT_TIMEOUT, e.g. "30s". Empty ⇒ the backend default (30s);
-	// "0s" disables for a maintenance run.
-	DBStatementTimeout string
+	// PAD_DB_STATEMENT_TIMEOUT, default 30s; "0s" disables for a maintenance run.
+	DBStatementTimeout Duration
+	// MaxReplicas is how many replicas share the database server at most
+	// (PAD_MAX_REPLICAS, which infra/main.bicep sets); 0 = unknown, counted as
+	// one. Only the boot check of the pool against max_connections reads it.
+	MaxReplicas int
+	// DBServerMaxConns is the server's max_connections as the deployment knows
+	// it (PAD_DB_SERVER_MAX_CONNS); 0 = unknown. The pool check uses it when
+	// the server's own settings cannot be read.
+	DBServerMaxConns int
 
 	// DBRequireSSL controls whether the Postgres DSN must enforce TLS. It is
 	// a raw tri-state string parsed from PAD_DB_REQUIRE_SSL: "true"/"1"/"yes"
@@ -264,7 +304,7 @@ type StorageConfig struct {
 	// connection string instead of account name + Managed Identity — for the
 	// Azurite emulator and non-MI/local scenarios; Managed Identity remains
 	// the production default.
-	AzureBlobConnectionString string
+	AzureBlobConnectionString secret.Value
 }
 
 type RuntimeConfig struct {
@@ -278,6 +318,10 @@ type RuntimeConfig struct {
 	RateLimitChatBurst      float64
 	RateLimitUploadRPS      float64
 	RateLimitUploadBurst    float64
+	// RateLimitChannelTest is the notification channel test's own bucket: each call makes the server POST to an
+	// admin-chosen public URL for up to 15 s.
+	RateLimitChannelTestRPS   float64
+	RateLimitChannelTestBurst float64
 	// RateLimitPerUser caps one authenticated user's total WRITE throughput
 	// (POST/PUT/PATCH/DELETE) across all endpoints — an additional ceiling on
 	// the per-group per-IP buckets, so an account can't rotate across
@@ -286,11 +330,21 @@ type RuntimeConfig struct {
 	RateLimitPerUserRPS    float64
 	RateLimitPerUserBurst  float64
 	CircuitBreakerFailures int
-	CircuitBreakerOpenDur  string
+	CircuitBreakerOpenDur  Duration
 	RetryMaxAttempts       int
-	RetryBaseDelay         string
+	RetryBaseDelay         Duration
 	OTLPEndpoint           string
-	RequestTimeout         string
+	// RequestTimeout is the deadline of an ordinary request (PAD_REQUEST_TIMEOUT); the streams and the
+	// knowledge-base bulk routes have their own. Validate requires it positive.
+	RequestTimeout Duration
+	// InstanceID names this process among the replicas: logs, traces, the Postgres application_name, a job
+	// lock's holder. PAD_INSTANCE_ID, else the replica name Azure Container Apps sets, else the host name, else a
+	// random id (Load resolves it; never empty after Load).
+	InstanceID string
+	// ShutdownDrainDelay is how long a stopping server answers "draining" (readiness 503, new streams refused)
+	// while it still serves, before it ends the open streams, so probes and load balancers move traffic first
+	// (PAD_SHUTDOWN_DRAIN_DELAY; ADR 0024). Default 3 s in the cloud profile, 0 for local and desktop; at most 10 s.
+	ShutdownDrainDelay Duration
 	// AzureFoundryAllowedHosts extends the hosts a user may configure as an
 	// Azure AI Foundry endpoint beyond Microsoft's own suffixes
 	// (*.openai.azure.com, *.services.ai.azure.com, …): exact hosts or
@@ -318,17 +372,20 @@ func DefaultRuntimeConfig() RuntimeConfig {
 		RateLimitChatBurst:      10,
 		RateLimitUploadRPS:      1,
 		RateLimitUploadBurst:    3,
+		// Channel tests: six a minute after a burst of three.
+		RateLimitChannelTestRPS:   0.1,
+		RateLimitChannelTestBurst: 3,
 		// Per-user default: generous enough that a legit user doing one thing at
 		// a time (already bounded by the tighter per-group per-IP caps) never
 		// hits it, but caps a runaway account's total write volume.
 		RateLimitPerUserRPS:    10,
 		RateLimitPerUserBurst:  20,
 		CircuitBreakerFailures: 5,
-		CircuitBreakerOpenDur:  "30s",
+		CircuitBreakerOpenDur:  Duration(30 * time.Second),
 		RetryMaxAttempts:       3,
-		RetryBaseDelay:         "500ms",
+		RetryBaseDelay:         Duration(500 * time.Millisecond),
 		OTLPEndpoint:           "",
-		RequestTimeout:         "30s",
+		RequestTimeout:         Duration(30 * time.Second),
 	}
 }
 
@@ -336,17 +393,22 @@ type AuthConfig struct {
 	// Enabled controls whether auth middleware is enforced
 	Enabled bool
 	// Secret is the JWT signing key (required when Enabled == true)
-	Secret string
+	Secret secret.Value
 	// EncryptionKey is the dedicated key for at-rest encryption (e.g. the
 	// database keystore AES-256-GCM key). Separate from Secret so a JWT-key
 	// leak doesn't compromise stored provider keys, and rotating the JWT key
 	// doesn't brick encrypted secrets. Falls back to Secret when unset
 	// (backward compatibility, emits a deprecation warning).
-	EncryptionKey string
+	EncryptionKey secret.Value
+	// EncryptionKeyPrevious are the keys EncryptionKey replaced, newest first (PAD_ENCRYPTION_KEY_PREVIOUS): they
+	// still open what they sealed until the re-seal pass has moved it to EncryptionKey (ADR 0005). Only beside a
+	// dedicated EncryptionKey.
+	EncryptionKeyPrevious []secret.Value
 	// SecretEphemeral is true when Secret was minted for this process because none was configured (only
 	// possible with auth disabled: Validate requires a secret when auth is enabled). Such a secret must never
-	// key data that outlives the process, such as the database keystore.
-	SecretEphemeral bool
+	// key data that outlives the process, such as the database keystore. Only ResolveRuntimeSecrets sets it: a
+	// config file cannot (it would make the keystore refuse the real secret beside it).
+	SecretEphemeral bool `json:"-"`
 	// SSO configures account-level OIDC login (cloud mode only)
 	SSO SSOConfig
 }
@@ -363,7 +425,7 @@ type SSOConfig struct {
 	// ClientID is the OAuth2 client ID from the IdP app registration.
 	ClientID string
 	// ClientSecret is optional — leave empty for public clients using PKCE only.
-	ClientSecret string
+	ClientSecret secret.Value
 	// RedirectURL is the absolute callback URL registered with the IdP,
 	// e.g. https://app.example.com/api/auth/sso/callback.
 	RedirectURL string
@@ -389,19 +451,26 @@ func Default() *Config {
 		},
 		Storage: StorageConfig{
 			Backend: StorageLocal,
+			// The Postgres backend's own defaults (database.DefaultConfig;
+			// internal/app's TestStorageConfig_DefaultsAreTheBackends keeps them
+			// equal). Held here so an explicit "0s" (off) and unset differ.
+			DBConnMaxLifetime:  Duration(time.Hour),
+			DBConnMaxIdleTime:  Duration(5 * time.Minute),
+			DBStatementTimeout: Duration(30 * time.Second),
 		},
 		Auth: AuthConfig{
 			Enabled: false,
 		},
+		// Info in every mode unless PAD_LOG_LEVEL or a config file says otherwise.
 		Log: models.LogConfig{
-			Level: "debug",
+			Level: "info",
 		},
 		Governance: GovernanceConfig{
 			// On by default (cloud mode only; see initRetentionPurge). Off, the
 			// expired-token and share-link tables grew forever, and nothing
 			// told an operator the purge existed. "0s" disables; age-based
 			// purges additionally need PAD_AUDIT_RETENTION_DAYS.
-			RetentionPurgeInterval: "24h",
+			RetentionPurgeInterval: Duration(24 * time.Hour),
 		},
 	}
 }

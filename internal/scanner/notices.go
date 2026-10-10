@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
+	"time"
 
 	"pad-core/logger"
 	"pad-core/models"
@@ -30,6 +32,9 @@ type pendingNotice struct {
 	// kept: an unchanged (skipped) flow still raises the notice; stored: a flush of this sweep wrote it. The sweep's
 	// last flush writes a kept notice no flush stored, so the retention sweep counts from this sweep.
 	kept, stored bool
+	// inserted: a flush of this sweep inserted the notice (it is new); delivered: the last flush handed it to the
+	// channels.
+	inserted, delivered bool
 }
 
 // noticeNote is one flow's part of a notice: the notice's identity and the flow's new rules with findings. A flow's
@@ -104,10 +109,18 @@ func (s *Scanner) addNote(flowID string, n *noticeNote, kept bool) {
 }
 
 // flushNotices stores the notices the sweep changed since the last flush, in one statement, and announces the ones
-// that are new; the sweep's last flush also stores the kept notices no flush stored. A failed store forgets the
-// contributing flows' scans: the notes stay pending for the next flush, and a later sweep re-scans the flows should
-// that one fail too.
+// that are new; the sweep's last flush also stores the kept notices no flush stored, then delivers the notices this
+// sweep inserted to the channels. A failed store forgets the contributing flows' scans: the notes stay pending for
+// the next flush, and a later sweep re-scans the flows should that one fail too.
 func (s *Scanner) flushNotices(ctx context.Context, last bool) {
+	s.storeNotices(ctx, last)
+	if last {
+		s.deliverNotices(ctx)
+	}
+}
+
+// storeNotices is flushNotices' store and in-app announcement.
+func (s *Scanner) storeNotices(ctx context.Context, last bool) {
 	s.noticeMu.Lock()
 	var batch []*storageif.RuleNotice
 	var flows []string
@@ -139,6 +152,7 @@ func (s *Scanner) flushNotices(ctx context.Context, last bool) {
 	for _, n := range batch {
 		if p := s.notices[n.ID]; p != nil {
 			p.unflushed, p.stored = nil, true
+			p.inserted = p.inserted || slices.Contains(inserted, n.ID)
 		}
 	}
 	s.noticeMu.Unlock()
@@ -170,18 +184,75 @@ func (s *Scanner) pushNoticeSSE(ctx context.Context, n *storageif.RuleNotice) {
 	case storageif.RuleNoticeScopeUser:
 		to = []string{n.ScopeID}
 	}
-	rules := "rules report"
-	if len(n.RuleIDs) == 1 {
-		rules = "rule reports"
-	}
 	for _, uid := range to {
 		s.sse.EmitTo(uid, "governance:alert", map[string]any{
 			"flowId":   "",
 			"type":     string(notify.EventNewRules),
-			"title":    fmt.Sprintf("%d new %s findings", len(n.RuleIDs), rules),
+			"title":    noticeTitle(n),
 			"severity": "warning",
 			"scope":    n.Scope,
 		})
+	}
+}
+
+// noticeTitle is a notice's headline: "3 new rules report findings".
+func noticeTitle(n *storageif.RuleNotice) string {
+	rules := "rules report"
+	if len(n.RuleIDs) == 1 {
+		rules = "rule reports"
+	}
+	return fmt.Sprintf("%d new %s findings", len(n.RuleIDs), rules)
+}
+
+// noticeRulesListed caps the rule ids a notice's message names.
+const noticeRulesListed = 10
+
+// deliverNotices hands the notices this sweep inserted to the channels, once each, with the sweep's full counts (a
+// notice is inserted at the first flush that sees it and grows at later ones): an organisation's notice to its
+// channels, the deployment's own notice (a deployment without accounts) to the deployment's channels. A user's notice
+// (personal flows) has no channel, and no channel receives another scope's notice.
+func (s *Scanner) deliverNotices(ctx context.Context) {
+	s.noticeMu.Lock()
+	var due []*storageif.RuleNotice
+	for _, id := range slices.Sorted(maps.Keys(s.notices)) {
+		p := s.notices[id]
+		if !p.inserted || p.delivered {
+			continue
+		}
+		p.delivered = true
+		n := p.notice
+		n.RuleIDs = slices.Sorted(maps.Keys(p.rules))
+		n.FlowCount = len(p.flows)
+		due = append(due, &n)
+	}
+	s.noticeMu.Unlock()
+	for _, n := range due {
+		ev := noticeEvent(n)
+		switch n.Scope {
+		case storageif.RuleNoticeScopeOrg:
+			s.deliverToOrg(ctx, n.ScopeID, ev)
+		case storageif.RuleNoticeScopeApp:
+			s.notifier.Dispatch(ctx, ev)
+		}
+	}
+}
+
+// noticeEvent is a notice as a channel event; its id is the notice's, so it is the same however often it is sent.
+func noticeEvent(n *storageif.RuleNotice) notify.Event {
+	listed := n.RuleIDs
+	more := ""
+	if len(listed) > noticeRulesListed {
+		listed, more = listed[:noticeRulesListed], fmt.Sprintf(" and %d more", len(n.RuleIDs)-noticeRulesListed)
+	}
+	return notify.Event{
+		ID:    notify.EventID(n.ID),
+		Type:  notify.EventNewRules,
+		Title: noticeTitle(n),
+		Message: fmt.Sprintf("Rules newer than the flows' baselines report findings in %d flow(s): %s%s. They raise no drift alert; review them in the analysis rule settings.",
+			n.FlowCount, strings.Join(listed, ", "), more),
+		RuleIDs:   n.RuleIDs,
+		FlowCount: n.FlowCount,
+		At:        time.Now().UTC(),
 	}
 }
 

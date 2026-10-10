@@ -1,0 +1,31 @@
+From: "PAD Analyzer" <no-reply@pad.example.com>
+To: <una@example.com>
+Subject: New comment on your assigned finding
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Message-ID: <golden@pad.example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary=GOLDEN-BOUNDARY
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain; charset=UTF-8
+
+Hi Una O'Neil,
+
+Ari <admin> commented on a finding assigned to you:
+
+  please look
+
+View it in PAD Analyzer (it is waiting in your notifications):
+https://pad.example.com/
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html; charset=UTF-8
+
+<p>Hi Una O&#39;Neil,</p><p><strong>Ari &lt;admin&gt;</strong> commented on=
+ a finding assigned to you:</p><blockquote>please look</blockquote><p><a hr=
+ef=3D"https://pad.example.com/">View the finding</a> =E2=80=94 it is waitin=
+g in your notifications.</p>
+--GOLDEN-BOUNDARY--

@@ -9,7 +9,7 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// The organisations domain: the organisation, its members and invitations, its shared credentials, and the
+// The organisations domain: the organisation, its members and invitations, its shared and CI credentials, and the
 // configuration and content it owns (policies, channels, custom rules, the knowledge base).
 func init() {
 	const orgConfig = "organisation configuration, no user identity"
@@ -26,10 +26,12 @@ func init() {
 				erase: erasedByStep, org: orgByCascade, noPurge: "a credential lives until an admin removes it"},
 			{table: "policies", noExport: orgConfig, erase: notPersonal, eraseWhy: orgConfig, org: orgByStep,
 				noPurge: "configuration lives as long as its organisation"},
-			{table: "org_channels", noExport: orgConfig, erase: notPersonal, eraseWhy: orgConfig, org: orgByStep,
+			{table: "org_channels", noExport: orgConfig, erase: erasedByStep, org: orgByStep,
 				noPurge: "configuration lives as long as its organisation"},
 			{table: "org_custom_rules", noExport: orgConfig, erase: notPersonal, eraseWhy: orgConfig, org: orgByStep,
 				noPurge: "configuration lives as long as its organisation"},
+			{table: "org_ci_credentials", noExport: "the organisation's CI credentials (sealed secrets)",
+				erase: erasedByStep, org: orgByCascade},
 			{table: "knowledge_documents", noExport: "the organisation's knowledge base",
 				erase: notPersonal, eraseWhy: "organisation content; no uploader is recorded", org: orgByStep,
 				noPurge: "organisation content, never on a timer"},
@@ -44,6 +46,13 @@ func init() {
 		erase: []eraseStep{
 			{phase: eraseIdentity, table: "organisations", run: eraseOrgOwnership},
 			eraseByUser(eraseIdentity, "org_invites", `UPDATE org_invites SET invited_by = '' WHERE invited_by = $1`),
+			// A credential the user minted stays the organisation's: only who minted it goes.
+			eraseByUser(eraseIdentity, "org_ci_credentials", `UPDATE org_ci_credentials SET created_by = '' WHERE created_by = $1`),
+			// An email channel's recipients are member ids (comma-separated): the user leaves every list, also of an
+			// organisation they already left, where delivery skipped them but the id stayed.
+			eraseByUser(eraseIdentity, "org_channels", `UPDATE org_channels SET config = jsonb_set(config, '{recipients}',
+		to_jsonb(array_to_string(array_remove(string_to_array(config->>'recipients', ','), $1), ',')))
+		WHERE $1 = ANY(string_to_array(config->>'recipients', ','))`),
 			// The credentials the user lent (secret_set_by, or updated_by on a row no save has stamped since v24) are
 			// AccountLifecycleService's: its finalize disables them by the user's id after this statement, on another
 			// connection, before the request commits. Touching those rows here would make it wait on this
@@ -66,6 +75,9 @@ func init() {
 			// audit can correlate).
 			{table: "org_invites", cond: `expires_at < NOW() OR (accepted_at IS NOT NULL AND accepted_at < NOW() - INTERVAL '7 days')`,
 				count: func(r *interfaces.PurgeResult) *int { return &r.OrgInvites }},
+			// An expired CI credential stays listed for 30 days, so its admin sees why a runner started to fail.
+			{table: "org_ci_credentials", cond: `expires_at < NOW() - INTERVAL '30 days'`,
+				count: func(r *interfaces.PurgeResult) *int { return &r.CICredentials }},
 		},
 	})
 }

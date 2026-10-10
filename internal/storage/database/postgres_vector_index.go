@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"pad-analyzer/internal/lifecycle"
 )
 
 // vectorIndexLockKey is the advisory lock replicas take while building the
@@ -35,41 +37,52 @@ func knowledgeVectorIndexDDL(dims int) string {
 		knowledgeVectorIndexName(dims), dims, dims)
 }
 
+// vectorIndexJob serialises the build across replicas, so two instances booting together do not run the same CREATE
+// INDEX CONCURRENTLY against each other.
+var vectorIndexJob = lifecycle.DeclareJob(lifecycle.JobDecl{
+	Name:      "vector_index_build",
+	LegacyKey: vectorIndexLockKey,
+	Schedule:  "once per boot, in the background (database with pgvector)",
+})
+
 // EnsureVectorIndex builds the HNSW index for the configured embedding width
 // if it is missing, outside any transaction (CREATE INDEX CONCURRENTLY cannot
 // run in one). A no-op when dims <= 0 or pgvector is absent. An invalid index
 // of that name (the leftover of an interrupted build) is dropped first: IF NOT
 // EXISTS would keep it forever and the planner never uses an invalid index.
-// Serialised across replicas by an advisory lock, with session timeouts lifted
-// (a large corpus takes minutes). Best effort: failures are logged and
-// reported as nil — the search works without the index, only slower; the
-// caller's context ending is returned as-is.
+// A job on one replica at a time (vectorIndexJob: its lease ends the build when
+// the lock is lost), with session timeouts lifted (a large corpus takes
+// minutes). Best effort: failures are logged and reported as nil — the search
+// works without the index, only slower; the caller's context ending is
+// returned as-is.
 func (b *PostgresStorageBackend) EnsureVectorIndex(ctx context.Context, dims int) error {
 	if dims <= 0 || !b.hasPgvector {
 		return nil
 	}
-	name := knowledgeVectorIndexName(dims)
-	release, acquired, err := b.TryGlobalLock(ctx, vectorIndexLockKey)
-	if err != nil {
-		slog.Warn("knowledge vector index: advisory lock failed; skipping build", "index", name, "err", err)
-		return ctx.Err()
+	job := lifecycle.NewSingleton(lifecycle.Job{
+		Spec: vectorIndexJob,
+		Run:  func(ctx context.Context) error { return b.buildVectorIndex(ctx, dims) },
+	}, b, b)
+	defer job.Stop()
+	if err := job.RunOnce(ctx); errors.Is(err, lifecycle.ErrJobHeld) {
+		slog.Info("knowledge vector index: another replica holds the build lock; skipping", "index", knowledgeVectorIndexName(dims))
+	} else if err != nil {
+		return ctx.Err() // the job logged why
 	}
-	if !acquired {
-		slog.Info("knowledge vector index: another replica holds the build lock; skipping", "index", name)
-		return nil
-	}
-	defer release()
+	return nil
+}
 
+// buildVectorIndex is the job's run: it builds the index on a connection of its own, or says why not.
+func (b *PostgresStorageBackend) buildVectorIndex(ctx context.Context, dims int) error {
+	name := knowledgeVectorIndexName(dims)
 	conn, err := b.db.Conn(ctx)
 	if err != nil {
-		slog.Warn("knowledge vector index: no connection; skipping build", "index", name, "err", err)
-		return ctx.Err()
+		return fmt.Errorf("knowledge vector index %s: no connection; build skipped: %w", name, err)
 	}
 	defer conn.Close()
 	restore, err := liftSessionTimeouts(ctx, conn)
 	if err != nil {
-		slog.Warn("knowledge vector index: could not lift session timeouts; skipping build", "index", name, "err", err)
-		return ctx.Err()
+		return fmt.Errorf("knowledge vector index %s: could not lift session timeouts; build skipped: %w", name, err)
 	}
 	defer restore()
 
@@ -85,20 +98,17 @@ func (b *PostgresStorageBackend) EnsureVectorIndex(ctx context.Context, dims int
 	case err == nil:
 		slog.Warn("knowledge vector index: dropping invalid index left by an interrupted build", "index", name)
 		if _, err := conn.ExecContext(ctx, `DROP INDEX CONCURRENTLY IF EXISTS `+name); err != nil {
-			slog.Warn("knowledge vector index: drop of invalid index failed; skipping build", "index", name, "err", err)
-			return ctx.Err()
+			return fmt.Errorf("knowledge vector index %s: drop of invalid index failed; build skipped: %w", name, err)
 		}
 	case errors.Is(err, sql.ErrNoRows):
 		// Absent: build it.
 	default:
-		slog.Warn("knowledge vector index: catalog lookup failed; skipping build", "index", name, "err", err)
-		return ctx.Err()
+		return fmt.Errorf("knowledge vector index %s: catalog lookup failed; build skipped: %w", name, err)
 	}
 
 	start := time.Now()
 	if _, err := conn.ExecContext(ctx, knowledgeVectorIndexDDL(dims)); err != nil {
-		slog.Warn("knowledge vector index: build failed; search stays an exact scan", "index", name, "dims", dims, "err", err)
-		return ctx.Err()
+		return fmt.Errorf("knowledge vector index %s (dims %d): build failed; search stays an exact scan: %w", name, dims, err)
 	}
 	slog.Info("knowledge vector index built", "index", name, "dims", dims, "took", time.Since(start).Round(time.Millisecond))
 	return nil

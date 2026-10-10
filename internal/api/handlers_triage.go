@@ -11,6 +11,7 @@ import (
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/events"
+	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
@@ -133,8 +134,8 @@ func (h *AnalysisHandler) OnFindingAssigned(ctx context.Context, e events.Findin
 }
 
 // fanOutAssignment is the detached work of one assignment change: resolve the assigner's display
-// name once, record the assignee's targeted in-app alert, send the assignment email from h.emails
-// (SMTP never holds the alert back). Bounded by bestEffortTimeout.
+// name once, record the assignee's targeted in-app alert, queue the assignment email on the mail
+// runner (SMTP never holds the fan-out). Bounded by bestEffortTimeout.
 func (h *AnalysisHandler) fanOutAssignment(flowID, findingKey, ruleID, flowName, assigneeID, assignerID, assignerEmail string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -157,11 +158,7 @@ func (h *AnalysisHandler) fanOutAssignment(flowID, findingKey, ruleID, flowName,
 		Severity:   "info",
 		TargetUser: assigneeID,
 	})
-	h.emails.Go(func() {
-		ectx, ecancel := context.WithTimeout(context.Background(), bestEffortTimeout)
-		defer ecancel()
-		h.notifyFindingAssignment(ectx, assigneeID, assignerName, flowName, ruleID)
-	})
+	h.notifyFindingAssignment(ctx, flowID, assigneeID, assignerName, flowName, ruleID)
 }
 
 // bestEffortTimeout bounds the detached best-effort work hanging off a triage or comment write: it
@@ -200,9 +197,10 @@ func (h *AnalysisHandler) ruleDisplayName(ruleID string) string {
 	return ruleID
 }
 
-// notifyFindingAssignment emails the assignee. Best-effort: any error is logged and swallowed — the
-// triage write already succeeded. The assigner's name arrives resolved (fanOutAssignment).
-func (h *AnalysisHandler) notifyFindingAssignment(ctx context.Context, assigneeID, assignerName, flowName, ruleID string) {
+// notifyFindingAssignment queues the assignee's email. Best-effort: any error is logged and swallowed —
+// the triage write already succeeded. The assigner's name arrives resolved (fanOutAssignment); the flow
+// is named only to an assignee who can read it (flowNameFor).
+func (h *AnalysisHandler) notifyFindingAssignment(ctx context.Context, flowID, assigneeID, assignerName, flowName, ruleID string) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Warn("finding-assignment notification panicked", "err", r)
@@ -215,14 +213,14 @@ func (h *AnalysisHandler) notifyFindingAssignment(ctx context.Context, assigneeI
 	if assignee == nil {
 		return
 	}
-	assigneeName := assignee.DisplayName
-	if assigneeName == "" {
-		assigneeName = assignee.Email
-	}
-	// Use the rule's human-readable name as the finding title when available.
-	findingTitle := h.ruleDisplayName(ruleID)
-	if err := h.email.SendFindingAssigned(ctx, assignee.Email, assigneeName, assignerName, flowName, findingTitle); err != nil {
-		logger.Warn("failed to send finding-assignment notification", "assignee", assigneeID, "error", err)
+	assigned := mailer.FindingAssigned.With(mailer.FindingAssignedData{
+		AssigneeName: recipientName(assignee),
+		AssignerName: assignerName,
+		FlowName:     h.flowNameFor(ctx, assignee, flowID, flowName),
+		FindingTitle: h.ruleDisplayName(ruleID), // the rule's human-readable name when available
+	})
+	if err := h.email.Enqueue(ctx, assignee.Email, assigned); err != nil {
+		logger.Warn("finding-assignment email not queued", "assignee", assigneeID, "error", err)
 	}
 }
 

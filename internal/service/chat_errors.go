@@ -1,10 +1,12 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"errors"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/platform/drain"
 	"pad-core/logger"
 )
 
@@ -32,7 +34,20 @@ const (
 	// ChatErrModelNotAvailable: the turn's model is not one the caller can use any more (ErrModelNotAvailable);
 	// the client refreshes its model list and offers another model.
 	ChatErrModelNotAvailable = "MODEL_NOT_AVAILABLE"
+	// ChatErrServerRestarting: the server's stop ended the stream (Shutdown); the client may send the turn again
+	// once, on the replica its reconnect reaches.
+	ChatErrServerRestarting = drain.Code
+	// ChatErrProviderUnknown: the turn names a provider no spec describes (ErrProviderUnknown) — a stale client
+	// or a typo, refused before the stream in the common case; here for a provider gone mid-flight.
+	ChatErrProviderUnknown = ProviderCodeUnknown
+	// ChatErrProviderNotAllowed: the provider policy refused the turn's provider at the factory
+	// (ai.ErrProviderNotAllowed) — disabled in the deployment, or off the organisation's allowed list.
+	ChatErrProviderNotAllowed = ProviderCodeNotAllowed
 )
+
+// serverRestartingMsg is the ChatErrServerRestarting copy: a client that does not know the code shows it with
+// its Retry, which is the right advice.
+const serverRestartingMsg = "response stopped: the server is restarting — try again in a moment"
 
 // modelNotAvailableMsg is the ChatErrModelNotAvailable copy.
 const modelNotAvailableMsg = "this model is no longer available — it was removed, or it is no longer shared with you; choose another model"
@@ -97,6 +112,14 @@ func (e *budgetError) Error() string        { return e.msg }
 func (e *budgetError) Is(target error) bool { return target == e.kind }
 func (e *budgetError) Unwrap() error        { return e.cause }
 
+// BudgetReason implements ai.BudgetReasoner for the refusal metric: "exceeded" or "unavailable".
+func (e *budgetError) BudgetReason() string {
+	if errors.Is(e.kind, ErrAIBudgetExceeded) {
+		return "exceeded"
+	}
+	return "unavailable"
+}
+
 // budgetUnavailable reports a spend read that failed: the storage error is logged here (an operator's problem)
 // and the returned error carries client-safe copy; the caller still fails closed. A read that failed only
 // because the stream itself ended is not worth a warning.
@@ -117,11 +140,11 @@ func budgetUnavailable(scope string, cause error) error {
 var errProviderSetup = errors.New("couldn't load the AI provider configuration — try again in a moment")
 
 // providerSetupError maps a provider-setup failure to what the client may see: a missing key is the user's to
-// fix and keeps its sentinel, as does a resource whose credentials cannot be decrypted (logged too — the
-// operator's concern); anything else is logged and replaced by errProviderSetup. Neither kept error's text
-// reaches the client: classifyFailure words both.
+// fix and keeps its sentinel, as does an unknown provider id (the client's, not an incident) and a resource
+// whose credentials cannot be decrypted (logged too — the operator's concern); anything else is logged and
+// replaced by errProviderSetup. No kept error's text reaches the client: classifyFailure words them all.
 func providerSetupError(scope, providerID string, cause error) error {
-	if errors.Is(cause, ai.ErrKeyNotConfigured) {
+	if errors.Is(cause, ai.ErrKeyNotConfigured) || errors.Is(cause, ErrProviderUnknown) || errors.Is(cause, ai.ErrProviderNotAllowed) {
 		return cause
 	}
 	logger.Warn("chat: provider setup failed", "scope", scope, "provider", providerID, "error", cause)
@@ -202,11 +225,11 @@ func sharedCredentialFailureMsg(code string, err error) (string, bool) {
 // classifyFailureBase is classifyFailure without the shared-credential copy.
 func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, msg string) {
 	c.mu.Lock()
-	reason := c.cancelReason
+	reason, cancelCode := c.cancelReason, c.cancelCode
 	c.mu.Unlock()
 	if ctx.Err() != nil {
 		if reason != "" {
-			return ChatErrStopped, reason
+			return cmp.Or(cancelCode, ChatErrStopped), reason
 		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return ChatErrTimeout, "response stopped: maximum response time reached"
@@ -267,6 +290,11 @@ func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, m
 		return ChatErrProviderNotConfigured, azureUnreadableMsg
 	case errors.Is(err, ai.ErrKeyNotConfigured):
 		return ChatErrProviderNotConfigured, "no API key is configured for this provider — add one in Settings → AI Accounts"
+	case errors.Is(err, ErrProviderUnknown):
+		return ChatErrProviderUnknown, "this AI provider is unknown to the server — reload the app and choose a provider from Settings → AI Accounts"
+	case errors.Is(err, ai.ErrProviderNotAllowed):
+		// The policy's own copy: the provider id and what to do, no credential or store detail.
+		return ChatErrProviderNotAllowed, err.Error()
 	case errors.Is(err, errProviderSetup):
 		return ChatErrProviderUnavailable, err.Error()
 	case isStreamTruncation(err):

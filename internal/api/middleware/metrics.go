@@ -18,7 +18,7 @@ func MetricsHandler() http.Handler { return metrics.Handler() }
 
 // RecordRateLimitExceeded is wired from ratelimit.go when a request is refused; lives here for
 // naming locality.
-func RecordRateLimitExceeded(group string) { metrics.RecordRateLimitExceeded(group) }
+func RecordRateLimitExceeded(group string) { rateLimitExceededTotal.WithLabelValues(group).Inc() }
 
 // Metrics wraps h to record http_requests_total and http_request_duration_seconds. Apply it inside AccessLog so the status label reflects the final response.
 // The route label is the label of the policy resolved for the request at the outermost layer (RouteLabel), taken before the handler runs: the matched pattern of a route, one of a few fixed labels otherwise. It is bounded whatever the path, and it does not depend on whether the router got to rewrite the URL (a 429 is labelled like the request it refused).
@@ -30,8 +30,8 @@ func Metrics(h http.Handler) http.Handler {
 		h.ServeHTTP(maybeHijackable(sr), r)
 		method := normalizeMethod(r.Method)
 		elapsed := time.Since(start).Seconds()
-		metrics.HTTPRequestsTotal.WithLabelValues(method, route, strconv.Itoa(sr.status)).Inc()
-		metrics.HTTPRequestDuration.WithLabelValues(method, route).Observe(elapsed)
+		httpRequestsTotal.WithLabelValues(method, route, strconv.Itoa(sr.status)).Inc()
+		httpRequestDuration.WithLabelValues(method, route).Observe(elapsed)
 	})
 }
 
@@ -83,7 +83,7 @@ var mismatchLogged sync.Map
 // ReportPolicyMismatch records that the policy declared on r's route (p) decides differently from the legacy path
 // tables: it counts pad_route_policy_mismatch_total{route,decision} and logs the first occurrence of each pair.
 func ReportPolicyMismatch(r *http.Request, p *route.Policy, decision, legacy, declared string) {
-	metrics.RecordRoutePolicyMismatch(p.Label, decision)
+	recordRoutePolicyMismatch(p.Label, decision)
 	if _, seen := mismatchLogged.LoadOrStore(p.Label+"\x00"+decision, struct{}{}); seen {
 		return
 	}
@@ -96,7 +96,7 @@ func ReportPolicyMismatch(r *http.Request, p *route.Policy, decision, legacy, de
 // policy the outer layer resolved and the middleware applied: a resolver bug, logged at ERROR every time and
 // counted in pad_route_policy_guard_mismatch_total{route}, where route is what chi dispatched to.
 func ReportGuardMismatch(r *http.Request, resolved *route.Policy, dispatched string) {
-	metrics.RecordRouteGuardMismatch(dispatched)
+	recordRouteGuardMismatch(dispatched)
 	logger.Error("route policy: chi dispatched the request elsewhere than the route its policy was resolved for",
 		"method", r.Method, "path", redactPath(canonicalPath(r.URL.Path)),
 		"resolved", resolved.Label, "resolved_kind", resolved.Kind, "dispatched", dispatched)

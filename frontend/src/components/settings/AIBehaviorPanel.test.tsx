@@ -1,10 +1,20 @@
-import {describe, it, expect, beforeEach} from 'vitest'
-import {render, screen, fireEvent, within} from '@testing-library/react'
+import {describe, it, expect, beforeEach, vi} from 'vitest'
+import {render, screen, fireEvent, within, act} from '@testing-library/react'
+
+vi.mock('@/api', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/api')>()
+  return {
+    ...actual,
+    providersApi: {...actual.providersApi, listProviders: vi.fn().mockResolvedValue([]), getProviderCatalog: vi.fn()},
+  }
+})
+
+import {providersApi} from '@/api'
 import AIBehaviorPanel from './AIBehaviorPanel'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useChatStore} from '@/stores/chatStore'
 import {useSystemStore} from '@/stores/systemStore'
-import type {AppInfo} from '@/types'
+import type {AppInfo, ProviderSpec} from '@/types'
 
 const initialSettings = useSettingsStore.getState().settings
 
@@ -21,6 +31,9 @@ beforeEach(() => {
   useSettingsStore.setState({settings: initialSettings})
   useChatStore.setState({selectedProvider: 'claude'})
   useSystemStore.setState({info: null, isLoaded: false})
+  vi.mocked(providersApi.listProviders).mockResolvedValue([])
+  // An older server: no catalogue, so the bundle's own lists apply.
+  vi.mocked(providersApi.getProviderCatalog).mockRejectedValue(new Error('404'))
 })
 
 describe('AIBehaviorPanel', () => {
@@ -153,5 +166,117 @@ describe('AIBehaviorPanel reasoning effort', () => {
     fireEvent.click(screen.getAllByRole('radio', {name: 'Gemini'})[0]!)
     expect((screen.getByLabelText('Reasoning Effort') as HTMLSelectElement).value).toBe('')
     expect(useSettingsStore.getState().settings.ai.providers.claude.reasoningEffort).toBe('high')
+  })
+})
+
+// A provider the server names but this bundle has no catalogue entry for
+// (Phase 4b: provider ids are open on the wire in both directions).
+describe('AIBehaviorPanel providers the bundle does not know', () => {
+  const activeAssistant = () => screen.getAllByRole('radiogroup')[0]!
+
+  // R1: a settings file written by a newer build (or by hand) names an
+  // assistant this bundle cannot label. It is still the saved choice: the
+  // control shows it selected instead of nothing, and the Advanced block
+  // tunes it from the defaults instead of vanishing.
+  it('an unknown saved activeProvider still selects a segment', () => {
+    useSettingsStore.setState({
+      settings: {...initialSettings, ai: {...initialSettings.ai, activeProvider: 'mistral'}},
+    })
+    render(<AIBehaviorPanel />)
+    expect(within(activeAssistant()).getByRole('radio', {name: 'mistral'})).toHaveAttribute('aria-checked', 'true')
+    expect(within(activeAssistant()).getByRole('radio', {name: 'Claude'})).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByRole('textbox', {name: 'Default for new chats'})).toHaveValue('')
+    expect(screen.getByLabelText('Reasoning Effort')).toBeInTheDocument()
+  })
+
+  it('offers an active provider the catalogue lists but the bundle does not know, labelled by its server name', async () => {
+    vi.mocked(providersApi.getProviderCatalog).mockResolvedValue([
+      {
+        id: 'mistral',
+        name: 'Mistral',
+        configured: true,
+        authType: 'api_key',
+        modes: ['cloud'],
+        caps: ['chat'],
+        credential: {kind: 'api_key', fields: []},
+        endpoints: {},
+        pricing: 'catalog',
+      },
+    ])
+    render(<AIBehaviorPanel />)
+    const seg = await within(activeAssistant()).findByRole('radio', {name: 'Mistral'})
+    fireEvent.click(seg)
+    expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('mistral')
+    expect(useChatStore.getState().selectedProvider).toBe('mistral')
+    expect(seg).toHaveAttribute('aria-checked', 'true')
+    // The catalogue's own entries keep their labels, once each.
+    expect(within(activeAssistant()).getAllByRole('radio', {name: 'Claude'})).toHaveLength(1)
+  })
+
+  it('keeps the control usable when the catalogue cannot be read', async () => {
+    vi.mocked(providersApi.getProviderCatalog).mockRejectedValue(new Error('offline'))
+    render(<AIBehaviorPanel />)
+    fireEvent.click(within(activeAssistant()).getByRole('radio', {name: 'Gemini'}))
+    expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('gemini')
+    await Promise.resolve()
+    expect(within(activeAssistant()).getByRole('radio', {name: 'Gemini'})).toHaveAttribute('aria-checked', 'true')
+  })
+})
+
+// The catalogue (GET /api/providers/catalog) says which providers embed; the
+// literal list is only the fallback for a server without the route.
+describe('AIBehaviorPanel embedding providers from the catalogue', () => {
+  const embeddingAssistant = () => screen.getByRole('radiogroup', {name: 'Embedding Assistant'})
+  const spec = (id: string, name: string, caps: string[]): ProviderSpec => ({
+    id,
+    name,
+    authType: 'api_key',
+    modes: ['cloud'],
+    caps,
+    credential: {kind: 'api_key', fields: []},
+    endpoints: {},
+    configured: false,
+    pricing: 'catalog',
+  })
+
+  it('the embedding options follow the catalogue caps, not a literal list', async () => {
+    vi.mocked(providersApi.getProviderCatalog).mockResolvedValue([
+      spec('openai', 'OpenAI', ['chat']),
+      spec('mistral', 'Mistral', ['chat', 'embeddings']),
+      spec('gemini', 'Gemini', ['embeddings']),
+    ])
+    render(<AIBehaviorPanel />)
+    const mistral = await within(embeddingAssistant()).findByRole('radio', {name: 'Mistral'})
+    expect(
+      within(embeddingAssistant())
+        .getAllByRole('radio')
+        .map(r => r.textContent),
+    ).toEqual(['Mistral', 'Gemini'])
+    fireEvent.click(mistral)
+    expect(useSettingsStore.getState().settings.ai.embeddingProvider).toBe('mistral')
+  })
+
+  it('keeps the literal list without a catalogue (an older server)', async () => {
+    vi.mocked(providersApi.getProviderCatalog).mockRejectedValue(new Error('404'))
+    render(<AIBehaviorPanel />)
+    await act(async () => {})
+    expect(
+      within(embeddingAssistant())
+        .getAllByRole('radio')
+        .map(r => r.textContent),
+    ).toEqual(['OpenAI', 'Gemini', 'GLM', 'GitHub Models', 'Azure AI Foundry'])
+  })
+
+  it('still selects a saved embedding provider the catalogue no longer lists', async () => {
+    vi.mocked(providersApi.getProviderCatalog).mockResolvedValue([spec('openai', 'OpenAI', ['chat', 'embeddings'])])
+    useSettingsStore.setState({
+      settings: {...initialSettings, ai: {...initialSettings.ai, embeddingProvider: 'voyage'}},
+    })
+    render(<AIBehaviorPanel />)
+    expect(await within(embeddingAssistant()).findByRole('radio', {name: 'OpenAI'})).toHaveAttribute(
+      'aria-checked',
+      'false',
+    )
+    expect(within(embeddingAssistant()).getByRole('radio', {name: 'voyage'})).toHaveAttribute('aria-checked', 'true')
   })
 })

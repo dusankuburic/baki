@@ -127,8 +127,8 @@ func TestEmbeddingCapability_ConsistentWithRegistry(t *testing.T) {
 			t.Errorf("duplicate %q in embedding fallback order", id)
 		}
 		seen[id] = true
-		if _, ok := providerCtors[id]; !ok {
-			t.Errorf("embedding-capable list includes %q which has no constructor", id)
+		if _, ok := lookupSpec(id); !ok {
+			t.Errorf("embedding-capable list includes %q which has no spec", id)
 		}
 		if !SupportsEmbeddings(id) {
 			t.Errorf("fallback order includes %q but SupportsEmbeddings(%q) is false", id, id)

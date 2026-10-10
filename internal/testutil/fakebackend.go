@@ -48,6 +48,13 @@ type FakeBackend struct {
 	Conversations map[string][]interfaces.ChatMessage
 	// OrgChannels backs the in-memory org-channel store (R2-3 tests).
 	OrgChannels map[string]*interfaces.OrgChannel
+	// ciCredentials backs the organisations' CI credentials (fakebackend_cicredentials.go), keyed by key id.
+	ciCredentials map[string]*interfaces.CICredential
+	// ciDeliveries is the CI webhook's replay record (fakebackend_cicredentials.go): when each pair was recorded.
+	ciDeliveries map[ciDelivery]time.Time
+	// FieldEncryptionOff models a Postgres backend without a field encryption key: secrets that must be sealed at
+	// rest (CI credentials) are refused with ErrSecretSealingUnavailable.
+	FieldEncryptionOff bool
 	// OrgCustomRules backs the in-memory per-org custom-rule store (R4 tests).
 	OrgCustomRules map[string]*interfaces.OrgCustomRule
 	// KnowledgeDocs / KnowledgeChunks back the in-memory knowledge methods
@@ -120,6 +127,8 @@ type FakeBackend struct {
 	refreshTokens map[string]*fakeRefreshToken
 	// idem backs the IdempotencyStore (fake_idempotency.go).
 	idem fakeIdempotency
+	// jobRuns backs the background jobs' run state (fakebackend_jobs.go).
+	jobRuns fakeJobRuns
 	// identityLinks backs the identity links (fakebackend_lookups.go).
 	identityLinks fakeIdentityLinks
 	// auditEvents keeps every saved audit row (the audit pool and detached writes save concurrently, hence
@@ -865,7 +874,7 @@ func (m *FakeBackend) UpdateUserProfile(_ context.Context, id, displayName, avat
 // DeleteUser erases the account as Postgres's erase steps do (internal/storage/database/lifecycle_*.go), for the rows
 // the fake keeps: the owned flows go with their conversations and their cascade; the user's id is cleared where
 // rows stay with other people's content (versions, triage updater and assignee, baselines, comment author id and
-// name, share links, invitations sent, organisations owned) and teammates' comment and assignment alerts naming the
+// name, share links, invitations sent, CI credentials minted, organisations owned) and teammates' comment and assignment alerts naming the
 // user say "a teammate"; alerts addressed to the user, the user's notices, sessions, usage rows, memberships,
 // invitations to the user's email, settings, tokens and grants go; audit rows are anonymised, and pre-auth rows
 // naming the user's address lose it. Organisations stay with their other members. A missing user is not an error.
@@ -926,6 +935,8 @@ func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
 			inv.InvitedBy = ""
 		}
 	}
+	m.eraseCICredentialCreatorLocked(id)
+	m.eraseChannelRecipientLocked(id)
 	maps.DeleteFunc(m.GovernanceAlerts, func(_ string, a *interfaces.GovernanceAlert) bool { return a.TargetUser == id })
 	maps.DeleteFunc(m.RuleNotices, func(_ string, n *interfaces.RuleNotice) bool {
 		return n.Scope == interfaces.RuleNoticeScopeUser && n.ScopeID == id
@@ -1101,7 +1112,7 @@ func (m *FakeBackend) ExportUserData(ctx context.Context, id string) (*interface
 
 // PurgeExpiredData removes what the Postgres retention sweep removes from the rows the fake keeps: expired
 // sessions, API tokens, user tokens, share links, idempotency keys and invitations (and those accepted more than
-// seven days ago), and with auditRetentionDays > 0 the audit, usage and alert rows older than that.
+// seven days ago), CI credentials expired more than 30 days ago, CI delivery records older than an hour, and with auditRetentionDays > 0 the audit, usage and alert rows older than that.
 func (m *FakeBackend) PurgeExpiredData(_ context.Context, auditRetentionDays int) (*interfaces.PurgeResult, error) {
 	now := time.Now()
 	out := &interfaces.PurgeResult{IdempotencyKeys: m.idem.purge()}
@@ -1113,6 +1124,8 @@ func (m *FakeBackend) PurgeExpiredData(_ context.Context, auditRetentionDays int
 	out.OrgInvites = deleteWhere(m.OrgInvites, func(inv *interfaces.OrgInvite) bool {
 		return inv.ExpiresAt.Before(now) || (inv.AcceptedAt != nil && inv.AcceptedAt.Before(now.AddDate(0, 0, -7)))
 	})
+	out.CICredentials = m.purgeCICredentialsLocked(now)
+	out.CIDeliveries = m.purgeCIDeliveriesLocked(now)
 	if auditRetentionDays <= 0 {
 		m.mu.Unlock()
 		return out, nil
@@ -1215,8 +1228,8 @@ func (m *FakeBackend) ListOrgsForUser(_ context.Context, userID string) ([]*inte
 }
 
 // DeleteOrg deletes the organisation as Postgres's org-delete steps do (internal/storage/database/lifecycle_*.go), for
-// the rows the fake keeps: its knowledge documents (with their chunks), policies, channels, custom rules and notices
-// go, its flows lose the org id, and the organisation goes with its members, invitations and settings; alerts, usage
+// the rows the fake keeps: its knowledge documents (with their chunks), policies, channels, custom rules, notices and
+// CI credentials go, its flows lose the org id, and the organisation goes with its members, invitations and settings; alerts, usage
 // and audit rows keep the id as history. Idempotent.
 func (m *FakeBackend) DeleteOrg(_ context.Context, id string) error {
 	m.mu.Lock()
@@ -1232,6 +1245,7 @@ func (m *FakeBackend) DeleteOrg(_ context.Context, id string) error {
 	maps.DeleteFunc(m.RuleNotices, func(_ string, n *interfaces.RuleNotice) bool {
 		return n.Scope == interfaces.RuleNoticeScopeOrg && n.ScopeID == id
 	})
+	m.deleteOrgCICredentialsLocked(id)
 	for _, f := range m.Flows {
 		if f.OrganizationID == id {
 			f.OrganizationID = ""
@@ -1556,7 +1570,7 @@ func (m *FakeBackend) SaveKnowledgeDocument(_ context.Context, _ string, doc *in
 	if _, ok := m.KnowledgeDocs[doc.ID]; ok {
 		return fmt.Errorf("fake: knowledge document %q already exists", doc.ID)
 	}
-	m.KnowledgeDocs[doc.ID] = &interfaces.KnowledgeDocument{ID: doc.ID, OrgID: doc.OrgID, Filename: doc.Filename, CreatedAt: time.Now().UTC()}
+	m.KnowledgeDocs[doc.ID] = &interfaces.KnowledgeDocument{ID: doc.ID, OrgID: doc.OrgID, Filename: doc.Filename, CreatedAt: time.Now().UTC(), ChunkerVersion: max(doc.ChunkerVersion, 1)}
 	return nil
 }
 func (m *FakeBackend) DeleteKnowledgeDocument(_ context.Context, _ string, orgID, id string) error {
@@ -1660,8 +1674,9 @@ const knowledgeMinSimilarity = 0.5
 
 // SearchKnowledge ranks the org's chunks whose embedding has the query's width by cosine similarity, most similar
 // first, keeps those at or above the floor and returns up to limit with their document's filename (no
-// embeddings), as the Postgres search does.
-func (m *FakeBackend) SearchKnowledge(_ context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
+// embeddings), as the Postgres search does. identity keeps the chunks embedded under it and the legacy ones
+// without an identity; "" keeps every chunk.
+func (m *FakeBackend) SearchKnowledge(_ context.Context, orgID string, queryEmbedding []float32, limit int, identity string) ([]interfaces.KnowledgeChunk, error) {
 	type scored struct {
 		chunk interfaces.KnowledgeChunk
 		sim   float64
@@ -1671,6 +1686,9 @@ func (m *FakeBackend) SearchKnowledge(_ context.Context, orgID string, queryEmbe
 	for _, c := range m.KnowledgeChunks {
 		d, ok := m.KnowledgeDocs[c.DocID]
 		if !ok || d.OrgID != orgID || len(c.Embedding) != len(queryEmbedding) {
+			continue
+		}
+		if identity != "" && c.EmbeddingIdentity != "" && c.EmbeddingIdentity != identity {
 			continue
 		}
 		if sim := cosineSimilarity(c.Embedding, queryEmbedding); sim >= knowledgeMinSimilarity {
@@ -1706,8 +1724,9 @@ func cosineSimilarity(a, b []float32) float64 {
 
 // ListKnowledgeChunkContents mirrors the Postgres keyset page: the org's
 // chunks strictly after the (DocID, ID) cursor, in (DocID, ID) order, capped
-// at limit (limit <= 0 = all).
-func (m *FakeBackend) ListKnowledgeChunkContents(_ context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int) ([]interfaces.KnowledgeChunk, error) {
+// at limit (limit <= 0 = all), skipping the chunks already embedded under
+// notIdentity ("" skips none).
+func (m *FakeBackend) ListKnowledgeChunkContents(_ context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int, notIdentity string) ([]interfaces.KnowledgeChunk, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []interfaces.KnowledgeChunk
@@ -1719,7 +1738,10 @@ func (m *FakeBackend) ListKnowledgeChunkContents(_ context.Context, orgID string
 		if c.DocID < after.DocID || (c.DocID == after.DocID && c.ID <= after.ID) {
 			continue
 		}
-		out = append(out, interfaces.KnowledgeChunk{ID: c.ID, DocID: c.DocID, Content: c.Content})
+		if notIdentity != "" && c.EmbeddingIdentity == notIdentity {
+			continue
+		}
+		out = append(out, interfaces.KnowledgeChunk{ID: c.ID, DocID: c.DocID, OrgID: orgID, Content: c.Content})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].DocID != out[j].DocID {
@@ -1833,6 +1855,7 @@ func (m *FakeBackend) UpdateKnowledgeChunkEmbeddings(_ context.Context, _ string
 	for _, c := range chunks {
 		if old, ok := m.KnowledgeChunks[c.ID]; ok {
 			old.Embedding = slices.Clone(c.Embedding)
+			old.EmbeddingIdentity = c.EmbeddingIdentity
 			m.KnowledgeChunks[c.ID] = old
 		}
 	}
@@ -1852,6 +1875,64 @@ func (m *FakeBackend) CountKnowledgeChunks(_ context.Context, orgID string) (int
 	}
 	return total, indexed, nil
 }
+
+// CountKnowledgeChunksByIdentity mirrors the Postgres census: the org's chunks at identity, at another one, and
+// (by difference) without one; "" names nothing current or stranded.
+func (m *FakeBackend) CountKnowledgeChunksByIdentity(_ context.Context, orgID, identity string) (interfaces.KnowledgeChunkCounts, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var counts interfaces.KnowledgeChunkCounts
+	for _, c := range m.KnowledgeChunks {
+		d, ok := m.KnowledgeDocs[c.DocID]
+		if !ok || d.OrgID != orgID {
+			continue
+		}
+		counts.Total++
+		if m.vectorIndexed(c) {
+			counts.VectorIndexed++
+		}
+		switch {
+		case identity == "" || c.EmbeddingIdentity == "":
+		case c.EmbeddingIdentity == identity:
+			counts.Current++
+		default:
+			counts.Stranded++
+		}
+	}
+	return counts, nil
+}
+
+// CountStrandedKnowledgeChunksByDocument mirrors the Postgres per-document count of chunks at another identity.
+func (m *FakeBackend) CountStrandedKnowledgeChunksByDocument(_ context.Context, orgID, identity string) (map[string]int, error) {
+	out := map[string]int{}
+	if identity == "" {
+		return out, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.KnowledgeChunks {
+		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID && c.EmbeddingIdentity != "" && c.EmbeddingIdentity != identity {
+			out[c.DocID]++
+		}
+	}
+	return out, nil
+}
+
+// StampKnowledgeChunkIdentity rewrites the identity of the org's chunks at from ("" = none) to to.
+func (m *FakeBackend) StampKnowledgeChunkIdentity(_ context.Context, _, orgID, from, to string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for id, c := range m.KnowledgeChunks {
+		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID && c.EmbeddingIdentity == from {
+			c.EmbeddingIdentity = to
+			m.KnowledgeChunks[id] = c
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (m *FakeBackend) initKnowledge() {
 	if m.KnowledgeDocs == nil {
 		m.KnowledgeDocs = make(map[string]*interfaces.KnowledgeDocument)
@@ -2686,18 +2767,23 @@ func (m *FakeBackend) ListOrgCustomRules(_ context.Context, orgID string, enable
 // SaveOrgChannel backs the org-channel store in memory (R2-3 tests). The
 // org-ownership check mirrors the Postgres upsert's
 // `WHERE org_channels.org_id = EXCLUDED.org_id`: an id existing under a
-// DIFFERENT org is ErrNotFound, never a silent cross-tenant overwrite.
+// DIFFERENT org is ErrNotFound, never a silent cross-tenant overwrite. An
+// update keeps the row's CreatedAt, as the upsert's SET list does.
 func (m *FakeBackend) SaveOrgChannel(_ context.Context, ch *interfaces.OrgChannel) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.OrgChannels == nil {
 		m.OrgChannels = make(map[string]*interfaces.OrgChannel)
 	}
-	if existing, ok := m.OrgChannels[ch.ID]; ok && existing.OrgID != ch.OrgID {
-		return interfaces.ErrNotFound
+	cp := copyOrgChannel(ch)
+	cp.Unreadable = false
+	if existing, ok := m.OrgChannels[ch.ID]; ok {
+		if existing.OrgID != ch.OrgID {
+			return interfaces.ErrNotFound
+		}
+		cp.CreatedAt = existing.CreatedAt
 	}
-	cp := *ch
-	m.OrgChannels[ch.ID] = &cp
+	m.OrgChannels[ch.ID] = cp
 	return nil
 }
 
@@ -2716,8 +2802,11 @@ func (m *FakeBackend) ListOrgChannels(_ context.Context, orgID string, enabledOn
 	var out []*interfaces.OrgChannel
 	for _, c := range m.OrgChannels {
 		if c.OrgID == orgID && (!enabledOnly || c.Enabled) {
-			cp := *c
-			out = append(out, &cp)
+			cp := copyOrgChannel(c)
+			if cp.Unreadable {
+				cp.URL, cp.Secret, cp.Secrets = "", "", nil
+			}
+			out = append(out, cp)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

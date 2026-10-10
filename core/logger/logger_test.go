@@ -1,6 +1,9 @@
 package logger
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -163,4 +166,104 @@ func TestRotateLogs_NonExistentFile_Noop(t *testing.T) {
 	// No log file in the dir → os.Stat fails → early return; must not panic.
 	dir := t.TempDir()
 	rotateLogs(dir)
+}
+
+// ---- newHandler: level and base attributes ----------------------------------
+
+// installHandler makes newHandler(opts) the default logger for the test, writing to the returned buffer.
+func installHandler(t *testing.T, opts Options) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(newHandler(&buf, opts)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// TestNewHandler_BaseAttrsOnEveryLine: the base attributes (the replica's instance id) are on every line, however it
+// is logged, so two replicas' lines can be told apart in one log stream; once, not repeated by derived loggers.
+func TestNewHandler_BaseAttrsOnEveryLine(t *testing.T) {
+	buf := installHandler(t, Options{Level: "debug", BaseAttrs: []slog.Attr{slog.String("instance_id", "replica-7")}})
+	setExtractor(t, func(ctx context.Context) []slog.Attr {
+		if id, _ := ctx.Value(requestKey{}).(string); id != "" {
+			return []slog.Attr{slog.String("request_id", id)}
+		}
+		return nil
+	})
+
+	Info("helper")
+	Debug("debug helper")
+	slog.Warn("direct", "k", "v")
+	slog.Default().With("component", "scanner").Info("derived")
+	slog.Default().WithGroup("g").Info("grouped", "k", "v")
+	FromContext(context.WithValue(context.Background(), requestKey{}, "req-1")).Error("request")
+	logPanic("op", "boom")
+
+	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
+	if len(lines) != 7 {
+		t.Fatalf("got %d lines, want 7:\n%s", len(lines), buf.String())
+	}
+	for _, line := range lines {
+		if n := bytes.Count(line, []byte(`"instance_id":`)); n != 1 {
+			t.Errorf("instance_id appears %d times in %s", n, line)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(line, &m); err != nil {
+			t.Fatalf("decode %s: %v", line, err)
+		}
+		if m["instance_id"] != "replica-7" {
+			t.Errorf("instance_id = %v in %s", m["instance_id"], line)
+		}
+	}
+	if m := lastLine(t, buf); m["msg"] != "panic recovered" {
+		t.Errorf("last line = %v", m)
+	}
+}
+
+func TestNewHandler_HonoursLevel(t *testing.T) {
+	for level, want := range map[string][]string{
+		"debug": {"d", "i", "w", "e"},
+		"":      {"i", "w", "e"},
+		"info":  {"i", "w", "e"},
+		"WARN":  {"w", "e"},
+		"error": {"e"},
+	} {
+		buf := installHandler(t, Options{Level: level})
+		Debug("d")
+		Info("i")
+		Warn("w")
+		Error("e")
+		var got []string
+		for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+			var m map[string]any
+			if err := json.Unmarshal(line, &m); err != nil {
+				t.Fatalf("level %q: decode %s: %v", level, line, err)
+			}
+			got = append(got, m["msg"].(string))
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("level %q logged %v, want %v", level, got, want)
+		}
+	}
+}
+
+// TestInitWith_FileSinkFailureKeepsLevel (R10, the core half): when the log file cannot be opened, InitWith used to
+// return without installing anything, so the process logged through slog's default text logger at info, whatever
+// the configured level. It now writes JSON to stderr at that level and still reports the error.
+func TestInitWith_FileSinkFailureKeepsLevel(t *testing.T) {
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	err := InitWith(Options{Level: "debug", BaseAttrs: []slog.Attr{slog.String("instance_id", "replica-7")}}) // no AppDataDir
+	if err == nil {
+		t.Fatal("InitWith without AppDataDir reported no error")
+	}
+	h := slog.Default().Handler()
+	if !h.Enabled(context.Background(), slog.LevelDebug) {
+		t.Error("the configured debug level was dropped")
+	}
+	if _, ok := h.(*slog.JSONHandler); !ok {
+		t.Errorf("handler = %T, want the JSON handler", h)
+	}
 }

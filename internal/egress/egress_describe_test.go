@@ -23,6 +23,14 @@ func TestDescribeFailure(t *testing.T) {
 	flattened := errors.New(`ClientSecretCredential: Post "https://login.microsoftonline.com/t/oauth2/v2.0/token": proxyconnect tcp: dial tcp 192.168.7.7:8080: connect: connection refused`)
 	timeout := &url.Error{Op: "Post", URL: "https://res.openai.azure.com/x", Err: context.DeadlineExceeded}
 	tlsErr := errors.New(`Post "https://res.openai.azure.com/x": tls: failed to verify certificate: x509: certificate signed by unknown authority`)
+	// Windows' wording of the same failures (the error chain keeps the syscall text).
+	winOp := func(text string) error {
+		return &url.Error{Op: "Post", URL: "https://hooks.example.com/x", Err: &net.OpError{Op: "dial", Net: "tcp",
+			Addr: &net.TCPAddr{IP: net.ParseIP("10.9.8.7"), Port: 443}, Err: errors.New(text)}}
+	}
+	winRefused := winOp("connectex: No connection could be made because the target machine actively refused it.")
+	winReset := winOp("wsarecv: An existing connection was forcibly closed by the remote host.")
+	winTimeout := winOp("connectex: A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.")
 
 	cases := []struct {
 		name string
@@ -36,6 +44,10 @@ func TestDescribeFailure(t *testing.T) {
 		{"flattened proxy failure", flattened, "outbound proxy"},
 		{"timeout", timeout, "timed out"},
 		{"tls", tlsErr, "TLS handshake"},
+		{"windows refused", winRefused, "was refused"},
+		{"windows reset", winReset, "closed unexpectedly"},
+		{"windows timeout", winTimeout, "timed out"},
+		{"windows refused, flattened", errors.New("Post \"https://hooks.example.com/x\": dial tcp 10.9.8.7:443: connectex: No connection could be made because the target machine actively refused it."), "was refused"},
 		{"provider answer", errors.New("provider is currently unavailable: Service overloaded (status 503)"), ""},
 		{"nil", nil, ""},
 	}
@@ -51,7 +63,7 @@ func TestDescribeFailure(t *testing.T) {
 			if !ok || !strings.Contains(msg, c.want) {
 				t.Errorf("DescribeFailure = %q, %v; want %q", msg, ok, c.want)
 			}
-			for _, leak := range []string{"10.20.30.40", "3128", "10.1.2.3", "10.0.0.53", "192.168.7.7", "8080", "login.microsoftonline.com"} {
+			for _, leak := range []string{"10.20.30.40", "3128", "10.1.2.3", "10.0.0.53", "192.168.7.7", "8080", "login.microsoftonline.com", "10.9.8.7"} {
 				if strings.Contains(msg, leak) {
 					t.Errorf("copy leaks %q: %q", leak, msg)
 				}

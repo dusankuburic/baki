@@ -303,3 +303,56 @@ describe('MessageBubble — model labels', () => {
     expect(useChatStore.getState().modelPickerRequest).toBe(before + 1)
   })
 })
+
+describe('MessageBubble — persisted approvals', () => {
+  it('renders non-fix approvals and a fix proposal of another kind generically, and cancels pending ones on an interrupted message', () => {
+    render(
+      <MessageBubble
+        message={msg({
+          content: 'done',
+          finishReason: 'interrupted',
+          fixProposals: [
+            {
+              proposalId: 'p1',
+              ruleId: 'unhandled-error',
+              fixType: 'wrap-error-handler',
+              blockLabel: 'Call API',
+              line: 3,
+              summary: 'wrap',
+              status: 'applied',
+            },
+            {
+              proposalId: 'p2',
+              tool: 'rename_variable',
+              previewKind: 'something-new',
+              ruleId: '',
+              fixType: '',
+              blockLabel: 'Rename x',
+              line: 0,
+              summary: 'x → total',
+              status: 'pending',
+            },
+          ],
+          approvals: [
+            {
+              proposalId: 'a1',
+              tool: 'delete_block',
+              previewKind: 'something-else',
+              status: 'pending',
+              items: [{id: 'b1', label: 'Block 1', summary: '', status: 'pending'}],
+            },
+          ],
+        })}
+      />,
+    )
+    expect(screen.getByTestId('fix-outcome')).toHaveTextContent('Fix applied and verified')
+    const generic = screen.getAllByTestId('approval-outcome')
+    expect(generic).toHaveLength(2)
+    expect(generic[0]).toHaveTextContent('rename_variable')
+    expect(generic[0]).toHaveTextContent('Rename x')
+    expect(generic[0]).toHaveTextContent('Cancelled — nothing was changed.')
+    expect(generic[1]).toHaveTextContent('delete_block')
+    expect(generic[1]).toHaveTextContent('Block 1')
+    expect(generic[1]).toHaveTextContent('Cancelled — nothing was changed.')
+  })
+})

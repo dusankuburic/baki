@@ -2,7 +2,8 @@
 
 Baki is a static analyzer and AI assistant for Power Automate Desktop flows. It has three parts:
 
-- **Go backend:** the root module, `main.go` and `internal/*`, wired with fx and chi, on Postgres with RLS and
+- **Go backend:** the root module, `main.go` (74 lines), the fx application in `internal/app` and `internal/*`,
+  wired with fx and chi, on Postgres with RLS and
   optional Redis.
 - **`core`:** the parser, analyzer and export, in the separate `pad-core` module.
 - **React frontend** (`frontend/`) and a **Tauri** desktop shell (`src-tauri/`, which runs the backend as a
@@ -44,6 +45,12 @@ go test ./internal/storage/database/ -run TestMigrationChecksums_Golden -update-
 go test ./internal/di/ -run TestCacheRegistry_Golden -update-caches
 go test ./core/analyzer/ -run TestFindingsGolden -update-findings
 go test ./core/export/ -run TestExportGolden -update-export-golden   # also after analyzer output changes
+go test ./internal/mail/ -run TestMailGolden -update-mail-golden
+go test ./internal/notify/ -run TestPayloadGolden -update-notify-golden
+go test ./internal/metrics/ -run TestMetricsGolden -update-metrics
+go test ./internal/lifecycle/ -run TestJobRegistry_Golden -update-jobs
+go test ./internal/ai/ -run TestProviderSpecs_Golden -update-provider-specs
+go test ./internal/ai/ -run TestToolSpecsGolden -update-tools
 ```
 
 ## Windows checkouts

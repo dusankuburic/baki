@@ -17,7 +17,7 @@ import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import CodeBlock from './CodeBlock'
 import ThinkingIndicator from './ThinkingIndicator'
-import {ToolTrail, FixOutcomeStrip} from './ToolTrail'
+import {ToolTrail, FixOutcomeStrip, ApprovalOutcomeStrip} from './ToolTrail'
 
 interface Props {
   message: ChatMessageType
@@ -583,6 +583,14 @@ function MessageBubble({
           />
         ))}
 
+      {!isUser &&
+        (message.approvals ?? []).map(snap => (
+          <ApprovalOutcomeStrip
+            key={snap.proposalId}
+            snapshot={isInterrupted && snap.status === 'pending' ? {...snap, status: 'cancelled'} : snap}
+          />
+        ))}
+
       {!isUser && !isStreaming && message.toolCalls && message.toolCalls.length > 0 && (
         <ToolTrail calls={message.toolCalls} />
       )}
@@ -664,6 +672,7 @@ export default memo(MessageBubble, (prevProps, nextProps) => {
     prevProps.message.toolCalls === nextProps.message.toolCalls &&
     prevProps.message.fixProposal === nextProps.message.fixProposal &&
     prevProps.message.fixProposals === nextProps.message.fixProposals &&
+    prevProps.message.approvals === nextProps.message.approvals &&
     prevProps.isStreaming === nextProps.isStreaming &&
     prevProps.isThinking === nextProps.isThinking &&
     prevProps.isLastAssistant === nextProps.isLastAssistant &&

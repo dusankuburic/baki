@@ -9,7 +9,7 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// What only the database offers, beyond the StorageBackend role interfaces. main.go's provideStorageBackend
+// What only the database offers, beyond the StorageBackend role interfaces. internal/app's provideStorageBackend
 // provides each as an fx value taken from the concrete backend, nil without a database, so no caller type-asserts
 // a storage value to find out what it can do (internal/archtest pins the assertions left). The cross-replica lock
 // is lock.GlobalLocker and the request transaction reqtx.Opener (RequestTx).
@@ -19,15 +19,23 @@ type SQLProvider interface {
 	DB() *sql.DB
 }
 
-// KeyStoreProvider constructs the encrypted, database-backed secret keystore.
+// KeyStoreProvider constructs the encrypted, database-backed secret keystore; previous are the keys secret
+// replaced, newest first, which only open (key rotation, ADR 0005).
 type KeyStoreProvider interface {
-	NewEncryptedKeyStore(secret []byte) (*EncryptedKeyStore, error)
+	NewEncryptedKeyStore(secret []byte, previous ...[]byte) (*EncryptedKeyStore, error)
 }
 
-// FieldEncryptor encrypts secret columns at rest (field_crypto.go) and seals the rows written before.
+// FieldEncryptor encrypts secret columns at rest (field_crypto.go), seals the rows written before, and moves the
+// values a previous key sealed to the current one (key rotation, ADR 0005).
 type FieldEncryptor interface {
-	EnableFieldEncryption(secret []byte) error
+	EnableFieldEncryption(secret []byte, previous ...[]byte) error
 	EncryptOrgChannelsAtRest(ctx context.Context) (int, error)
+	ResealFields(ctx context.Context) (ResealReport, error)
+}
+
+// KeyResealer moves the keystore's values a previous key sealed to the current one (key rotation, ADR 0005).
+type KeyResealer interface {
+	ResealKeys(ctx context.Context) (ResealReport, error)
 }
 
 // RLSBeginner starts Postgres row-level-security transactions scoped to a caller.

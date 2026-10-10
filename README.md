@@ -192,25 +192,60 @@ Backend env vars (the common ones; `.env.example` is annotated and lists every v
 | Variable | Purpose | Default |
 |---|---|---|
 | `PAD_MODE` | `local` (Tauri sidecar) or `cloud` (web server) | `local` |
+| `PAD_CONFIG` | A JSON config file (the `Config` struct's field names, durations as `"30s"`) instead of the `PAD_*` variables, which are then ignored. An invalid or out-of-range duration refuses to boot from either source | — |
 | `PAD_HOST` / `PAD_PORT` | Bind address / port (cloud mode) | `localhost` / ephemeral |
 | `PAD_ALLOWED_ORIGINS` | Comma-separated CORS / WebSocket origin allowlist | — |
 | `PAD_AUTH_ENABLED` | Enable JWT auth (required for browser use) | `false` |
 | `PAD_AUTH_SECRET` | JWT signing secret (required when auth enabled) | — |
+| `PAD_ENCRYPTION_KEY_PREVIOUS` | Key rotation: the keys `PAD_ENCRYPTION_KEY` replaced, comma-separated, newest first. They still open what they sealed, and each boot re-seals it with `PAD_ENCRYPTION_KEY` ([Rotating the encryption key](#rotating-the-encryption-key)) | — |
 | `PAD_STORAGE` | `local` (no server-side store; desktop) or `database` (PostgreSQL) | `local` |
 | `PAD_DATABASE_URL` | Postgres DSN (required when `PAD_STORAGE=database`) | — |
 | `PAD_AZURE_STORAGE_ACCOUNT` / `PAD_AZURE_STORAGE_CONTAINER` | Offload flow content to Azure Blob Storage (both required together; database backend) | — (off) |
 | `PAD_TRUSTED_PROXIES` | Trusted proxy IPs for `X-Forwarded-For` | — |
-| `PAD_SCAN_INTERVAL` | Periodic flow re-scan interval (e.g. `1h`); enables drift/regression alerts (cloud) | — (off) |
-| `PAD_NOTIFY_WEBHOOK_URL` | Generic webhook for governance alerts (raw JSON) | — |
-| `PAD_NOTIFY_TEAMS_URL` | Microsoft Teams incoming-webhook URL for alerts | — |
+| `PAD_SCAN_INTERVAL` | Periodic flow re-scan interval (e.g. `1h`); enables drift/regression alerts (database backend) | — (off) |
+| `PAD_NOTIFY_WEBHOOK_URL` | Generic webhook for governance alerts (JSON event, signed with `PAD_NOTIFY_WEBHOOK_SECRET`; [docs/webhooks.md](docs/webhooks.md)). Deployment channels receive every tenant's alerts | — |
+| `PAD_NOTIFY_TEAMS_URL` | Microsoft Teams incoming-webhook URL for alerts (an Office 365 connector, which Microsoft is retiring: move to `PAD_NOTIFY_TEAMS_WORKFLOW_URL`) | — |
+| `PAD_NOTIFY_TEAMS_WORKFLOW_URL` | Microsoft Teams Workflows webhook URL for alerts (an Adaptive Card; replaces the incoming webhooks) | — |
+| `PAD_NOTIFY_ALLOWED_HOSTS` | Hosts an organisation's channels may point at: exact hosts or `*.suffix` globs (never over a public suffix or a multi-tenant zone, which refuse to boot), checked at save and at every delivery. The `PAD_NOTIFY_*` channels are not restricted | — (any public host) |
+| `PAD_NOTIFY_ALLOWED_HOSTS_VISIBLE` | Show `PAD_NOTIFY_ALLOWED_HOSTS` to organisation admins in the channel form. Off, they learn only that a list applies, since it may name other customers' hosts; turn it on when it names only shared service hosts | `false` |
 | `PAD_SMTP_HOST` / `PAD_SMTP_PORT` | SMTP relay for transactional email (port 587 STARTTLS or 465 TLS) | — / `587` |
 | `PAD_SMTP_USERNAME` / `PAD_SMTP_PASSWORD` | SMTP auth credentials | — |
-| `PAD_EMAIL_FROM` | From address for outbound email (enables email when set with host) | — |
+| `PAD_SMTP_MAX_CONNECTIONS` | SMTP sessions open to the relay at once; set it to the relay's limit. Notifications may hold one less, so a password reset never waits behind them | `0` (only the mail queue's bound, 32) |
+| `PAD_EMAIL_FROM` | From address for outbound email, `addr` or `Name <addr>` (enables email when set with host) | — |
 | `PAD_APP_BASE_URL` | Public origin used to build links in emails | — |
+| `PAD_INSTANCE_ID` | This replica's name in logs, traces, the Postgres `application_name` (`baki-backend/<id>`) and job locks | ACA's replica name, else the host name |
+| `PAD_SHUTDOWN_DRAIN_DELAY` | On stop, how long the server answers "draining" (readiness 503, new streams refused) before it ends the open chat streams ([ADR 0024](docs/adr/0024-graceful-shutdown-and-server-restarting.md)); at most `10s` | `3s` in cloud mode, else `0s` |
 
 Frontend env var: `VITE_API_URL` — the backend origin (e.g. `http://localhost:8080`), **without** a trailing `/api`. Only needed in web mode; the desktop app discovers the sidecar automatically.
 
 **Azure Blob Storage (optional).** When `PAD_AZURE_STORAGE_ACCOUNT` and `PAD_AZURE_STORAGE_CONTAINER` are both set, large flow content is stored in blob storage while Postgres keeps a placeholder + metadata. Auth uses `DefaultAzureCredential` (Managed Identity in Azure, `az` CLI locally); grant the identity the **Storage Blob Data Contributor** role on the account. The container must already exist — the server probes reachability at startup and **logs a warning but does not fail boot**; the readiness probe (`/readyz`) keeps the instance out of rotation until blob is reachable. Current content is keyed by the row's version (`flows/{id}/content.v{N}.json`), so a save whose transaction later rolls back leaves an unreferenced orphan blob rather than corrupting the live flow. Superseded content blobs are deleted automatically shortly after each successful save (and `DeleteFlow` removes the flow's whole prefix); version snapshots are capped at the 50 most recent per flow, with older snapshots (rows and blobs) pruned on each new snapshot. **Do not add an age-based storage lifecycle rule to the container**: it cannot distinguish a stale orphan from the live blob of a flow that simply hasn't been edited recently, and would silently destroy flow content. For the Azurite emulator or non-MI scenarios, set `PAD_AZURE_BLOB_CONNECTION_STRING` instead of the account name (Managed Identity remains the production default).
+
+#### Rotating the encryption key
+
+`PAD_ENCRYPTION_KEY` seals the stored secrets: provider keys, organisation credentials (Azure resources included),
+channel URLs and signing secrets, CI credentials and stored idempotent responses. Replacing it outright makes all of
+them unreadable. Rotate it like this:
+
+1. **Stage the new key (only for rolling deploys, where old and new replicas overlap):** keep `PAD_ENCRYPTION_KEY`,
+   set `PAD_ENCRYPTION_KEY_PREVIOUS` to the new key, and deploy. Every replica can then open what the new key seals.
+2. **Rotate:** set `PAD_ENCRYPTION_KEY` to the new key and `PAD_ENCRYPTION_KEY_PREVIOUS` to the old one, and deploy.
+   Reads fall back to the old key and writes use the new one. On one replica at a time, each boot re-seals every value
+   the old key sealed.
+3. **Wait** for the log line `secret re-seal complete: every sealed value opens with PAD_ENCRYPTION_KEY` from a boot
+   after the rollout finished. If the last pass reports `remaining` above 0 (values an old replica wrote during the
+   rollout), restart one replica. If it reports `unreadable`, the listed values (table, column, row id) were sealed
+   with a key you did not list. Add that key, or have the owners re-enter those secrets.
+4. **Remove** `PAD_ENCRYPTION_KEY_PREVIOUS` and deploy.
+
+When moving off the `PAD_AUTH_SECRET` fallback, list that secret as the previous key. Each entry is held to the same
+rule as the current key in cloud mode (at least 32 characters, no placeholder). A key cannot contain a comma. On the
+GitHub deploy, add `PAD_ENCRYPTION_KEY_PREVIOUS` as an environment secret, with no spaces around the commas.
+
+**Rollback.** The release before key rotation knows one key and ignores `PAD_ENCRYPTION_KEY_PREVIOUS`. If you roll
+the image back after step 2, keep the new key as `PAD_ENCRYPTION_KEY`: once step 3's line was logged, it opens
+everything. Never go back to the old key alone after step 2: what the new key sealed (every write since step 2 and
+every value the pass re-sealed) is then unreadable. To undo a rotation, rotate back with this release (old key
+current, new key previous), wait for step 3's line, and only then deploy the old release. Details: ADR 0005.
 
 #### Azure Container Apps deployment (ops runbook)
 
@@ -411,13 +446,14 @@ for two approvals per release. That splits the secrets in two:
 | `AZURE_CONTAINER_APP_NAME` | `appName` for the template |
 | `PAD_AUTH_SECRET` | JWT signing key, ≥ 32 chars |
 | `PAD_ENCRYPTION_KEY` | AES-256-GCM key for the provider keystore. Set it — unset, the keystore falls back to `PAD_AUTH_SECRET`, and rotating the JWT secret then makes every stored provider key unreadable |
+| `PAD_ENCRYPTION_KEY_PREVIOUS` | Only during a key rotation: the keys `PAD_ENCRYPTION_KEY` replaced, comma-separated with no spaces, newest first (see [Rotating the encryption key](#rotating-the-encryption-key)). Delete the secret when the rotation is done |
 | `PAD_DATABASE_URL` | DSN for the dedicated `baki_app` role |
 | `PAD_METRICS_TOKEN` | Gates `GET /metrics` and `/debug/pprof` |
 | `ALERT_EMAILS` | Comma-separated recipients. **Empty provisions no alerting at all** — all four alert resources are conditional on it |
 | `PAD_ALLOWED_ORIGINS` | Only needed once a custom domain fronts the app; defaults to the ingress FQDN |
 | `PAD_SMTP_HOST` / `PAD_SMTP_USERNAME` / `PAD_SMTP_PASSWORD` / `PAD_EMAIL_FROM` / `PAD_APP_BASE_URL` | Transactional email. Without SMTP the app uses a log-only mailer, which means password-reset and verification links are written into Log Analytics instead of delivered |
 | `PAD_SSO_ISSUER` / `PAD_SSO_CLIENT_ID` / `PAD_SSO_CLIENT_SECRET` / `PAD_SSO_REDIRECT_URL` | OIDC SSO. All of issuer/client-id/redirect are required together or SSO stays off |
-| `PAD_CI_WEBHOOK_SECRET` | Enables `POST /api/integrations/ci`; treat it as a read token for the whole flow library |
+| `PAD_CI_WEBHOOK_SECRET` | Deprecated: a deployment-wide key for `POST /api/integrations/ci` that reads the whole flow library. Leave it unset and have organisation admins mint CI credentials instead, and users API tokens with the `ci` scope for their personal flows (see [Other CI systems](#other-ci-systems)); while set, the server warns at boot and marks every answer to it with a `Deprecation` header |
 | `AZURE_STORAGE_ACCOUNT_ID` | Optional: bring your own storage account instead of letting the template provision one. The template cannot create the blob role assignment for an account it does not own — grant the managed identity **Storage Blob Data Contributor** yourself, and create the `flow-content` container |
 
 **Repository / environment variables** (GitHub Actions *variables*, not
@@ -487,7 +523,7 @@ A **platform adapter** (`frontend/src/platform/`) abstracts everything platform-
 - **AI review** — streaming chat over your flow with GitHub Copilot, Anthropic Claude, OpenAI, Google Gemini, xAI Grok, Zhipu GLM, GitHub Models, or any Azure AI Foundry deployment and Foundry agent. Tool-augmented mode for autonomous analysis.
 - **Export** — full analysis reports to PDF or Markdown (works in both desktop and browser); analysis history with regression diffing.
 - **CI/CD** — headless `bakicli` runs static analysis and exits non-zero past a severity threshold (`-fail-on`) or a named, shareable **policy** (`-policy policy.json`), ratcheting on new findings only with `-baseline` or `-new-from-rev`. It emits `text`, `json`, **SARIF 2.1.0**, `junit`, `csv`, `html`, `markdown` or `pdf` (redirected to a file); `-report-json` also writes the JSON report from the same run. Several paths are analyzed together with `text` or `json`, one report per flow plus the cross-flow library findings, which never gate. A packaged **GitHub Action** uploads SARIF to the Security tab, writes a job summary and gates the build; GitLab and Azure DevOps templates live in `ci/`. See [CI/CD](#cicd).
-- **Governance** *(web mode)* — persistent, team-shared finding triage (status/assignee/justification) and per-flow **baselines** so dashboards and CI can ratchet on *new* findings only; an org-wide **portfolio** view (Command Palette → "Flow Portfolio", or `GET /api/library/portfolio`) ranks every accessible flow worst-health-first; a periodic scanner re-analyzes stored flows and **alerts on drift or health regressions** via webhook / Microsoft Teams (`PAD_SCAN_INTERVAL` + `PAD_NOTIFY_*`); findings of rules added or revised since a flow's baseline raise one in-app **new rules** notice in the alerts bell instead of drift alerts.
+- **Governance** *(web mode)* — persistent, team-shared finding triage (status/assignee/justification) and per-flow **baselines** so dashboards and CI can ratchet on *new* findings only; an org-wide **portfolio** view (Command Palette → "Flow Portfolio", or `GET /api/library/portfolio`) ranks every accessible flow worst-health-first; a periodic scanner re-analyzes stored flows and **alerts on drift or health regressions** in the alerts bell, to each organisation's own channels (webhook, Slack, Teams, Teams Workflows, Jira, email to chosen members, each choosing its events; Settings → Organisations) and to the deployment's channels (`PAD_SCAN_INTERVAL` + `PAD_NOTIFY_*`); findings of rules added or revised since a flow's baseline raise one **new rules** notice instead of drift alerts, in the bell and on the organisation's channels. Webhook payloads, headers and signature verification: [docs/webhooks.md](docs/webhooks.md).
 - **Collaboration** *(web mode)* — organizations with role-based access (admin/member/viewer/guest); real-time presence indicators and block selection sync via WebSocket; flow sharing with per-flow collaborator permissions.
 - **SSO** *(web mode)* — OIDC single sign-on with Microsoft Entra ID, Google, Okta, or any OIDC-compliant IdP. Account linking with automatic JIT provisioning.
 - **Account email** *(web mode)* — transactional email for **password reset** (`/api/auth/forgot-password` → `/api/auth/reset-password`, single-use 1-hour token, all sessions revoked on reset), **email verification** (`/api/auth/verify-email`, sent on registration), and **org-invite delivery**. Configure an SMTP relay via `PAD_SMTP_*` + `PAD_EMAIL_FROM`; without it the app uses a log-only mailer so non-email deployments still work (links land in the server log). Reset endpoints never reveal whether an email exists.
@@ -535,7 +571,17 @@ Both templates download the release binary (falling back to a source build), run
 - **GitLab** — include `https://raw.githubusercontent.com/dusankuburic/baki/main/ci/.gitlab-ci.pad-analysis.yml` and extend `.pad-analysis`. The SARIF file is a plain job artifact. GitLab's `artifacts:reports:sast` expects its own schema and ignores SARIF, so the merge-request security widget stays empty.
 - **Azure DevOps** — copy `ci/azure-pipelines.pad-analysis.yml` into your repository (or reference it through a GitHub repository resource) and use it as a step template.
 
-Both headers list every variable or parameter. To record a run on a PAD Analyzer server's dashboard, use `bakicli report` — it signs the request with `PAD_CI_WEBHOOK_SECRET` and posts to `/api/integrations/ci`, which is disabled until that secret is set. Treat the secret as a read token for the whole flow library.
+Both headers list every variable or parameter. To record a run on a PAD Analyzer server's dashboard, use `bakicli report`, which signs the request (or sends an API token) and posts to `/api/integrations/ci`:
+
+- **Cloud (accounts on):** an organisation admin mints a CI credential under Settings > Organisation > CI credentials. It is shown once and looks like `baki_ci_<keyId>_<secret>`. Store it as the pipeline secret `PAD_CI_WEBHOOK_SECRET` and run `bakicli report -endpoint https://baki.example.com -flow-id <flowId>`. A credential analyses its organisation's flows only. It can expire (1 to 365 days) and can be revoked; to rotate, mint a new one, switch the pipeline, then revoke the old one. bakicli releases that predate credentials sign with one unchanged.
+- **Personal flows (accounts on):** flows outside any organisation have no organisation credential. Mint an API token with only the **CI** scope under Settings > API Tokens, store it as the pipeline secret `PAD_CI_TOKEN` and run the same command (or pass `-token`; it excludes `-secret`). The token reaches the flows its user can read (their own, their organisations', personal flows shared with them; an organisation's flow only when they are a member, since the run uses its custom rules and records onto its dashboard) and nothing else on the API; an unscoped token or one without the CI scope is refused with 401. It is sent as `Authorization: Bearer`, not signed, so `bakicli report` sends it only to an https endpoint (or a loopback address).
+- **Local server without accounts:** set the server's `PAD_CI_WEBHOOK_SECRET` and give the runner the same value. The endpoint answers 503 until it is set.
+
+The server's own `PAD_CI_WEBHOOK_SECRET` still works with accounts on, but it reaches every organisation's flows and is deprecated ([ADR 0019](docs/adr/0019-org-ci-credentials.md)).
+
+Each `bakicli report` sends a random `deliveryId` in the body, which the signature covers. The server runs a key's delivery id once and answers a repeat with `409 CI_REPLAYED`, so a captured call cannot be replayed within the signature's five-minute window. bakicli releases that predate it send none and are still accepted (`pad_ci_webhook_deliveries_total{delivery="missing"}` counts them). A captured bearer call can still be resent with a new delivery id, as with any bearer token: keep the token secret and the endpoint on https.
+
+Each call is a full analysis and shares the server's `analysis` rate limit per client address (`PAD_RATE_LIMIT_EXPENSIVE_RPS`/`_BURST`). Runners behind one NAT address share it; `bakicli report` waits out a 429 and retries up to four times within `-timeout`, with the same delivery id (the limiter refused the call before it ran).
 
 ## Tests
 
@@ -556,7 +602,7 @@ npm run lint                           # ESLint
 
 ```
 baki/
-├── main.go                # Go server entry point (reads PAD_* env / Tauri sidecar)
+├── main.go                # Go server entry point (build stamps, healthcheck; the app graph is internal/app)
 ├── core/                  # pad-core module: engine code shared by the server and bakicli
 │   ├── parser/            #   PAD export text parser (lexer + parser + tree builder)
 │   ├── analyzer/          #   static-analysis rules, auto-fixers, suppression, policies

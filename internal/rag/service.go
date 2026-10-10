@@ -13,8 +13,9 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/events"
-	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/platform/lock"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/ai/scrubber"
 	"pad-core/logger"
@@ -40,8 +41,15 @@ var (
 	// (maxKnowledgeChunks) — the byte cap alone cannot track how a text chunks (HTTP 413).
 	ErrDocumentTooLarge = errors.New("document too large to index")
 	// ErrKnowledgeBusy: another upload or re-index of the same org is in flight in this process
-	// (lockOrg; HTTP 409).
+	// (lockOrg; HTTP 409), or a background re-embed runs on some replica (ReindexInBackground).
 	ErrKnowledgeBusy = errors.New("the knowledge base is being updated — try again in a moment")
+	// ErrEmbeddingOrgCredentialRequired: a background re-embed runs unattended under the organisation's
+	// shared embedding credential only; the caller's embedder is their own key (HTTP 400, the org admin's
+	// EMBEDDING_ORG_NOT_CONFIGURED guidance). The synchronous re-index stays open to them.
+	ErrEmbeddingOrgCredentialRequired = errors.New("a background re-index needs the organisation's own embedding credential — re-index now instead, or ask an org admin to configure a shared embedding provider")
+	// ErrReembedUnavailable: the background re-embed could not start — its cross-replica lock could not be
+	// asked for, or the server is shutting down (HTTP 503).
+	ErrReembedUnavailable = errors.New("the background re-index could not be started — try again in a moment")
 )
 
 // azureFoundryProviderID is the provider that embeds the knowledge base only on the operator's opt-in (PAD_EMBEDDING_PROVIDER; see embedder).
@@ -103,6 +111,14 @@ type KnowledgeService struct {
 	searchOnce sync.Once
 	// bus announces corpus changes (KnowledgeDocChanged); the corpus count cache drops on them. nil publishes nothing.
 	bus *eventbus.Bus
+	// jobLeaser is the deployment's cross-replica job lock (WithJobLeaser); nil runs the background re-embed
+	// without one, in this process alone.
+	jobLeaser lock.Leaser
+	// reembed runs the on-demand background re-embed (reembed_job.go); built on first use, under reembedMu
+	// with the request the next run takes.
+	reembed        *lifecycle.Singleton
+	reembedMu      sync.Mutex
+	reembedPending *reembedRequest
 }
 
 // AzureEmbedderSource resolves the knowledge base's Azure AI Foundry embedder from the model registry:
@@ -125,6 +141,14 @@ func (s *KnowledgeService) checkBudget(ctx context.Context, embedder ai.Provider
 		return nil
 	}
 	return s.budget.CheckBudget(ctx, scope, orgID)
+}
+
+// budgetRun names a billed run's spender on ctx and gives it one usage memo: every embedding call of the run
+// (N batches, the wrapper's pre-call hook before each) is charged to the caller IN the org — whichever key the
+// chain resolved to, the org's corpus bills the org — and reads today's spend once. A memo already on ctx (a
+// chat turn's) is kept.
+func budgetRun(ctx context.Context, scope, orgID string) context.Context {
+	return ai.WithBudgetScope(ai.WithBudgetMemo(ctx), scope, orgID)
 }
 
 // Option configures a KnowledgeService at construction.
@@ -158,6 +182,12 @@ func WithEventBus(bus *eventbus.Bus) Option {
 	return func(s *KnowledgeService) { s.bus = bus }
 }
 
+// WithJobLeaser runs the background re-embed (ReindexInBackground) under the deployment's job lease, one run
+// across every replica (ADR 0023); without it the process runs it alone.
+func WithJobLeaser(l lock.Leaser) Option {
+	return func(s *KnowledgeService) { s.jobLeaser = l }
+}
+
 // AzureEmbedderEnabled reports whether the knowledge base embeds with Azure AI Foundry through the
 // model registry here (operator pin plus registry).
 func (s *KnowledgeService) AzureEmbedderEnabled() bool {
@@ -180,6 +210,23 @@ func (s *KnowledgeService) embedder(scope, orgID string) (ai.Provider, error) {
 	return s.embedderFor(context.Background(), scope, orgID)
 }
 
+// registryEmbedded reports whether pid's embedding model is a designated deployment alias (ai.CapModelAliases,
+// Azure AI Foundry): such a provider embeds the corpus only through its registry's designation and only on the
+// operator's opt-in, never as a fallback — a second model must never mix into the org corpus.
+func registryEmbedded(pid string) bool {
+	spec, ok := ai.SpecOf(pid)
+	return ok && spec.Caps.Has(ai.CapModelAliases)
+}
+
+// defaultEmbeddingProvider is the provider the corpus embeds with when nothing names one: the first
+// embedding-capable spec in display order (openai).
+func defaultEmbeddingProvider() string {
+	if order := ai.EmbeddingFallbackOrder(); len(order) > 0 {
+		return order[0]
+	}
+	return ""
+}
+
 // embedderFor is embedder with the request's context (the registry reads join its transaction).
 func (s *KnowledgeService) embedderFor(ctx context.Context, scope, orgID string) (ai.Provider, error) {
 	if s.embedOverride != nil {
@@ -189,16 +236,16 @@ func (s *KnowledgeService) embedderFor(ctx context.Context, scope, orgID string)
 		return nil, ErrEmbeddingNotConfigured
 	}
 	forEmbedding := func(pid, model string) (ai.Provider, error) {
-		if pid == azureFoundryProviderID && s.azureEmbedder != nil {
+		if registryEmbedded(pid) && s.azureEmbedder != nil {
 			return s.azureRegistryEmbedder(ctx, scope, orgID)
 		}
 		if s.factory == nil {
 			return nil, ErrEmbeddingNotConfigured
 		}
-		if orgID != "" && (pid == azureFoundryProviderID || (s.embeddingProvider != "" && pid == s.embeddingProvider)) {
-			return s.factory.ForEmbeddingOrg(scope, orgID, pid, model)
+		if orgID != "" && (registryEmbedded(pid) || (s.embeddingProvider != "" && pid == s.embeddingProvider)) {
+			return s.factory.ForEmbeddingOrg(ctx, scope, orgID, pid, model)
 		}
-		return s.factory.ForEmbedding(scope, pid, model)
+		return s.factory.ForEmbedding(ctx, scope, pid, model)
 	}
 
 	providerID := s.embeddingProvider
@@ -212,17 +259,17 @@ func (s *KnowledgeService) embedderFor(ctx context.Context, scope, orgID string)
 		}
 	}
 
-	// Try the configured (or default openai) embedding provider first.
+	// Try the configured embedding provider first, else the first embedding-capable one (openai).
 	if providerID == "" {
-		providerID = "openai"
+		providerID = defaultEmbeddingProvider()
 	}
 	if !ai.SupportsEmbeddings(providerID) {
 		// Chat-only provider: fail fast with the sentinel instead of at Embed time.
 		return nil, fmt.Errorf("%w (%q does not support embeddings)", ErrEmbeddingUnavailable, providerID)
 	}
 	var err error
-	if providerID == azureFoundryProviderID && s.embeddingProvider != azureFoundryProviderID {
-		err = fmt.Errorf("%s embeds the knowledge base only when the operator sets PAD_EMBEDDING_PROVIDER=%s", azureFoundryProviderID, azureFoundryProviderID)
+	if registryEmbedded(providerID) && s.embeddingProvider != providerID {
+		err = fmt.Errorf("%s embeds the knowledge base only when the operator sets PAD_EMBEDDING_PROVIDER=%s", providerID, providerID)
 	} else {
 		var p ai.Provider
 		if p, err = forEmbedding(providerID, embeddingModel); err == nil {
@@ -233,8 +280,13 @@ func (s *KnowledgeService) embedderFor(ctx context.Context, scope, orgID string)
 		if errors.Is(err, ai.ErrOrgEmbeddingDeploymentMissing) {
 			return nil, fmt.Errorf("%w: %w", ErrEmbeddingUnavailable, err)
 		}
+		// The policy could not be read: not a "no key" case, so no other provider may stand in; the sentinel's
+		// copy is fixed and the cause was logged where it failed.
+		if errors.Is(err, ai.ErrProviderPolicyUnavailable) {
+			return nil, err
+		}
 		// The registry could not say which model embeds: no other provider may stand in on the corpus.
-		if providerID == azureFoundryProviderID && s.azureEmbedder != nil {
+		if registryEmbedded(providerID) && s.azureEmbedder != nil {
 			if refusal := azureEmbedderRefusal(err); refusal != nil {
 				return nil, refusal
 			}
@@ -247,10 +299,10 @@ func (s *KnowledgeService) embedderFor(ctx context.Context, scope, orgID string)
 	// Fallback: first keyed, embedding-capable provider in fixed priority order; having a usable key
 	// (which ForEmbedding decides) is the whole test. Azure AI Foundry is never a fallback.
 	for _, pid := range ai.EmbeddingFallbackOrder() {
-		if pid == providerID || pid == azureFoundryProviderID {
+		if pid == providerID || registryEmbedded(pid) {
 			continue // already tried above / opt-in only
 		}
-		if p2, err2 := s.factory.ForEmbedding(scope, pid, embeddingModel); err2 == nil {
+		if p2, err2 := s.factory.ForEmbedding(ctx, scope, pid, embeddingModel); err2 == nil {
 			return p2, nil
 		}
 	}
@@ -264,6 +316,8 @@ func azureEmbedderRefusal(err error) error {
 	switch {
 	case errors.Is(err, ErrEmbeddingSetupUnavailable):
 		return err // the source logged its cause and masked it
+	case errors.Is(err, ai.ErrProviderNotAllowed), errors.Is(err, ai.ErrProviderPolicyUnavailable):
+		return err // the policy's answer: 400 PROVIDER_NOT_ALLOWED, or its own fixed copy
 	case errors.Is(err, ai.ErrEmbeddingDeploymentMissing), errors.Is(err, ai.ErrKeyNotConfigured):
 		return nil
 	case errors.Is(err, ai.ErrProviderConfigInvalid):
@@ -296,17 +350,61 @@ const (
 	corpusOtherWidth                      // no same-width pair: the caller's width differs from every sampled row
 )
 
-// checkCorpusModel is the embedding-model mismatch guard: nothing records which model produced a stored
-// vector, and equal width does not mean equal model (text-embedding-3-small and an Azure ada-002 deployment
-// are both 1536 wide) — up to corpusSampleSize indexed chunks (one per document) are re-embedded and compared
-// with their stored vectors. The WORST same-width pair decides, so a mixed corpus (partial re-index, race)
-// refuses everyone until a forced re-index repairs it; no same-width pair is corpusOtherWidth (corpusStranded).
+// checkCorpusModel is the embedding-model mismatch guard. Every chunk records the identity of the embedder
+// that produced its vector (ADR 0027), so the guard is a column compare first: a corpus whose every row carries
+// the caller's identity is accepted without a provider call, and rows stamped with another identity are another
+// model whatever a sample would say. Equal width does not mean equal model (text-embedding-3-small and an Azure
+// ada-002 deployment are both 1536 wide), so the rows without an identity — legacy rows from before the column,
+// and every row for a provider that names none — still take the sample proof: up to corpusSampleSize indexed
+// chunks (one per document) are re-embedded and compared with their stored vectors; the WORST same-width pair
+// decides, so a mixed corpus (partial re-index, race) refuses everyone until a forced re-index repairs it; no
+// same-width pair is corpusOtherWidth (corpusStranded). A proof over legacy rows stamps them with the caller's
+// identity: the lenient match ends for the org, and the next upload is a column compare.
 func (s *KnowledgeService) checkCorpusModel(ctx context.Context, provider ai.Provider, orgID string) (corpusVerdict, error) {
+	identity := ai.EmbeddingIdentity(provider)
+	var counts interfaces.KnowledgeChunkCounts
+	if identity != "" {
+		var err error
+		if counts, err = s.store.CountKnowledgeChunksByIdentity(ctx, orgID, identity); err != nil {
+			return corpusEmpty, fmt.Errorf("count indexed chunks: %w", err)
+		}
+		switch {
+		case counts.Total == 0:
+			return corpusEmpty, nil
+		case counts.Stranded == 0 && counts.Legacy() == 0:
+			return corpusSameModel, nil
+		}
+	}
 	samples, err := s.store.SampleKnowledgeChunkEmbeddings(ctx, orgID, corpusSampleSize)
 	if err != nil {
 		return corpusEmpty, fmt.Errorf("sample indexed chunks: %w", err)
 	}
-	return compareSamples(ctx, provider, orgID, samples)
+	verdict, err := compareSamples(ctx, provider, orgID, samples)
+	if err != nil || identity == "" {
+		return verdict, err
+	}
+	if counts.Stranded > 0 {
+		// The sample only says whether the other identity is another WIDTH (the stranded-corpus recovery);
+		// at the same width it is another model, also when the sample happened to pick the matching rows.
+		if verdict == corpusOtherWidth {
+			return corpusOtherWidth, nil
+		}
+		logger.Warn("knowledge base: chunks were indexed under another embedding identity than the caller's",
+			"org_id", orgID, "stranded_chunks", counts.Stranded, "total_chunks", counts.Total)
+		return corpusOtherModel, nil
+	}
+	if verdict == corpusSameModel {
+		userID := ""
+		if claims := auth.ClaimsFromContext(ctx); claims != nil {
+			userID = claims.UserID
+		}
+		if n, err := s.store.StampKnowledgeChunkIdentity(ctx, userID, orgID, "", identity); err != nil {
+			logger.Warn("knowledge base: could not stamp the legacy chunks with the proven identity", "org_id", orgID, "error", err)
+		} else if n > 0 {
+			logger.Info("knowledge base: legacy chunks stamped with the proven embedding identity", "org_id", orgID, "chunks", n)
+		}
+	}
+	return verdict, nil
 }
 
 // compareSamples re-embeds the sampled chunks' text with provider and classifies against their
@@ -398,6 +496,7 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("document is empty")
 	}
+	ctx = budgetRun(ctx, scope, orgID)
 	// The embedder is resolved first: whether the budget applies depends on it (Foundry is never gated).
 	provider, err := s.embedderFor(ctx, scope, orgID)
 	if err != nil {
@@ -464,10 +563,12 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 		userID = claims.UserID
 	}
 
+	identity := ai.EmbeddingIdentity(provider)
 	doc := &interfaces.KnowledgeDocument{
-		ID:       uuid.NewString(),
-		OrgID:    orgID,
-		Filename: filename,
+		ID:             uuid.NewString(),
+		OrgID:          orgID,
+		Filename:       filename,
+		ChunkerVersion: chunkerVersion,
 	}
 	docID = doc.ID
 	// ORDERING: write the new version FIRST, delete the old only once the new document AND its chunks
@@ -480,11 +581,12 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	knowledgeChunks := make([]interfaces.KnowledgeChunk, len(chunks))
 	for i := range chunks {
 		knowledgeChunks[i] = interfaces.KnowledgeChunk{
-			ID:        uuid.NewString(),
-			DocID:     doc.ID,
-			OrgID:     orgID,
-			Content:   chunks[i],
-			Embedding: embeddings[i],
+			ID:                uuid.NewString(),
+			DocID:             doc.ID,
+			OrgID:             orgID,
+			Content:           chunks[i],
+			Embedding:         embeddings[i],
+			EmbeddingIdentity: identity,
 		}
 	}
 
@@ -506,9 +608,41 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	return nil
 }
 
-// ListDocuments returns up to limit of the org's documents (<=0 = all), newest first, skipping offset.
-func (s *KnowledgeService) ListDocuments(ctx context.Context, orgID string, limit, offset int) ([]*interfaces.KnowledgeDocument, error) {
-	return s.store.ListKnowledgeDocuments(ctx, orgID, limit, offset)
+// ListDocuments returns up to limit of the org's documents (<=0 = all), newest first, skipping offset, each with
+// the number of its chunks the caller's searches would never return (EmbeddingStranded: embedded under another
+// identity than the caller's embedder's). A caller without an embedder has nothing to compare with and sees none.
+func (s *KnowledgeService) ListDocuments(ctx context.Context, scope, orgID string, limit, offset int) ([]*interfaces.KnowledgeDocument, error) {
+	docs, err := s.store.ListKnowledgeDocuments(ctx, orgID, limit, offset)
+	if err != nil || len(docs) == 0 {
+		return docs, err
+	}
+	identity := s.viewerIdentity(ctx, scope, orgID)
+	if identity == "" {
+		return docs, nil
+	}
+	stranded, err := s.store.CountStrandedKnowledgeChunksByDocument(ctx, orgID, identity)
+	if err != nil {
+		logger.Warn("knowledge: could not count the documents' stranded chunks", "org_id", orgID, "error", err)
+		return docs, nil
+	}
+	for _, d := range docs {
+		d.EmbeddingStranded = stranded[d.ID]
+	}
+	return docs, nil
+}
+
+// viewerIdentity is the embedding identity of the caller's embedder, "" when none resolves (no key, a provider
+// that names none): resolving one reads credentials and settings, never the provider.
+func (s *KnowledgeService) viewerIdentity(ctx context.Context, scope, orgID string) string {
+	if s.embedOverride == nil && s.factory == nil && s.azureEmbedder == nil {
+		return ""
+	}
+	// Outside a run nothing seeds the budget scope: name the org for the policy's reads here.
+	provider, err := s.embedderFor(ai.WithBudgetScope(ctx, scope, orgID), scope, orgID)
+	if err != nil {
+		return ""
+	}
+	return ai.EmbeddingIdentity(provider)
 }
 
 // DeleteDocument removes one of the org's documents (its chunks cascade), RLS-scoped to userID, then announces
@@ -533,8 +667,14 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 	if s.store != nil && s.corpusEmpty(ctx, orgID) {
 		return "", nil
 	}
+	ctx = budgetRun(ctx, scope, orgID)
 	provider, err := s.embedderFor(ctx, scope, orgID)
 	if err != nil {
+		return "", err
+	}
+	// The query embed is billed like any other: gated here, explicitly, not only by the chat turn's own check
+	// (inside a chat turn the read is the turn's memoised one).
+	if err := s.checkBudget(ctx, provider, scope, orgID); err != nil {
 		return "", err
 	}
 
@@ -561,8 +701,11 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 	}
 
 	// Top-k retrieval: 5 chunks — more context improves grounding cheaply; the pgvector query
-	// applies a distance threshold to exclude irrelevant chunks.
-	chunks, err := s.store.SearchKnowledge(ctx, orgID, vec, 5)
+	// applies a distance threshold to exclude irrelevant chunks. Only chunks this embedder produced
+	// (or legacy rows of unknown origin) are candidates: another model's vectors at the same width
+	// are noise cosine cannot tell from a miss.
+	identity := ai.EmbeddingIdentity(provider)
+	chunks, err := s.store.SearchKnowledge(ctx, orgID, vec, 5, identity)
 	if err != nil {
 		return "", err
 	}
@@ -571,16 +714,32 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 	if len(chunks) > 0 {
 		sb.WriteString(assembleGuidelines(chunks))
 	} else {
-		// Dim-mismatch detection: a corpus stranded by an embedding-provider switch returns empty
-		// silently — log + meter so ops sees WHY guidelines stopped instead of a "healthy" empty result.
-		if total, _, cerr := s.store.CountKnowledgeChunks(ctx, orgID); cerr == nil && total > 0 {
-			logger.Warn("knowledge search returned nothing but the org has chunks — embedding dimension mismatch? re-index",
-				"org_id", orgID, "total_chunks", total, "query_dim", len(vec))
-			metrics.RecordRAGDimMismatch()
-		}
+		s.explainEmptySearch(ctx, orgID, identity, len(vec))
 	}
 
 	return sb.String(), nil
+}
+
+// explainEmptySearch tells an empty result's reasons apart for ops, since a corpus stranded by an embedding
+// switch returns empty silently: chunks the caller's identity cannot see (a model switch at the same width)
+// and a corpus with nothing in the vector index at the configured width (a width switch) are each logged and
+// metered on their own counter; a corpus that simply has nothing above the relevance floor is a miss, not a
+// signal (R4).
+func (s *KnowledgeService) explainEmptySearch(ctx context.Context, orgID, identity string, queryDim int) {
+	counts, err := s.store.CountKnowledgeChunksByIdentity(ctx, orgID, identity)
+	if err != nil || counts.Total == 0 {
+		return
+	}
+	switch {
+	case counts.Stranded > 0:
+		logger.Warn("knowledge search returned nothing: chunks were indexed under another embedding model than the caller's — re-index",
+			"org_id", orgID, "stranded_chunks", counts.Stranded, "total_chunks", counts.Total)
+		recordRAGStrandedSearch()
+	case counts.VectorIndexed == 0:
+		logger.Warn("knowledge search returned nothing but the org has chunks — embedding dimension mismatch? re-index",
+			"org_id", orgID, "total_chunks", counts.Total, "query_dim", queryDim)
+		recordRAGDimMismatch()
+	}
 }
 
 // ReindexResult reports what ONE re-index request did. NextCursor is set when chunks remain — the
@@ -602,14 +761,30 @@ type ReindexResult struct {
 // BOTH the partial result and the error. Unless forced, a corpus indexed with a different model at the same width
 // is refused (ErrEmbeddingModelChanged), and so is one at another width while it is still in the vector index; a
 // width change against a corpus with NOTHING in the vector index is the stranded-corpus recovery and proceeds
-// unforced. Only the first request of a run is judged; see reindexGuard.
+// unforced. Only the first request of a run is judged; see reindexGuard. Unforced, the walk skips the chunks
+// already embedded under the caller's identity (ADR 0027): a repeated or restarted run never re-buys a converted
+// page, and a corpus the proof just stamped has nothing left to convert; forced, every chunk is rewritten — the
+// admin's word that the vectors must change even where the identity would not (an Azure deployment re-pointed
+// behind the same name). Every converted chunk is stamped with the identity it was embedded under.
 func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, force bool, after interfaces.KnowledgeChunkCursor) (ReindexResult, error) {
+	return s.reindexOrg(ctx, scope, orgID, force, after, false)
+}
+
+// reindexOrg is ReindexOrg; with orgCredential the page runs only on the organisation's shared credential
+// (ErrEmbeddingOrgCredentialRequired otherwise) — the background job's rule, re-checked on every page because
+// every page resolves the embedder anew and the member-first fallback would otherwise continue on the starting
+// admin's personal key once the org's is gone.
+func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, force bool, after interfaces.KnowledgeChunkCursor, orgCredential bool) (ReindexResult, error) {
 	if s.store == nil {
 		return ReindexResult{}, fmt.Errorf("knowledge service has no storage backend (cloud mode required)")
 	}
+	ctx = budgetRun(ctx, scope, orgID)
 	provider, err := s.embedderFor(ctx, scope, orgID)
 	if err != nil {
 		return ReindexResult{}, fmt.Errorf("embedding provider unavailable: %w", err)
+	}
+	if orgCredential && !s.onOrgCredential(provider) {
+		return ReindexResult{}, ErrEmbeddingOrgCredentialRequired
 	}
 	if err := s.checkBudget(ctx, provider, scope, orgID); err != nil {
 		return ReindexResult{}, err
@@ -627,6 +802,11 @@ func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, 
 	userID := ""
 	if claims := auth.ClaimsFromContext(ctx); claims != nil {
 		userID = claims.UserID
+	}
+	identity := ai.EmbeddingIdentity(provider)
+	skip := identity
+	if force {
+		skip = ""
 	}
 	var (
 		res    ReindexResult
@@ -656,7 +836,7 @@ func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, 
 	budgetSpent := false
 	for res.Chunks < maxReindexChunks {
 		want := min(reindexPageSize, maxReindexChunks-res.Chunks)
-		page, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, want)
+		page, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, want, skip)
 		if err != nil {
 			return stopped(fmt.Errorf("load chunk contents: %w", err))
 		}
@@ -676,6 +856,8 @@ func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, 
 		}
 		for i := range page {
 			page[i].Embedding = embeddings[i]
+			page[i].EmbeddingIdentity = identity
+			page[i].OrgID = orgID
 		}
 		// Commits this page on its own (see reindexPageSize).
 		if err := s.store.UpdateKnowledgeChunkEmbeddings(ctx, userID, page); err != nil {
@@ -701,7 +883,7 @@ func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, 
 	if budgetSpent || res.Chunks >= maxReindexChunks {
 		// At the ceiling or the budget: resumable only when something is actually left. A probe
 		// that fails hands out the cursor anyway — the next request finds out.
-		if rest, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, 1); err != nil || len(rest) > 0 {
+		if rest, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, 1, skip); err != nil || len(rest) > 0 {
 			next := cursor
 			res.NextCursor, res.Truncated = &next, true
 		}
@@ -860,6 +1042,11 @@ func embedOneBatch(ctx context.Context, provider ai.Provider, items []string) ([
 // Chunking geometry: knowledgeChunkRunes is the chunk size AddDocument hands to chunkText;
 // chunkOverlapPercent is the share of each chunk carried verbatim into the next.
 const (
+	// chunkerVersion names this geometry on every document it splits (knowledge_documents.chunker_version,
+	// ADR 0027). A document is chunked once — the original text is not kept — so a change to the geometry
+	// below cannot be applied to stored documents; it must bump the version (TestChunkText_GoldenGeometry pins
+	// the split) so that stripOverlapPrefix can tell which overlap a retrieved chunk carries.
+	chunkerVersion      = 1
 	knowledgeChunkRunes = 1000
 	chunkOverlapPercent = 15
 	// chunkOverlapRunes is the exact length of the tail carried from one chunk into the next

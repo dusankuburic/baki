@@ -33,7 +33,7 @@ func TestKnowledgeVectorIndexDDL_Shape(t *testing.T) {
 	q := oneLine(knowledgeVectorSearchSQL(1536))
 	for _, want := range []string{
 		"c.embedding_vec::vector(1536) <=> $2::vector(1536) AS dist",
-		"FROM knowledge_chunks c WHERE c.org_id = $1 AND vector_dims(c.embedding_vec) = 1536 ORDER BY dist LIMIT $3",
+		"FROM knowledge_chunks c WHERE c.org_id = $1 AND vector_dims(c.embedding_vec) = 1536 AND ($5::text = '' OR c.embedding_identity IS NULL OR c.embedding_identity = $5::text) ORDER BY dist LIMIT $3",
 		") nearest JOIN knowledge_documents d ON d.id = nearest.doc_id WHERE nearest.dist <= $4 ORDER BY nearest.dist",
 	} {
 		if !strings.Contains(q, want) {
@@ -316,7 +316,7 @@ func TestEnsureVectorIndex_BuildsAndPlannerUsesIt(t *testing.T) {
 	}
 	var planJSON string
 	if err := tx.QueryRowContext(rctx, `EXPLAIN (FORMAT JSON) `+knowledgeVectorSearchSQL(vectorIndexTestDims),
-		f.orgA, FormatVector(q), 5, knowledgeMaxCosineDistance).Scan(&planJSON); err != nil {
+		f.orgA, FormatVector(q), 5, knowledgeMaxCosineDistance, "ident").Scan(&planJSON); err != nil {
 		t.Fatalf("EXPLAIN: %v", err)
 	}
 	var plan []struct {
@@ -357,7 +357,7 @@ func TestSearchKnowledgeVector_RecallMatchesExact(t *testing.T) {
 			q[j] = rng.Float32()*2 - 1
 		}
 		want := f.exactTopK(q, 5)
-		got, err := b.searchKnowledgeVector(rctx, f.orgA, q, 5)
+		got, err := b.searchKnowledgeVector(rctx, f.orgA, q, 5, "")
 		if err != nil {
 			t.Fatalf("query %d: searchKnowledgeVector: %v", qi, err)
 		}
@@ -426,7 +426,7 @@ func TestSearchKnowledgeVector_SmallTenantWithoutIterativeScan(t *testing.T) {
 
 	check := func(label string) {
 		t.Helper()
-		got, err := b.searchKnowledgeVector(f.rls(), f.orgB, u, 5)
+		got, err := b.searchKnowledgeVector(f.rls(), f.orgB, u, 5, "")
 		if err != nil {
 			t.Fatalf("%s: searchKnowledgeVector: %v", label, err)
 		}
@@ -454,6 +454,7 @@ func TestSearchKnowledgeVector_SmallTenantWithoutIterativeScan(t *testing.T) {
 		if !indexed {
 			args = append(args, vectorIndexTestDims)
 		}
+		args = append(args, "ident")
 		rctx := f.rls()
 		tx := b.query(rctx)
 		if _, err := tx.ExecContext(rctx, `SET LOCAL enable_seqscan = off`); err != nil {

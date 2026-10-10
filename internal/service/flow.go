@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"pad-analyzer/internal/metrics"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -760,18 +759,18 @@ func (s *FlowService) SearchLibrary(ctx context.Context, userID string, query mo
 	candidates, cerr := s.storage.SearchFlowContents(ctx, storageif.FlowFilter{UserID: userID}, query.Text, maxLibrarySearchCandidates)
 	switch {
 	case cerr == nil && len(candidates) > 0:
-		metrics.RecordLibrarySearch("pushdown")
+		recordLibrarySearch("pushdown")
 		flows = candidates
 	case cerr == nil:
 		// Pushdown matched nothing: the library genuinely has no content hit.
-		metrics.RecordLibrarySearch("pushdown")
+		recordLibrarySearch("pushdown")
 		return &models.SearchResults{Query: query, Results: []models.SearchResult{}, TotalCount: 0}, nil
 	default:
 		if !errors.Is(cerr, storageif.ErrContentSearchUnsupported) {
 			// A real pushdown error degrades to scan rather than failing the search.
 			logger.Warn("library search pushdown failed; falling back to scan", "error", cerr)
 		}
-		metrics.RecordLibrarySearch("scan")
+		recordLibrarySearch("scan")
 		scanFlows, slErr := s.storage.ListFlows(ctx, storageif.FlowFilter{UserID: userID, Limit: maxLibrarySearchFlows, MetadataOnly: true})
 		if slErr != nil {
 			return nil, fmt.Errorf("list flows for search: %w", slErr)

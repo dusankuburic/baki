@@ -1,8 +1,8 @@
 import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
-import {Check, Loader2} from 'lucide-react'
+import {Check, Cloud, HardDrive, KeyRound, Loader2} from 'lucide-react'
 import {GithubMark} from '@/components/shared'
-import {useState, useEffect, useRef, useCallback} from 'react'
+import {useState, useEffect, useRef, useCallback, type ComponentType} from 'react'
 import {createAdapter} from '@/platform/adapters'
 import {logger} from '@/lib/logger'
 import type {DeviceAuthResponse, GitHubAuthResult, GitHubUser} from '@/types'
@@ -19,6 +19,12 @@ export interface DeviceAuthProvider {
   label: string
   /** Tailwind classes for the sign-in button background. */
   buttonClassName: string
+  /**
+   * The catalogue's glyph name (ProviderSpec.icon) for the sign-in button.
+   * Absent draws the GitHub mark, which every device-flow provider was
+   * before the catalogue; a name the bundle lacks draws a key.
+   */
+  icon?: string
   getUser: () => Promise<GitHubUser | null>
   startAuth: () => Promise<DeviceAuthResponse | null>
   pollAuth: (deviceCode: string) => Promise<GitHubAuthResult>
@@ -31,6 +37,25 @@ interface Props {
 }
 
 type State = 'unconfigured' | 'authorizing' | 'configured' | 'error'
+
+// The glyphs a catalogue entry may name, as the chat picker knows them, plus
+// the key a provider with no glyph of its own gets.
+const GLYPHS: Record<string, ComponentType<{size?: number}>> = {
+  github: GithubMark,
+  cloud: Cloud,
+  'hard-drive': HardDrive,
+  key: KeyRound,
+}
+
+function glyphOf(icon: string | undefined): string {
+  if (!icon) return 'github'
+  return Object.prototype.hasOwnProperty.call(GLYPHS, icon) ? icon : 'key'
+}
+
+function DeviceGlyph({name}: {name: string}) {
+  const Icon = GLYPHS[name] ?? KeyRound
+  return <Icon size={16} />
+}
 
 export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props) {
   const {t} = useTranslation('chat')
@@ -104,8 +129,14 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
           if (result.status === 'success') {
             attemptRef.current++
             setState('configured')
-            const user = await provider.getUser()
-            if (user?.login) setUsername(user.login)
+            // The name is a courtesy; the completion is not — the host
+            // relists and switches on it, whatever the user route answered.
+            try {
+              const user = await provider.getUser()
+              if (user?.login) setUsername(user.login)
+            } catch (e) {
+              logger.warn(`Fetch ${provider.name} user failed:`, e)
+            }
             onAuthComplete?.()
             return
           }
@@ -149,6 +180,8 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
     setUsername('')
   }, [provider])
 
+  const glyph = glyphOf(provider.icon)
+
   switch (state) {
     case 'unconfigured':
       return (
@@ -156,8 +189,9 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm transition-colors disabled:opacity-60 ${provider.buttonClassName}`}
           onClick={startAuth}
           disabled={starting}
+          data-glyph={glyph}
         >
-          {starting ? <Loader2 size={16} className="animate-spin" /> : <GithubMark size={16} />}
+          {starting ? <Loader2 size={16} className="animate-spin" /> : <DeviceGlyph name={glyph} />}
           {provider.label}
         </button>
       )

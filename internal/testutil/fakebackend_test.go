@@ -164,11 +164,11 @@ func TestFakeBackend_SearchKnowledgeRanksByCosineSimilarity(t *testing.T) {
 		{ID: "wide", DocID: "d1", Content: "other model", Embedding: []float32{1, 0, 0}},
 		{ID: "foreign", DocID: "d2", Content: "other org", Embedding: []float32{1, 0}},
 	})
-	hits, err := b.SearchKnowledge(ctx, "org", []float32{1, 0}, 10)
+	hits, err := b.SearchKnowledge(ctx, "org", []float32{1, 0}, 10, "")
 	if err != nil || len(hits) != 2 || hits[0].ID != "exact" || hits[1].ID != "close" || hits[0].Filename != "guide.md" {
 		t.Fatalf("hits = %+v, %v; want exact then close, from guide.md", hits, err)
 	}
-	if hits, _ := b.SearchKnowledge(ctx, "org", []float32{1, 0}, 1); len(hits) != 1 {
+	if hits, _ := b.SearchKnowledge(ctx, "org", []float32{1, 0}, 1, ""); len(hits) != 1 {
 		t.Errorf("limit 1 returned %d hits", len(hits))
 	}
 }

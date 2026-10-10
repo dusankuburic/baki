@@ -414,10 +414,11 @@ func GuardedTransport(policy Policy) *http.Transport {
 
 // transportFailureMarkers recognise a connection failure in an error whose
 // chain was flattened to text (azidentity reports a failed token request as a
-// string): the net/net/http phrasings, and this package's own refusals.
+// string): the net/net/http phrasings, Windows' (connectex, wsarecv), and this package's own refusals.
 var transportFailureMarkers = []string{
 	"dial tcp", "dial udp", "proxyconnect", "no such host", "connection refused",
 	"connection reset", "i/o timeout", "network is unreachable", "host is unreachable",
+	"actively refused", "forcibly closed", "did not properly respond",
 	"tls: ", "x509: ", "egress: refusing",
 }
 
@@ -466,11 +467,14 @@ func DescribeFailure(err error) (msg string, ok bool) {
 	case strings.Contains(lower, "x509: ") || strings.Contains(lower, "tls: ") || strings.Contains(lower, "certificate"):
 		return "the TLS handshake failed (an untrusted certificate or an intercepting proxy)", true
 	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) ||
-		strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded"):
+		strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") ||
+		strings.Contains(lower, "did not properly respond"):
 		return "the connection timed out", true
-	case strings.Contains(lower, "connection refused"):
+	// Windows words a refused connection "No connection could be made because the target machine actively refused
+	// it" and a reset one "An existing connection was forcibly closed by the remote host".
+	case strings.Contains(lower, "connection refused") || strings.Contains(lower, "actively refused"):
 		return "the connection was refused", true
-	case strings.Contains(lower, "connection reset") || strings.Contains(lower, "eof"):
+	case strings.Contains(lower, "connection reset") || strings.Contains(lower, "forcibly closed") || strings.Contains(lower, "eof"):
 		return "the connection was closed unexpectedly", true
 	case strings.Contains(lower, "unreachable"):
 		return "the network is unreachable", true

@@ -244,7 +244,7 @@ func TestModelListCache_ForgetDuringFetchIsNotUndone(t *testing.T) {
 // provider's embedding identity through the wrappers.
 func TestFactoryChain_EmbedsConcurrentlyAndNamesIdentity(t *testing.T) {
 	f := NewProviderFactory(func(_, _ string) (string, error) { return "sk-test", nil }, nil, nil, nil)
-	p, err := f.ForEmbedding("u1", "openai", "text-embedding-3-small")
+	p, err := f.ForEmbedding(context.Background(), "u1", "openai", "text-embedding-3-small")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestFactoryChain_EmbedsConcurrentlyAndNamesIdentity(t *testing.T) {
 	if id := EmbeddingIdentity(p); !strings.Contains(id, "text-embedding-3-small") {
 		t.Errorf("identity = %q, want the embedding model in it", id)
 	}
-	other, _ := f.ForEmbedding("u1", "openai", "text-embedding-3-large")
+	other, _ := f.ForEmbedding(context.Background(), "u1", "openai", "text-embedding-3-large")
 	if EmbeddingIdentity(other) == EmbeddingIdentity(p) {
 		t.Error("two embedding models share one identity")
 	}

@@ -16,6 +16,7 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/mail"
@@ -109,7 +110,7 @@ func newKnowledgeGuardRouter(t *testing.T, callerVec []float32) (http.Handler, *
 		{ID: "c2", DocID: "doc-1", Content: "name flows by team", Embedding: []float32{1, 0}},
 	})
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(directionEmbedder{vec: callerVec}))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
 	return mountedAs(h, "u-admin"), store, org.ID
 }
 
@@ -183,7 +184,7 @@ func TestKnowledgeUpload_AzureWithoutEmbeddingDeployment400(t *testing.T) {
 	}
 	store := &testutil.FakeBackend{}
 	knowledge := rag.NewKnowledgeService(store, factory, nil, rag.WithEmbeddingProvider("azure-foundry"))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
 	r := mountedAs(h, "u-admin")
 
 	rr := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/upload", `{"filename":"a.md","content":"a guideline"}`)
@@ -212,7 +213,7 @@ func TestKnowledgeUpload_AzureRegistryFailureIs503Masked(t *testing.T) {
 		store := &testutil.FakeBackend{}
 		knowledge := rag.NewKnowledgeService(store, ai.NewProviderFactory(nil, nil, nil, nil), nil,
 			rag.WithEmbeddingProvider("azure-foundry"), rag.WithAzureEmbedder(failingAzureEmbedderSource{err: cause}))
-		h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+		h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
 		r := mountedAs(h, "u-admin")
 		rr := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/upload", `{"filename":"a.md","content":"a guideline"}`)
 		if rr.Code != http.StatusServiceUnavailable || errorCode(t, rr) != "EMBEDDING_PROVIDER_UNAVAILABLE" {
@@ -266,7 +267,7 @@ func newKnowledgeErrorRouter(t *testing.T, embedErr error) (http.Handler, string
 	}
 	store := &testutil.FakeBackend{}
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(failingEmbedder{err: embedErr}))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
 	return mountedAs(h, "u-admin"), org.ID
 }
 
@@ -439,7 +440,7 @@ func TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit(t *testing.T) {
 	}
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", chunks)
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(directionEmbedder{vec: []float32{0, 1}}))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
 	r := mountedAs(h, "u-admin")
 
 	rr := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/reindex", `{"force":true}`)

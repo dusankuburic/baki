@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
+
+	"pad-analyzer/internal/platform/secret"
 )
 
 // parseIntOrError parses a base-10 integer env var, returning a clear error
@@ -33,15 +36,124 @@ func parseFloatOrError(envVar, val string) (float64, error) {
 	return f, nil
 }
 
-// parseDurationOrError validates a duration-string env var (e.g. "30s", "5m")
-// at load time rather than at runtime consumption. Returns the original string
-// (fields stay strings, consumed later by time.ParseDuration) so callers gain
-// fail-fast validation.
-func parseDurationOrError(envVar, val string) (string, error) {
-	if _, err := time.ParseDuration(val); err != nil {
-		return "", fmt.Errorf("config: %s=%q is not a valid duration (use e.g. \"30s\", \"5m\", \"1h\"): %w", envVar, val, err)
+// parseDurationOrError parses a duration env var (e.g. "30s", "5m") with the
+// same fail-fast contract; its range is Validate's.
+func parseDurationOrError(envVar, val string) (Duration, error) {
+	var d Duration
+	if err := d.UnmarshalText([]byte(val)); err != nil {
+		return 0, fmt.Errorf("config: %s=%q is not a valid duration (use e.g. \"30s\", \"5m\", \"1h\"): %w", envVar, val, err)
 	}
-	return val, nil
+	return d, nil
+}
+
+// Load builds the process's configuration, once, at boot: from the JSON file PAD_CONFIG names (the PAD_* variables
+// are then ignored), else from the PAD_* environment when PAD_MODE or PAD_PORT is set, else the desktop defaults. It
+// validates the result (every duration's range included, whichever source set it) and resolves what a running
+// server needs (the secrets, the legacy aliases, the instance id) here, so no provider fills anything in later:
+// they all share the one *Config (TestArch_ConfigNotMutatedOutsideConfig).
+func Load() (*Config, error) {
+	var cfg *Config
+	if path := os.Getenv("PAD_CONFIG"); path != "" {
+		// Raw load: Validate runs below, on every path.
+		c, err := LoadRaw(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load config from %s: %w", path, err)
+		}
+		cfg = c
+	} else if os.Getenv("PAD_MODE") != "" || os.Getenv("PAD_PORT") != "" {
+		c, err := LoadFromEnvRaw()
+		if err != nil {
+			return nil, fmt.Errorf("invalid env config: %w", err)
+		}
+		cfg = c
+	} else {
+		cfg = Default()
+	}
+
+	if err := Validate(cfg); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+	// Once, here: providers read the config and never fill it in later (the keystore used to pick up a
+	// secret the auth manager minted, depending on construction order).
+	ResolveRuntimeSecrets(cfg)
+	if err := ResolveLegacyAliases(cfg); err != nil {
+		return nil, fmt.Errorf("invalid env config: %w", err)
+	}
+	resolveInstanceID(cfg)
+	detachSlices(cfg)
+	return cfg, nil
+}
+
+// hostname is os.Hostname; a test replaces it.
+var hostname = os.Hostname
+
+// resolveInstanceID names the process among the replicas when the configuration does not (PAD_INSTANCE_ID, a
+// config file's Runtime.InstanceID): the replica name Azure Container Apps gives each replica, else the host name
+// (a container's), else a random id, so it is never empty.
+func resolveInstanceID(cfg *Config) {
+	cfg.Runtime.InstanceID = strings.TrimSpace(cfg.Runtime.InstanceID)
+	if cfg.Runtime.InstanceID != "" {
+		return
+	}
+	if v := strings.TrimSpace(os.Getenv("CONTAINER_APP_REPLICA_NAME")); v != "" {
+		cfg.Runtime.InstanceID = v
+		return
+	}
+	if h, err := hostname(); err == nil && strings.TrimSpace(h) != "" {
+		cfg.Runtime.InstanceID = strings.TrimSpace(h)
+		return
+	}
+	cfg.Runtime.InstanceID = uuid.NewString()
+}
+
+// detachSlices gives every slice of the configuration a backing array of its own with no spare capacity. Readers
+// share the one *Config, so an append to a slice with room to spare would write where every other reader's copy
+// of the slice header can see; with none, append copies.
+func detachSlices(cfg *Config) {
+	var walk func(v reflect.Value)
+	walk = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.Struct:
+			for i := range v.NumField() {
+				walk(v.Field(i))
+			}
+		case reflect.Slice:
+			if v.IsNil() {
+				return
+			}
+			c := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+			reflect.Copy(c, v)
+			for i := range c.Len() {
+				walk(c.Index(i))
+			}
+			v.Set(c)
+		}
+	}
+	walk(reflect.ValueOf(cfg).Elem())
+}
+
+// HealthcheckPort is the port `baki-backend healthcheck` probes: the server's own, from where Load takes it (the
+// PAD_CONFIG file, else PAD_PORT), read without validating the rest or minting secrets, so a probe never fails over
+// a setting it does not use. 8080, the container image's port, when neither names one.
+func HealthcheckPort() (int, error) {
+	port := 0
+	if path := os.Getenv("PAD_CONFIG"); path != "" {
+		cfg, err := LoadRaw(path)
+		if err != nil {
+			return 0, err
+		}
+		port = cfg.Server.Port
+	} else if v := os.Getenv("PAD_PORT"); v != "" {
+		n, err := parseIntOrError("PAD_PORT", v)
+		if err != nil {
+			return 0, err
+		}
+		port = n
+	}
+	if port <= 0 {
+		port = 8080
+	}
+	return port, nil
 }
 
 // LoadRaw reads configuration from the given JSON file without validating.
@@ -54,7 +166,12 @@ func LoadRaw(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
 	}
-	cfg := Default()
+	// The mode first: the defaults that depend on it go in before the file, so a setting the file makes wins.
+	var mode struct{ Mode DeploymentMode }
+	if err := json.Unmarshal(data, &mode); err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	cfg := defaultsFor(mode.Mode)
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
@@ -65,22 +182,31 @@ func LoadRaw(path string) (*Config, error) {
 // validating; the caller is responsible for calling Validate on the result.
 // Use this when you need to adjust the config (e.g. inject secrets) first.
 func LoadFromEnvRaw() (*Config, error) {
-	cfg := Default()
+	cfg := defaultsFor(DeploymentMode(os.Getenv("PAD_MODE")))
 	if err := applyEnvVars(cfg); err != nil {
 		return nil, err
 	}
-	applyModeDefaults(cfg)
 	return cfg, nil
 }
 
-// applyModeDefaults sets defaults that depend on the deployment mode, for
-// values the operator did not set: Default() uses the desktop's debug log
-// level, so a cloud server would log at debug unless PAD_LOG_LEVEL was set,
-// while the documented cloud default is info.
-func applyModeDefaults(cfg *Config) {
-	if cfg.Mode == ModeCloud && os.Getenv("PAD_LOG_LEVEL") == "" {
-		cfg.Log.Level = "info"
+// DefaultCloudShutdownDrainDelay is PAD_SHUTDOWN_DRAIN_DELAY's default in the cloud: about one readiness probe
+// period of a load balancer in front, so it sees the stopping replica's 503 before the streams end (ADR 0024).
+const DefaultCloudShutdownDrainDelay = 3 * time.Second
+
+// maxShutdownDrainDelay bounds PAD_SHUTDOWN_DRAIN_DELAY: the pause comes out of the stop budget (StopTimeout),
+// which the rest of the stop needs.
+const maxShutdownDrainDelay = 10 * time.Second
+
+// defaultsFor is Default with the defaults that depend on the deployment mode. Load applies them before the file
+// or the environment, so an explicit setting, 0 included, wins. The cloud ones are those of capability's Cloud
+// profile, which is the cloud mode; this package cannot ask capability.Of (capability is derived from a Config), so
+// internal/app's TestDrainDelayDefault_FollowsTheCloudProfile holds the two together.
+func defaultsFor(mode DeploymentMode) *Config {
+	cfg := Default()
+	if mode == ModeCloud {
+		cfg.Runtime.ShutdownDrainDelay = Duration(DefaultCloudShutdownDrainDelay)
 	}
+	return cfg
 }
 
 // envBinding maps one PAD_* environment variable to a setter that parses its
@@ -118,15 +244,27 @@ func floatEnv(key string, set func(*Config, float64)) envBinding {
 	}}
 }
 
-// durEnv validates a duration string but stores it as a string (the Config
-// fields are consumed later by time.ParseDuration; see parseDurationOrError).
-func durEnv(key string, set func(*Config, string)) envBinding {
+// durEnv parses a duration string; Validate checks its range.
+func durEnv(key string, set func(*Config, Duration)) envBinding {
 	return envBinding{key, func(c *Config, v string) error {
 		d, err := parseDurationOrError(key, v)
 		if err != nil {
 			return err
 		}
 		set(c, d)
+		return nil
+	}}
+}
+
+// secretEnv reads a credential through secret.Value's UnmarshalText, which refuses the redaction marker: a redacted
+// dump pasted back as the environment fails at boot instead of becoming the secret.
+func secretEnv(key string, set func(*Config, secret.Value)) envBinding {
+	return envBinding{key, func(c *Config, v string) error {
+		var s secret.Value
+		if err := s.UnmarshalText([]byte(v)); err != nil {
+			return fmt.Errorf("config: %s: %w", key, err)
+		}
+		set(c, s)
 		return nil
 	}}
 }
@@ -153,7 +291,7 @@ var envBindings = []envBinding{
 	strEnv("PAD_STATIC_DIR", func(c *Config, v string) { c.Server.StaticDir = v }),
 	strEnv("PAD_CUSTOM_RULES", func(c *Config, v string) { c.Server.CustomRulesPath = v }),
 	intEnv("PAD_PORT", func(c *Config, n int) { c.Server.Port = n }),
-	strEnv("PAD_METRICS_TOKEN", func(c *Config, v string) { c.Server.MetricsToken = v }),
+	secretEnv("PAD_METRICS_TOKEN", func(c *Config, v secret.Value) { c.Server.MetricsToken = v }),
 	strEnv("PAD_TLS_CERT", func(c *Config, v string) { c.Server.TLSCert = v }),
 	strEnv("PAD_TLS_KEY", func(c *Config, v string) { c.Server.TLSKey = v }),
 	boolEnv("PAD_BEHIND_PROXY", func(c *Config, b bool) { c.Server.BehindProxy = b }),
@@ -164,47 +302,55 @@ var envBindings = []envBinding{
 	}),
 
 	// Governance
-	durEnv("PAD_SCAN_INTERVAL", func(c *Config, d string) { c.Governance.ScanInterval = d }),
-	strEnv("PAD_NOTIFY_WEBHOOK_URL", func(c *Config, v string) { c.Governance.NotifyWebhookURL = v }),
-	strEnv("PAD_NOTIFY_WEBHOOK_SECRET", func(c *Config, v string) { c.Governance.NotifyWebhookSecret = v }),
-	strEnv("PAD_NOTIFY_TEAMS_URL", func(c *Config, v string) { c.Governance.NotifyTeamsURL = v }),
-	strEnv("PAD_NOTIFY_SLACK_URL", func(c *Config, v string) { c.Governance.NotifySlackURL = v }),
-	strEnv("PAD_NOTIFY_SLACK_SECRET", func(c *Config, v string) { c.Governance.NotifySlackSecret = v }),
-	strEnv("PAD_CI_WEBHOOK_SECRET", func(c *Config, v string) { c.Governance.InboundWebhookSecret = v }),
+	durEnv("PAD_SCAN_INTERVAL", func(c *Config, d Duration) { c.Governance.ScanInterval = d }),
+	secretEnv("PAD_NOTIFY_WEBHOOK_URL", func(c *Config, v secret.Value) { c.Governance.NotifyWebhookURL = v }),
+	secretEnv("PAD_NOTIFY_WEBHOOK_SECRET", func(c *Config, v secret.Value) { c.Governance.NotifyWebhookSecret = v }),
+	secretEnv("PAD_NOTIFY_TEAMS_URL", func(c *Config, v secret.Value) { c.Governance.NotifyTeamsURL = v }),
+	secretEnv("PAD_NOTIFY_TEAMS_WORKFLOW_URL", func(c *Config, v secret.Value) { c.Governance.NotifyTeamsWorkflowURL = v }),
+	secretEnv("PAD_NOTIFY_SLACK_URL", func(c *Config, v secret.Value) { c.Governance.NotifySlackURL = v }),
+	secretEnv("PAD_NOTIFY_SLACK_SECRET", func(c *Config, v secret.Value) { c.Governance.NotifySlackSecret = v }),
+	boolEnv("PAD_NOTIFY_ALLOWED_HOSTS_VISIBLE", func(c *Config, b bool) { c.Governance.NotifyAllowedHostsVisible = b }),
+	secretEnv("PAD_CI_WEBHOOK_SECRET", func(c *Config, v secret.Value) { c.Governance.InboundWebhookSecret = v }),
+	// Exactly "1", as the webhook read it before the variable moved here: any other value leaves it off.
+	strEnv("PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP", func(c *Config, v string) { c.Governance.InboundWebhookAllowNoTimestamp = v == "1" }),
 	strEnv("PAD_NOTIFY_EMAIL_TO", func(c *Config, v string) { c.Governance.NotifyEmailTo = v }),
 	strEnv("PAD_NOTIFY_JIRA_BASE_URL", func(c *Config, v string) { c.Governance.NotifyJiraBaseURL = v }),
 	strEnv("PAD_NOTIFY_JIRA_EMAIL", func(c *Config, v string) { c.Governance.NotifyJiraEmail = v }),
-	strEnv("PAD_NOTIFY_JIRA_API_TOKEN", func(c *Config, v string) { c.Governance.NotifyJiraAPIToken = v }),
+	secretEnv("PAD_NOTIFY_JIRA_API_TOKEN", func(c *Config, v secret.Value) { c.Governance.NotifyJiraAPIToken = v }),
 	strEnv("PAD_NOTIFY_JIRA_PROJECT", func(c *Config, v string) { c.Governance.NotifyJiraProject = v }),
-	durEnv("PAD_RETENTION_PURGE_INTERVAL", func(c *Config, d string) { c.Governance.RetentionPurgeInterval = d }),
+	durEnv("PAD_RETENTION_PURGE_INTERVAL", func(c *Config, d Duration) { c.Governance.RetentionPurgeInterval = d }),
 
 	// Email
 	strEnv("PAD_SMTP_HOST", func(c *Config, v string) { c.Email.SMTPHost = v }),
 	intEnv("PAD_SMTP_PORT", func(c *Config, n int) { c.Email.SMTPPort = n }),
 	strEnv("PAD_SMTP_USERNAME", func(c *Config, v string) { c.Email.Username = v }),
-	strEnv("PAD_SMTP_PASSWORD", func(c *Config, v string) { c.Email.Password = v }),
+	secretEnv("PAD_SMTP_PASSWORD", func(c *Config, v secret.Value) { c.Email.Password = v }),
+	intEnv("PAD_SMTP_MAX_CONNECTIONS", func(c *Config, n int) { c.Email.MaxConnections = n }),
 	strEnv("PAD_EMAIL_FROM", func(c *Config, v string) { c.Email.From = v }),
 	strEnv("PAD_APP_BASE_URL", func(c *Config, v string) { c.Email.AppBaseURL = v }),
 
 	// Redis
-	strEnv("PAD_REDIS_URL", func(c *Config, v string) { c.Redis.URL = v }),
+	secretEnv("PAD_REDIS_URL", func(c *Config, v secret.Value) { c.Redis.URL = v }),
 	intEnv("PAD_REDIS_POOL_SIZE", func(c *Config, v int) { c.Redis.PoolSize = v }),
 	intEnv("PAD_REDIS_MIN_IDLE_CONNS", func(c *Config, v int) { c.Redis.MinIdleConns = v }),
 
 	// Storage
 	strEnv("PAD_DATA_DIR", func(c *Config, v string) { c.Storage.DataDir = v }),
-	strEnv("PAD_DATABASE_URL", func(c *Config, v string) { c.Storage.DatabaseURL = v }),
+	secretEnv("PAD_DATABASE_URL", func(c *Config, v secret.Value) { c.Storage.DatabaseURL = v }),
 	strEnv("PAD_DB_REQUIRE_SSL", func(c *Config, v string) { c.Storage.DBRequireSSL = v }),
 	strEnv("PAD_AZURE_STORAGE_ACCOUNT", func(c *Config, v string) { c.Storage.AzureStorageAccount = v }),
 	strEnv("PAD_AZURE_STORAGE_CONTAINER", func(c *Config, v string) { c.Storage.AzureStorageContainer = v }),
-	strEnv("PAD_AZURE_BLOB_CONNECTION_STRING", func(c *Config, v string) { c.Storage.AzureBlobConnectionString = v }),
+	secretEnv("PAD_AZURE_BLOB_CONNECTION_STRING", func(c *Config, v secret.Value) { c.Storage.AzureBlobConnectionString = v }),
 	// PostgreSQL connection pool tuning — right-size the pool for the Azure
 	// Database for PostgreSQL SKU without a code change.
 	intEnv("PAD_DB_MAX_OPEN_CONNS", func(c *Config, n int) { c.Storage.DBMaxOpenConns = n }),
 	intEnv("PAD_DB_MAX_IDLE_CONNS", func(c *Config, n int) { c.Storage.DBMaxIdleConns = n }),
-	durEnv("PAD_DB_CONN_MAX_LIFETIME", func(c *Config, d string) { c.Storage.DBConnMaxLifetime = d }),
-	durEnv("PAD_DB_CONN_MAX_IDLE_TIME", func(c *Config, d string) { c.Storage.DBConnMaxIdleTime = d }),
-	durEnv("PAD_DB_STATEMENT_TIMEOUT", func(c *Config, d string) { c.Storage.DBStatementTimeout = d }),
+	durEnv("PAD_DB_CONN_MAX_LIFETIME", func(c *Config, d Duration) { c.Storage.DBConnMaxLifetime = d }),
+	durEnv("PAD_DB_CONN_MAX_IDLE_TIME", func(c *Config, d Duration) { c.Storage.DBConnMaxIdleTime = d }),
+	durEnv("PAD_DB_STATEMENT_TIMEOUT", func(c *Config, d Duration) { c.Storage.DBStatementTimeout = d }),
+	// What the deployment knows about the server, for the pool's boot check (infra/main.bicep sets both).
+	intEnv("PAD_MAX_REPLICAS", func(c *Config, n int) { c.Storage.MaxReplicas = n }),
+	intEnv("PAD_DB_SERVER_MAX_CONNS", func(c *Config, n int) { c.Storage.DBServerMaxConns = n }),
 	// Knowledge-base embedding dimension: sets the contract for which chunks
 	// are pgvector-searchable; mismatched embeddings are excluded from the
 	// vector index rather than corrupting similarity search.
@@ -219,11 +365,11 @@ var envBindings = []envBinding{
 
 	// Auth / SSO
 	boolEnv("PAD_AUTH_ENABLED", func(c *Config, b bool) { c.Auth.Enabled = b }),
-	strEnv("PAD_AUTH_SECRET", func(c *Config, v string) { c.Auth.Secret = v }),
-	strEnv("PAD_ENCRYPTION_KEY", func(c *Config, v string) { c.Auth.EncryptionKey = v }),
+	secretEnv("PAD_AUTH_SECRET", func(c *Config, v secret.Value) { c.Auth.Secret = v }),
+	secretEnv("PAD_ENCRYPTION_KEY", func(c *Config, v secret.Value) { c.Auth.EncryptionKey = v }),
 	strEnv("PAD_SSO_ISSUER", func(c *Config, v string) { c.Auth.SSO.IssuerURL = v }),
 	strEnv("PAD_SSO_CLIENT_ID", func(c *Config, v string) { c.Auth.SSO.ClientID = v }),
-	strEnv("PAD_SSO_CLIENT_SECRET", func(c *Config, v string) { c.Auth.SSO.ClientSecret = v }),
+	secretEnv("PAD_SSO_CLIENT_SECRET", func(c *Config, v secret.Value) { c.Auth.SSO.ClientSecret = v }),
 	strEnv("PAD_SSO_REDIRECT_URL", func(c *Config, v string) { c.Auth.SSO.RedirectURL = v }),
 	strEnv("PAD_SSO_PROVIDER_NAME", func(c *Config, v string) { c.Auth.SSO.ProviderName = v }),
 
@@ -241,16 +387,20 @@ var envBindings = []envBinding{
 	floatEnv("PAD_RATE_LIMIT_CHAT_BURST", func(c *Config, f float64) { c.Runtime.RateLimitChatBurst = f }),
 	floatEnv("PAD_RATE_LIMIT_UPLOAD_RPS", func(c *Config, f float64) { c.Runtime.RateLimitUploadRPS = f }),
 	floatEnv("PAD_RATE_LIMIT_UPLOAD_BURST", func(c *Config, f float64) { c.Runtime.RateLimitUploadBurst = f }),
+	floatEnv("PAD_RATE_LIMIT_CHANNEL_TEST_RPS", func(c *Config, f float64) { c.Runtime.RateLimitChannelTestRPS = f }),
+	floatEnv("PAD_RATE_LIMIT_CHANNEL_TEST_BURST", func(c *Config, f float64) { c.Runtime.RateLimitChannelTestBurst = f }),
 	floatEnv("PAD_RATE_LIMIT_PER_USER_RPS", func(c *Config, f float64) { c.Runtime.RateLimitPerUserRPS = f }),
 	floatEnv("PAD_RATE_LIMIT_PER_USER_BURST", func(c *Config, f float64) { c.Runtime.RateLimitPerUserBurst = f }),
 
 	// Runtime tuning — resilience / observability
 	intEnv("PAD_CB_FAILURES", func(c *Config, n int) { c.Runtime.CircuitBreakerFailures = n }),
-	durEnv("PAD_CB_OPEN_DURATION", func(c *Config, d string) { c.Runtime.CircuitBreakerOpenDur = d }),
+	durEnv("PAD_CB_OPEN_DURATION", func(c *Config, d Duration) { c.Runtime.CircuitBreakerOpenDur = d }),
 	intEnv("PAD_RETRY_MAX_ATTEMPTS", func(c *Config, n int) { c.Runtime.RetryMaxAttempts = n }),
-	durEnv("PAD_RETRY_BASE_DELAY", func(c *Config, d string) { c.Runtime.RetryBaseDelay = d }),
+	durEnv("PAD_RETRY_BASE_DELAY", func(c *Config, d Duration) { c.Runtime.RetryBaseDelay = d }),
 	strEnv("PAD_OTLP_ENDPOINT", func(c *Config, v string) { c.Runtime.OTLPEndpoint = v }),
-	durEnv("PAD_REQUEST_TIMEOUT", func(c *Config, d string) { c.Runtime.RequestTimeout = d }),
+	durEnv("PAD_REQUEST_TIMEOUT", func(c *Config, d Duration) { c.Runtime.RequestTimeout = d }),
+	strEnv("PAD_INSTANCE_ID", func(c *Config, v string) { c.Runtime.InstanceID = strings.TrimSpace(v) }),
+	durEnv("PAD_SHUTDOWN_DRAIN_DELAY", func(c *Config, d Duration) { c.Runtime.ShutdownDrainDelay = d }),
 	boolEnv("PAD_AI_ALLOW_PRIVATE_EGRESS", func(c *Config, b bool) { c.Runtime.AIAllowPrivateEgress = b }),
 
 	// Feature flags — env-sourced, read-only product gates.
@@ -273,9 +423,16 @@ func applyEnvVars(cfg *Config) error {
 	applyListEnv("PAD_ALLOWED_ORIGINS", &cfg.Server.AllowedOrigins)
 	applyListEnv("PAD_TRUSTED_PROXIES", &cfg.Server.TrustedProxies)
 	applyListEnv("PAD_AZURE_FOUNDRY_ALLOWED_HOSTS", &cfg.Runtime.AzureFoundryAllowedHosts)
+	if err := applySecretListEnv("PAD_ENCRYPTION_KEY_PREVIOUS", &cfg.Auth.EncryptionKeyPrevious); err != nil {
+		return err
+	}
 	// Host names are case-insensitive; the allow-list compares lower-cased.
 	for i, h := range cfg.Runtime.AzureFoundryAllowedHosts {
 		cfg.Runtime.AzureFoundryAllowedHosts[i] = strings.ToLower(strings.TrimSpace(h))
+	}
+	applyListEnv("PAD_NOTIFY_ALLOWED_HOSTS", &cfg.Governance.NotifyAllowedHosts)
+	for i, h := range cfg.Governance.NotifyAllowedHosts {
+		cfg.Governance.NotifyAllowedHosts[i] = strings.ToLower(strings.TrimSpace(h))
 	}
 
 	if err := applyStorageBackendEnv(cfg); err != nil {
@@ -299,6 +456,20 @@ func applyListEnv(key string, dst *[]string) {
 			*dst = append(*dst, trimmed)
 		}
 	}
+}
+
+// applySecretListEnv is applyListEnv for a list of credentials, each read as secretEnv reads one.
+func applySecretListEnv(key string, dst *[]secret.Value) error {
+	var raw []string
+	applyListEnv(key, &raw)
+	for i, item := range raw {
+		var s secret.Value
+		if err := s.UnmarshalText([]byte(item)); err != nil {
+			return fmt.Errorf("config: %s entry %d: %w", key, i+1, err)
+		}
+		*dst = append(*dst, s)
+	}
+	return nil
 }
 
 // applyStorageBackendEnv normalises PAD_STORAGE case/whitespace so a capitalised
@@ -429,8 +600,8 @@ func isWeakSecret(s string) bool {
 // the config later. With no auth secret configured (auth disabled; Validate rejects that with auth enabled) it
 // mints a per-process one and marks it ephemeral.
 func ResolveRuntimeSecrets(cfg *Config) {
-	if cfg.Auth.Secret == "" {
-		cfg.Auth.Secret = uuid.NewString()
+	if !cfg.Auth.Secret.IsSet() {
+		cfg.Auth.Secret = secret.New(uuid.NewString())
 		cfg.Auth.SecretEphemeral = true
 	}
 }
@@ -449,21 +620,24 @@ func Validate(cfg *Config) error {
 	if cfg.Mode == ModeCloud && !cfg.Auth.Enabled {
 		return errors.New("config: cloud mode requires PAD_AUTH_ENABLED=true (multi-tenant deployments must enforce authentication)")
 	}
-	if cfg.Auth.Enabled && cfg.Auth.Secret == "" {
+	if cfg.Auth.Enabled && !cfg.Auth.Secret.IsSet() {
 		return errors.New("config: auth.secret is required when auth.enabled is true")
 	}
 	// In cloud (multi-user) mode the JWT secret protects every account, so reject
 	// short or placeholder secrets that would make token forgery trivial.
-	if cfg.Mode == ModeCloud && cfg.Auth.Enabled && isWeakSecret(cfg.Auth.Secret) {
+	if cfg.Mode == ModeCloud && cfg.Auth.Enabled && isWeakSecret(cfg.Auth.Secret.Reveal()) {
 		return fmt.Errorf("config: auth.secret must be at least %d characters and not a known placeholder in cloud mode (set PAD_AUTH_SECRET to a long random value)", minSecretLength)
 	}
 	// The dedicated encryption key protects stored provider credentials at rest
 	// (AES-256-GCM); apply the same strength gate so a weak PAD_ENCRYPTION_KEY
 	// can't make a DB leak trivially brute-forceable. When unset, the auth
-	// secret is the backward-compat fallback (warned in main.go), so only
+	// secret is the backward-compat fallback (warned in internal/app), so only
 	// enforce when an explicit key is provided.
-	if cfg.Mode == ModeCloud && cfg.Auth.EncryptionKey != "" && isWeakSecret(cfg.Auth.EncryptionKey) {
+	if cfg.Mode == ModeCloud && cfg.Auth.EncryptionKey.IsSet() && isWeakSecret(cfg.Auth.EncryptionKey.Reveal()) {
 		return fmt.Errorf("config: auth.encryption_key must be at least %d characters and not a known placeholder in cloud mode (set PAD_ENCRYPTION_KEY to a long random value)", minSecretLength)
+	}
+	if err := validateEncryptionKeyPrevious(cfg); err != nil {
+		return err
 	}
 	// A wildcard CORS origin would let any site make credentialed requests.
 	// (An empty list is fine: the SPA is served same-origin by the backend.)
@@ -472,16 +646,19 @@ func Validate(cfg *Config) error {
 			return errors.New("config: wildcard '*' is not permitted in server.allowed_origins; list explicit origins")
 		}
 	}
+	if cfg.Email.MaxConnections < 0 {
+		return errors.New("config: PAD_SMTP_MAX_CONNECTIONS must be 0 (no cap) or a positive number")
+	}
 	if cfg.Mode == ModeCloud && cfg.Storage.Backend != StorageDatabase {
 		return errors.New("config: cloud mode requires storage.backend=database (set PAD_STORAGE=database)")
 	}
-	if cfg.Storage.Backend == StorageDatabase && cfg.Storage.DatabaseURL == "" {
+	if cfg.Storage.Backend == StorageDatabase && !cfg.Storage.DatabaseURL.IsSet() {
 		return errors.New("config: storage.database_url is required when storage.backend is database")
 	}
 	// Azure Blob Storage: a container is required, plus exactly one auth source —
 	// an account name (Managed Identity, the prod default) or a connection
 	// string (emulator / non-MI). A bare account or bare container is a misconfig.
-	if cfg.Storage.AzureBlobConnectionString != "" {
+	if cfg.Storage.AzureBlobConnectionString.IsSet() {
 		if cfg.Storage.AzureStorageContainer == "" {
 			return errors.New("config: PAD_AZURE_STORAGE_CONTAINER must be set when PAD_AZURE_BLOB_CONNECTION_STRING is set")
 		}
@@ -504,6 +681,9 @@ func Validate(cfg *Config) error {
 	if err := validateAzureFoundryAllowedHosts(cfg.Runtime.AzureFoundryAllowedHosts); err != nil {
 		return err
 	}
+	if err := validateNotifyAllowedHosts(cfg.Governance.NotifyAllowedHosts); err != nil {
+		return err
+	}
 	if err := validateTLSConfig(cfg); err != nil {
 		return err
 	}
@@ -513,7 +693,79 @@ func Validate(cfg *Config) error {
 	if err := validateEmbeddingProvider(cfg.Storage.EmbeddingProvider); err != nil {
 		return err
 	}
+	if err := validateDurations(cfg); err != nil {
+		return err
+	}
+	for _, n := range []struct {
+		env, field string
+		v          int
+	}{
+		{"PAD_MAX_REPLICAS", "Storage.MaxReplicas", cfg.Storage.MaxReplicas},
+		{"PAD_DB_SERVER_MAX_CONNS", "Storage.DBServerMaxConns", cfg.Storage.DBServerMaxConns},
+	} {
+		if n.v < 0 {
+			return fmt.Errorf("config: %s (%s) must be 0 (unknown) or more, not %d", n.env, n.field, n.v)
+		}
+	}
 	return validateRoutePolicy(cfg.Server.RoutePolicy)
+}
+
+// validateDurations holds every duration to its range, whichever source set it: a config file's used to go
+// unchecked, and a zero request timeout (R8) timed every request out at once. An error names the variable and the
+// config file's field.
+func validateDurations(cfg *Config) error {
+	for _, r := range []struct {
+		env, field string
+		d          Duration
+		positive   bool          // more than 0; otherwise 0 or more (0 = off, or the backend's own meaning)
+		max        time.Duration // 0 = no ceiling
+	}{
+		{"PAD_REQUEST_TIMEOUT", "Runtime.RequestTimeout", cfg.Runtime.RequestTimeout, true, 0},
+		{"PAD_SCAN_INTERVAL", "Governance.ScanInterval", cfg.Governance.ScanInterval, false, 0},
+		{"PAD_RETENTION_PURGE_INTERVAL", "Governance.RetentionPurgeInterval", cfg.Governance.RetentionPurgeInterval, false, 0},
+		{"PAD_DB_CONN_MAX_LIFETIME", "Storage.DBConnMaxLifetime", cfg.Storage.DBConnMaxLifetime, false, 0},
+		{"PAD_DB_CONN_MAX_IDLE_TIME", "Storage.DBConnMaxIdleTime", cfg.Storage.DBConnMaxIdleTime, false, 0},
+		{"PAD_DB_STATEMENT_TIMEOUT", "Storage.DBStatementTimeout", cfg.Storage.DBStatementTimeout, false, 0},
+		{"PAD_CB_OPEN_DURATION", "Runtime.CircuitBreakerOpenDur", cfg.Runtime.CircuitBreakerOpenDur, true, 0},
+		{"PAD_RETRY_BASE_DELAY", "Runtime.RetryBaseDelay", cfg.Runtime.RetryBaseDelay, true, 0},
+		{"PAD_SHUTDOWN_DRAIN_DELAY", "Runtime.ShutdownDrainDelay", cfg.Runtime.ShutdownDrainDelay, false, maxShutdownDrainDelay},
+	} {
+		switch d := r.d.Std(); {
+		case r.positive && d <= 0:
+			return fmt.Errorf("config: %s (%s) must be a positive duration such as \"30s\", not %q", r.env, r.field, r.d)
+		case d < 0:
+			return fmt.Errorf("config: %s (%s) must not be negative, not %q", r.env, r.field, r.d)
+		case r.max > 0 && d > r.max:
+			return fmt.Errorf("config: %s (%s) must be at most %s, not %q", r.env, r.field, r.max, r.d)
+		}
+	}
+	return nil
+}
+
+// validateEncryptionKeyPrevious checks the keys PAD_ENCRYPTION_KEY replaced. They only open what they sealed, so
+// they need a dedicated current key (rotating away from the PAD_AUTH_SECRET fallback lists that secret here, beside
+// a new PAD_ENCRYPTION_KEY); a repeated key is a rotation that did not happen; and in cloud mode each meets the
+// current key's strength rule. Errors name an entry by its position, never by its value.
+func validateEncryptionKeyPrevious(cfg *Config) error {
+	previous := cfg.Auth.EncryptionKeyPrevious
+	if len(previous) == 0 {
+		return nil
+	}
+	if !cfg.Auth.EncryptionKey.IsSet() {
+		return errors.New("config: PAD_ENCRYPTION_KEY_PREVIOUS needs PAD_ENCRYPTION_KEY, the key that replaced them (when rotating away from the PAD_AUTH_SECRET fallback, list that secret in PAD_ENCRYPTION_KEY_PREVIOUS)")
+	}
+	seen := map[string]bool{cfg.Auth.EncryptionKey.Reveal(): true}
+	for i, p := range previous {
+		k := p.Reveal()
+		if seen[k] {
+			return fmt.Errorf("config: PAD_ENCRYPTION_KEY_PREVIOUS entry %d repeats PAD_ENCRYPTION_KEY or an earlier entry", i+1)
+		}
+		seen[k] = true
+		if cfg.Mode == ModeCloud && isWeakSecret(k) {
+			return fmt.Errorf("config: PAD_ENCRYPTION_KEY_PREVIOUS entry %d must be at least %d characters and not a known placeholder in cloud mode", i+1, minSecretLength)
+		}
+	}
+	return nil
 }
 
 // validateRoutePolicy fails closed on an unknown PAD_ROUTE_POLICY: a typo must not
@@ -551,7 +803,7 @@ func validateEmbeddingProvider(id string) error {
 // (JWT signing secret, decrypted provider keys, flow content). Profiling on +
 // token off is refused outright: no deployment shape makes that safe.
 func validateProfilingConfig(cfg *Config) error {
-	if cfg.Server.PprofEnabled && strings.TrimSpace(cfg.Server.MetricsToken) == "" {
+	if cfg.Server.PprofEnabled && strings.TrimSpace(cfg.Server.MetricsToken.Reveal()) == "" {
 		return errors.New("config: PAD_PPROF_ENABLED=true requires PAD_METRICS_TOKEN — /debug/pprof/heap dumps live process memory (auth secret, provider API keys, flow content), and the private-IP allowlist that would otherwise guard it is bypassed whenever a reverse proxy is in front (PAD_BEHIND_PROXY)")
 	}
 	return nil
@@ -594,32 +846,48 @@ func validateTLSConfig(cfg *Config) error {
 // operator's own API Management front is "contoso-ai.azure-api.net", listed
 // as such.
 func validateAzureFoundryAllowedHosts(entries []string) error {
+	return validateHostAllowList("PAD_AZURE_FOUNDRY_ALLOWED_HOSTS", "IP literals are never allowed as Azure endpoints", entries)
+}
+
+// validateNotifyAllowedHosts holds PAD_NOTIFY_ALLOWED_HOSTS to the same rules:
+// the list keeps organisations' alerts on the hosts the operator chose, and a
+// glob over a public suffix or a multi-tenant zone would let any tenant admin
+// stand up a receiver under it, so it would restrict nothing. The list names
+// hosts: an IP literal is refused too.
+func validateNotifyAllowedHosts(entries []string) error {
+	return validateHostAllowList("PAD_NOTIFY_ALLOWED_HOSTS", "IP literals are not allowed, list host names", entries)
+}
+
+// validateHostAllowList is the check of a host allow-list variable: bare host
+// names or "*.suffix" globs of two labels or more, no IP literal (noIP says
+// why), and no glob over a public suffix or a multi-tenant zone.
+func validateHostAllowList(variable, noIP string, entries []string) error {
 	for _, raw := range entries {
 		e := strings.ToLower(strings.TrimSpace(raw))
 		if e == "" {
 			continue
 		}
 		if strings.ContainsAny(e, "/:@ \t") {
-			return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q must be a bare host name or \"*.suffix\" (no scheme, port, path or credentials)", raw)
+			return fmt.Errorf("config: %s entry %q must be a bare host name or \"*.suffix\" (no scheme, port, path or credentials)", variable, raw)
 		}
 		name := e
 		if strings.HasPrefix(e, "*.") {
 			name = e[2:]
 		} else if strings.Contains(e, "*") {
-			return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q: a wildcard is only allowed as a leading \"*.\"", raw)
+			return fmt.Errorf("config: %s entry %q: a wildcard is only allowed as a leading \"*.\"", variable, raw)
 		}
 		if name == "" || strings.HasSuffix(name, ".") || strings.HasPrefix(name, ".") || strings.Count(name, ".") < 1 {
-			return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q must name at least two DNS labels", raw)
+			return fmt.Errorf("config: %s entry %q must name at least two DNS labels", variable, raw)
 		}
 		if net.ParseIP(name) != nil {
-			return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q: IP literals are never allowed as Azure endpoints", raw)
+			return fmt.Errorf("config: %s entry %q: %s", variable, raw, noIP)
 		}
 		if name != e { // a "*.suffix" glob
 			if zone := multiTenantZoneOf(name); zone != "" {
-				return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q: %q is a multi-tenant zone where anyone can create a host — list the exact host (e.g. contoso-ai.%s) instead of a glob", raw, zone, zone)
+				return fmt.Errorf("config: %s entry %q: %q is a multi-tenant zone where anyone can create a host — list the exact host (e.g. contoso-ai.%s) instead of a glob", variable, raw, zone, zone)
 			}
 			if ps, _ := publicsuffix.PublicSuffix(name); ps == name {
-				return fmt.Errorf("config: PAD_AZURE_FOUNDRY_ALLOWED_HOSTS entry %q: %q is a public suffix, so the glob would allow every domain registered under it — list exact hosts", raw, name)
+				return fmt.Errorf("config: %s entry %q: %q is a public suffix, so the glob would allow every domain registered under it — list exact hosts", variable, raw, name)
 			}
 		}
 	}

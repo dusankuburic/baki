@@ -152,7 +152,7 @@ func (c *Client) invalidateProvider() {
 func (c *Client) oauthConfig(p *oidc.Provider) oauth2.Config {
 	return oauth2.Config{
 		ClientID:     c.cfg.ClientID,
-		ClientSecret: c.cfg.ClientSecret,
+		ClientSecret: c.cfg.ClientSecret.Reveal(),
 		Endpoint:     p.Endpoint(),
 		RedirectURL:  c.cfg.RedirectURL,
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},

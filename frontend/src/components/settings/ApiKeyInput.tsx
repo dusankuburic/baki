@@ -1,12 +1,7 @@
-import {useState, useCallback, useEffect} from 'react'
-import Input from '@/components/shared/Input'
-import Button from '@/components/shared/Button'
-import {providersApi} from '@/api'
-import type {ProviderTestResult} from '@/types'
-import {logger} from '@/lib/logger'
+import {useCallback, useMemo} from 'react'
 import {useTranslation} from 'react-i18next'
-import {useSystemStore} from '@/stores/systemStore'
-import {isTauri} from '@/platform/guards'
+import CredentialForm from './providers/CredentialForm'
+import type {ProviderSpec} from '@/types'
 
 interface Props {
   provider: string
@@ -14,115 +9,27 @@ interface Props {
   onConfigured?: () => void
 }
 
+// The one-key form of the built-in sections (providers/LegacyProvidersPanel):
+// the generic CredentialForm over an api_key entry the bundle writes itself,
+// since a server without the catalogue sends none. Goes with the legacy panel.
 export default function ApiKeyInput({provider, label, onConfigured}: Props) {
   const {t} = useTranslation('settings')
-  const [key, setKey] = useState('')
-  const [showKey, setShowKey] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState(false)
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<'valid' | 'invalid' | null>(null)
-  const [hasKey, setHasKey] = useState<boolean | null>(null)
-  // Where the key actually ends up: the OS keychain on a local backend, the
-  // server (encrypted at rest) in cloud mode. The line used to claim the
-  // keychain either way. Same signal the Privacy panel uses.
-  const systemInfo = useSystemStore(s => s.info)
-  const localBackend = systemInfo ? systemInfo.capabilities.sessionAnalytics : isTauri()
-
-  const checkKey = useCallback(() => {
-    providersApi
-      .hasApiKey(provider)
-      .then(setHasKey)
-      .catch(() => setHasKey(false))
-  }, [provider])
-
-  useEffect(() => {
-    checkKey()
-  }, [checkKey])
-
-  const handleSave = useCallback(async () => {
-    if (!key.trim()) return
-    setSaving(true)
-    setSaveError(false)
-    try {
-      await providersApi.saveApiKey(provider, key.trim())
-      setKey('')
-      setHasKey(true)
-      setTestResult(null)
-      onConfigured?.()
-    } catch {
-      setSaveError(true)
-    } finally {
-      setSaving(false)
-    }
-  }, [key, provider, onConfigured])
-
-  const handleDelete = useCallback(async () => {
-    try {
-      await providersApi.deleteApiKey(provider)
-      setHasKey(false)
-      setTestResult(null)
-      onConfigured?.()
-    } catch (e) {
-      logger.warn('Delete API key failed:', e)
-    }
-  }, [provider, onConfigured])
-
-  const handleTest = useCallback(async () => {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      const result = (await providersApi.testProviderConnection(provider)) as ProviderTestResult
-      setTestResult(result?.ok ? 'valid' : 'invalid')
-    } catch {
-      setTestResult('invalid')
-    } finally {
-      setTesting(false)
-    }
-  }, [provider])
-
-  return (
-    <div className="space-y-2">
-      <label className="text-sm font-medium text-text-primary">{label}</label>
-      {hasKey ? (
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-text-secondary">
-            {localBackend ? t('keys.configuredLocal') : t('keys.configuredServer')}
-          </span>
-          <Button size="sm" variant="secondary" onClick={handleDelete}>
-            {t('keys.remove')}
-          </Button>
-          <Button size="sm" variant="secondary" onClick={handleTest} disabled={testing}>
-            {testing ? t('keys.testing') : t('keys.test')}
-          </Button>
-          {testResult === 'valid' && <span className="text-xs text-green-400">{t('apiKey.valid')}</span>}
-          {testResult === 'invalid' && <span className="text-xs text-red-400">{t('apiKey.invalid')}</span>}
-        </div>
-      ) : (
-        <div className="flex items-center gap-2">
-          <Input
-            type={showKey ? 'text' : 'password'}
-            value={key}
-            onChange={e => setKey((e.target as HTMLInputElement).value)}
-            placeholder={t('apiKey.placeholder')}
-            aria-label={t('apiKey.aria')}
-            className="flex-1"
-            // A secret: no autofill/suggestions, and no spellcheck — once shown
-            // as plain text, browser spellcheck services could receive it.
-            autoComplete="off"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-          />
-          <Button size="sm" variant="secondary" onClick={() => setShowKey(!showKey)}>
-            {showKey ? t('apiKey.hide') : t('apiKey.show')}
-          </Button>
-          <Button size="sm" onClick={handleSave} disabled={!key.trim() || saving}>
-            {saving ? t('apiKey.saving') : t('apiKey.save')}
-          </Button>
-          {saveError && <span className="text-xs text-red-400">{t('apiKey.saveFailed')}</span>}
-        </div>
-      )}
-    </div>
+  const spec = useMemo<ProviderSpec>(
+    () => ({
+      id: provider,
+      name: label,
+      authType: 'api_key',
+      modes: [],
+      caps: [],
+      credential: {
+        kind: 'api_key',
+        fields: [{name: 'key', label, type: 'secret', required: true, placeholder: t('apiKey.placeholder')}],
+      },
+      endpoints: {save: '/api/keys/save', test: '/api/providers/test'},
+      configured: false,
+    }),
+    [provider, label, t],
   )
+  const handleConfigured = useCallback(() => onConfigured?.(), [onConfigured])
+  return <CredentialForm spec={spec} onConfigured={handleConfigured} />
 }

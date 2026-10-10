@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/notify"
@@ -27,7 +28,7 @@ type WebhookNotifier struct {
 const maxConcurrentAnalysisDispatches = 32
 
 // NewWebhookNotifier wraps a notify.Dispatcher. The dispatcher is provided by
-// main.go's provideNotifier and already knows about every configured channel.
+// internal/app's provideNotifier and already knows about every configured channel.
 func NewWebhookNotifier(dispatcher *notify.Dispatcher) *WebhookNotifier {
 	return &WebhookNotifier{
 		dispatcher: dispatcher,
@@ -70,6 +71,9 @@ func (w *WebhookNotifier) NotifyAnalysis(flowName string, report *models.Analysi
 	}
 
 	ev := notify.Event{
+		// No stored row raised it: a random id, and the time of the analysis.
+		ID:       notify.NewEventID(),
+		At:       time.Now().UTC(),
 		Type:     notify.EventAnalysisComplete,
 		FlowName: flowName,
 		Title:    fmt.Sprintf("PAD Flow Analysis: %s (%s)", flowName, severity),

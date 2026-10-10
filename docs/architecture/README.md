@@ -7,6 +7,7 @@ lasting consequences are recorded as ADRs in [`../adr/`](../adr/).
 | Topic | Where |
 |---|---|
 | Deployment profiles and what each can do | [modes.md](modes.md) |
+| Operating a deployment: database connections, pooling, the stop budget, alerts | [operations.md](operations.md) |
 | Schema migrations (format, compat, rollback) | [`internal/storage/database/migrations/README.md`](../../internal/storage/database/migrations/README.md) |
 | Test safety nets (goldens, ratchets, isolated databases, benchmark) | [safety-nets.md](safety-nets.md) |
 | DI wiring and the post-construction setters that remain | [di-wiring.md](di-wiring.md) |
@@ -63,6 +64,13 @@ and when it shrinks, so the pinned numbers keep going down.
   every declaration is in `internal/di/testdata/caches.golden` (ADR 0017).
 - **Background work.** Anything that must not hold up the request runs on a `lifecycle.NewBounded` runner,
   which is capped, reports panics and is drained at shutdown, never a bare `go func`.
+- **Metrics.** A package defines its own metrics beside the code that records them and registers them with
+  `metrics.MustRegister` from a package-level var or `init`, never at construction and never on the client
+  library's global registry (`TestRegistration_OnlyThroughThePackageRegistry`). A package that starts registering
+  is blank-imported in `internal/metrics/registry_external_test.go`, and every family is listed with its owner in
+  `internal/metrics/testdata/metrics.golden` (refresh: `go test ./internal/metrics/ -run TestMetricsGolden
+  -update-metrics`, and review the diff: dashboards and alerts name these). The central list in `internal/metrics`
+  only shrinks (`centralListPin`).
 - **Request logs.** Log on the request path through `logger.FromContext(ctx)`, so the line carries the
   `request_id`, `user_id` and `trace_id` of the request's access-log line. They come from the request's
   `reqinfo.Info`, which `middleware.RequestInfo` installs at the outermost layer. Whoever authenticates the
@@ -75,15 +83,34 @@ and when it shrinks, so the pinned numbers keep going down.
   what the data-subject export, account erasure, organisation deletion and the retention sweep do with it
   (`TestPostgres_Lifecycle_EveryTableClaimed`, ADR 0011, [data-lifecycle.md](data-lifecycle.md)).
 - **Secret columns.** Credentials stored outside the keystore are sealed with `sealField`/`openField` and
-  included in the at-rest backfill (ADR 0005).
-- **Configuration.** Read environment variables only in `internal/config`. Resolve secrets once at load
-  (`config.ResolveRuntimeSecrets`); providers never fill in config later (`internal/archtest`).
+  included in the at-rest backfill and in `fieldSealedColumns`, which the key-rotation re-seal pass walks (ADR 0005,
+  `TestReseal_CoversEverySealedColumn`).
+- **Configuration.** Read environment variables only in `internal/config`. `config.Load` builds the
+  configuration once: durations parsed (`config.Duration`), ranges validated on every source, secrets, aliases and
+  the instance id resolved. Providers share the one `*config.Config` and never write to it
+  (`TestArch_ConfigNotMutatedOutsideConfig` in `internal/archtest`).
+- **Secrets in configuration.** Credentials, and the values that carry one (a DSN, a webhook URL), travel as
+  `secret.Value` (`internal/platform/secret`), which prints, marshals and logs as `[redacted]`, and leave only
+  through `Reveal()` at the boundary that needs the plain text (a driver, a signer, the keystore), never into a log
+  or an error. A struct that keeps one for the life of the process keeps the `secret.Value` and compares with
+  `Equal` (ADR 0005, `TestConfig_FormatAndJSONNeverShowSecrets`).
 - **Deployment modes.** Ask `capability.Of(cfg)` what the process can do; don't compare `cfg.Mode` or test for a
   nil backend.
+- **AI providers.** A provider is described once, as an `ai.ProviderSpec` in `internal/ai/spec_<id>.go`; every
+  provider list is derived from `ai.Specs()` (the factory, the keystore keys, the embedding order, the listing, the
+  catalogue route, the pricing fallback), and `internal/ai/testdata/providers.golden` pins the table (refresh with
+  `-update-provider-specs`). Never branch on a provider id by name: ask the spec (`Caps`, `Keys`, `Modes`,
+  `Pricing`, `Listing`); the literal count per file only goes down (`internal/archtest`). A family with its own
+  registry installs a `ListingHook` from DI (ADR 0025, [ai-providers.md](ai-providers.md)).
+- **Chat tools.** A tool the model can call is an `ai.ToolSpec` in `internal/ai/tools.go`, which says whether it
+  needs an approval, which token scope it needs and how the card previews it (`internal/ai/testdata/tools.golden`,
+  refresh with `-update-tools`). The stream's `ai.ToolGate` decides what is offered AND is asked again in
+  `ExecuteTool`; never test a tool name in the service, ask `ai.ToolRequiresApproval`. A tool that must ask the user
+  goes through `ChatService.requestApproval` (`chat_approvals.go`) and the one decision endpoint (ADR 0026).
 - **Storage capabilities.** Never type-assert a store to learn what it can do (`internal/archtest`, ADR 0010). A
   method any store could offer joins its role interface, and every backend implements it under the storage
   contract. What only the database offers (the cross-replica lock, the request transaction, the keystore, …) is an
-  fx value `main.go` provides beside the backend, nil without a database: take it as a parameter.
+  fx value `internal/app` provides beside the backend, nil without a database: take it as a parameter.
 - **Migrations.** New steps are `.sql` files with a `-- baki:compat expand|breaking` line. Prefer expand/contract.
   Never edit a shipped step (its checksum is pinned).
 - **Settings.** Each top-level key of `AppSettings` is a section with its own version, declared in
@@ -114,6 +141,10 @@ A browser tab outlives a deploy, so the frontend that reads a response may be on
   parsing that accepts it (`tolerantEnum` in `frontend/src/api/schemas.lazy.ts`, `Tolerant<T>` in
   `frontend/src/types/tolerant.ts`). A closed `z.enum` fails the whole response on one unknown value; only the
   roles and `Finding.severity` stay closed on purpose. A new enum field is tolerant from its first release.
+- **Provider catalogue.** AI Accounts renders its sections from `GET /api/providers/catalog`; a server without the
+  route (404) gets the frontend's built-in sections (`LegacyProvidersPanel`), and a provider, credential kind or
+  field type the frontend does not know renders a generic card (configured state, help link, Test/Remove), never a
+  guessed input.
 - **Stale tabs.** Every response carries the running build in `X-Baki-Version` (`securityHeaders`); the frontend
   compares it with the build in `index.html`'s `baki-version` meta, which the image build stamps after bundling so
   no chunk is renamed by a new version, and offers a reload once per server build when they differ. The version is

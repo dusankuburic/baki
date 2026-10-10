@@ -79,7 +79,7 @@ func TestFactory_OrgCredentialUsageIsOrgAttributed(t *testing.T) {
 	f, ch := usageOrgFactory(map[string]string{"u-own": "member-key"}, map[string]string{"org-1": "org-key"})
 
 	t.Run("embedding on the org credential", func(t *testing.T) {
-		p, err := f.ForEmbeddingOrg("u-none", "org-1", "usage-org-stub", "")
+		p, err := f.ForEmbeddingOrg(context.Background(), "u-none", "org-1", "usage-org-stub", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +92,7 @@ func TestFactory_OrgCredentialUsageIsOrgAttributed(t *testing.T) {
 	})
 
 	t.Run("chat fallback on the org credential without a request org", func(t *testing.T) {
-		p, err := f.ForOrg("u-none", "org-1", "usage-org-stub")
+		p, err := f.ForOrg(context.Background(), "u-none", "org-1", "usage-org-stub")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -108,7 +108,7 @@ func TestFactory_OrgCredentialUsageIsOrgAttributed(t *testing.T) {
 	})
 
 	t.Run("admin connection test", func(t *testing.T) {
-		p, err := f.ForOrgCredential("u-own", "org-1", "usage-org-stub")
+		p, err := f.ForOrgCredential(context.Background(), "u-own", "org-1", "usage-org-stub")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +121,7 @@ func TestFactory_OrgCredentialUsageIsOrgAttributed(t *testing.T) {
 	})
 
 	t.Run("a request org still wins", func(t *testing.T) {
-		p, err := f.ForOrg("u-none", "org-1", "usage-org-stub")
+		p, err := f.ForOrg(context.Background(), "u-none", "org-1", "usage-org-stub")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -134,7 +134,7 @@ func TestFactory_OrgCredentialUsageIsOrgAttributed(t *testing.T) {
 	})
 
 	t.Run("member's own key stays personal", func(t *testing.T) {
-		p, err := f.ForEmbeddingOrg("u-own", "org-2", "usage-org-stub", "")
+		p, err := f.ForEmbeddingOrg(context.Background(), "u-own", "org-2", "usage-org-stub", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -147,7 +147,7 @@ func TestFactory_OrgCredentialUsageIsOrgAttributed(t *testing.T) {
 		if m := nextUsage(t, ch); m.OrgID != "" {
 			t.Errorf("usage org = %q, want personal (no org credential)", m.OrgID)
 		}
-		own, err := f.ForOrg("u-own", "org-1", "usage-org-stub")
+		own, err := f.ForOrg(context.Background(), "u-own", "org-1", "usage-org-stub")
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -12,7 +12,7 @@ import (
 )
 
 // Provide builds the deployment's recorder for fx (no store in desktop mode: it records nothing). The pool
-// starts with the app and drains when the app stops. main constructs it from an early fx.Invoke, so its stop hook runs after the HTTP server's, whose
+// starts with the app and drains when the app stops. internal/app constructs it from an early fx.Invoke (initAuditTrail), so its stop hook runs after the HTTP server's, whose
 // drain of the background runners still records.
 func Provide(lc fx.Lifecycle, cfg *config.Config, store storageif.StorageBackend) *Recorder {
 	var rc Config

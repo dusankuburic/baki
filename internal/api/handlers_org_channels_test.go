@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/notify"
+	"pad-analyzer/internal/egress"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -52,21 +54,17 @@ func newChannelEnv(t *testing.T) *channelEnv {
 	return &channelEnv{t: t, rt: rt, admin: admin, orgID: createdOrg.ID, backend: backend}
 }
 
-// allowLoopbackDelivery relaxes this env's egress policy to the desktop one.
+// allowLoopbackDelivery relaxes this env's egress policy to the one of a deployment without accounts.
 //
 // A test that asserts a channel actually DELIVERS needs a receiver, and a test
-// receiver is necessarily loopback — which the cloud policy refuses, by design.
-// So the lifecycle test opts in explicitly and the cloud refusal is asserted by
-// its own test below. Reaching into the field is deliberate: the policy is a
-// constructed dependency, and stating it here is clearer than a second router
-// builder that differs in one invisible way.
+// receiver is necessarily loopback — which the policy of a deployment with
+// accounts refuses, by design. So the lifecycle test opts in explicitly and the
+// refusal is asserted by its own test below. Swapping the handler's channel
+// service is deliberate: the policy is a constructed dependency, and stating it
+// here is clearer than a second router builder that differs in one invisible way.
 func (e *channelEnv) allowLoopbackDelivery() *channelEnv {
 	org := moduleOf[*OrgHandler](e.t, e.rt)
-	org.notifyPolicy = notify.AllowLoopbackTargets
-	// The shared channel client (D-25) was built under the strict policy at
-	// construction; swap it with the policy so the test delivery can dial
-	// the loopback httptest server.
-	org.channelClient = notify.NewChannelClient(notify.AllowLoopbackTargets)
+	org.channels = service.NewChannelService(e.backend, service.ChannelOptions{Policy: egress.AllowLoopback})
 	return e
 }
 
@@ -203,51 +201,32 @@ func TestOrgChannels_DeliveryRefusesInternalTargetAtDialTime(t *testing.T) {
 	}
 }
 
-// TestOrgChannels_ListRedactsURLForNonAdmins: for Slack/Teams the webhook URL is the credential, so a plain
-// member (who can list but not manage channels) sees only scheme and host; the admin still sees the full URL
-// the edit form needs.
-func TestOrgChannels_ListRedactsURLForNonAdmins(t *testing.T) {
+// TestOrgChannels_ListRedactsURLForEveryone: for Slack/Teams the webhook URL is the credential, so the list shows
+// only the host ("host/…", no scheme, so the listing is never a valid URL itself), to plain members and to admins
+// alike (write-only URLs, ADR 0021); hasSecret says whether a signing secret is set, which is never returned.
+func TestOrgChannels_ListRedactsURLForEveryone(t *testing.T) {
 	env := newChannelEnv(t)
 	addOrgMember(t, env.rt, env.orgID, "peon", auth.RoleMember)
 	peon := jwtBearer(t, env.rt, "peon", "peon@acme.io")
 	const full = "https://hooks.slack.com/services/T000/B000/XXXXSECRET?token=abc"
 	if err := env.backend.SaveOrgChannel(context.Background(), &storageif.OrgChannel{
-		ID: "ch-1", OrgID: env.orgID, Name: "ops", Kind: "slack", URL: full, Enabled: true,
+		ID: "ch-1", OrgID: env.orgID, Name: "ops", Kind: "slack", URL: full, Secret: "s", Enabled: true,
 	}); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
 
-	listURL := func(bearer string) string {
-		t.Helper()
+	for name, bearer := range map[string]string{"admin": env.admin, "member": peon} {
 		rr := doRequestWithAuth(t, env.rt, http.MethodGet, "/api/orgs/"+env.orgID+"/channels", bearer, nil)
 		checkStatus(t, rr, http.StatusOK)
-		var list []channelOut
-		if err := json.NewDecoder(rr.Body).Decode(&list); err != nil || len(list) != 1 {
-			t.Fatalf("list: %v (%s)", err, rr.Body.String())
+		if body := rr.Body.String(); strings.Contains(body, "XXXXSECRET") || strings.Contains(body, `"secret"`) {
+			t.Errorf("%s list carries the URL's path or the secret: %s", name, body)
 		}
-		return list[0].URL
-	}
-
-	if got := listURL(env.admin); got != full {
-		t.Errorf("admin list URL = %q, want the full URL", got)
-	}
-	if got := listURL(peon); got != "https://hooks.slack.com/…" {
-		t.Errorf("member list URL = %q, want it redacted to scheme and host", got)
-	}
-}
-
-func TestRedactChannelURL(t *testing.T) {
-	cases := map[string]string{
-		"https://hooks.slack.com/services/T/B/SECRET":          "https://hooks.slack.com/…",
-		"https://user:pass@example.com:8443/hook?sig=abc#frag": "https://example.com:8443/…",
-		"https://acme.webhook.office.com/webhookb2/abc/def":    "https://acme.webhook.office.com/…",
-		"not a url":         "…",
-		"":                  "…",
-		"://missing-scheme": "…",
-	}
-	for in, want := range cases {
-		if got := redactChannelURL(in); got != want {
-			t.Errorf("redactChannelURL(%q) = %q, want %q", in, got, want)
+		var list []channelOut
+		if err := json.Unmarshal(rr.Body.Bytes(), &list); err != nil || len(list) != 1 {
+			t.Fatalf("%s list: %v (%s)", name, err, rr.Body.String())
+		}
+		if list[0].URL != "hooks.slack.com/…" || !list[0].HasSecret {
+			t.Errorf("%s sees %+v, want the URL redacted to its host and hasSecret", name, list[0])
 		}
 	}
 }

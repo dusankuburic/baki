@@ -24,7 +24,24 @@ function sseBody(events: Array<{name: string; data: unknown}>) {
   return events.map(e => `event: ${e.name}\ndata: ${JSON.stringify(e.data)}\n\n`).join('') + '\n'
 }
 
-async function stubChatBoot(page: Page) {
+type SseEvent = {name: string; data: unknown}
+
+interface ChatBootOptions {
+  // The chat:event envelopes the SSE connection serves (default: a reply
+  // that streams and finishes).
+  sse?: SseEvent[]
+  // The /api/chat/resume answer (default: the finished reply).
+  resume?: unknown
+}
+
+const DEFAULT_SSE: SseEvent[] = [
+  {name: 'chat:event', data: {streamId: STREAM_ID, type: 'tool', data: {label: 'analyzing'}}},
+  {name: 'chat:event', data: {streamId: STREAM_ID, type: 'chunk', data: {content: 'This flow has '}}},
+  {name: 'chat:event', data: {streamId: STREAM_ID, type: 'chunk', data: {content: '1 error to fix.'}}},
+  {name: 'chat:event', data: {streamId: STREAM_ID, type: 'done', data: {tokensIn: 42, tokensOut: 7}}},
+]
+
+async function stubChatBoot(page: Page, options: ChatBootOptions = {}) {
   // Proven auth bypass + boot stubs from the shared helpers.
   await setupAuthenticatedPage(page)
   // Every crypto.randomUUID call returns the same constant: the send's
@@ -65,13 +82,26 @@ async function stubChatBoot(page: Page) {
     '/api/analysis/analyze': mockAnalysisReport(),
     '/api/auth/refresh': {accessToken: 'tok', expiresAt: '2099-01-01T00:00:00Z'},
     '/api/auth/me': {id: 'user-1', email: 'e2e@example.com', role: 'member', displayName: 'E2E'},
+    // Every field the listing schema requires (api/schemas.lazy.ts): a
+    // listing that fails to parse reads as "Couldn't check your AI providers"
+    // and the composer never renders.
     '/api/providers/list': [
       {
         id: 'claude',
         name: 'Claude',
         configured: true,
         authType: 'api_key',
-        models: [{id: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5', contextLimit: 200000}],
+        contextLimit: 200000,
+        models: [
+          {
+            id: 'claude-haiku-4-5',
+            displayName: 'Claude Haiku 4.5',
+            contextLimit: 200000,
+            inputCostPerM: 1,
+            outputCostPerM: 5,
+            supportsTools: true,
+          },
+        ],
         defaultModel: 'claude-haiku-4-5',
       },
     ],
@@ -88,7 +118,14 @@ async function stubChatBoot(page: Page) {
     // When the mocked SSE body completes instantly, the client's reconnect
     // logic catch-ups via resume — serve the full message as a finished
     // stream (the legitimate delta-resume protocol path).
-    '/api/chat/resume': {text: 'This flow has 1 error to fix.', done: true, error: '', tokensIn: 42, tokensOut: 7},
+    '/api/chat/resume': options.resume ?? {
+      text: 'This flow has 1 error to fix.',
+      done: true,
+      error: '',
+      tokensIn: 42,
+      tokensOut: 7,
+    },
+    '/api/chat/fix-decision': {status: 'ok'},
     '/api/analysis/triage/list': [],
     '/api/analysis/baseline/get': null,
   }
@@ -106,12 +143,7 @@ async function stubChatBoot(page: Page) {
       await route.fulfill({
         status: 200,
         contentType: 'text/event-stream',
-        body: sseBody([
-          {name: 'chat:event', data: {streamId: STREAM_ID, type: 'tool', data: {label: 'analyzing'}}},
-          {name: 'chat:event', data: {streamId: STREAM_ID, type: 'chunk', data: {content: 'This flow has '}}},
-          {name: 'chat:event', data: {streamId: STREAM_ID, type: 'chunk', data: {content: '1 error to fix.'}}},
-          {name: 'chat:event', data: {streamId: STREAM_ID, type: 'done', data: {tokensIn: 42, tokensOut: 7}}},
-        ]),
+        body: sseBody(options.sse ?? DEFAULT_SSE),
       })
       return
     }
@@ -197,5 +229,57 @@ test.describe('Chat streaming', () => {
       await page.keyboard.press('Escape')
     }
     await expect(focus).toBeHidden()
+  })
+})
+
+// A fix_proposal of a preview kind this bundle does not know (a tool a newer
+// server added): the generic card still asks for a decision — the tool's
+// name, each item's label and summary, Approve/Dismiss — and Dismiss reaches
+// the one decision route.
+test.describe('Approval card', () => {
+  test('asks for a decision on a request of an unknown preview kind', async ({page}) => {
+    const request = {
+      proposalId: 'approval-1',
+      tool: 'rename_variable',
+      previewKind: 'something-new',
+      requiredScope: 'write',
+      items: [{id: 'v1', label: 'Variable %Customer%', summary: 'Rename to %CustomerRecord%'}],
+    }
+    await stubChatBoot(page, {
+      sse: [
+        {name: 'chat:event', data: {streamId: STREAM_ID, type: 'chunk', data: {content: 'Renaming… '}}},
+        {name: 'chat:event', data: {streamId: STREAM_ID, type: 'fix_proposal', data: request}},
+      ],
+      // The stream is still open (no done): a reconnect's resume replays the
+      // journaled request, so the card survives the catch-up.
+      resume: {
+        text: 'Renaming… ',
+        done: false,
+        error: '',
+        tokensIn: 0,
+        tokensOut: 0,
+        events: [{type: 'fix_proposal', data: request}],
+      },
+    })
+    await openChatWithFlow(page)
+
+    const input = page.locator('textarea[placeholder*="Ask anything"]')
+    await input.waitFor({timeout: 10_000})
+    await input.fill('Rename the customer variable')
+    await input.press('Enter')
+
+    const card = page.getByRole('alertdialog', {name: 'rename_variable: approval needed'})
+    await expect(card).toBeVisible({timeout: 10_000})
+    await expect(card.getByText('Variable %Customer%')).toBeVisible()
+    await expect(card.getByText('Rename to %CustomerRecord%')).toBeVisible()
+    await expect(card.getByText(/requires write access/i)).toBeVisible()
+    await expect(card.getByRole('button', {name: 'Approve'})).toBeVisible()
+
+    const decision = page.waitForRequest(req => req.url().endsWith('/api/chat/fix-decision') && req.method() === 'POST')
+    await card.getByRole('button', {name: 'Dismiss'}).click()
+    const body = (await decision).postDataJSON() as Record<string, unknown>
+    expect(body).toMatchObject({streamId: STREAM_ID, proposalId: 'approval-1', approved: false})
+    await expect(card.getByText('Dismissed')).toBeVisible()
+    await expect(card.getByRole('button', {name: 'Approve'})).toBeHidden()
   })
 })

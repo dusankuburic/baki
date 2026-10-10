@@ -14,19 +14,13 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/events"
-	"pad-analyzer/internal/lifecycle"
+	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
-
-// orgInviteEmails sends invite emails off the request path, capped and drained at shutdown.
-var orgInviteEmails = lifecycle.NewBounded("org_invite_email", maxConcurrentInviteEmails)
-
-// maxConcurrentInviteEmails caps concurrent invite SMTP dials.
-const maxConcurrentInviteEmails = 8
 
 // orgMemberMutationResponse is a membership change reply; sharedCredentialDisabled is true when the change disabled the org's shared Azure credential.
 type orgMemberMutationResponse struct {
@@ -230,21 +224,14 @@ func (h *OrgHandler) handleOrgInviteCreate(w http.ResponseWriter, r *http.Reques
 
 	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgInviteCreate, id, map[string]string{"email": email, "role": string(role)}))
 
-	// Best-effort invite email: after the commit (a rolled-back invite must not be mailed) and off the request
-	// path. SendOrgInvite is up to a 30 s SMTP round trip, and post-commit hooks run before the response is
-	// complete, so sending inline in the hook held the reply for the whole dial. The invite and the token in this
-	// response stand even when the mail is dropped.
+	// Best-effort invite email: queued after the commit (a rolled-back invite must not be mailed) on the mail
+	// runner, so the SMTP round trip never holds the reply. The invite and the token in this response stand even
+	// when the mail is dropped.
 	if h.email != nil {
-		orgName := org.Name
+		invite := mailer.OrgInvite.With(mailer.OrgInviteData{OrgName: org.Name, Token: token})
 		txhook.Register(r.Context(), func(ctx context.Context) {
-			log := logger.FromContext(ctx) // the sender keeps the request's log attributes, not its context
-			send := func() {
-				if err := h.email.SendOrgInvite(context.Background(), email, orgName, token); err != nil {
-					log.Error("sending org invite email failed", "error", err, "org", id, "email", email)
-				}
-			}
-			if !orgInviteEmails.Go(send) {
-				log.Warn("org invite email not sent: the mail queue is full or shutting down", "org", id)
+			if err := h.email.Enqueue(ctx, email, invite); err != nil {
+				logger.FromContext(ctx).Warn("org invite email not queued", "error", err, "org", id)
 			}
 		})
 	}

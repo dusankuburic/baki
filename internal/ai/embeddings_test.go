@@ -273,7 +273,7 @@ func TestForEmbedding_AppliesOverride(t *testing.T) {
 	defer func() { openAIBaseURL = orig }()
 
 	f := NewProviderFactory(func(scope, provider string) (string, error) { return "sk-test", nil }, nil, nil, nil)
-	p, err := f.ForEmbedding("", "openai", "custom-embed-model")
+	p, err := f.ForEmbedding(context.Background(), "", "openai", "custom-embed-model")
 	if err != nil {
 		t.Fatalf("ForEmbedding: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestForEmbedding_NoOverrideUsesDefault(t *testing.T) {
 	defer func() { openAIBaseURL = orig }()
 
 	f := NewProviderFactory(func(scope, provider string) (string, error) { return "sk-test", nil }, nil, nil, nil)
-	p, err := f.ForEmbedding("", "openai", "")
+	p, err := f.ForEmbedding(context.Background(), "", "openai", "")
 	if err != nil {
 		t.Fatalf("ForEmbedding: %v", err)
 	}

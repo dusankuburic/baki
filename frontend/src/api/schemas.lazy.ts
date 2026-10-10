@@ -5,7 +5,11 @@ import {
   AZURE_MODEL_KINDS,
   AZURE_REGISTRY_STATES,
   AZURE_STATUSES,
+  CREDENTIAL_FIELD_TYPES,
+  CREDENTIAL_KINDS,
   PROVIDER_IDS,
+  PROVIDER_MODES,
+  PROVIDER_PRICINGS,
   RULE_STAGES,
   isKnown,
   type AnalysisReport,
@@ -17,14 +21,22 @@ import {
   type DashboardHomeData,
   type FlowDocument,
   type PagedResponse,
+  type ProviderCatalog,
   type ProviderInfo,
+  type ProviderSpec,
   type RuleStage,
   type Tolerant,
   type UnknownEnumValue,
 } from '@/types'
 import {PURPOSE_PRESETS} from '@/lib/modelPurpose'
 import type {AdminUser} from './admin'
-import type {GovernanceAlertSeverity, GovernanceAlertType, GovernanceNoticeScope} from './governance'
+import type {
+  ChannelEvent,
+  ChannelKind,
+  GovernanceAlertSeverity,
+  GovernanceAlertType,
+  GovernanceNoticeScope,
+} from './governance'
 import type {LibraryFlow} from './library'
 
 // A Go server serialises a nil slice (or map) as null — an empty list on the
@@ -32,7 +44,10 @@ import type {LibraryFlow} from './library'
 // at call sites). Accept null/undefined and read it as empty so a
 // legitimately-empty list validates instead of throwing ResponseValidationError.
 function nilAsEmpty<T extends z.ZodTypeAny>(item: T) {
-  return z.array(item).nullish().transform(v => v ?? [])
+  return z
+    .array(item)
+    .nullish()
+    .transform(v => v ?? [])
 }
 
 // A wire enum the backend may grow (types/tolerant.ts): a known value keeps
@@ -359,6 +374,68 @@ export function buildSchemas() {
 
   const UnreadCountSchema = z.object({count: z.number()}).passthrough()
 
+  // ── Org CI credentials ────────────────────────────────────────────────────
+  // The timestamps are *time.Time: null or absent for a credential that
+  // never expires or was never used. The display-only strings read as empty
+  // when absent, so an omitempty on the server cannot fail the whole list.
+  const OrgCICredentialSchema = z
+    .object({
+      id: z.string(),
+      name: z.string(),
+      secretHint: z.string().default(''),
+      createdBy: z.string().default(''),
+      createdByName: z.string().default(''),
+      createdAt: z.string(),
+      expiresAt: z.string().nullish(),
+      lastUsedAt: z.string().nullish(),
+    })
+    .passthrough()
+
+  const OrgCICredentialsSchema = nilAsEmpty(OrgCICredentialSchema)
+
+  // The create answer carries the credential, shown once: without it the
+  // admin would have nothing to copy, so its absence is drift.
+  const CreatedOrgCICredentialSchema = OrgCICredentialSchema.extend({credential: z.string().min(1)}).passthrough()
+
+  // ── Org notification channels ─────────────────────────────────────────────
+  // `kind` is tolerant: a channel of a kind a newer server added is listed,
+  // tested and removed. hasSecret is absent from a server before the channel
+  // rework (unknown, not "no secret"); the Jira, email, events and unreadable
+  // fields from a server before those.
+  const channelKinds: ChannelKind[] = ['webhook', 'teams', 'teams-workflow', 'slack', 'jira', 'email']
+  const channelEvents: ChannelEvent[] = ['drift', 'health_regression', 'new_rules']
+  const OrgChannelSchema = z
+    .object({
+      id: z.string(),
+      name: z.string().default(''),
+      kind: tolerantEnum<ChannelKind>(channelKinds),
+      url: z.string().default(''),
+      enabled: z.boolean(),
+      createdAt: z.string(),
+      hasSecret: z.boolean().optional(),
+      email: z.string().optional(),
+      project: z.string().optional(),
+      hasToken: z.boolean().optional(),
+      recipients: z.array(z.string()).optional(),
+      events: z.array(tolerantEnum<ChannelEvent>(channelEvents)).optional(),
+      unreadable: z.boolean().optional(),
+    })
+    .passthrough()
+
+  const OrgChannelsSchema = nilAsEmpty(OrgChannelSchema)
+
+  // The channel form's choices: kinds and events tolerant (a newer server may
+  // offer more), the host list present only when the operator shows it.
+  const ChannelOptionsSchema = z
+    .object({
+      kinds: z.array(tolerantEnum<ChannelKind>(channelKinds)).default([]),
+      events: z.array(tolerantEnum<ChannelEvent>(channelEvents)).default([]),
+      defaultEvents: z.array(tolerantEnum<ChannelEvent>(channelEvents)).default([]),
+      hostsRestricted: z.boolean().default(false),
+      allowedHosts: z.array(z.string()).optional(),
+    })
+    .passthrough()
+
   // ── Providers ─────────────────────────────────────────────────────────────
   // Mirrors models.ProviderInfo/ModelDetail (core/models/chat.go). The ids,
   // kinds and statuses are tolerant: the backend may add a provider (or a
@@ -391,6 +468,55 @@ export function buildSchemas() {
     })
     .passthrough()
 
+  // The credential form of GET /api/providers/catalog (Phase 4b). Kind, field
+  // type and mode are tolerant: an entry this bundle cannot form renders as
+  // a generic card, so nothing here may fail the whole catalogue. A nil
+  // slice or map is empty (Go null on the wire).
+  const CredentialFieldSchema = z
+    .object({
+      name: z.string(),
+      label: z.string(),
+      type: tolerantEnum(CREDENTIAL_FIELD_TYPES),
+      required: z.boolean(),
+      placeholder: z.string().optional(),
+      help: z.string().optional(),
+      options: z.array(z.object({value: z.string(), label: z.string()}).passthrough()).optional(),
+    })
+    .passthrough()
+
+  const CredentialSchemaSchema = z
+    .object({
+      kind: tolerantEnum(CREDENTIAL_KINDS),
+      fields: nilAsEmpty(CredentialFieldSchema),
+      helpUrl: z.string().optional(),
+    })
+    .passthrough()
+
+  const ProviderEndpointsSchema = z
+    .object({
+      save: z.string().optional(),
+      test: z.string().optional(),
+      start: z.string().optional(),
+      poll: z.string().optional(),
+      revoke: z.string().optional(),
+      user: z.string().optional(),
+    })
+    .passthrough()
+    .nullish()
+    .transform(v => v ?? {})
+
+  // The descriptive fields the catalogue sends and /list repeats (optional
+  // there: a server before Phase 4b sends none).
+  const providerDescription = {
+    modes: nilAsEmpty(tolerantEnum(PROVIDER_MODES)),
+    caps: nilAsEmpty(z.string()),
+    credential: CredentialSchemaSchema,
+    endpoints: ProviderEndpointsSchema,
+    color: z.string().optional(),
+    icon: z.string().optional(),
+    pricing: tolerantEnum(PROVIDER_PRICINGS).optional(),
+  }
+
   const ProviderInfoSchema = z
     .object({
       id: tolerantEnum(PROVIDER_IDS),
@@ -404,15 +530,50 @@ export function buildSchemas() {
       configured: z.boolean(),
       shared: z.boolean().optional(),
       suggestDiscovery: z.boolean().optional(),
+      modes: providerDescription.modes.optional(),
+      caps: providerDescription.caps.optional(),
+      credential: providerDescription.credential.optional(),
+      endpoints: providerDescription.endpoints.optional(),
+      color: providerDescription.color,
+      icon: providerDescription.icon,
+      pricing: providerDescription.pricing,
     })
     .passthrough() as unknown as z.ZodType<ProviderInfo>
 
   const ProviderListSchema = nilAsEmpty(ProviderInfoSchema) as unknown as z.ZodType<ProviderInfo[]>
 
+  const ProviderSpecSchema = z
+    .object({
+      id: z.string(),
+      name: z.string(),
+      authType: tolerantEnum(AUTH_TYPES),
+      configured: z.boolean(),
+      ...providerDescription,
+    })
+    .passthrough() as unknown as z.ZodType<ProviderSpec>
+
+  const ProviderCatalogSchema = z
+    .object({providers: nilAsEmpty(ProviderSpecSchema)})
+    .passthrough() as unknown as z.ZodType<ProviderCatalog>
+
   // GET /api/providers/github/user (and the Copilot twin) answers null when
   // not connected — "no stored token" is not an error.
   const GitHubUserSchema = z.object({login: z.string(), name: z.string()}).passthrough()
   const GitHubUserOrNullSchema = z.union([GitHubUserSchema, z.null()])
+
+  // A catalogue device-flow provider answers its `user` route in its own
+  // shape; whichever of these it has names the signed-in user.
+  const DeviceAuthUserOrNullSchema = z.union([
+    z
+      .object({
+        login: z.string().nullish(),
+        name: z.string().nullish(),
+        email: z.string().nullish(),
+        id: z.union([z.string(), z.number()]).nullish(),
+      })
+      .passthrough(),
+    z.null(),
+  ])
 
   const AzureStatusSchema = tolerantEnum(AZURE_STATUSES)
 
@@ -553,7 +714,10 @@ export function buildSchemas() {
   // validator (parseConversationLoad): the payload is a bare array OR an
   // {messages, activeStreamId} object and per-message coercion lives in
   // lib/chatMessage — a zod duplicate would only drift from it.
-  const SuggestedPromptsSchema = z.array(z.string()).nullish().transform(v => v ?? [])
+  const SuggestedPromptsSchema = z
+    .array(z.string())
+    .nullish()
+    .transform(v => v ?? [])
 
   // ── Admin ─────────────────────────────────────────────────────────────────
   // Mirrors storageif.User as the admin list marshals it: every field is
@@ -644,18 +808,34 @@ export function buildSchemas() {
       activity: nilAsEmpty(z.object({action: z.string(), createdAt: z.string()}).passthrough()),
       complexity: nilAsEmpty(
         z
-          .object({flowId: z.string(), flowName: z.string(), blockCount: z.number(), findingCount: z.number(), healthScore: z.number()})
+          .object({
+            flowId: z.string(),
+            flowName: z.string(),
+            blockCount: z.number(),
+            findingCount: z.number(),
+            healthScore: z.number(),
+          })
           .passthrough(),
       ),
       security: z
-        .object({available: z.boolean(), failedLogins24h: z.number(), credentialFindings: z.number(), admin: z.boolean()})
+        .object({
+          available: z.boolean(),
+          failedLogins24h: z.number(),
+          credentialFindings: z.number(),
+          admin: z.boolean(),
+        })
         .passthrough(),
       // Analytics sections (v3).
       severityTrend: nilAsEmpty(
         z.object({date: z.string(), errors: z.number(), warnings: z.number(), info: z.number()}).passthrough(),
       ),
-      confidenceDist: z.record(z.string(), z.number()).nullish().transform(v => v ?? {}),
-      healthBuckets: nilAsEmpty(z.object({label: z.string(), lo: z.number(), hi: z.number(), count: z.number()}).passthrough()),
+      confidenceDist: z
+        .record(z.string(), z.number())
+        .nullish()
+        .transform(v => v ?? {}),
+      healthBuckets: nilAsEmpty(
+        z.object({label: z.string(), lo: z.number(), hi: z.number(), count: z.number()}).passthrough(),
+      ),
       fixability: z
         .object({available: z.number(), total: z.number(), autoFixableRules: z.number(), totalRules: z.number()})
         .passthrough(),
@@ -722,9 +902,15 @@ export function buildSchemas() {
     LibraryFlowVersionsSchema,
     GovernanceAlertsSchema,
     UnreadCountSchema,
+    OrgCICredentialsSchema,
+    CreatedOrgCICredentialSchema,
+    OrgChannelsSchema,
+    ChannelOptionsSchema,
     ProviderListSchema,
+    ProviderCatalogSchema,
     ProviderInfoSchema,
     GitHubUserOrNullSchema,
+    DeviceAuthUserOrNullSchema,
     AzureConnectionsListingSchema,
     AzureConnectionResponseSchema,
     AzureModelsListingSchema,

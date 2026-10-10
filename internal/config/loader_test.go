@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"pad-analyzer/internal/platform/secret"
 )
 
 func TestDefault(t *testing.T) {
@@ -65,7 +67,7 @@ func TestLoadRaw_InvalidJSON(t *testing.T) {
 func TestValidate_AuthSecretRequired(t *testing.T) {
 	cfg := Default()
 	cfg.Auth.Enabled = true
-	cfg.Auth.Secret = ""
+	cfg.Auth.Secret = secret.Value{}
 
 	if err := Validate(cfg); err == nil {
 		t.Error("expected validation error when auth enabled with no secret")
@@ -107,7 +109,7 @@ func TestLoadFromEnvRaw_NormalizesStorageCase(t *testing.T) {
 func TestValidate_DatabaseURLRequired(t *testing.T) {
 	cfg := Default()
 	cfg.Storage.Backend = StorageDatabase
-	cfg.Storage.DatabaseURL = ""
+	cfg.Storage.DatabaseURL = secret.Value{}
 
 	if err := Validate(cfg); err == nil {
 		t.Error("expected validation error when database backend with no URL")
@@ -123,8 +125,8 @@ func cloudCfg() *Config {
 	cfg.Mode = ModeCloud
 	cfg.Auth.Enabled = true
 	cfg.Storage.Backend = StorageDatabase
-	cfg.Storage.DatabaseURL = "postgres://localhost/db"
-	cfg.Auth.Secret = "a-sufficiently-long-random-secret-value-123456"
+	cfg.Storage.DatabaseURL = secret.New("postgres://localhost/db")
+	cfg.Auth.Secret = secret.New("a-sufficiently-long-random-secret-value-123456")
 	// Most existing tests don't care about the TLS posture; declare a
 	// reverse proxy so the plaintext-credentials safety check passes.
 	// Tests that specifically exercise the TLS validation override this.
@@ -140,14 +142,14 @@ func TestValidate_CloudSecretStrength(t *testing.T) {
 	})
 	t.Run("short secret rejected", func(t *testing.T) {
 		cfg := cloudCfg()
-		cfg.Auth.Secret = "too-short"
+		cfg.Auth.Secret = secret.New("too-short")
 		if err := Validate(cfg); err == nil {
 			t.Fatal("expected short secret to be rejected in cloud mode")
 		}
 	})
 	t.Run("known default rejected", func(t *testing.T) {
 		cfg := cloudCfg()
-		cfg.Auth.Secret = "change-me-in-production"
+		cfg.Auth.Secret = secret.New("change-me-in-production")
 		if err := Validate(cfg); err == nil {
 			t.Fatal("expected known-default secret to be rejected in cloud mode")
 		}
@@ -156,7 +158,7 @@ func TestValidate_CloudSecretStrength(t *testing.T) {
 		cfg := cloudCfg()
 		cfg.Mode = ModeLocal
 		cfg.Auth.Enabled = false
-		cfg.Auth.Secret = ""
+		cfg.Auth.Secret = secret.Value{}
 		if err := Validate(cfg); err != nil {
 			t.Fatalf("local mode should not enforce secret strength, got %v", err)
 		}
@@ -221,7 +223,7 @@ func TestValidate_PprofRequiresMetricsToken(t *testing.T) {
 	t.Run("disabled needs no token", func(t *testing.T) {
 		cfg := cloudCfg()
 		cfg.Server.PprofEnabled = false
-		cfg.Server.MetricsToken = ""
+		cfg.Server.MetricsToken = secret.Value{}
 		if err := Validate(cfg); err != nil {
 			t.Errorf("pprof off should not require a token, got %v", err)
 		}
@@ -229,7 +231,7 @@ func TestValidate_PprofRequiresMetricsToken(t *testing.T) {
 	t.Run("enabled without a token is rejected", func(t *testing.T) {
 		cfg := cloudCfg()
 		cfg.Server.PprofEnabled = true
-		cfg.Server.MetricsToken = ""
+		cfg.Server.MetricsToken = secret.Value{}
 		err := Validate(cfg)
 		if err == nil {
 			t.Fatal("expected validation error: profiling on with no PAD_METRICS_TOKEN")
@@ -242,7 +244,7 @@ func TestValidate_PprofRequiresMetricsToken(t *testing.T) {
 	t.Run("whitespace-only token is not a token", func(t *testing.T) {
 		cfg := cloudCfg()
 		cfg.Server.PprofEnabled = true
-		cfg.Server.MetricsToken = "   "
+		cfg.Server.MetricsToken = secret.New("   ")
 		if err := Validate(cfg); err == nil {
 			t.Fatal("expected validation error for a blank token")
 		}
@@ -250,7 +252,7 @@ func TestValidate_PprofRequiresMetricsToken(t *testing.T) {
 	t.Run("enabled with a token passes", func(t *testing.T) {
 		cfg := cloudCfg()
 		cfg.Server.PprofEnabled = true
-		cfg.Server.MetricsToken = "a-real-shared-secret"
+		cfg.Server.MetricsToken = secret.New("a-real-shared-secret")
 		if err := Validate(cfg); err != nil {
 			t.Errorf("pprof on with a token should pass, got %v", err)
 		}
@@ -463,21 +465,21 @@ func TestValidate_EmbeddingProvider(t *testing.T) {
 func TestValidate_CloudEncryptionKeyStrength(t *testing.T) {
 	t.Run("strong encryption key passes", func(t *testing.T) {
 		cfg := cloudCfg()
-		cfg.Auth.EncryptionKey = "a-sufficiently-long-random-enc-key-123456"
+		cfg.Auth.EncryptionKey = secret.New("a-sufficiently-long-random-enc-key-123456")
 		if err := Validate(cfg); err != nil {
 			t.Fatalf("expected strong encryption key to pass, got %v", err)
 		}
 	})
 	t.Run("short encryption key rejected", func(t *testing.T) {
 		cfg := cloudCfg()
-		cfg.Auth.EncryptionKey = "x"
+		cfg.Auth.EncryptionKey = secret.New("x")
 		if err := Validate(cfg); err == nil {
 			t.Fatal("expected short encryption key to be rejected in cloud mode")
 		}
 	})
 	t.Run("empty encryption key allowed (falls back to auth secret)", func(t *testing.T) {
 		cfg := cloudCfg()
-		cfg.Auth.EncryptionKey = ""
+		cfg.Auth.EncryptionKey = secret.Value{}
 		if err := Validate(cfg); err != nil {
 			t.Fatalf("expected empty encryption key to pass (fallback), got %v", err)
 		}
@@ -525,10 +527,12 @@ func TestIsWeakSecret_BlocklistAndEntropy(t *testing.T) {
 	}
 }
 
-// TestLoadFromEnvRaw_CloudDefaultsToInfoLogLevel: the documented cloud default
-// is info, but Default() carries the desktop's debug level and nothing
-// adjusted it for cloud mode.
-func TestLoadFromEnvRaw_CloudDefaultsToInfoLogLevel(t *testing.T) {
+// TestLoadFromEnvRaw_LogLevelDefaultsToInfo: the default level is info in every
+// mode, and an explicit PAD_LOG_LEVEL (or a config file's Log.Level) wins.
+// Default() used to carry a debug level that only cloud mode corrected; the
+// local and desktop logger ignored it (R10), so info was the effective level
+// everywhere, and fixing the logger must not turn debug on.
+func TestLoadFromEnvRaw_LogLevelDefaultsToInfo(t *testing.T) {
 	t.Setenv("PAD_MODE", "cloud")
 	t.Setenv("PAD_LOG_LEVEL", "")
 	cfg, err := LoadFromEnvRaw()
@@ -554,8 +558,29 @@ func TestLoadFromEnvRaw_CloudDefaultsToInfoLogLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromEnvRaw: %v", err)
 	}
-	if cfg.Log.Level != "debug" {
-		t.Errorf("local default log level = %q, want debug", cfg.Log.Level)
+	if cfg.Log.Level != "info" {
+		t.Errorf("local default log level = %q, want info", cfg.Log.Level)
+	}
+	if got := Default().Log.Level; got != "info" {
+		t.Errorf("desktop default log level = %q, want info", got)
+	}
+
+	for _, tc := range []struct{ body, want string }{
+		{`{"Mode":"cloud"}`, "info"},
+		{`{"Mode":"local"}`, "info"},
+		{`{"Mode":"cloud","Log":{"Level":"debug"}}`, "debug"},
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadRaw(path)
+		if err != nil {
+			t.Fatalf("LoadRaw %s: %v", tc.body, err)
+		}
+		if cfg.Log.Level != tc.want {
+			t.Errorf("config file %s: log level = %q, want %q", tc.body, cfg.Log.Level, tc.want)
+		}
 	}
 }
 

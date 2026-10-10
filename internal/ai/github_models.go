@@ -48,14 +48,13 @@ func NewGitHubModelsProvider(token string) *GitHubModelsProvider {
 
 func (g *GitHubModelsProvider) SupportsTools() bool { return true }
 
-func (g *GitHubModelsProvider) ID() string           { return "github-models" }
-func (g *GitHubModelsProvider) Name() string         { return "GitHub Models" }
+func (g *GitHubModelsProvider) ID() string           { return githubModelsSpec.ID }
+func (g *GitHubModelsProvider) Name() string         { return githubModelsSpec.Name }
 func (g *GitHubModelsProvider) ContextLimit() int    { return 8192 }
-func (g *GitHubModelsProvider) DefaultModel() string { return "gpt-4o" }
+func (g *GitHubModelsProvider) DefaultModel() string { return githubModelsSpec.DefaultModel }
 func (g *GitHubModelsProvider) FreeModel() string    { return "" }
-
 func (g *GitHubModelsProvider) PricePerMillionTokens() Pricing {
-	return Pricing{InputCostPerM: 0.0, OutputCostPerM: 0.0}
+	return specDefaultPricing(githubModelsSpec)
 }
 
 func (g *GitHubModelsProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
@@ -96,22 +95,22 @@ func (g *GitHubModelsProvider) fetchModels(ctx context.Context) (models []ModelI
 	// 401 every time; ListProviders calls this synchronously, and the uncached
 	// 401 fallback (live=false) would repeat the doomed call every time.
 	if g.apiKey == "" {
-		return catalogModels("github-models"), false
+		return catalogModels(githubModelsSpec.Catalog), false
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", strings.Replace(githubModelsBaseURL, "/chat/completions", "/models", 1), nil)
 	if err != nil {
-		return catalogModels("github-models"), false
+		return catalogModels(githubModelsSpec.Catalog), false
 	}
 	req.Header.Set("Authorization", "Bearer "+g.apiKey)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return catalogModels("github-models"), false
+		return catalogModels(githubModelsSpec.Catalog), false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return catalogModels("github-models"), false
+		return catalogModels(githubModelsSpec.Catalog), false
 	}
 
 	var parsed []struct {
@@ -119,7 +118,7 @@ func (g *GitHubModelsProvider) fetchModels(ctx context.Context) (models []ModelI
 		ContextLimit int    `json:"context_limit"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBodyBytes)).Decode(&parsed); err != nil {
-		return catalogModels("github-models"), false
+		return catalogModels(githubModelsSpec.Catalog), false
 	}
 
 	models = make([]ModelInfo, 0, len(parsed))
@@ -137,7 +136,7 @@ func (g *GitHubModelsProvider) fetchModels(ctx context.Context) (models []ModelI
 	}
 
 	if len(models) == 0 {
-		return catalogModels("github-models"), false
+		return catalogModels(githubModelsSpec.Catalog), false
 	}
 
 	return models, true

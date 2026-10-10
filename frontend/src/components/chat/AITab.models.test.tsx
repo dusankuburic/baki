@@ -139,7 +139,7 @@ function seed(extra: Partial<ChatThread> = {}, streaming = false) {
             tokens: 0,
             toolStatus: null,
             toolCalls: [],
-            fixProposals: [],
+            approvals: [],
           },
         }
       : {},

@@ -21,6 +21,7 @@ type HealthChecker interface {
 type StorageBackend interface {
 	FlowStore
 	OrgChannelStore
+	CICredentialStore
 	OrgCustomRuleStore
 	FlowVersionStore
 	AppSettingsStore
@@ -45,4 +46,5 @@ type StorageBackend interface {
 	RuleSetStore
 	RefreshTokenStore
 	IdentityLinkStore
+	JobRunStore
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	mailer "pad-analyzer/internal/mail"
@@ -10,16 +11,17 @@ import (
 	"pad-analyzer/internal/testutil"
 )
 
-// captureSend records the last message handed to the mail service.
+// captureSend records the messages handed to the mail service.
 type captureSend struct {
-	calls int
-	text  string
+	mu   sync.Mutex
+	sent []mailer.Message
 }
 
 func (c *captureSend) Enabled() bool { return true }
-func (c *captureSend) Send(_ context.Context, _, _, text, _ string) error {
-	c.calls++
-	c.text = text
+func (c *captureSend) Send(_ context.Context, _ string, msg mailer.Message) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sent = append(c.sent, msg)
 	return nil
 }
 
@@ -44,12 +46,12 @@ func (b *assigneeBackend) ListCollaborators(_ context.Context, _ string, _ int) 
 	return []*storageif.Collaborator{{UserID: "u-assignee", Permission: "viewer"}}, nil
 }
 
-// TestNotifyFindingComment_FlowNameGatedOnAssigneeAccess: the flow name in
-// the comment email arrives resolved through the commenter's access; it is
-// only disclosed to an assignee who can read the flow themselves (an editor
-// may assign a user who is not a collaborator), as the pre-detached code did
-// by resolving the document as the assignee.
-func TestNotifyFindingComment_FlowNameGatedOnAssigneeAccess(t *testing.T) {
+// TestFindingEmails_FlowNameGatedOnAssigneeAccess: the flow name in the
+// comment and assignment emails arrives resolved through the actor's access;
+// it is only disclosed to an assignee who can read the flow themselves (an
+// editor may assign a user who is not a collaborator). The assignment email
+// used to name the flow to anyone it was assigned to.
+func TestFindingEmails_FlowNameGatedOnAssigneeAccess(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		collaborator bool
@@ -72,12 +74,18 @@ func TestNotifyFindingComment_FlowNameGatedOnAssigneeAccess(t *testing.T) {
 			h.email = mailer.NewServiceWithMailer(sink, "")
 
 			h.notifyFindingComment(context.Background(), "flow-c", "unused-variable:b1", "Invoices", "alice", "Alice", "looks risky")
-
-			if sink.calls != 1 {
-				t.Fatalf("emails sent = %d, want 1", sink.calls)
+			h.notifyFindingAssignment(context.Background(), "flow-c", "u-assignee", "Alice", "Invoices", "unused-variable")
+			if err := h.email.Drain(context.Background()); err != nil {
+				t.Fatal(err)
 			}
-			if got := strings.Contains(sink.text, "Invoices"); got != tc.wantName {
-				t.Errorf("email names the flow = %v, want %v:\n%s", got, tc.wantName, sink.text)
+
+			if len(sink.sent) != 2 {
+				t.Fatalf("emails sent = %d, want 2", len(sink.sent))
+			}
+			for _, msg := range sink.sent {
+				if got := strings.Contains(msg.Text, "Invoices") || strings.Contains(msg.HTML, "Invoices"); got != tc.wantName {
+					t.Errorf("%s names the flow = %v, want %v:\n%s", msg.Template, got, tc.wantName, msg.Text)
+				}
 			}
 		})
 	}

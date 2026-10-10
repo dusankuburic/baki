@@ -100,9 +100,20 @@ describe('parseChatEvent', () => {
       }),
     ).toEqual({
       kind: 'fix-proposal',
+      source: 'fix',
       proposalId: 'p1',
+      tool: '',
+      previewKind: 'fix-patch',
       items: [
-        {ruleId: 'unhandled-error', fixType: 'wrap-error-handler', blockLabel: 'Call API', line: 3, summary: 'wrap'},
+        {
+          id: 'unhandled-error',
+          label: 'Call API',
+          ruleId: 'unhandled-error',
+          fixType: 'wrap-error-handler',
+          blockLabel: 'Call API',
+          line: 3,
+          summary: 'wrap',
+        },
       ],
     })
     // Batch: items[] pass through with per-item defaults; missing optional
@@ -115,10 +126,13 @@ describe('parseChatEvent', () => {
       }),
     ).toEqual({
       kind: 'fix-proposal',
+      source: 'fix',
       proposalId: 'p2',
+      tool: '',
+      previewKind: 'fix-patch',
       items: [
-        {ruleId: 'r1', fixType: '', blockLabel: '', line: 0, summary: ''},
-        {ruleId: 'r2', fixType: 'f', blockLabel: '', line: 0, summary: ''},
+        {id: 'r1', label: '', ruleId: 'r1', fixType: '', blockLabel: '', line: 0, summary: ''},
+        {id: 'r2', label: '', ruleId: 'r2', fixType: 'f', blockLabel: '', line: 0, summary: ''},
       ],
     })
     expect(parseChatEvent({streamId: 's1', type: 'fix_proposal', data: {}})).toBeNull()
@@ -140,6 +154,7 @@ describe('parseChatEvent', () => {
       }),
     ).toEqual({
       kind: 'fix-decision',
+      source: 'fix',
       proposalId: 'p2',
       status: 'applied-unresolved',
       message: undefined,
@@ -155,7 +170,14 @@ describe('parseChatEvent', () => {
         type: 'fix_decision',
         data: {proposalId: 'p', status: 'applied', items: [{status: 'applied'}, 'junk']},
       }),
-    ).toEqual({kind: 'fix-decision', proposalId: 'p', status: 'applied', message: undefined, items: undefined})
+    ).toEqual({
+      kind: 'fix-decision',
+      source: 'fix',
+      proposalId: 'p',
+      status: 'applied',
+      message: undefined,
+      items: undefined,
+    })
   })
 
   it('parseResumeEvents converts a resume journal into replayable events', () => {
@@ -184,10 +206,20 @@ describe('parseChatEvent', () => {
       },
       {
         kind: 'fix-proposal',
+        source: 'fix',
         proposalId: 'p1',
-        items: [{ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+        tool: '',
+        previewKind: 'fix-patch',
+        items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
       },
-      {kind: 'fix-decision', proposalId: 'p1', status: 'applied', message: undefined, items: undefined},
+      {
+        kind: 'fix-decision',
+        source: 'fix',
+        proposalId: 'p1',
+        status: 'applied',
+        message: undefined,
+        items: undefined,
+      },
       // Chunks parse (a well-formed event) though the backend journal never
       // records them — the replay consumer ignores non-agentic kinds.
       {kind: 'chunk', content: 'not replayable'},
@@ -197,7 +229,7 @@ describe('parseChatEvent', () => {
 
   it('parses a fix-decision envelope, requiring proposalId + status', () => {
     expect(parseChatEvent({streamId: 's1', type: 'fix_decision', data: {proposalId: 'p1', status: 'applied'}})).toEqual(
-      {kind: 'fix-decision', proposalId: 'p1', status: 'applied', message: undefined},
+      {kind: 'fix-decision', source: 'fix', proposalId: 'p1', status: 'applied', message: undefined},
     )
     expect(
       parseChatEvent({
@@ -205,7 +237,7 @@ describe('parseChatEvent', () => {
         type: 'fix_decision',
         data: {proposalId: 'p1', status: 'error', message: 'boom'},
       }),
-    ).toEqual({kind: 'fix-decision', proposalId: 'p1', status: 'error', message: 'boom'})
+    ).toEqual({kind: 'fix-decision', source: 'fix', proposalId: 'p1', status: 'error', message: 'boom'})
     expect(parseChatEvent({streamId: 's1', type: 'fix_decision', data: {proposalId: 'p1'}})).toBeNull()
     expect(parseChatEvent({streamId: 's1', type: 'fix_decision', data: {status: 'applied'}})).toBeNull()
   })
@@ -336,5 +368,204 @@ describe('parseChatEvent failure codes and keepalives', () => {
       kind: 'error',
       message: 'mine',
     })
+  })
+})
+
+// Phase 4b: a request carries the tool, its preview kind, the scope it needs
+// and always items[]; an older server sends none of them. The same payload
+// may later arrive as approval_request / approval_decision, whose decision
+// goes to another route (source).
+describe('parseChatEvent approvals', () => {
+  it('reads tool, previewKind, requiredScope and items[] off a fix_proposal', () => {
+    expect(
+      parseChatEvent({
+        streamId: 's1',
+        type: 'fix_proposal',
+        data: {
+          proposalId: 'p1',
+          tool: 'apply_fix',
+          previewKind: 'fix-patch',
+          requiredScope: 'write',
+          ruleId: 'unhandled-error',
+          fixType: 'wrap-error-handler',
+          blockLabel: 'Call API',
+          line: 3,
+          summary: 'wrap',
+          items: [
+            {
+              ruleId: 'unhandled-error',
+              fixType: 'wrap-error-handler',
+              blockLabel: 'Call API',
+              line: 3,
+              summary: 'wrap',
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: 'fix-proposal',
+      source: 'fix',
+      proposalId: 'p1',
+      tool: 'apply_fix',
+      previewKind: 'fix-patch',
+      requiredScope: 'write',
+      items: [
+        {
+          id: 'unhandled-error',
+          label: 'Call API',
+          ruleId: 'unhandled-error',
+          fixType: 'wrap-error-handler',
+          blockLabel: 'Call API',
+          line: 3,
+          summary: 'wrap',
+        },
+      ],
+    })
+  })
+
+  it('parses approval_request/approval_decision; a fix_proposal maps to previewKind fix-patch', () => {
+    // A kind this bundle does not know, with generic items: label and
+    // summary are kept; the fix fields are read from meta when a fix travels
+    // this way and stay empty otherwise.
+    expect(
+      parseChatEvent({
+        streamId: 's1',
+        type: 'approval_request',
+        data: {
+          proposalId: 'a1',
+          tool: 'rename_variable',
+          previewKind: 'something-new',
+          requiredScope: 'write',
+          items: [
+            {id: 'v1', label: 'Variable %A%', summary: 'to %Alpha%'},
+            {
+              id: 'r1',
+              label: 'Call API',
+              summary: 'wrap',
+              meta: {ruleId: 'r1', fixType: 'f', blockLabel: 'Call API', line: 3},
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: 'fix-proposal',
+      source: 'approval',
+      proposalId: 'a1',
+      tool: 'rename_variable',
+      previewKind: 'something-new',
+      requiredScope: 'write',
+      items: [
+        {id: 'v1', label: 'Variable %A%', ruleId: '', fixType: '', blockLabel: '', line: 0, summary: 'to %Alpha%'},
+        {id: 'r1', label: 'Call API', ruleId: 'r1', fixType: 'f', blockLabel: 'Call API', line: 3, summary: 'wrap'},
+      ],
+    })
+    // A fix_proposal without a kind is a fix card.
+    expect(parseChatEvent({streamId: 's1', type: 'fix_proposal', data: {proposalId: 'p1', ruleId: 'r'}})).toMatchObject(
+      {source: 'fix', previewKind: 'fix-patch'},
+    )
+    // So is an approval_request without one: the default is the kind, not
+    // the source.
+    expect(
+      parseChatEvent({streamId: 's1', type: 'approval_request', data: {proposalId: 'a2', items: [{id: 'x'}]}}),
+    ).toMatchObject({source: 'approval', previewKind: 'fix-patch', items: [{id: 'x', label: '', ruleId: ''}]})
+    expect(parseChatEvent({streamId: 's1', type: 'approval_request', data: {}})).toBeNull()
+
+    // approval_decision items are keyed by id (a fix item's ruleId).
+    expect(
+      parseChatEvent({
+        streamId: 's1',
+        type: 'approval_decision',
+        data: {
+          proposalId: 'a1',
+          status: 'cancelled',
+          message: 'the server is restarting',
+          items: [
+            {id: 'v1', status: 'error'},
+            {ruleId: 'r1', status: 'applied'},
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: 'fix-decision',
+      source: 'approval',
+      proposalId: 'a1',
+      status: 'cancelled',
+      message: 'the server is restarting',
+      items: [
+        {id: 'v1', status: 'error', message: undefined},
+        {ruleId: 'r1', status: 'applied', message: undefined},
+      ],
+    })
+    expect(parseChatEvent({streamId: 's1', type: 'approval_decision', data: {proposalId: 'a1'}})).toBeNull()
+  })
+
+  // F1: a batch that fixes the same rule on two blocks. The server stamps
+  // each item with its own id (blockId:ruleId) on the request and on the
+  // decision; an older server sends ruleId alone, and a decision item then
+  // carries no id at all (the engine matches it by position), never one
+  // invented from the rule.
+  it('keys decision items by the id the server sent, and invents none from the rule', () => {
+    const request = parseChatEvent({
+      streamId: 's1',
+      type: 'fix_proposal',
+      data: {
+        proposalId: 'p3',
+        items: [
+          {id: 'b1:unhandled-error', ruleId: 'unhandled-error', blockId: 'b1', blockLabel: 'Call A'},
+          {id: 'b2:unhandled-error', ruleId: 'unhandled-error', blockId: 'b2', blockLabel: 'Call B'},
+        ],
+      },
+    })
+    expect(request).toMatchObject({
+      items: [
+        {id: 'b1:unhandled-error', ruleId: 'unhandled-error', label: 'Call A'},
+        {id: 'b2:unhandled-error', ruleId: 'unhandled-error', label: 'Call B'},
+      ],
+    })
+    expect(
+      parseChatEvent({
+        streamId: 's1',
+        type: 'fix_decision',
+        data: {
+          proposalId: 'p3',
+          status: 'applied-unresolved',
+          items: [
+            {id: 'b1:unhandled-error', ruleId: 'unhandled-error', status: 'applied'},
+            {id: 'b2:unhandled-error', ruleId: 'unhandled-error', status: 'error', message: 'block changed'},
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: 'fix-decision',
+      source: 'fix',
+      proposalId: 'p3',
+      status: 'applied-unresolved',
+      message: undefined,
+      items: [
+        {id: 'b1:unhandled-error', ruleId: 'unhandled-error', status: 'applied', message: undefined},
+        {id: 'b2:unhandled-error', ruleId: 'unhandled-error', status: 'error', message: 'block changed'},
+      ],
+    })
+    const legacy = parseChatEvent({
+      streamId: 's1',
+      type: 'fix_decision',
+      data: {
+        proposalId: 'p3',
+        status: 'applied-unresolved',
+        items: [
+          {ruleId: 'unhandled-error', status: 'applied'},
+          {ruleId: 'unhandled-error', status: 'error', message: 'block changed'},
+        ],
+      },
+    })
+    expect(legacy).toMatchObject({
+      items: [
+        {ruleId: 'unhandled-error', status: 'applied'},
+        {ruleId: 'unhandled-error', status: 'error', message: 'block changed'},
+      ],
+    })
+    const legacyItems = legacy?.kind === 'fix-decision' ? legacy.items! : []
+    expect(legacyItems[0]).not.toHaveProperty('id')
+    expect(legacyItems[1]).not.toHaveProperty('id')
   })
 })

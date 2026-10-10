@@ -524,3 +524,29 @@ describe('ModelPicker empty states and prompts', () => {
     expect(openSettings).toHaveBeenCalledWith('accounts', 'provider-azure-foundry')
   })
 })
+
+// The trigger's provider glyph follows the catalogue `icon` (Phase 4b); the
+// id map is the fallback for a listing without one, or an icon the bundle
+// does not know.
+describe('ModelPicker provider glyph', () => {
+  const glyph = (container: HTMLElement) =>
+    container.querySelector('button[aria-haspopup="dialog"] svg:not(.lucide-chevron-down)')
+  const picker = (providers: PickerProvider[], provider: string) => (
+    <ModelPicker providers={providers} provider={provider} model="" label="" defaults={{}} onSelect={vi.fn()} />
+  )
+
+  it('takes the glyph from the catalogue icon, falling back to the id map', () => {
+    const {container, rerender} = render(picker([{...CLAUDE, icon: 'hard-drive'}], 'claude'))
+    expect(glyph(container)).toHaveClass('lucide-hard-drive')
+    rerender(picker([{...CLAUDE, icon: 'sparkles'}], 'claude'))
+    expect(glyph(container)).toHaveClass('lucide-cloud')
+    rerender(picker([{...CLAUDE, id: 'local'}], 'local'))
+    expect(glyph(container)).toHaveClass('lucide-hard-drive')
+  })
+
+  // F2: the icon is a server string used as a key into the glyph map.
+  it('ignores an icon naming a prototype key', () => {
+    const {container} = render(picker([{...CLAUDE, icon: 'constructor'}], 'claude'))
+    expect(glyph(container)).toHaveClass('lucide-cloud')
+  })
+})

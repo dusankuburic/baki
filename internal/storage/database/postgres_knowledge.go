@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
@@ -22,8 +21,9 @@ import (
 // leave app_rls_active() false, short-circuiting the WITH CHECK policy to "allow".
 func (b *PostgresStorageBackend) SaveKnowledgeDocument(ctx context.Context, userID string, doc *interfaces.KnowledgeDocument) error {
 	return b.withTxAs(ctx, userID, func(_ context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO knowledge_documents (id, org_id, filename) VALUES ($1, $2, $3)`,
-			doc.ID, doc.OrgID, doc.Filename)
+		// chunker_version 0 is "unsaid": the column's default (1), the geometry every document before the column had.
+		_, err := tx.ExecContext(ctx, `INSERT INTO knowledge_documents (id, org_id, filename, chunker_version) VALUES ($1, $2, $3, $4)`,
+			doc.ID, doc.OrgID, doc.Filename, max(doc.ChunkerVersion, 1))
 		return err
 	})
 }
@@ -50,8 +50,8 @@ func (b *PostgresStorageBackend) DeleteKnowledgeDocumentByName(ctx context.Conte
 func listKnowledgeDocumentsSQL(pgvector bool) string {
 	if pgvector {
 		return `
-		SELECT d.id, d.org_id, d.filename, d.created_at, c.chunk_count, c.indexed_count
-		FROM (SELECT id, org_id, filename, created_at FROM knowledge_documents
+		SELECT d.id, d.org_id, d.filename, d.created_at, d.chunker_version, c.chunk_count, c.indexed_count
+		FROM (SELECT id, org_id, filename, created_at, chunker_version FROM knowledge_documents
 		      WHERE org_id = $1
 		      ORDER BY created_at DESC
 		      LIMIT CASE WHEN $2 > 0 THEN $2 ELSE NULL END
@@ -64,8 +64,8 @@ func listKnowledgeDocumentsSQL(pgvector bool) string {
 		ORDER BY d.created_at DESC`
 	}
 	return `
-		SELECT d.id, d.org_id, d.filename, d.created_at, c.chunk_count, c.indexed_count
-		FROM (SELECT id, org_id, filename, created_at FROM knowledge_documents
+		SELECT d.id, d.org_id, d.filename, d.created_at, d.chunker_version, c.chunk_count, c.indexed_count
+		FROM (SELECT id, org_id, filename, created_at, chunker_version FROM knowledge_documents
 		      WHERE org_id = $1
 		      ORDER BY created_at DESC
 		      LIMIT CASE WHEN $2 > 0 THEN $2 ELSE NULL END
@@ -89,7 +89,7 @@ func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, org
 	var docs []*interfaces.KnowledgeDocument
 	for rows.Next() {
 		var d interfaces.KnowledgeDocument
-		if err := rows.Scan(&d.ID, &d.OrgID, &d.Filename, &d.CreatedAt, &d.ChunkCount, &d.VectorIndexed); err != nil {
+		if err := rows.Scan(&d.ID, &d.OrgID, &d.Filename, &d.CreatedAt, &d.ChunkerVersion, &d.ChunkCount, &d.VectorIndexed); err != nil {
 			return nil, err
 		}
 		docs = append(docs, &d)
@@ -142,18 +142,22 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID
 		if err := b.fillKnowledgeChunkOrgs(ctx, tx, chunks); err != nil {
 			return err
 		}
+		if err := lockKnowledgeOrgs(ctx, tx, chunks); err != nil {
+			return err
+		}
 		// embedding (JSONB) is always written (portability + pgvector backfill source); embedding_vec
 		// only when pgvector is active AND the dimension matches the configured contract — mismatched
-		// chunks stay NULL so the HNSW index never sees an incomparable vector. Multi-row INSERTs.
+		// chunks stay NULL so the HNSW index never sees an incomparable vector. embedding_identity is
+		// NULL for a chunk whose embedder named none. Multi-row INSERTs.
 		const rowsPerStmt = 2000
 		for start := 0; start < len(chunks); start += rowsPerStmt {
 			end := min(start+rowsPerStmt, len(chunks))
 			batch := chunks[start:end]
 
 			var sb strings.Builder
-			args := make([]any, 0, len(batch)*6)
+			args := make([]any, 0, len(batch)*7)
 			if b.hasPgvector {
-				sb.WriteString(`INSERT INTO knowledge_chunks (id, doc_id, org_id, content, embedding, embedding_vec) VALUES `)
+				sb.WriteString(`INSERT INTO knowledge_chunks (id, doc_id, org_id, content, embedding, embedding_vec, embedding_identity) VALUES `)
 				for i, c := range batch {
 					embJSON, _ := json.Marshal(c.Embedding)
 					var vec any
@@ -166,20 +170,20 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID
 					if i > 0 {
 						sb.WriteByte(',')
 					}
-					base := i*6 + 1
-					fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d::vector)", base, base+1, base+2, base+3, base+4, base+5)
-					args = append(args, c.ID, c.DocID, c.OrgID, c.Content, embJSON, vec)
+					base := i*7 + 1
+					fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d::vector,NULLIF($%d::text,''))", base, base+1, base+2, base+3, base+4, base+5, base+6)
+					args = append(args, c.ID, c.DocID, c.OrgID, c.Content, embJSON, vec, c.EmbeddingIdentity)
 				}
 			} else {
-				sb.WriteString(`INSERT INTO knowledge_chunks (id, doc_id, org_id, content, embedding) VALUES `)
+				sb.WriteString(`INSERT INTO knowledge_chunks (id, doc_id, org_id, content, embedding, embedding_identity) VALUES `)
 				for i, c := range batch {
 					embJSON, _ := json.Marshal(c.Embedding)
 					if i > 0 {
 						sb.WriteByte(',')
 					}
-					base := i*5 + 1
-					fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d)", base, base+1, base+2, base+3, base+4)
-					args = append(args, c.ID, c.DocID, c.OrgID, c.Content, embJSON)
+					base := i*6 + 1
+					fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,NULLIF($%d::text,''))", base, base+1, base+2, base+3, base+4, base+5)
+					args = append(args, c.ID, c.DocID, c.OrgID, c.Content, embJSON, c.EmbeddingIdentity)
 				}
 			}
 			if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
@@ -230,6 +234,27 @@ func (b *PostgresStorageBackend) fillKnowledgeChunkOrgs(ctx context.Context, tx 
 	return nil
 }
 
+// lockKnowledgeOrgs takes, in tx, the transaction-scoped advisory lock of every org the chunks belong to
+// (pg_advisory_xact_lock(hashtext(org_id))), so the chunk writes of one org — an upload's insert, a re-index
+// page — serialise across replicas, where rag's per-org mutex cannot reach (R2). Released with the transaction.
+func lockKnowledgeOrgs(ctx context.Context, tx DBTX, chunks []interfaces.KnowledgeChunk) error {
+	seen := map[string]bool{}
+	var orgs []string
+	for _, c := range chunks {
+		if c.OrgID != "" && !seen[c.OrgID] {
+			seen[c.OrgID] = true
+			orgs = append(orgs, c.OrgID)
+		}
+	}
+	sort.Strings(orgs) // one lock order for every session: a multi-org batch cannot deadlock another
+	for _, org := range orgs {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, org); err != nil {
+			return fmt.Errorf("lock knowledge org %s: %w", org, err)
+		}
+	}
+	return nil
+}
+
 // knowledgeMinSimilarity is the relevance floor for retrieval; knowledgeMaxCosineDistance is the identical
 // cutoff in pgvector's units (<=> is cosine DISTANCE = 1 - similarity) — together they keep the paths in step.
 const (
@@ -237,15 +262,19 @@ const (
 	knowledgeMaxCosineDistance         = 1 - float64(knowledgeMinSimilarity)
 )
 
-func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
+// SearchKnowledge ranks the org's chunks by similarity to the query. identity restricts the candidates to the
+// chunks embedded under it and the legacy rows without one (ADR 0027): a chunk of another identity is the same
+// width but another model's vector, which cosine cannot tell from a miss; "" = any. The width filters stay
+// separate — the identity string is not parsed for the width (a provider may retry at its native width).
+func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int, identity string) ([]interfaces.KnowledgeChunk, error) {
 	// pgvector path: push the similarity ordering + LIMIT into the database; only same-dimension
 	// chunks are indexed, and <=> is cosine distance, so ORDER BY it ASC returns the most similar.
 	if b.hasPgvector && len(queryEmbedding) == b.embeddingDim {
-		return b.searchKnowledgeVector(ctx, orgID, queryEmbedding, limit)
+		return b.searchKnowledgeVector(ctx, orgID, queryEmbedding, limit, identity)
 	}
 	// Go-side fallback: no pgvector, or the query dimension doesn't match the index — loads a
 	// deterministic capped sample and ranks in-process for portability.
-	return b.searchKnowledgeGo(ctx, orgID, queryEmbedding, limit)
+	return b.searchKnowledgeGo(ctx, orgID, queryEmbedding, limit, identity)
 }
 
 // searchKnowledgeVector runs the server-side similarity search. The relevance cutoff MUST match the Go
@@ -258,10 +287,10 @@ func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID stri
 // tenant, so on pgvector < 0.8 the index is not used at all; with it, the scan keeps walking until LIMIT
 // rows pass the org filter, bounded by hnsw.max_scan_tuples (raised here so a small tenant in a large
 // corpus is not cut short).
-func (b *PostgresStorageBackend) searchKnowledgeVector(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
+func (b *PostgresStorageBackend) searchKnowledgeVector(ctx context.Context, orgID string, queryEmbedding []float32, limit int, identity string) ([]interfaces.KnowledgeChunk, error) {
 	stmt, indexed := b.knowledgeVectorStatement()
 	if !indexed {
-		rows, err := b.query(ctx).QueryContext(ctx, stmt, orgID, FormatVector(queryEmbedding), limit, knowledgeMaxCosineDistance, b.embeddingDim)
+		rows, err := b.query(ctx).QueryContext(ctx, stmt, orgID, FormatVector(queryEmbedding), limit, knowledgeMaxCosineDistance, b.embeddingDim, identity)
 		if err != nil {
 			return nil, err
 		}
@@ -278,7 +307,7 @@ func (b *PostgresStorageBackend) searchKnowledgeVector(ctx context.Context, orgI
 				return fmt.Errorf("%s: %w", stmt, err)
 			}
 		}
-		rows, err := tx.QueryContext(ctx, stmt, orgID, FormatVector(queryEmbedding), limit, knowledgeMaxCosineDistance)
+		rows, err := tx.QueryContext(ctx, stmt, orgID, FormatVector(queryEmbedding), limit, knowledgeMaxCosineDistance, identity)
 		if err != nil {
 			return err
 		}
@@ -306,7 +335,8 @@ func (b *PostgresStorageBackend) knowledgeVectorStatement() (stmt string, indexe
 const hnswMaxScanTuples = 100000
 
 // knowledgeVectorSearchExactSQL is the exact-scan form (no index expression to match), used with no configured
-// width or a non-iterating pgvector. Args: $1 org, $2 query vector, $3 limit, $4 max cosine distance, $5 width (0 = any).
+// width or a non-iterating pgvector. Args: $1 org, $2 query vector, $3 limit, $4 max cosine distance, $5 width (0 = any),
+// $6 embedding identity ("" = any; else that identity or none).
 const knowledgeVectorSearchExactSQL = `
 		SELECT nearest.id, nearest.doc_id, nearest.content, d.filename
 		FROM (
@@ -316,6 +346,7 @@ const knowledgeVectorSearchExactSQL = `
 			WHERE c.org_id = $1
 			  AND c.embedding_vec IS NOT NULL
 			  AND ($5 <= 0 OR vector_dims(c.embedding_vec) = $5)
+			  AND ($6::text = '' OR c.embedding_identity IS NULL OR c.embedding_identity = $6::text)
 			  AND c.embedding_vec <=> $2::vector <= $4
 			ORDER BY dist
 			LIMIT $3
@@ -323,11 +354,12 @@ const knowledgeVectorSearchExactSQL = `
 		JOIN knowledge_documents d ON d.id = nearest.doc_id
 		ORDER BY nearest.dist`
 
-// knowledgeVectorSearchSQL is the indexed form for width dims (same args minus $5): the inner query is exactly
-// what the HNSW index serves — the cast expression it is built on, its partial predicate verbatim, ORDER BY on
-// the distance computed once, the LIMIT. The cutoff is applied OUTSIDE the inner WHERE (the k nearest filtered
-// to the close-enough ones equals the nearest k of the close-enough ones, and keeping it out lets the LIMIT
-// push into the index scan); the document join is outside the LIMIT too.
+// knowledgeVectorSearchSQL is the indexed form for width dims (args $1-$4 as above, $5 the identity): the inner
+// query is exactly what the HNSW index serves — the cast expression it is built on, its partial predicate verbatim,
+// ORDER BY on the distance computed once, the LIMIT; the org and identity conjuncts are filters the iterative scan
+// keeps walking past. The cutoff is applied OUTSIDE the inner WHERE (the k nearest filtered to the close-enough
+// ones equals the nearest k of the close-enough ones, and keeping it out lets the LIMIT push into the index scan);
+// the document join is outside the LIMIT too.
 func knowledgeVectorSearchSQL(dims int) string {
 	return fmt.Sprintf(`
 		SELECT nearest.id, nearest.doc_id, nearest.content, d.filename
@@ -337,6 +369,7 @@ func knowledgeVectorSearchSQL(dims int) string {
 			FROM knowledge_chunks c
 			WHERE c.org_id = $1
 			  AND vector_dims(c.embedding_vec) = %[1]d
+			  AND ($5::text = '' OR c.embedding_identity IS NULL OR c.embedding_identity = $5::text)
 			ORDER BY dist
 			LIMIT $3
 		) nearest
@@ -362,7 +395,7 @@ func scanKnowledgeHits(rows *sql.Rows) ([]interfaces.KnowledgeChunk, error) {
 }
 
 // searchKnowledgeGo is the portability fallback: load a deterministic capped sample and rank in-process.
-func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
+func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID string, queryEmbedding []float32, limit int, identity string) ([]interfaces.KnowledgeChunk, error) {
 	// Cap the DB load to avoid OOM; cosine sort and truncation stay in Go. ORDER BY doc_id, id makes
 	// the 500-chunk sample deterministic. The jsonb_array_length filter drops width-mismatched chunks
 	// BEFORE transfer (cosine is undefined across widths; a 1536-dim embedding is ~15-30 KB of JSON).
@@ -373,8 +406,9 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 		JOIN knowledge_documents d ON d.id = c.doc_id
 		WHERE c.org_id = $1
 		  AND jsonb_array_length(c.embedding) = $2
+		  AND ($4::text = '' OR c.embedding_identity IS NULL OR c.embedding_identity = $4::text)
 		ORDER BY c.doc_id, c.id
-		LIMIT $3`, orgID, len(queryEmbedding), maxChunks)
+		LIMIT $3`, orgID, len(queryEmbedding), maxChunks, identity)
 	if err != nil {
 		return nil, err
 	}
@@ -400,15 +434,17 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 	if len(chunks) >= maxChunks {
 		logger.Warn("knowledge search fallback capped — chunks beyond the sample are unsearchable",
 			"org_id", orgID, "sampled", len(chunks))
-		metrics.RecordRAGFallbackCapped()
+		recordRAGFallbackCapped()
 	}
 
 	return rankKnowledgeChunks(orgID, chunks, queryEmbedding, limit)
 }
 
 // ListKnowledgeChunkContents returns one page of chunks (no embeddings) strictly after the (doc_id, id) cursor,
-// for re-indexing: the embedding provider changed, but the chunked TEXT is still the source of truth.
-func (b *PostgresStorageBackend) ListKnowledgeChunkContents(ctx context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int) ([]interfaces.KnowledgeChunk, error) {
+// for re-indexing: the embedding provider changed, but the chunked TEXT is still the source of truth. With
+// notIdentity the page skips the chunks already embedded under it (legacy rows without one are walked), so a
+// re-index converts only what is not yet at the current model and a restarted run never re-buys a page.
+func (b *PostgresStorageBackend) ListKnowledgeChunkContents(ctx context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int, notIdentity string) ([]interfaces.KnowledgeChunk, error) {
 	const maxPage = 2000
 	if limit <= 0 || limit > maxPage {
 		limit = maxPage
@@ -418,15 +454,16 @@ func (b *PostgresStorageBackend) ListKnowledgeChunkContents(ctx context.Context,
 		FROM knowledge_chunks c
 		WHERE c.org_id = $1
 		  AND (c.doc_id, c.id) > ($2::text, $3::text)
+		  AND ($5::text = '' OR c.embedding_identity IS DISTINCT FROM $5::text)
 		ORDER BY c.doc_id, c.id
-		LIMIT $4`, orgID, after.DocID, after.ID, limit)
+		LIMIT $4`, orgID, after.DocID, after.ID, limit, notIdentity)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var chunks []interfaces.KnowledgeChunk
 	for rows.Next() {
-		var c interfaces.KnowledgeChunk
+		c := interfaces.KnowledgeChunk{OrgID: orgID}
 		if err := rows.Scan(&c.ID, &c.DocID, &c.Content); err != nil {
 			return nil, err
 		}
@@ -535,6 +572,9 @@ func (b *PostgresStorageBackend) UpdateKnowledgeChunkEmbeddings(ctx context.Cont
 		return nil
 	}
 	runUpdates := func(tx DBTX) error {
+		if err := lockKnowledgeOrgs(ctx, tx, chunks); err != nil {
+			return err
+		}
 		const perStmt = 200
 		for start := 0; start < len(chunks); start += perStmt {
 			end := min(start+perStmt, len(chunks))
@@ -551,11 +591,12 @@ func (b *PostgresStorageBackend) UpdateKnowledgeChunkEmbeddings(ctx context.Cont
 // buildKnowledgeEmbeddingUpdate renders one multi-row UPDATE ... FROM (VALUES ...) statement (200 rows per
 // statement). knowledge_chunks.id is TEXT and Postgres has no implicit text/uuid cast — the explicit ::text
 // keeps the VALUES column typed so a NULL vector still plans (vec is NULL for vectors whose width is not embeddingDim).
+// The identity is replaced along with the vector: NULL when the embedder named none.
 func buildKnowledgeEmbeddingUpdate(batch []interfaces.KnowledgeChunk, hasPgvector bool, embeddingDim int) (string, []any) {
 	var sb strings.Builder
-	args := make([]any, 0, len(batch)*3)
+	args := make([]any, 0, len(batch)*4)
 	if hasPgvector {
-		sb.WriteString(`UPDATE knowledge_chunks AS c SET embedding = v.emb, embedding_vec = v.vec
+		sb.WriteString(`UPDATE knowledge_chunks AS c SET embedding = v.emb, embedding_vec = v.vec, embedding_identity = NULLIF(v.ident, '')
 			FROM (VALUES `)
 		for i, c := range batch {
 			embJSON, _ := json.Marshal(c.Embedding)
@@ -566,25 +607,25 @@ func buildKnowledgeEmbeddingUpdate(batch []interfaces.KnowledgeChunk, hasPgvecto
 			if i > 0 {
 				sb.WriteByte(',')
 			}
-			base := i*3 + 1
-			fmt.Fprintf(&sb, "($%d::text, $%d::jsonb, $%d::vector)", base, base+1, base+2)
-			args = append(args, c.ID, embJSON, vec)
+			base := i*4 + 1
+			fmt.Fprintf(&sb, "($%d::text, $%d::jsonb, $%d::vector, $%d::text)", base, base+1, base+2, base+3)
+			args = append(args, c.ID, embJSON, vec, c.EmbeddingIdentity)
 		}
-		sb.WriteString(`) AS v(id, emb, vec) WHERE c.id = v.id`)
+		sb.WriteString(`) AS v(id, emb, vec, ident) WHERE c.id = v.id`)
 		return sb.String(), args
 	}
-	sb.WriteString(`UPDATE knowledge_chunks AS c SET embedding = v.emb
+	sb.WriteString(`UPDATE knowledge_chunks AS c SET embedding = v.emb, embedding_identity = NULLIF(v.ident, '')
 		FROM (VALUES `)
 	for i, c := range batch {
 		embJSON, _ := json.Marshal(c.Embedding)
 		if i > 0 {
 			sb.WriteByte(',')
 		}
-		base := i*2 + 1
-		fmt.Fprintf(&sb, "($%d::text, $%d::jsonb)", base, base+1)
-		args = append(args, c.ID, embJSON)
+		base := i*3 + 1
+		fmt.Fprintf(&sb, "($%d::text, $%d::jsonb, $%d::text)", base, base+1, base+2)
+		args = append(args, c.ID, embJSON, c.EmbeddingIdentity)
 	}
-	sb.WriteString(`) AS v(id, emb) WHERE c.id = v.id`)
+	sb.WriteString(`) AS v(id, emb, ident) WHERE c.id = v.id`)
 	return sb.String(), args
 }
 
@@ -604,6 +645,74 @@ func (b *PostgresStorageBackend) CountKnowledgeChunks(ctx context.Context, orgID
 	}
 	err := b.query(ctx).QueryRowContext(ctx, query, orgID).Scan(&total, &indexed)
 	return total, indexed, err
+}
+
+// CountKnowledgeChunksByIdentity is CountKnowledgeChunks with the census by embedding identity (ADR 0027): one
+// aggregate pass over the org's chunks; with "" nothing is current or stranded, so every row counts as legacy.
+func (b *PostgresStorageBackend) CountKnowledgeChunksByIdentity(ctx context.Context, orgID, identity string) (interfaces.KnowledgeChunkCounts, error) {
+	var c interfaces.KnowledgeChunkCounts
+	query := `
+		SELECT COUNT(c.id), 0,
+		       COUNT(c.id) FILTER (WHERE $2::text <> '' AND c.embedding_identity = $2::text),
+		       COUNT(c.id) FILTER (WHERE $2::text <> '' AND c.embedding_identity IS NOT NULL AND c.embedding_identity <> $2::text)
+		FROM knowledge_chunks c
+		WHERE c.org_id = $1`
+	if b.hasPgvector {
+		query = `
+		SELECT COUNT(c.id), COUNT(c.id) FILTER (WHERE c.embedding_vec IS NOT NULL),
+		       COUNT(c.id) FILTER (WHERE $2::text <> '' AND c.embedding_identity = $2::text),
+		       COUNT(c.id) FILTER (WHERE $2::text <> '' AND c.embedding_identity IS NOT NULL AND c.embedding_identity <> $2::text)
+		FROM knowledge_chunks c
+		WHERE c.org_id = $1`
+	}
+	err := b.query(ctx).QueryRowContext(ctx, query, orgID, identity).Scan(&c.Total, &c.VectorIndexed, &c.Current, &c.Stranded)
+	return c, err
+}
+
+// CountStrandedKnowledgeChunksByDocument counts the org's chunks of another identity per document, for the
+// admin list; the walk is the org's chunk index (org_id, doc_id, id). "" strands nothing.
+func (b *PostgresStorageBackend) CountStrandedKnowledgeChunksByDocument(ctx context.Context, orgID, identity string) (map[string]int, error) {
+	out := map[string]int{}
+	if identity == "" {
+		return out, nil
+	}
+	rows, err := b.query(ctx).QueryContext(ctx, `
+		SELECT c.doc_id, COUNT(c.id)::int
+		FROM knowledge_chunks c
+		WHERE c.org_id = $1
+		  AND c.embedding_identity IS NOT NULL AND c.embedding_identity <> $2::text
+		GROUP BY c.doc_id`, orgID, identity)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var docID string
+		var n int
+		if err := rows.Scan(&docID, &n); err != nil {
+			return nil, err
+		}
+		out[docID] = n
+	}
+	return out, rows.Err()
+}
+
+// StampKnowledgeChunkIdentity rewrites the identity of the org's chunks at from ("" = the legacy NULL rows) to
+// to ("" = NULL): the lenient legacy match ends for an org once an upload or re-index proved its model. Its own
+// short RLS transaction as userID, like the other chunk writers: the org predicate is not the only tenant guard.
+func (b *PostgresStorageBackend) StampKnowledgeChunkIdentity(ctx context.Context, userID, orgID, from, to string) (n int, err error) {
+	err = b.withTxAs(ctx, userID, func(_ context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE knowledge_chunks SET embedding_identity = NULLIF($3::text, '')
+			WHERE org_id = $1 AND embedding_identity IS NOT DISTINCT FROM NULLIF($2::text, '')`, orgID, from, to)
+		if err != nil {
+			return err
+		}
+		rows, err := res.RowsAffected()
+		n = int(rows)
+		return err
+	})
+	return n, err
 }
 
 // rankKnowledgeChunks scores chunks against queryEmbedding by cosine similarity and returns the top `limit`,

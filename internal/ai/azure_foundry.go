@@ -272,16 +272,18 @@ func (p *AzureFoundryProvider) breakerScope() string {
 	return strings.ToLower(p.cfg.Endpoint) + "|" + strings.ToLower(p.cfg.ProjectEndpoint)
 }
 
-func (p *AzureFoundryProvider) ID() string        { return azureFoundryProviderID }
-func (p *AzureFoundryProvider) Name() string      { return "Azure AI Foundry" }
+func (p *AzureFoundryProvider) ID() string        { return azureFoundrySpec.ID }
+func (p *AzureFoundryProvider) Name() string      { return azureFoundrySpec.Name }
 func (p *AzureFoundryProvider) ContextLimit() int { return 128000 }
 func (p *AzureFoundryProvider) FreeModel() string { return "" }
 
 // SupportsTools: every Foundry chat model family exposes native function calling; models that don't reject the request and the loop degrades.
 func (p *AzureFoundryProvider) SupportsTools() bool { return true }
 
-// PricePerMillionTokens is zero on purpose: Foundry is not priced by baki (auditedProvider.pricingFor); the cost is read in the Azure portal.
-func (p *AzureFoundryProvider) PricePerMillionTokens() Pricing { return Pricing{} }
+// PricePerMillionTokens is zero on purpose (PricingUnpriced): Foundry is not priced by baki (auditedProvider.pricingFor); the cost is read in the Azure portal.
+func (p *AzureFoundryProvider) PricePerMillionTokens() Pricing {
+	return specDefaultPricing(azureFoundrySpec)
+}
 
 // DefaultModel is the configured chat deployment, else the first additional one, else the first Claude one;
 // "" (a document naming none, or a registry provider) lets the picker decide — never the first in sort order.
@@ -290,7 +292,7 @@ func (p *AzureFoundryProvider) DefaultModel() string {
 		return ""
 	}
 	if !p.cfg.Configured() {
-		return "gpt-4.1"
+		return azureFoundrySpec.DefaultModel
 	}
 	if names := p.cfg.chatDeployments(); len(names) > 0 {
 		// The project listing may have re-listed it as a Claude deployment ("claude:<name>"), which /openai/v1 cannot serve.

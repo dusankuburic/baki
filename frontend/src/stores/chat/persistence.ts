@@ -1,7 +1,7 @@
 import {currentUserId} from '../storeRegistry'
 import {storableModelLabel} from '@/lib/modelIds'
 import {isTauri} from '@/platform/guards'
-import {MAX_THREADS, isProviderId} from './types'
+import {MAX_THREADS} from './types'
 import type {ChatThread, InFlightTurn, ThreadPinFields} from './types'
 
 // LEGACY_FLOW_SCOPE is the pre-thread conversation key. A flow whose threads
@@ -72,18 +72,24 @@ type StoredThread = Pick<
 
 // A stored pin's strings are capped: a registry id is "m/" plus 10
 // characters and a display name at most 64 on the server, a catalogue id a
-// model name — anything longer did not come from this app.
+// model name — anything longer did not come from this app. A provider id is
+// whatever the server names (a newer server's provider pins too), short.
+const MAX_PIN_PROVIDER_LENGTH = 64
 const MAX_PIN_MODEL_LENGTH = 256
 const MAX_PIN_LABEL_LENGTH = 200
 
-// readThreadPin validates a stored thread's model pin. Anything off — an
-// unknown provider, a missing or oversized model — loads the thread
-// unpinned (as every thread from before per-thread memory loads), and
-// lib/modelSelection resolves it; a bad label alone is just dropped (as is
-// one that is only an id — see storableModelLabel).
+function isPinProvider(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_PIN_PROVIDER_LENGTH
+}
+
+// readThreadPin validates a stored thread's model pin. Anything off — no
+// provider, a missing or oversized model — loads the thread unpinned (as
+// every thread from before per-thread memory loads), and lib/modelSelection
+// resolves it; a bad label alone is just dropped (as is one that is only an
+// id — see storableModelLabel).
 function readThreadPin(t: Record<string, unknown>): ThreadPinFields {
   const {provider, model, modelLabel} = t
-  if (!isProviderId(provider)) return {}
+  if (!isPinProvider(provider)) return {}
   if (typeof model !== 'string' || !model.trim() || model.length > MAX_PIN_MODEL_LENGTH) return {}
   const pin: ThreadPinFields = {provider, model}
   const label =
@@ -102,7 +108,7 @@ function readInFlight(raw: unknown): InFlightTurn | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const r = raw as Record<string, unknown>
   if (typeof r.streamId !== 'string' || !UUID_RE.test(r.streamId)) return undefined
-  if (!isProviderId(r.provider)) return undefined
+  if (!isPinProvider(r.provider)) return undefined
   if (typeof r.model !== 'string' || r.model.length > MAX_PIN_MODEL_LENGTH) return undefined
   const turn: InFlightTurn = {streamId: r.streamId, provider: r.provider, model: r.model}
   if (typeof r.messageId === 'string' && UUID_RE.test(r.messageId)) turn.messageId = r.messageId

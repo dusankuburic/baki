@@ -41,18 +41,41 @@ export type ChatEvent =
   | {kind: 'heartbeat'}
   | {kind: 'tool'; label: string}
   | {kind: 'tool-result'; name: string; label: string; ok: boolean; durationMs: number; summary: string}
-  | {kind: 'fix-proposal'; proposalId: string; items: FixProposalEventItem[]}
+  // An approval request: a fix_proposal (source 'fix', the decision goes to
+  // /api/chat/fix-decision) or an approval_request a later server may emit
+  // instead (source 'approval', /api/chat/approval-decision). `tool` is ''
+  // and `previewKind` 'fix-patch' from a server that sends neither.
+  | {
+      kind: 'fix-proposal'
+      source: ApprovalSource
+      proposalId: string
+      tool: string
+      previewKind: string
+      requiredScope?: string
+      items: FixProposalEventItem[]
+    }
   | {
       kind: 'fix-decision'
+      source: ApprovalSource
       proposalId: string
       status: string
       message?: string
-      items?: {ruleId: string; status: string; message?: string}[]
+      // One outcome per item, matched to the request's items by the id the
+      // server stamped on both (blockId:ruleId), else by position (see
+      // stream-engine/helpers decisionTargets).
+      items?: FixDecisionEventItem[]
     }
 
-// FixProposalEventItem is one fix inside a proposal event (single-fix events
-// carry one item synthesized from the flat fields).
+export type ApprovalSource = 'fix' | 'approval'
+
+// FixProposalEventItem is one item inside a request event: its id and label
+// (a fix's ruleId and block label), the preview text, and the fix fields —
+// read from the flat item (fix_proposal) or its `meta` (approval_request),
+// empty for an item that is not a fix. Single-fix events carry one item
+// synthesized from the flat fields.
 export interface FixProposalEventItem {
+  id: string
+  label: string
   ruleId: string
   fixType: string
   blockLabel: string
@@ -60,8 +83,19 @@ export interface FixProposalEventItem {
   summary: string
 }
 
-// FixProposalPayload is the parsed fix-proposal event (the apply_fix /
-// apply_fixes approval prompt's content).
+// FixDecisionEventItem is one item's outcome inside a decision event. At
+// least one of `id` (the request item's id) and `ruleId` (a fix's rule) is
+// set; neither is invented from the other, so the engine can tell a server
+// that stamps ids from one that sends the rule alone.
+export interface FixDecisionEventItem {
+  id?: string
+  ruleId?: string
+  status: string
+  message?: string
+}
+
+// FixProposalPayload is the parsed request event (the apply_fix /
+// apply_fixes approval prompt's content, or any later tool's).
 export type FixProposalPayload = Extract<ChatEvent, {kind: 'fix-proposal'}>
 
 // ToolResultPayload is the parsed tool_result event — one finished tool
@@ -92,6 +126,83 @@ function doneMeta(data: Record<string, unknown>): DoneMeta {
   const outputCostPerM = asNumber(data.outputCostPerM)
   if (outputCostPerM !== null) meta.outputCostPerM = outputCostPerM
   return meta
+}
+
+const DEFAULT_PREVIEW_KIND = 'fix-patch'
+
+// requestItem reads one item of a request event: the fix fields off the item
+// itself or its `meta`; the id and label default to the fix's rule and block.
+function requestItem(rec: Record<string, unknown>): FixProposalEventItem {
+  const meta = asRecord(rec.meta) ?? {}
+  const ruleId = asString(rec.ruleId) ?? asString(meta.ruleId) ?? ''
+  const blockLabel = asString(rec.blockLabel) ?? asString(meta.blockLabel) ?? ''
+  return {
+    id: asString(rec.id) ?? ruleId,
+    label: asString(rec.label) ?? blockLabel,
+    ruleId,
+    fixType: asString(rec.fixType) ?? asString(meta.fixType) ?? '',
+    blockLabel,
+    line: asNumber(rec.line) ?? asNumber(meta.line) ?? 0,
+    summary: asString(rec.summary) ?? '',
+  }
+}
+
+function parseRequest(source: ApprovalSource, data: Record<string, unknown>): ChatEvent | null {
+  const proposalId = asString(data.proposalId)
+  if (!proposalId) return null
+  // Batch events carry items[]; single-fix events carry flat fields —
+  // normalize both to items[] (single = one item).
+  const rawItems = Array.isArray(data.items) ? data.items : null
+  const items: FixProposalEventItem[] = []
+  if (rawItems) {
+    for (const it of rawItems) {
+      const rec = asRecord(it)
+      if (rec) items.push(requestItem(rec))
+    }
+  }
+  if (items.length === 0) items.push(requestItem(data))
+  const requiredScope = asString(data.requiredScope)
+  return {
+    kind: 'fix-proposal',
+    source,
+    proposalId,
+    tool: asString(data.tool) ?? '',
+    previewKind: asString(data.previewKind) || DEFAULT_PREVIEW_KIND,
+    ...(requiredScope ? {requiredScope} : {}),
+    items,
+  }
+}
+
+function parseDecision(source: ApprovalSource, data: Record<string, unknown>): ChatEvent | null {
+  const proposalId = asString(data.proposalId)
+  const status = asString(data.status)
+  if (!proposalId || !status) return null
+  const items: FixDecisionEventItem[] = []
+  if (Array.isArray(data.items)) {
+    for (const it of data.items) {
+      const rec = asRecord(it)
+      if (!rec) continue
+      const id = asString(rec.id)
+      const ruleId = asString(rec.ruleId)
+      const st = asString(rec.status)
+      if ((id || ruleId) && st) {
+        items.push({
+          ...(id ? {id} : {}),
+          ...(ruleId ? {ruleId} : {}),
+          status: st,
+          message: asString(rec.message) ?? undefined,
+        })
+      }
+    }
+  }
+  return {
+    kind: 'fix-decision',
+    source,
+    proposalId,
+    status,
+    message: asString(data.message) ?? undefined,
+    items: items.length > 0 ? items : undefined,
+  }
 }
 
 export function parseChatEvent(raw: unknown): ChatEvent | null {
@@ -143,59 +254,16 @@ export function parseChatEvent(raw: unknown): ChatEvent | null {
         summary: asString(data.summary) ?? '',
       }
     }
-    case 'fix_proposal': {
-      const proposalId = asString(data.proposalId)
-      if (!proposalId) return null
-      // Batch events carry items[]; single-fix events carry flat fields —
-      // normalize both to items[] (single = one item).
-      const rawItems = Array.isArray(data.items) ? data.items : null
-      const items: FixProposalEventItem[] = []
-      if (rawItems) {
-        for (const it of rawItems) {
-          const rec = asRecord(it)
-          if (!rec) continue
-          items.push({
-            ruleId: asString(rec.ruleId) ?? '',
-            fixType: asString(rec.fixType) ?? '',
-            blockLabel: asString(rec.blockLabel) ?? '',
-            line: asNumber(rec.line) ?? 0,
-            summary: asString(rec.summary) ?? '',
-          })
-        }
-      }
-      if (items.length === 0) {
-        items.push({
-          ruleId: asString(data.ruleId) ?? '',
-          fixType: asString(data.fixType) ?? '',
-          blockLabel: asString(data.blockLabel) ?? '',
-          line: asNumber(data.line) ?? 0,
-          summary: asString(data.summary) ?? '',
-        })
-      }
-      return {kind: 'fix-proposal', proposalId, items}
-    }
-    case 'fix_decision': {
-      const proposalId = asString(data.proposalId)
-      const status = asString(data.status)
-      if (!proposalId || !status) return null
-      const items: {ruleId: string; status: string; message?: string}[] = []
-      if (Array.isArray(data.items)) {
-        for (const it of data.items) {
-          const rec = asRecord(it)
-          if (!rec) continue
-          const rid = asString(rec.ruleId)
-          const st = asString(rec.status)
-          if (rid && st) items.push({ruleId: rid, status: st, message: asString(rec.message) ?? undefined})
-        }
-      }
-      return {
-        kind: 'fix-decision',
-        proposalId,
-        status,
-        message: asString(data.message) ?? undefined,
-        items: items.length > 0 ? items : undefined,
-      }
-    }
+    case 'fix_proposal':
+      return parseRequest('fix', data)
+    case 'fix_decision':
+      return parseDecision('fix', data)
+    // The same payloads under the names a later server may use; only the
+    // decision route differs.
+    case 'approval_request':
+      return parseRequest('approval', data)
+    case 'approval_decision':
+      return parseDecision('approval', data)
     default:
       return null
   }

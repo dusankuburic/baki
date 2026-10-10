@@ -1,0 +1,12 @@
+Hi Una O'Neil,
+
+Ari <admin> commented on a finding assigned to you on the flow "Invoices & Payments "EU" <v2>":
+
+  Looks risky, see <b>step 4</b> & retry +1.
+--pad_mime_boundary_8a3f
+Content-Type: text/html; charset=UTF-8
+
+<a href="https://evil.example">Reset your password</a>
+
+View it in PAD Analyzer (it is waiting in your notifications):
+https://pad.example.com/

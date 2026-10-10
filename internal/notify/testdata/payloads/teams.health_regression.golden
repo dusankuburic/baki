@@ -1,0 +1,8 @@
+POST /webhookb2/x
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: health_regression
+X-Baki-Timestamp: 1790856001
+
+{"@context":"http://schema.org/extensions","@type":"MessageCard","sections":[{"activityTitle":"Health regressed in Invoice Bot","facts":[{"name":"Flow","value":"Invoice Bot"},{"name":"Health","value":"90 → 70"}],"markdown":false,"text":"Health score dropped from 90 to 70."}],"summary":"Health regressed in Invoice Bot","themeColor":"D13438"}

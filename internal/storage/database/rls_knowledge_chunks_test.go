@@ -194,7 +194,7 @@ func TestV28_OrgScopedChunkReadsAgree(t *testing.T) {
 	if err != nil || total != len(idsA) {
 		t.Errorf("CountKnowledgeChunks(A) = %d, %v; want %d", total, err, len(idsA))
 	}
-	page, err := f.b.ListKnowledgeChunkContents(f.ctx, orgA, interfaces.KnowledgeChunkCursor{}, 0)
+	page, err := f.b.ListKnowledgeChunkContents(f.ctx, orgA, interfaces.KnowledgeChunkCursor{}, 0, "")
 	if err != nil {
 		t.Fatalf("ListKnowledgeChunkContents: %v", err)
 	}

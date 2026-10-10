@@ -33,7 +33,7 @@ func repoRoot(t *testing.T) string {
 	return filepath.Join(filepath.Dir(here), "..", "..")
 }
 
-// sourceFiles parses main.go and every non-test file under internal/ and cmd/.
+// sourceFiles parses every non-test file of the root package (main.go) and under internal/ and cmd/.
 func sourceFiles(t *testing.T) []goFile {
 	t.Helper()
 	root := repoRoot(t)
@@ -47,7 +47,15 @@ func sourceFiles(t *testing.T) []goFile {
 		rel, _ := filepath.Rel(root, abs)
 		out = append(out, goFile{path: filepath.ToSlash(rel), ast: f})
 	}
-	parse(filepath.Join(root, "main.go"))
+	rootFiles, err := filepath.Glob(filepath.Join(root, "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range rootFiles {
+		if !strings.HasSuffix(p, "_test.go") {
+			parse(p)
+		}
+	}
 	for _, dir := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -290,7 +298,6 @@ var handWrittenRoutes = map[string]int{
 	"internal/api/library_versions.go":      5,
 	"internal/api/org.go":                   5,
 	"internal/api/org_azure.go":             15,
-	"internal/api/org_channels.go":          4,
 	"internal/api/org_knowledge.go":         4,
 	"internal/api/org_members.go":           6,
 	"internal/api/providers_azure.go":       14,
@@ -390,10 +397,7 @@ func TestArch_EnvReadsOnlyInConfig(t *testing.T) {
 		}
 	}
 	checkRatchet(t, "os.Getenv outside internal/config", got, map[string]int{
-		"main.go":                               6, // config bootstrap (PAD_CONFIG/PAD_MODE/PAD_PORT), webhook notifier, healthcheck
-		"internal/ai/httpclient.go":             1,
-		"internal/ai/providerconfig.go":         1,
-		"internal/api/handlers_integrations.go": 1,
-		"internal/telemetry/telemetry.go":       1, // PAD_MODE as the deployment environment
+		"internal/ai/httpclient.go":     1,
+		"internal/ai/providerconfig.go": 1,
 	})
 }

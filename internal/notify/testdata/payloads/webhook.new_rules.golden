@@ -1,0 +1,10 @@
+POST /hook
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: new_rules
+X-Baki-Signature: sha256=b4948044fec83e24f4f61602c9a68d4edfcba02b137bf70d44bd2bb6efb0fc18
+X-Baki-Signature-V2: sha256=efe8e172766a659cba410217a6e8040c4fd1eb09742d204a7b7b8d14dd3211ca
+X-Baki-Timestamp: 1790856001
+
+{"schemaVersion":1,"id":"evt_c6d883e0ecc7c345f8ae3dea","deliveryId":"00000000-0000-4000-8000-000000000001","orgId":"org-1","type":"new_rules","flowId":"","title":"2 new rules report findings","message":"Rules newer than the flows' baselines report findings in 3 flow(s): rule-a, rule-b.","ruleIds":["rule-a","rule-b"],"flowCount":3,"at":"2026-10-01T12:00:00Z"}

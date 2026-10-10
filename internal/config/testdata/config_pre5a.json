@@ -1,0 +1,117 @@
+{
+  "Mode": "cloud",
+  "Server": {
+    "Host": "0.0.0.0",
+    "Port": 8080,
+    "AllowedOrigins": [
+      "https://baki.example.com"
+    ],
+    "TrustedProxies": [
+      "10.0.0.0/8"
+    ],
+    "StaticDir": "",
+    "MetricsToken": "",
+    "LocalConfigEndpoint": false,
+    "PprofEnabled": false,
+    "TLSCert": "",
+    "TLSKey": "",
+    "BehindProxy": true,
+    "CustomRulesPath": "",
+    "RoutePolicy": "shadow"
+  },
+  "Storage": {
+    "DataDir": "",
+    "Backend": "database",
+    "DatabaseURL": "postgres://baki_app@db.example.com:5432/baki?sslmode=require",
+    "DBMaxOpenConns": 15,
+    "DBMaxIdleConns": 0,
+    "DBConnMaxLifetime": "",
+    "DBConnMaxIdleTime": "10m",
+    "DBStatementTimeout": "0s",
+    "DBRequireSSL": "",
+    "EmbeddingDim": 0,
+    "EmbeddingProvider": "",
+    "AzureStorageAccount": "",
+    "AzureStorageContainer": "",
+    "AzureBlobConnectionString": ""
+  },
+  "Auth": {
+    "Enabled": true,
+    "Secret": "a-long-random-cloud-signing-secret-of-a-fixture",
+    "EncryptionKey": "",
+    "EncryptionKeyPrevious": null,
+    "SecretEphemeral": false,
+    "SSO": {
+      "IssuerURL": "",
+      "ClientID": "",
+      "ClientSecret": "",
+      "RedirectURL": "",
+      "ProviderName": ""
+    }
+  },
+  "Runtime": {
+    "RateLimitGeneralRPS": 1,
+    "RateLimitGeneralBurst": 20,
+    "RateLimitAuthRPS": 0.08333333333333333,
+    "RateLimitAuthBurst": 5,
+    "RateLimitExpensiveRPS": 2,
+    "RateLimitExpensiveBurst": 5,
+    "RateLimitChatRPS": 3,
+    "RateLimitChatBurst": 10,
+    "RateLimitUploadRPS": 1,
+    "RateLimitUploadBurst": 3,
+    "RateLimitChannelTestRPS": 0.1,
+    "RateLimitChannelTestBurst": 3,
+    "RateLimitPerUserRPS": 10,
+    "RateLimitPerUserBurst": 20,
+    "CircuitBreakerFailures": 5,
+    "CircuitBreakerOpenDur": "45s",
+    "RetryMaxAttempts": 3,
+    "RetryBaseDelay": "",
+    "OTLPEndpoint": "",
+    "RequestTimeout": "1m30s",
+    "AzureFoundryAllowedHosts": null,
+    "AIAllowPrivateEgress": false
+  },
+  "Governance": {
+    "ScanInterval": "1h",
+    "NotifyWebhookURL": "",
+    "NotifyWebhookSecret": "",
+    "NotifyTeamsURL": "",
+    "NotifyTeamsWorkflowURL": "",
+    "NotifySlackURL": "",
+    "NotifySlackSecret": "",
+    "NotifyAllowedHosts": null,
+    "NotifyAllowedHostsVisible": false,
+    "InboundWebhookSecret": "",
+    "InboundWebhookAllowNoTimestamp": false,
+    "NotifyEmailTo": "",
+    "NotifyJiraBaseURL": "",
+    "NotifyJiraEmail": "",
+    "NotifyJiraAPIToken": "",
+    "NotifyJiraProject": "",
+    "RetentionPurgeInterval": "12h",
+    "AuditRetentionDays": 90,
+    "AuditSpillDir": ""
+  },
+  "Email": {
+    "SMTPHost": "",
+    "SMTPPort": 0,
+    "Username": "",
+    "Password": "",
+    "From": "",
+    "AppBaseURL": "",
+    "MaxConnections": 0
+  },
+  "Redis": {
+    "URL": "",
+    "PoolSize": 0,
+    "MinIdleConns": 0
+  },
+  "Features": {
+    "disableSignUp": false
+  },
+  "Log": {
+    "Level": "warn"
+  }
+}

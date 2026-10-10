@@ -15,7 +15,6 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"golang.org/x/sync/errgroup"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -268,7 +267,7 @@ func (b *PostgresStorageBackend) LoadFlow(ctx context.Context, id string) (*inte
 		} else if metadataRecordsContent(flow.Metadata) {
 			// Both keys 404 on metadata-recorded content: data loss, not a legitimately empty flow —
 			// fail rather than return a hollow {}.
-			metrics.RecordBlobContentMissing()
+			recordBlobContentMissing()
 			return nil, fmt.Errorf("load flow %s: content blob missing though metadata records content (%d block(s))", flow.ID, flow.Metadata.BlockCount)
 		}
 	}
@@ -570,7 +569,7 @@ func (b *PostgresStorageBackend) backfillBlobContent(ctx context.Context, flows 
 				// from real content; per-flow data loss is logged, not a permanent error for every caller.
 				f.Content = nil
 				if metadataRecordsContent(f.Metadata) {
-					metrics.RecordBlobContentMissing()
+					recordBlobContentMissing()
 					logger.Error("flow content blob missing though metadata records content", "flow_id", f.ID, "version", f.Version)
 				}
 				return nil
@@ -763,10 +762,10 @@ func (b *PostgresStorageBackend) uploadBlob(ctx context.Context, key string, dat
 		HTTPHeaders: &blob.HTTPHeaders{BlobContentType: &contentType},
 	})
 	if err != nil {
-		metrics.RecordBlobOp("upload", blobErrStatus(err), time.Since(start))
+		recordBlobOp("upload", blobErrStatus(err), time.Since(start))
 		return fmt.Errorf("upload blob %s: %w", key, err)
 	}
-	metrics.RecordBlobOp("upload", "ok", time.Since(start))
+	recordBlobOp("upload", "ok", time.Since(start))
 	return nil
 }
 
@@ -802,14 +801,14 @@ func (b *PostgresStorageBackend) deleteSingleBlob(ctx context.Context, flowID, k
 	if err != nil {
 		var respErr *azcore.ResponseError
 		if errors.As(err, &respErr) && respErr.StatusCode == 404 {
-			metrics.RecordBlobOp("delete", "not_found", time.Since(start))
+			recordBlobOp("delete", "not_found", time.Since(start))
 			return
 		}
-		metrics.RecordBlobOp("delete", blobErrStatus(err), time.Since(start))
+		recordBlobOp("delete", blobErrStatus(err), time.Since(start))
 		logger.Warn("failed to delete flow content blob", "flow_id", flowID, "key", key, "error", err)
 		return
 	}
-	metrics.RecordBlobOp("delete", "ok", time.Since(start))
+	recordBlobOp("delete", "ok", time.Since(start))
 }
 
 func (b *PostgresStorageBackend) downloadBlob(ctx context.Context, key string) ([]byte, error) {
@@ -823,14 +822,14 @@ func (b *PostgresStorageBackend) downloadBlob(ctx context.Context, key string) (
 	if err != nil {
 		var respErr *azcore.ResponseError
 		if errors.As(err, &respErr) && respErr.StatusCode == 404 {
-			metrics.RecordBlobOp("download", "not_found", time.Since(start))
+			recordBlobOp("download", "not_found", time.Since(start))
 			return nil, nil
 		}
 		// Defensively close an error body if the SDK returned one (robust against SDK connection leaks).
 		if resp.Body != nil {
 			_ = resp.Body.Close()
 		}
-		metrics.RecordBlobOp("download", blobErrStatus(err), time.Since(start))
+		recordBlobOp("download", blobErrStatus(err), time.Since(start))
 		return nil, fmt.Errorf("download blob %s: %w", key, err)
 	}
 	defer resp.Body.Close()
@@ -838,14 +837,14 @@ func (b *PostgresStorageBackend) downloadBlob(ctx context.Context, key string) (
 	// LimitReader takes limit+1 so an exactly-limit blob reads fully and only a truly oversized one trips.
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxBlobContentBytes+1)); err != nil {
-		metrics.RecordBlobOp("download", "error", time.Since(start))
+		recordBlobOp("download", "error", time.Since(start))
 		return nil, fmt.Errorf("read blob %s: %w", key, err)
 	}
 	if buf.Len() > maxBlobContentBytes {
-		metrics.RecordBlobOp("download", "error", time.Since(start))
+		recordBlobOp("download", "error", time.Since(start))
 		return nil, fmt.Errorf("download blob %s: content exceeds limit of %d bytes", key, maxBlobContentBytes)
 	}
-	metrics.RecordBlobOp("download", "ok", time.Since(start))
+	recordBlobOp("download", "ok", time.Since(start))
 	return buf.Bytes(), nil
 }
 
@@ -872,18 +871,18 @@ func (b *PostgresStorageBackend) deleteBlobs(ctx context.Context, prefix string)
 		start := time.Now()
 		bb, err := svc.NewBatchBuilder()
 		if err != nil {
-			metrics.RecordBlobOp("delete", "error", time.Since(start))
+			recordBlobOp("delete", "error", time.Since(start))
 			return fmt.Errorf("create blob delete batch: %w", err)
 		}
 		for _, name := range names {
 			if err := bb.Delete(b.container, name, nil); err != nil {
-				metrics.RecordBlobOp("delete", "error", time.Since(start))
+				recordBlobOp("delete", "error", time.Since(start))
 				return fmt.Errorf("queue blob %q for batch delete: %w", name, err)
 			}
 		}
 		resp, err := svc.SubmitBatch(ctx, bb, nil)
 		if err != nil {
-			metrics.RecordBlobOp("delete", blobErrStatus(err), time.Since(start))
+			recordBlobOp("delete", blobErrStatus(err), time.Since(start))
 			return fmt.Errorf("submit blob delete batch: %w", err)
 		}
 		// The batch call can succeed as a whole while sub-requests fail (e.g. concurrently deleted
@@ -904,7 +903,7 @@ func (b *PostgresStorageBackend) deleteBlobs(ctx context.Context, prefix string)
 		if batchFailed > 0 {
 			status = "error"
 		}
-		metrics.RecordBlobOp("delete", status, time.Since(start))
+		recordBlobOp("delete", status, time.Since(start))
 		names = names[:0]
 		return nil
 	}
@@ -913,10 +912,10 @@ func (b *PostgresStorageBackend) deleteBlobs(ctx context.Context, prefix string)
 		start := time.Now()
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			metrics.RecordBlobOp("list", blobErrStatus(err), time.Since(start))
+			recordBlobOp("list", blobErrStatus(err), time.Since(start))
 			return fmt.Errorf("list blobs for deletion: %w", err)
 		}
-		metrics.RecordBlobOp("list", "ok", time.Since(start))
+		recordBlobOp("list", "ok", time.Since(start))
 		for _, blob := range page.Segment.BlobItems {
 			if blob.Name == nil {
 				continue
@@ -1198,7 +1197,7 @@ func (b *PostgresStorageBackend) LoadFlowVersion(ctx context.Context, flowID str
 		if content != nil {
 			v.Content = content
 		} else if metadataRecordsContent(v.Metadata) {
-			metrics.RecordBlobContentMissing()
+			recordBlobContentMissing()
 			return nil, fmt.Errorf("load flow version %s/%d: content blob missing though metadata records content (%d block(s))", v.FlowID, v.Version, v.Metadata.BlockCount)
 		}
 	}

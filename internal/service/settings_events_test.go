@@ -208,7 +208,7 @@ func TestSystemService_AnnouncesSettingsChanges(t *testing.T) {
 
 	r.Resolve(ctx, "org-1")
 	r.Resolve(ctx, "org-2")
-	if err := sys.UpdateOrgSettings(ctx, "org-1", *models.DefaultSettings()); err != nil {
+	if err := sys.UpdateOrgSettings(ctx, "org-1", *models.DefaultSettings(), OrgSettingsWrite{}); err != nil {
 		t.Fatal(err)
 	}
 	if r.cachedFor("org-1") != nil || r.cachedFor("org-2") == nil {

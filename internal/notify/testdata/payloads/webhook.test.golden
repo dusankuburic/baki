@@ -1,0 +1,10 @@
+POST /hook
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: test
+X-Baki-Signature: sha256=eafce7eedfd7f1f29b9f1acfac8c34817bcea2dcb334a4344340cdfe746b4604
+X-Baki-Signature-V2: sha256=23542bf1b4f983db226d78a6e45dc3cdc7a2eb5cad45b79ffbcc6254caaef8b8
+X-Baki-Timestamp: 1790856001
+
+{"schemaVersion":1,"id":"evt_76543210fedcba9876543210","deliveryId":"00000000-0000-4000-8000-000000000001","orgId":"org-1","type":"test","flowId":"","title":"baki channel test","message":"This is a test delivery to \"ops\" (webhook). If you can read this, the channel works.","at":"2026-10-01T12:00:00Z"}

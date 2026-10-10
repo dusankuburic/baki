@@ -199,7 +199,7 @@ describe('streaming', () => {
       tokens: 0,
       toolStatus: null,
       toolCalls: [],
-      fixProposals: [],
+      approvals: [],
     })
   })
 
@@ -767,7 +767,7 @@ describe('thread model pins', () => {
     const base = {flowId: 'flow1', title: 't', createdAt: '2026-09-30T00:00:00Z'}
     stored[KEY('flow1')] = JSON.stringify([
       {...base, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'},
-      {...base, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', provider: 'nope', model: 'x'},
+      {...base, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', provider: 7, model: 'x'},
       {...base, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', provider: 'claude', model: ''},
       {...base, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', provider: 'claude', model: 'x'.repeat(300)},
       {
@@ -792,7 +792,7 @@ describe('thread model pins', () => {
     const before = useChatStore.getState().threads
     st.setThreadModel(id, {provider: 'claude', model: 'claude-opus-4-1', modelLabel: 'Opus'})
     expect(useChatStore.getState().threads).toBe(before)
-    st.setThreadModel(id, {provider: 'not-a-provider', model: 'x'})
+    st.setThreadModel(id, {provider: '', model: 'x'})
     st.setThreadModel(id, {provider: 'claude', model: ''})
     expect(useChatStore.getState().threads).toBe(before)
     st.setThreadModel(id, null)
@@ -848,7 +848,7 @@ describe('thread model pins', () => {
     const base = {flowId: 'flow3', title: 't', createdAt: '2026-09-30T00:00:00Z'}
     stored[KEY('flow3')] = JSON.stringify([
       {...base, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', inFlight: {...turn, streamId: 'not-a-uuid'}},
-      {...base, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', inFlight: {...turn, provider: 'nope'}},
+      {...base, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', inFlight: {...turn, provider: 7}},
       {...base, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', inFlight: {...turn, model: 7}},
       {...base, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', inFlight: 'x'},
       {

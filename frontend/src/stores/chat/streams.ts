@@ -42,7 +42,7 @@ export const createStreamSlice: StateCreator<ChatState, [], [], StreamSlice> = (
           tokens: 0,
           toolStatus: null,
           toolCalls: [],
-          fixProposals: [],
+          approvals: [],
         },
       },
     })),
@@ -69,9 +69,9 @@ export const createStreamSlice: StateCreator<ChatState, [], [], StreamSlice> = (
       if (!slot) return state
       // A journal replay rebuilds the cards; keep each known card's arrival
       // time so its countdown doesn't restart.
-      const seen = new Map(slot.fixProposals.map(c => [c.proposalId, c.receivedAt]))
-      const fixProposals = cards.map(c => ({...c, receivedAt: c.receivedAt ?? seen.get(c.proposalId) ?? Date.now()}))
-      return {streams: {...state.streams, [threadId]: {...slot, fixProposals}}}
+      const seen = new Map(slot.approvals.map(c => [c.proposalId, c.receivedAt]))
+      const approvals = cards.map(c => ({...c, receivedAt: c.receivedAt ?? seen.get(c.proposalId) ?? Date.now()}))
+      return {streams: {...state.streams, [threadId]: {...slot, approvals}}}
     }),
 
   // The turn is over: its slot goes, and with it the thread's in-flight
@@ -111,32 +111,33 @@ export const createStreamSlice: StateCreator<ChatState, [], [], StreamSlice> = (
     set(state => {
       const slot = state.streams[threadId]
       if (!slot) return state
-      if (slot.fixProposals.some(c => c.proposalId === card.proposalId)) return state
+      if (slot.approvals.some(c => c.proposalId === card.proposalId)) return state
       const stamped = {...card, receivedAt: card.receivedAt ?? Date.now()}
-      return {streams: {...state.streams, [threadId]: {...slot, fixProposals: [...slot.fixProposals, stamped]}}}
+      return {streams: {...state.streams, [threadId]: {...slot, approvals: [...slot.approvals, stamped]}}}
     }),
 
   // patchFixProposal merges a status/message update into the matching card
   // (a no-op when the card is gone — the stream may have ended) and applies
-  // per-item patches (batch decisions) by ruleId.
+  // per-item patches (batch decisions) by row position: the engine has
+  // matched the outcomes to the rows already, and two rows may share an id.
   patchFixProposal: (threadId, proposalId, patch, itemPatches) =>
     set(state => {
       const slot = state.streams[threadId]
       if (!slot) return state
-      const idx = slot.fixProposals.findIndex(c => c.proposalId === proposalId)
+      const idx = slot.approvals.findIndex(c => c.proposalId === proposalId)
       if (idx < 0) return state
-      const card = slot.fixProposals[idx]
+      const card = slot.approvals[idx]
       if (!card) return state
       let items = card.items
       if (itemPatches && itemPatches.length > 0) {
-        items = card.items.map(it => {
-          const p = itemPatches.find(ip => ip.ruleId === it.ruleId)
+        items = card.items.map((it, i) => {
+          const p = itemPatches.find(ip => ip.index === i)
           return p ? {...it, ...p.patch} : it
         })
       }
-      const fixProposals = [...slot.fixProposals]
-      fixProposals[idx] = {...card, ...patch, items}
-      return {streams: {...state.streams, [threadId]: {...slot, fixProposals}}}
+      const approvals = [...slot.approvals]
+      approvals[idx] = {...card, ...patch, items}
+      return {streams: {...state.streams, [threadId]: {...slot, approvals}}}
     }),
 
   setStreamMeta: (threadId, patch) =>

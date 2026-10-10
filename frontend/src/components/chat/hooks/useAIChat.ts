@@ -5,7 +5,7 @@ import {
   conversationKey,
   threadPinKey,
   MAX_CONCURRENT_STREAMS,
-  type FixProposalCard,
+  type ApprovalCard,
 } from '@/stores/chatStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useSettingsStore} from '@/stores/settingsStore'
@@ -39,11 +39,11 @@ interface UseAIChatOptions {
 }
 
 const EMPTY_ARRAY: ChatMessage[] = []
-// Stable fallback for the fix-card selector: a fresh `[]` per call made the
-// selector's result differ on EVERY store update (Zustand compares with
+// Stable fallback for the approval-card selector: a fresh `[]` per call made
+// the selector's result differ on EVERY store update (Zustand compares with
 // Object.is), re-rendering the whole panel at 60fps while any other thread
 // streamed.
-const EMPTY_FIX_PROPOSALS: FixProposalCard[] = []
+const EMPTY_APPROVALS: ApprovalCard[] = []
 
 interface PendingPreview {
   // The thread the preview was built for: the user may switch threads while
@@ -107,8 +107,8 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
   const isCurrentThreadStreaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
   const showThinking = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]?.isThinking))
   const toolStatus = useChatStore(s => (s.activeThreadId ? (s.streams[s.activeThreadId]?.toolStatus ?? null) : null))
-  const fixProposals = useChatStore(s =>
-    s.activeThreadId ? (s.streams[s.activeThreadId]?.fixProposals ?? EMPTY_FIX_PROPOSALS) : EMPTY_FIX_PROPOSALS,
+  const approvals = useChatStore(s =>
+    s.activeThreadId ? (s.streams[s.activeThreadId]?.approvals ?? EMPTY_APPROVALS) : EMPTY_APPROVALS,
   )
 
   const {buildRequest} = useChatRequestBuilder({doc, activeThread, provider, selectedModel, aiSettings, getMessages})
@@ -330,7 +330,7 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
     contextPreview,
     pendingMessage: pendingPreview?.text ?? null,
     toolStatus,
-    fixProposals,
+    approvals,
     respondFixProposal,
     ...threadActions,
     handleCloseThread,

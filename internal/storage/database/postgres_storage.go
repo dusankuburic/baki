@@ -98,7 +98,33 @@ type Config struct {
 	// EmbeddingDim is the configured knowledge-base embedding dimension. 0 ⇒
 	// default 1536; mismatched chunks are excluded from the pgvector index.
 	EmbeddingDim int
+
+	// ExpectedReplicas is how many replicas share the server (PAD_MAX_REPLICAS); 0 counts as one. Only the boot
+	// check of MaxOpenConns against the server's max_connections reads it.
+	ExpectedReplicas int
+	// ServerMaxConns is the server's max_connections as the deployment knows it (PAD_DB_SERVER_MAX_CONNS); 0 =
+	// unknown. The boot check uses it when the server's own settings cannot be read (a pooler in front, a
+	// restricted role); the server's answer wins when there is one.
+	ServerMaxConns int
+	// ApplicationName is the application_name every connection reports, so pg_stat_activity and pg_locks tell the
+	// replicas (and the job locks they hold) apart, e.g. "baki-backend/<instance>". Empty means
+	// DefaultApplicationName; an application_name in the DSN (or PGAPPNAME) wins.
+	ApplicationName string
 }
+
+// Fixed boot-check log messages, for alerts and runbooks (docs/architecture/operations.md); never reworded.
+const (
+	// LogPoolOverServerLimit (WARN): MaxOpenConns × the expected replicas is more than the server accepts.
+	LogPoolOverServerLimit = "postgres: connection pools can exceed max_connections"
+	// LogPgBouncerPort (WARN): the DSN points at port 6432, where Azure Flexible Server's PgBouncer listens.
+	LogPgBouncerPort = "PgBouncer transaction mode is unsupported: session advisory locks"
+)
+
+// DefaultApplicationName is the application_name of a connection when neither the DSN nor Config names one.
+const DefaultApplicationName = "baki-backend"
+
+// pgBouncerPort is the port of Azure Flexible Server's built-in PgBouncer (transaction pooling by default).
+const pgBouncerPort = 6432
 
 func DefaultConfig(dsn string) Config {
 	return Config{
@@ -128,6 +154,9 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	if cfg.RequireSSL && !sslModeIsSecure(cfg.DSN) {
 		return nil, fmt.Errorf("postgres: TLS required but DSN sslmode=%q is insecure; use sslmode=require or verify-full", sslModeFromDSN(cfg.DSN))
 	}
+	// Before the first connection: through a transaction-mode pooler that one may already fail (its startup
+	// parameters), and this line names the cause.
+	warnIfPgBouncerPort(slog.Default(), pgxCfg)
 
 	b := &PostgresStorageBackend{}
 
@@ -180,17 +209,23 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 		slog.Info("azure: blob storage enabled", "account", cfg.AzureStorageAccount, "container", cfg.AzureStorageContainer)
 	}
 
-	// Server-side statement and lock budgets on every connection. Deliberately NOT
-	// idle_in_transaction_session_timeout: the RLS middleware holds a transaction
-	// open through a chat stream that legitimately idles for minutes.
+	if pgxCfg.RuntimeParams == nil {
+		pgxCfg.RuntimeParams = map[string]string{}
+	}
+	// Server-side statement and lock budgets on every connection. No
+	// idle_in_transaction_session_timeout, though no longer for a chat stream
+	// idling in the request transaction: the streaming routes run outside it
+	// (rls_middleware.go), and it ends before the first response byte (ADR
+	// 0004). It still idles while its handler works between statements (an
+	// outbound call, CPU), and lives until the handler returns, not until the
+	// deadline (rls.go begins it WithoutCancel): a timeout would have to outlast
+	// the slowest handler.
 	if cfg.StatementTimeout > 0 {
-		if pgxCfg.RuntimeParams == nil {
-			pgxCfg.RuntimeParams = map[string]string{}
-		}
 		ms := strconv.FormatInt(cfg.StatementTimeout.Milliseconds(), 10)
 		pgxCfg.RuntimeParams["statement_timeout"] = ms
 		pgxCfg.RuntimeParams["lock_timeout"] = ms
 	}
+	setApplicationName(pgxCfg.RuntimeParams, cfg.ApplicationName)
 
 	otelOpts := []otelsql.Option{
 		otelsql.WithAttributes(semconv.DBSystemPostgreSQL),
@@ -254,7 +289,105 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	// pass, the schema still lists the policies.
 	warnIfRLSBypassed(ctx, db)
 
+	// Every replica's pool full at once (a burst, a stuck dependency) must fit the server, or the next connection
+	// fails with "too many clients".
+	warnIfPoolExceedsServer(ctx, slog.Default(), func(ctx context.Context) (serverConnLimits, error) {
+		return readServerConnLimits(ctx, db)
+	}, maxOpen, cfg.ExpectedReplicas, cfg.ServerMaxConns)
+
 	return b, nil
+}
+
+// serverConnLimits are the server's connection settings: max_connections, of which superuser_reserved_connections
+// are for superusers only and reserved_connections (PostgreSQL 16) for pg_use_reserved_connections members.
+type serverConnLimits struct {
+	Max, SuperuserReserved, Reserved int
+}
+
+// available is what an ordinary role such as the application's can open.
+func (l serverConnLimits) available() int { return l.Max - l.SuperuserReserved - l.Reserved }
+
+// readServerConnLimits reads the settings in one round trip (what SHOW reports); reserved_connections is 0 before
+// PostgreSQL 16, which does not know it.
+func readServerConnLimits(ctx context.Context, db *sql.DB) (serverConnLimits, error) {
+	var l serverConnLimits
+	err := db.QueryRowContext(ctx, `SELECT current_setting('max_connections')::int,
+		current_setting('superuser_reserved_connections')::int,
+		COALESCE(current_setting('reserved_connections', true), '0')::int`,
+	).Scan(&l.Max, &l.SuperuserReserved, &l.Reserved)
+	return l, err
+}
+
+// warnIfPoolExceedsServer logs LogPoolOverServerLimit when maxOpen × max(replicas, 1) is more than the server
+// accepts. It warns and never fails the boot: the replica count is deployment knowledge, and what else uses the
+// server (an operator's session, another app) the process cannot know. During a rolling deploy one more replica
+// runs beside the others, so the suggested size leaves room for it, as infra/main.bicep's derivation does. When the
+// server's settings cannot be read, configuredMax (PAD_DB_SERVER_MAX_CONNS) stands in, with no reserves known.
+func warnIfPoolExceedsServer(ctx context.Context, log *slog.Logger, read func(context.Context) (serverConnLimits, error), maxOpen, replicas, configuredMax int) {
+	if maxOpen <= 0 {
+		return // no cap: there is no pool size to compare
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	from := "server"
+	lim, err := read(ctx)
+	switch {
+	case err == nil:
+	case configuredMax > 0:
+		log.Debug("postgres: connection limits not read; checking the pool against PAD_DB_SERVER_MAX_CONNS", "err", err)
+		lim, from = serverConnLimits{Max: configuredMax}, "PAD_DB_SERVER_MAX_CONNS"
+	default:
+		log.Debug("postgres: connection limits not read; pool check skipped", "err", err)
+		return
+	}
+	replicas = max(replicas, 1)
+	total, available := maxOpen*replicas, lim.available()
+	if total <= available {
+		return
+	}
+	log.Warn(LogPoolOverServerLimit,
+		"max_open_conns", maxOpen,
+		"replicas", replicas,
+		"pools_total", total,
+		"server_max_connections", lim.Max,
+		"server_reserved_connections", lim.SuperuserReserved+lim.Reserved,
+		"available", available,
+		"limits_from", from,
+		"suggested_max_open_conns", max(1, available/(replicas+1)),
+		"remediation", "lower PAD_DB_MAX_OPEN_CONNS, or set dbServerMaxConnections in infra/main.bicep to derive it (docs/architecture/operations.md)")
+}
+
+// warnIfPgBouncerPort logs LogPgBouncerPort when a host of the DSN uses PgBouncer's port. In transaction mode a
+// session advisory lock and its unlock run on different server sessions, so every Singleton job's lease is lost
+// (ADR 0023), and the startup statement_timeout may be refused. Read from the parsed config, so a multi-host DSN is
+// checked host by host and the password is never near the log.
+func warnIfPgBouncerPort(log *slog.Logger, cfg *pgx.ConnConfig) {
+	type hostPort struct {
+		host string
+		port uint16
+	}
+	hosts := []hostPort{{cfg.Host, cfg.Port}}
+	for _, f := range cfg.Fallbacks {
+		hosts = append(hosts, hostPort{f.Host, f.Port})
+	}
+	for _, h := range hosts {
+		if h.port == pgBouncerPort {
+			log.Warn(LogPgBouncerPort, "host", h.host, "port", h.port,
+				"remediation", "connect to the server's own port (5432), or run PgBouncer in session mode (docs/architecture/operations.md)")
+			return
+		}
+	}
+}
+
+// setApplicationName names the connections, unless the DSN (or PGAPPNAME) already does.
+func setApplicationName(params map[string]string, name string) {
+	if params["application_name"] != "" {
+		return
+	}
+	if name == "" {
+		name = DefaultApplicationName
+	}
+	params["application_name"] = name
 }
 
 // rlsBypassedByRole reports whether the connection's current role ignores Row-Level Security (a superuser

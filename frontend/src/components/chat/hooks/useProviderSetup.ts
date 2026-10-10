@@ -1,5 +1,5 @@
 import {useState, useEffect, useRef, useCallback, useMemo} from 'react'
-import {useChatStore, isProviderId, type ModelRefusal} from '@/stores/chatStore'
+import {useChatStore, type ModelRefusal} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -34,6 +34,8 @@ export interface ProviderOption {
    * resource used to list its deployments and agents automatically.
    */
   suggestDiscovery?: boolean
+  /** The catalogue's glyph name for the model picker (ProviderInfo.icon). */
+  icon?: string
 }
 
 /**
@@ -98,6 +100,7 @@ function toProviderOption(p: ProviderInfo): ProviderOption {
     models: (p.models || []).map(toModelDetail),
     defaultModel: p.defaultModel || '',
     ...(p.suggestDiscovery === true ? {suggestDiscovery: true} : {}),
+    ...(p.icon ? {icon: p.icon} : {}),
   }
 }
 
@@ -207,9 +210,10 @@ export function useProviderSetup() {
       .listProviders(listOrgId, bypassCache ? {noDedup: true} : undefined)
       .then((ps: ProviderInfo[]) => {
         if (cancelled) return
-        // A provider a newer server added is left out: a turn can only go
-        // to a provider this bundle knows (its settings, its stream).
-        const list = (ps || []).filter(p => isProviderId(p.id)).map(toProviderOption)
+        // A provider a newer server added is listed as sent: the server
+        // resolves its credential, so a turn can go to it; the bundle
+        // only lacks a label and a settings entry for it (defaults apply).
+        const list = (ps || []).map(toProviderOption)
         setListing({scope: listOrgId ?? '', epoch, providers: list})
         setFailedEpoch(null)
         setConfigured(list.some(p => p.configured))
@@ -297,7 +301,7 @@ export function useProviderSetup() {
   const turnModel: TurnModel = useMemo(() => {
     const modelLabel = storableModelLabel(selection.label, selection.model)
     return {
-      provider: isProviderId(selection.provider) ? selection.provider : aiSettings.activeProvider,
+      provider: selection.provider || aiSettings.activeProvider,
       model: selection.model,
       ...(modelLabel ? {modelLabel} : {}),
       pinThread: selection.reason !== 'fallbackUnavailable' && (pinned || historySynced),

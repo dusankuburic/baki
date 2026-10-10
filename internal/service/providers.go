@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/platform/eventbus"
@@ -77,6 +79,9 @@ type ProviderService struct {
 	orgKeys OrgKeyStore
 	// azure is the Azure AI Foundry model registry; nil (tests) keeps the single-document behaviour.
 	azure *AzureModelService
+	// profile is the running deployment profile (WithProfile): a provider is offered when its spec's Modes name
+	// it. "" (a service built without one, in tests) stands in the local-models egress gate.
+	profile capability.Profile
 
 	modelMu    sync.Mutex
 	modelCache map[cache.Key]modelCacheEntry // modelListingKey(scope, providerID)
@@ -93,11 +98,20 @@ type modelCacheEntry struct {
 	expiresAt    time.Time
 }
 
+// ProviderOption configures NewProviderService.
+type ProviderOption func(*ProviderService)
+
+// WithProfile names the running deployment profile (capability.Of(cfg).Profile()); the listing and the
+// catalogue offer a provider when its spec's Modes include it.
+func WithProfile(p capability.Profile) ProviderOption {
+	return func(s *ProviderService) { s.profile = p }
+}
+
 // NewProviderService builds the provider service. orgKeys holds organisations' shared credentials (nil leaves
 // the org methods reporting ErrOrgKeyStoreUnavailable); azure is the Azure AI Foundry model registry the
 // single-document routes act on as resource "default" (nil keeps the single document).
-func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory, secrets KeyStore, orgKeys OrgKeyStore, azure *AzureModelService) *ProviderService {
-	return &ProviderService{
+func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory, secrets KeyStore, orgKeys OrgKeyStore, azure *AzureModelService, opts ...ProviderOption) *ProviderService {
+	s := &ProviderService{
 		auth:        auth,
 		copilotAuth: copilotAuth,
 		factory:     factory,
@@ -109,10 +123,120 @@ func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factor
 		invalidatedKeys:  make(map[cache.Key]invalidation),
 		invalidatedScope: make(map[string]invalidation),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // AzureModels is the wired Azure AI Foundry model registry (nil without one).
 func (s *ProviderService) AzureModels() *AzureModelService { return s.azure }
+
+// ProviderCodeUnknown is the client code for a provider id no spec describes (ADR 0025): 400 on /api/keys/*
+// and chat create, the ok:false result of the connection test, the stream error of a turn that reaches the
+// factory with one.
+const ProviderCodeUnknown = "PROVIDER_UNKNOWN"
+
+// ErrProviderUnknown is ai.ErrUnknownProvider as the services return it; match with errors.Is.
+var ErrProviderUnknown = ai.ErrUnknownProvider
+
+// azureListing is the Azure AI Foundry model registry as the azure-foundry spec's ai.ListingHook: the provider
+// is configured when the caller (or their organisation) holds a resource, and the picker lists the registry's
+// entries without a live listing. DI installs it on the spec (ai.InstallListing); a service built with the
+// registry reaches it through listingHook as well, so a test that wires a registry needs no process-global
+// install and tests without one keep the single-document behaviour.
+type azureListing struct {
+	registry *AzureModelService
+	// orgKeys answers for an organisation where organisations cannot hold registries (its shared document).
+	orgKeys OrgKeyStore
+}
+
+// AzureListing is the registry as the azure-foundry spec's ListingHook (nil without a registry); orgKeys is
+// the organisation keystore the shared document lives in where organisations hold no registry.
+func AzureListing(a *AzureModelService, orgKeys OrgKeyStore) ai.ListingHook {
+	if a == nil {
+		return nil
+	}
+	return azureListing{registry: a, orgKeys: orgKeys}
+}
+
+func (l azureListing) Configured(ctx context.Context, scope string) (bool, error) {
+	return l.registry.HasPersonalResources(ctx, scope)
+}
+
+// OrgConfigured: the organisation's registry when organisations can hold one here, else its shared document.
+func (l azureListing) OrgConfigured(ctx context.Context, orgID string) (bool, error) {
+	if l.registry.OrgRegistriesAvailable() {
+		return l.registry.OrgHasResources(ctx, orgID)
+	}
+	if l.orgKeys == nil {
+		return false, nil
+	}
+	return l.orgKeys.HasOrg(orgID, ai.AzureFoundryProviderID)
+}
+
+func (l azureListing) Picker(ctx context.Context, scope, orgID string) (ai.ProviderListing, error) {
+	listing, err := l.registry.PickerListing(ctx, scope, orgID)
+	if err != nil {
+		return ai.ProviderListing{}, err
+	}
+	return ai.ProviderListing{
+		Models:           listing.Models,
+		DefaultModel:     listing.DefaultModel,
+		Configured:       listing.Configured,
+		Shared:           listing.Shared,
+		SuggestDiscovery: listing.SuggestDiscovery,
+	}, nil
+}
+
+// connectionTester is a family whose connection test is its own (the registry's resource probe, no model call).
+// ok is false when the family has no test for that scope (an organisation without registries here).
+type connectionTester interface {
+	testConnection(ctx context.Context, as AzureScope) (res *models.ProviderTestResult, ok bool, err error)
+}
+
+func (l azureListing) testConnection(ctx context.Context, as AzureScope) (*models.ProviderTestResult, bool, error) {
+	if as.OrgID != "" && !l.registry.OrgRegistriesAvailable() {
+		return nil, false, nil
+	}
+	res, err := l.registry.legacyTest(ctx, as)
+	return res, true, err
+}
+
+// registryFamily reports whether providerID is the family the Azure AI Foundry registry a serves. The one
+// place that knows the registry was written for the azure-foundry spec; every other site asks a hook.
+func registryFamily(a *AzureModelService, providerID string) bool {
+	return a != nil && providerID == ai.AzureFoundryProviderID
+}
+
+// listingHook is providerID's family hook: the registry this service was built with, else the one installed
+// on the spec (DI), else nil — the keystore keys and the catalogue or a live listing answer for it.
+func (s *ProviderService) listingHook(providerID string) ai.ListingHook {
+	if registryFamily(s.azure, providerID) {
+		return azureListing{registry: s.azure, orgKeys: s.orgKeys}
+	}
+	if spec, ok := ai.SpecOf(providerID); ok {
+		return spec.Listing
+	}
+	return nil
+}
+
+// runningProfile is the profile the listing filters on: the configured one, else the one the local-models
+// egress gate implies (a service built without a profile, in tests).
+func (s *ProviderService) runningProfile() capability.Profile {
+	if s.profile != "" {
+		return s.profile
+	}
+	if ai.LocalModelsAvailable() {
+		return capability.Desktop
+	}
+	return capability.Cloud
+}
+
+// offered reports whether spec is offered in this deployment: its Modes name the running profile.
+func (s *ProviderService) offered(spec ai.ProviderSpec) bool {
+	return slices.Contains(spec.Modes, s.runningProfile())
+}
 
 // OrgKeysAvailable reports whether this deployment can hold organisation credentials (cloud mode).
 func (s *ProviderService) OrgKeysAvailable() bool { return s.orgKeys != nil }
@@ -162,7 +286,7 @@ func (s *ProviderService) dynamicModels(ctx context.Context, ls listingScope, pr
 	}
 
 	// Member-first: the org's credential exactly when the caller has none.
-	realProvider, err := s.factory.ForOrg(ls.scope, ls.orgID, providerID)
+	realProvider, err := s.factory.ForOrg(ctx, ls.scope, ls.orgID, providerID)
 	if err != nil {
 		return nil, "", false
 	}
@@ -435,57 +559,48 @@ func awaitLiveListing(wait context.Context, ch <-chan liveListing) liveListing {
 	}
 }
 
-// isConfigured reports whether the caller has credentials for a provider (OAuth tokens and manual keys both count).
+// isConfigured reports whether the caller has credentials for a provider: the family's hook answers for a
+// family (the registry's resources), else the spec's keystore rows — the device-flow token or the stored key.
 func (s *ProviderService) isConfigured(scope, providerID string) bool {
-	switch providerID {
-	case ai.AzureFoundryProviderID:
-		if s.azure != nil {
-			ok, err := s.azure.HasPersonalResources(context.Background(), scope)
-			if err != nil {
-				logger.Warn("azure ai foundry: reading the caller's resources failed", "error", err)
-			}
-			return ok
+	if hook := s.listingHook(providerID); hook != nil {
+		ok, err := hook.Configured(context.Background(), scope)
+		if err != nil {
+			logger.Warn("provider listing: reading the caller's configuration failed", "provider", providerID, "error", err)
 		}
-		ok, _ := s.secrets.Has(scope, providerID)
-		return ok
-	case "github-models":
-		ok, _ := s.secrets.Has(scope, "github-models-token")
-		return ok
-	case "copilot":
-		oauthOk, _ := s.secrets.Has(scope, "copilot-oauth-token")
-		patOk, _ := s.secrets.Has(scope, "copilot")
-		return oauthOk || patOk
-	default:
-		ok, _ := s.secrets.Has(scope, providerID)
 		return ok
 	}
+	spec, known := ai.SpecOf(providerID)
+	if !known {
+		return false
+	}
+	if spec.Keys.OAuthToken != "" {
+		if ok, _ := s.secrets.Has(scope, spec.Keys.OAuthToken); ok {
+			return true
+		}
+	}
+	ok, _ := s.secrets.Has(scope, spec.Keys.Primary)
+	return ok
 }
 
-// isOrgConfigured reports whether the organisation holds a shared credential; Copilot is per member only.
+// isOrgConfigured reports whether the organisation holds a shared credential: never for a provider that is
+// not org-shareable (Copilot, a person's subscription), the family's hook for a family, else the spec's key.
 func (s *ProviderService) isOrgConfigured(orgID, providerID string) bool {
 	if s.orgKeys == nil || orgID == "" {
 		return false
 	}
-	switch providerID {
-	case "copilot":
+	spec, known := ai.SpecOf(providerID)
+	if !known || !spec.Caps.Has(ai.CapOrgShared) {
 		return false
-	case ai.AzureFoundryProviderID:
-		if s.azure != nil && s.azure.OrgRegistriesAvailable() {
-			ok, err := s.azure.OrgHasResources(context.Background(), orgID)
-			if err != nil {
-				logger.Warn("azure ai foundry: reading the organisation's resources failed", "org", orgID, "error", err)
-			}
-			return ok
+	}
+	if hook := s.listingHook(providerID); hook != nil {
+		ok, err := hook.OrgConfigured(context.Background(), orgID)
+		if err != nil {
+			logger.Warn("provider listing: reading the organisation's configuration failed", "provider", providerID, "org", orgID, "error", err)
 		}
-		ok, _ := s.orgKeys.HasOrg(orgID, providerID)
-		return ok
-	case "github-models":
-		ok, _ := s.orgKeys.HasOrg(orgID, "github-models-token")
-		return ok
-	default:
-		ok, _ := s.orgKeys.HasOrg(orgID, providerID)
 		return ok
 	}
+	ok, _ := s.orgKeys.HasOrg(orgID, spec.Keys.Primary)
+	return ok
 }
 
 // resolveListing decides whose credential a provider is listed on (G7, member-first): the caller's own, else the org's.
@@ -499,44 +614,45 @@ func (s *ProviderService) resolveListing(scope, orgID, providerID string) (ls li
 	return personalScope(scope), false
 }
 
-// ListProviders lists every provider with models and default; live listings run concurrently under liveModelsBudget.
+// ListProviders lists every provider of the running profile with models and default; live listings run
+// concurrently under liveModelsBudget. A family with a Listing hook is listed from it (no live listing); a
+// loopback provider only once the caller configured it (the catalogue lists it regardless).
 func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string) (providers []models.ProviderInfo, err error) {
 	defer logger.Guard("App.ListProviders", &err)
 
-	metas := ai.AvailableProviders()
-	metaProviders := make([]ai.MetadataProvider, len(metas))
-	configured := make([]bool, len(metas))
-	shared := make([]bool, len(metas))
-	live := make([]<-chan liveListing, len(metas))
-	for i, meta := range metas {
-		// The local models provider is listed only when this process may use it (desktop) and the caller configured it.
-		if meta.ID == ai.LocalProviderID && (!ai.LocalModelsAvailable() || !s.isConfigured(scope, meta.ID)) {
+	specs := ai.Specs()
+	metaProviders := make([]ai.MetadataProvider, len(specs))
+	configured := make([]bool, len(specs))
+	shared := make([]bool, len(specs))
+	live := make([]<-chan liveListing, len(specs))
+	for i, spec := range specs {
+		if !s.offered(spec) || (spec.Egress.Kind == ai.EgressLoopback && !s.isConfigured(scope, spec.ID)) {
 			continue
 		}
-		metaProviders[i] = ai.GetMetadataProvider(meta.ID)
+		metaProviders[i] = ai.GetMetadataProvider(spec.ID)
 		if metaProviders[i] == nil {
 			continue
 		}
-		if s.fromAzureRegistry(meta.ID) {
-			continue // listed from the registry below: no live listing
+		if s.listingHook(spec.ID) != nil {
+			continue // listed from the family's hook below: no live listing
 		}
 		var ls listingScope
-		ls, configured[i] = s.resolveListing(scope, orgID, meta.ID)
+		ls, configured[i] = s.resolveListing(scope, orgID, spec.ID)
 		shared[i] = ls.shared
 		if configured[i] {
-			live[i] = s.startLiveListing(ctx, ls, meta.ID)
+			live[i] = s.startLiveListing(ctx, ls, spec.ID)
 		}
 	}
 	wait, cancel := context.WithTimeout(ctx, liveModelsBudget+liveModelsGrace)
 	defer cancel()
 
-	for i, meta := range metas {
+	for i, spec := range specs {
 		p := metaProviders[i]
 		if p == nil {
 			continue
 		}
-		if s.fromAzureRegistry(meta.ID) {
-			info, err := s.azureProviderInfo(ctx, scope, orgID, meta, p)
+		if hook := s.listingHook(spec.ID); hook != nil {
+			info, err := s.hookProviderInfo(ctx, scope, orgID, spec, p, hook)
 			if err != nil {
 				return nil, err
 			}
@@ -546,17 +662,17 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 
 		modelInfos, mErr := p.Models(ctx)
 		if mErr != nil {
-			logger.Warn("list provider models", "provider", meta.ID, "error", mErr)
+			logger.Warn("list provider models", "provider", spec.ID, "error", mErr)
 		}
 		defaultModel := p.DefaultModel()
 		if live[i] != nil {
 			if l := awaitLiveListing(wait, live[i]); l.ok {
 				modelInfos = chatModels(l.models)
 				switch {
-				case ai.UsesModelAliases(meta.ID) && l.defaultModel != "":
+				case spec.Caps.Has(ai.CapModelAliases) && l.defaultModel != "":
 					// The user's configuration names the default (the chat deployment); it wins even when the listing lacks it.
 					defaultModel = l.defaultModel
-				case ai.UsesModelAliases(meta.ID):
+				case spec.Caps.Has(ai.CapModelAliases):
 					// Nothing named: the first chat-capable listed deployment, never the catalogue's reference name.
 					defaultModel = chooseDefaultModel("", modelInfos, "")
 				default:
@@ -578,61 +694,147 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 		}
 
 		contextLimit := p.ContextLimit()
-		// The local provider's window is the caller's configured one, which the key-less metadata provider cannot know.
-		if meta.ID == ai.LocalProviderID && len(modelInfos) > 0 && modelInfos[0].ContextLimit > 0 {
+		// A provider without a catalogue serves whatever window the caller configured, which the key-less
+		// metadata provider cannot know.
+		if spec.Catalog == "" && len(modelInfos) > 0 && modelInfos[0].ContextLimit > 0 {
 			contextLimit = modelInfos[0].ContextLimit
 		}
 
-		providers = append(providers, models.ProviderInfo{
-			ID:           meta.ID,
-			Name:         meta.Name,
+		providers = append(providers, specFields(models.ProviderInfo{
+			ID:           spec.ID,
+			Name:         spec.Name,
 			Configured:   configured[i],
 			Shared:       shared[i],
 			Models:       modelDetails,
 			DefaultModel: defaultModel,
 			ContextLimit: contextLimit,
-			AuthType:     meta.AuthType,
-		})
+			AuthType:     string(spec.AuthType),
+		}, spec))
 	}
 
 	return providers, nil
 }
 
-// fromAzureRegistry reports whether providerID's listing entry comes from the Azure registry (never a live listing).
-func (s *ProviderService) fromAzureRegistry(providerID string) bool {
-	return s.azure != nil && providerID == ai.AzureFoundryProviderID
-}
-
-// azureProviderInfo builds the Azure Foundry listing from the registry (network-free).
-func (s *ProviderService) azureProviderInfo(ctx context.Context, scope, orgID string, meta ai.ProviderMetadata, p ai.MetadataProvider) (models.ProviderInfo, error) {
-	listing, err := s.azure.PickerListing(ctx, scope, orgID)
+// hookProviderInfo builds a family's listing entry from its hook (network-free).
+func (s *ProviderService) hookProviderInfo(ctx context.Context, scope, orgID string, spec ai.ProviderSpec, p ai.MetadataProvider, hook ai.ListingHook) (models.ProviderInfo, error) {
+	listing, err := hook.Picker(ctx, scope, orgID)
 	if err != nil {
-		return models.ProviderInfo{}, fmt.Errorf("list the Azure AI Foundry models: %w", err)
+		return models.ProviderInfo{}, fmt.Errorf("list the %s models: %w", spec.Name, err)
 	}
-	return models.ProviderInfo{
-		ID:               meta.ID,
-		Name:             meta.Name,
+	return specFields(models.ProviderInfo{
+		ID:               spec.ID,
+		Name:             spec.Name,
 		Configured:       listing.Configured || listing.Shared,
 		Shared:           listing.Shared,
 		Models:           listing.Models,
 		DefaultModel:     listing.DefaultModel,
 		ContextLimit:     p.ContextLimit(),
-		AuthType:         meta.AuthType,
+		AuthType:         string(spec.AuthType),
 		SuggestDiscovery: listing.SuggestDiscovery,
-	}, nil
+	}, spec), nil
+}
+
+// specFields adds the spec's optional wire fields to a listing entry (ADR 0025).
+func specFields(info models.ProviderInfo, spec ai.ProviderSpec) models.ProviderInfo {
+	cred := spec.WireCredential()
+	info.Caps = spec.Caps.Names()
+	info.Modes = spec.WireModes()
+	info.Credential = &cred
+	info.Pricing = string(spec.Pricing)
+	info.Color = spec.Color
+	info.Icon = spec.Icon
+	if endpoints := providerEndpoints(spec); endpoints != (models.ProviderEndpoints{}) {
+		info.Endpoints = &endpoints
+		info.Configurable = true
+	}
+	return info
+}
+
+// Routes that manage a credential, named per provider in the catalogue.
+const (
+	keysSaveRoute        = "/api/keys/save"
+	providerTestRoute    = "/api/providers/test"
+	providerOAuthRoutes  = "/api/providers/%s/%s"
+	githubModelsOAuthDir = "github"
+)
+
+// providerEndpoints names the routes a client manages spec's credential with: the key routes for a bare key,
+// the device flow's four for an OAuth provider (mounted under their historical directories), the connection
+// test alone for a document provider (its own panel saves it; an unknown document provider has no panel, so
+// nothing is offered — "configured on the server"). The zero value means not configurable.
+func providerEndpoints(spec ai.ProviderSpec) models.ProviderEndpoints {
+	switch spec.Credential.Kind {
+	case ai.CredentialAPIKey:
+		return models.ProviderEndpoints{Save: keysSaveRoute, Test: providerTestRoute}
+	case ai.CredentialOAuthDevice:
+		dir := spec.ID
+		if spec.ID == ai.GitHubModelsProviderID {
+			dir = githubModelsOAuthDir
+		}
+		return models.ProviderEndpoints{
+			Test:   providerTestRoute,
+			Start:  fmt.Sprintf(providerOAuthRoutes, dir, "start"),
+			Poll:   fmt.Sprintf(providerOAuthRoutes, dir, "poll"),
+			Revoke: fmt.Sprintf(providerOAuthRoutes, dir, "revoke"),
+			User:   fmt.Sprintf(providerOAuthRoutes, dir, "user"),
+		}
+	case ai.CredentialDocument:
+		if spec.ID == ai.AzureFoundryProviderID || spec.ID == ai.LocalProviderID {
+			return models.ProviderEndpoints{Test: providerTestRoute}
+		}
+	}
+	return models.ProviderEndpoints{}
+}
+
+// ProviderCatalog is every registered provider of the running profile in display order, configured or not,
+// with its credential schema and the routes that manage it (GET /api/providers/catalog). Network-free: the
+// configured state is the keystore's (or the family hook's), never a live listing.
+func (s *ProviderService) ProviderCatalog(ctx context.Context, scope, orgID string) (entries []models.ProviderCatalogEntry, err error) {
+	defer logger.Guard("App.ProviderCatalog", &err)
+	for _, spec := range ai.Specs() {
+		if !s.offered(spec) {
+			continue
+		}
+		endpoints := providerEndpoints(spec)
+		entries = append(entries, models.ProviderCatalogEntry{
+			ID:           spec.ID,
+			Name:         spec.Name,
+			AuthType:     string(spec.AuthType),
+			Modes:        spec.WireModes(),
+			Caps:         spec.Caps.Names(),
+			Credential:   spec.WireCredential(),
+			Endpoints:    endpoints,
+			Configured:   s.isConfigured(scope, spec.ID) || s.isOrgConfigured(orgID, spec.ID),
+			Color:        spec.Color,
+			Icon:         spec.Icon,
+			Pricing:      string(spec.Pricing),
+			Configurable: endpoints != (models.ProviderEndpoints{}),
+		})
+	}
+	return entries, nil
+}
+
+// unknownProviderResult is the connection test's answer for an id no spec describes: today's 200 shape, coded.
+func unknownProviderResult(providerID string) *models.ProviderTestResult {
+	return &models.ProviderTestResult{Ok: false, Error: fmt.Sprintf("unknown provider: %s", providerID), Code: ProviderCodeUnknown}
 }
 
 // TestProviderConnection sends a tiny chat request per candidate; model-level rejections try the next, outages stop.
 func (s *ProviderService) TestProviderConnection(ctx context.Context, scope, providerID string) (result *models.ProviderTestResult, err error) {
 	defer logger.Guard("App.TestProviderConnection", &err)
 
-	if providerID == ai.AzureFoundryProviderID && s.azure != nil {
-		// Deprecated for Azure AI Foundry (the registry's test route tests one resource or model): no model call.
-		return s.azure.legacyTest(ctx, AzureScope{Scope: scope})
+	if !ai.KnownProvider(providerID) {
+		return unknownProviderResult(providerID), nil
 	}
-	provider, err := s.factory.For(scope, providerID)
+	if tester, ok := s.listingHook(providerID).(connectionTester); ok {
+		// Deprecated for Azure AI Foundry (the registry's test route tests one resource or model): no model call.
+		if res, handled, err := tester.testConnection(ctx, AzureScope{Scope: scope}); handled {
+			return res, err
+		}
+	}
+	provider, err := s.factory.For(ctx, scope, providerID)
 	if err != nil {
-		return &models.ProviderTestResult{Ok: false, Error: connectionTestError(providerID, "", err)}, nil
+		return &models.ProviderTestResult{Ok: false, Error: connectionTestError(providerID, "", err), Code: connectionTestCode(err)}, nil
 	}
 	return s.runConnectionTest(ctx, provider, providerID, func() string {
 		raw, getErr := s.secrets.Get(scope, providerID)
@@ -649,13 +851,18 @@ func (s *ProviderService) TestOrgProviderConnection(ctx context.Context, scope, 
 	if s.orgKeys == nil {
 		return nil, ErrOrgKeyStoreUnavailable
 	}
-	if providerID == ai.AzureFoundryProviderID && s.azure != nil && s.azure.OrgRegistriesAvailable() {
-		// Deprecated: the organisation's resource "default", else its first.
-		return s.azure.legacyTest(ctx, AzureScope{Scope: scope, OrgID: orgID})
+	if !ai.KnownProvider(providerID) {
+		return unknownProviderResult(providerID), nil
 	}
-	provider, err := s.factory.ForOrgCredential(scope, orgID, providerID)
+	if tester, ok := s.listingHook(providerID).(connectionTester); ok {
+		// Deprecated: the organisation's resource "default", else its first.
+		if res, handled, err := tester.testConnection(ctx, AzureScope{Scope: scope, OrgID: orgID}); handled {
+			return res, err
+		}
+	}
+	provider, err := s.factory.ForOrgCredential(ctx, scope, orgID, providerID)
 	if err != nil {
-		return &models.ProviderTestResult{Ok: false, Error: connectionTestError(providerID, "", err)}, nil
+		return &models.ProviderTestResult{Ok: false, Error: connectionTestError(providerID, "", err), Code: connectionTestCode(err)}, nil
 	}
 	return s.runConnectionTest(ctx, provider, providerID, func() string {
 		raw, getErr := s.orgKeys.GetOrg(orgID, providerID)
@@ -675,7 +882,7 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 	testModels := s.connectionTestModels(ctx, provider, providerID)
 	if len(testModels) == 0 {
 		msg := "no model to test: add a chat model to the provider under Settings → AI Accounts"
-		if providerID == ai.LocalProviderID {
+		if spec, _ := ai.SpecOf(providerID); spec.Egress.Kind == ai.EgressLoopback {
 			msg = "no model found: start the local server, load a model and check the base URL"
 			if !ai.LocalModelsAvailable() {
 				msg = "local models are available in the desktop app only"
@@ -703,6 +910,11 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 		if chatErr == nil {
 			latency := int(time.Since(start).Milliseconds())
 			return &models.ProviderTestResult{Ok: true, Latency: latency}
+		}
+		if code := connectionTestCode(chatErr); code != "" {
+			// The wrapper's pre-call hook refused the test (the daily budget): nothing was sent, no candidate helps.
+			latency := int(time.Since(start).Milliseconds())
+			return &models.ProviderTestResult{Ok: false, Latency: latency, Error: chatErr.Error(), Code: code}
 		}
 		if errors.Is(chatErr, ai.ErrProviderPermissionDenied) || errors.Is(chatErr, ai.ErrEntraCredentialsRejected) || errors.Is(chatErr, ai.ErrEntraTokenRejected) || errors.Is(chatErr, ai.ErrClaudeEntraOnly) {
 			// Auth failures whose one-line text is what the user needs (missing role, AADSTS code, Entra-only refusal).
@@ -735,6 +947,22 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 	return &models.ProviderTestResult{Ok: false, Latency: latency, Error: connectionTestError(providerID, "", firstErr)}
 }
 
+// connectionTestCode is the coded class of a connection-test failure the client branches on: the pre-call
+// gates' refusals (the daily budget, the provider policy). "" for every other failure, which keeps its text.
+func connectionTestCode(err error) string {
+	switch {
+	case errors.Is(err, ErrAIBudgetExceeded):
+		return ChatErrBudgetExceeded
+	case errors.Is(err, ErrAIBudgetUnavailable):
+		return ChatErrBudgetUnavailable
+	case errors.Is(err, ai.ErrProviderNotAllowed):
+		return ProviderCodeNotAllowed
+	case errors.Is(err, ai.ErrProviderPolicyUnavailable):
+		return ProviderCodePolicyUnavailable
+	}
+	return ""
+}
+
 // connectionTestError is the test's text for err: a connect failure (DNS, dial, proxy, TLS, egress) is fixed copy — the raw text names addresses a client must never see.
 func connectionTestError(providerID, target string, err error) string {
 	what, ok := egress.DescribeFailure(err)
@@ -746,6 +974,17 @@ func connectionTestError(providerID, target string, err error) string {
 		target = "the endpoint"
 	}
 	return "could not connect to " + target + ": " + what
+}
+
+// primaryKey and oauthTokenKey are the keystore rows of a provider, from its spec ("" for an unknown id).
+func primaryKey(providerID string) string {
+	spec, _ := ai.SpecOf(providerID)
+	return spec.Keys.Primary
+}
+
+func oauthTokenKey(providerID string) string {
+	spec, _ := ai.SpecOf(providerID)
+	return spec.Keys.OAuthToken
 }
 
 // --- GitHub Models OAuth ---
@@ -764,11 +1003,11 @@ func (s *ProviderService) PollGitHubAuth(ctx context.Context, scope string, devi
 	}
 
 	if result.Status == "success" && result.Token != "" {
-		if saveErr := s.secrets.Save(scope, "github-models-token", result.Token); saveErr != nil {
+		if saveErr := s.secrets.Save(scope, primaryKey(ai.GitHubModelsProviderID), result.Token); saveErr != nil {
 			logger.Error("failed to save github token", "error", saveErr)
 		} else {
 			// A replacement token may carry other entitlements: drop the previous token's cached listing (mirrors Revoke).
-			s.InvalidateModels(scope, "github-models")
+			s.InvalidateModels(scope, ai.GitHubModelsProviderID)
 		}
 		result.Token = ""
 	}
@@ -778,18 +1017,18 @@ func (s *ProviderService) PollGitHubAuth(ctx context.Context, scope string, devi
 
 func (s *ProviderService) RevokeGitHubAuth(scope string) (err error) {
 	defer logger.Guard("App.RevokeGitHubAuth", &err)
-	if err := s.secrets.Delete(scope, "github-models-token"); err != nil {
+	if err := s.secrets.Delete(scope, primaryKey(ai.GitHubModelsProviderID)); err != nil {
 		return err
 	}
 	// Drop the cached listing so the revoked credential's models disappear immediately.
-	s.InvalidateModels(scope, "github-models")
+	s.InvalidateModels(scope, ai.GitHubModelsProviderID)
 	return nil
 }
 
 func (s *ProviderService) GetGitHubUser(ctx context.Context, scope string) (user *ai.GitHubUser, err error) {
 	defer logger.Guard("App.GetGitHubUser", &err)
 
-	token, err := s.secrets.Get(scope, "github-models-token")
+	token, err := s.secrets.Get(scope, primaryKey(ai.GitHubModelsProviderID))
 	if err != nil {
 		// No stored token (or no secret storage) → not connected, not an error.
 		return nil, nil
@@ -813,11 +1052,11 @@ func (s *ProviderService) PollCopilotAuth(ctx context.Context, scope string, dev
 	}
 
 	if result.Status == "success" && result.Token != "" {
-		if saveErr := s.secrets.Save(scope, "copilot-oauth-token", result.Token); saveErr != nil {
+		if saveErr := s.secrets.Save(scope, oauthTokenKey(ai.CopilotProviderID), result.Token); saveErr != nil {
 			logger.Error("failed to save copilot oauth token", "error", saveErr)
 		} else {
 			// A replacement token may carry other entitlements: drop the previous token's cached listing (mirrors Revoke).
-			s.InvalidateModels(scope, "copilot")
+			s.InvalidateModels(scope, ai.CopilotProviderID)
 		}
 		result.Token = ""
 		// Pre-warm the Copilot session-token cache so the first chat turn doesn't pay the exchange RTT.
@@ -842,9 +1081,9 @@ func (s *ProviderService) preWarmCopilot(scope string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		// OAuth device-flow token (per-user) first, then manual PAT.
-		token, err := s.secrets.Get(scope, "copilot-oauth-token")
+		token, err := s.secrets.Get(scope, oauthTokenKey(ai.CopilotProviderID))
 		if err != nil || token == "" {
-			token, err = s.secrets.Get(scope, "copilot")
+			token, err = s.secrets.Get(scope, primaryKey(ai.CopilotProviderID))
 			if err != nil || token == "" {
 				return // not configured — nothing to warm
 			}
@@ -857,18 +1096,18 @@ func (s *ProviderService) preWarmCopilot(scope string) {
 
 func (s *ProviderService) RevokeCopilotAuth(scope string) (err error) {
 	defer logger.Guard("App.RevokeCopilotAuth", &err)
-	if err := s.secrets.Delete(scope, "copilot-oauth-token"); err != nil {
+	if err := s.secrets.Delete(scope, oauthTokenKey(ai.CopilotProviderID)); err != nil {
 		return err
 	}
 	// Drop the cached listing so the revoked credential's models disappear immediately.
-	s.InvalidateModels(scope, "copilot")
+	s.InvalidateModels(scope, ai.CopilotProviderID)
 	return nil
 }
 
 func (s *ProviderService) GetCopilotUser(ctx context.Context, scope string) (user *ai.GitHubUser, err error) {
 	defer logger.Guard("App.GetCopilotUser", &err)
 
-	token, err := s.secrets.Get(scope, "copilot-oauth-token")
+	token, err := s.secrets.Get(scope, oauthTokenKey(ai.CopilotProviderID))
 	if err != nil {
 		// No stored token (or no secret storage) → not connected, not an error.
 		return nil, nil

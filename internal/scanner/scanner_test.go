@@ -14,7 +14,9 @@ import (
 	"pad-core/analyzer"
 	"pad-core/models"
 
+	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/notify"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
@@ -50,11 +52,21 @@ func mustNotifier(t *testing.T, url string) *notify.Dispatcher {
 	t.Helper()
 	// The capture servers are httptest, i.e. loopback — the policy has to be
 	// opted into explicitly, which is the point of the zero value being strict.
-	d, err := notify.New(notify.Config{WebhookURL: url, Policy: notify.AllowLoopbackTargets})
+	d, err := notify.New(notify.Config{Policy: notify.AllowLoopbackTargets,
+		Channels: []notify.ChannelConfig{{Kind: "webhook", Values: notify.Values{"url": url}}}})
 	if err != nil {
 		t.Fatalf("notify.New: %v", err)
 	}
 	return d
+}
+
+// loopbackChannels is the org-channel service over store with the policy of a deployment without accounts: the test
+// receivers are loopback. A nil store is no org channels.
+func loopbackChannels(store storageif.OrgChannelStore) OrgChannels {
+	if store == nil {
+		return nil
+	}
+	return service.NewChannelService(store, service.ChannelOptions{Policy: egress.AllowLoopback})
 }
 
 func (c *capture) all() []notify.Event {
@@ -116,7 +128,7 @@ func TestScanOnce_DriftAlert(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(context.Background())
 
 	got := cap.all()
@@ -136,7 +148,7 @@ func TestScanOnce_NoBaselineNoAlert(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(context.Background())
 
 	if got := cap.all(); len(got) != 0 {
@@ -153,7 +165,7 @@ func TestScanOnce_HealthRegression(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(context.Background())
 
 	got := cap.all()
@@ -174,7 +186,7 @@ func TestScanOnce_NoRegressionWhenHealthImproves(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(context.Background())
 
 	if got := cap.all(); len(got) != 0 {
@@ -193,7 +205,7 @@ func TestScanOnce_DedupsRepeatAlerts(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 
 	s.ScanOnce(context.Background())
 	s.ScanOnce(context.Background()) // identical state — must not re-alert
@@ -219,7 +231,7 @@ func TestScanOnce_PrunesDedupEntriesForDeletedFlows(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 
 	s.ScanOnce(context.Background())
 	s.mu.Lock()
@@ -256,7 +268,7 @@ func TestScanOnce_PersistsAlertToInbox(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(context.Background())
 
 	// One external dispatch AND one persisted inbox row.
@@ -337,7 +349,7 @@ func TestScanOnce_PushesAlertOverSSE(t *testing.T) {
 	}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 	sse := &fakeSSE{}
 	s.SetEventNotifier(sse)
 	s.ScanOnce(context.Background())
@@ -393,7 +405,7 @@ func TestScanOnce_OrgChannelRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(context.Background())
 
 	// Org delivery runs on detached goroutines (parity with the global
@@ -436,15 +448,15 @@ func TestEnabled_DoesNotRequireEnvNotifier(t *testing.T) {
 	}
 	cases := map[string]*notify.Dispatcher{"empty dispatcher": empty, "nil dispatcher": nil}
 	for name, d := range cases {
-		s := New(b, nil, analyzeReturning(nil), d, time.Hour, notify.AllowLoopbackTargets)
+		s := New(b, nil, analyzeReturning(nil), d, time.Hour, loopbackChannels(b))
 		if !s.enabled() {
 			t.Errorf("%s: scanner must be enabled with a backend, analyzer and interval", name)
 		}
 	}
-	if s := New(b, nil, analyzeReturning(nil), empty, 0, notify.AllowLoopbackTargets); s.enabled() {
+	if s := New(b, nil, analyzeReturning(nil), empty, 0, loopbackChannels(b)); s.enabled() {
 		t.Errorf("zero interval must still disable the scanner")
 	}
-	if s := New(nil, nil, analyzeReturning(nil), empty, time.Hour, notify.AllowLoopbackTargets); s.enabled() {
+	if s := New(nil, nil, analyzeReturning(nil), empty, time.Hour, loopbackChannels(nil)); s.enabled() {
 		t.Errorf("nil backend must still disable the scanner")
 	}
 }
@@ -484,7 +496,7 @@ func newSkipHarness(t *testing.T, b *healthBackend) *skipHarness {
 		}
 		return &models.AnalysisReport{FlowID: doc.ID}, nil
 	}
-	h.s = New(b, nil, analyze, mustNotifier(t, h.cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	h.s = New(b, nil, analyze, mustNotifier(t, h.cap.srv.URL), 0, loopbackChannels(b))
 	h.s.SetRuleSetDigest(func(context.Context, string) string {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -661,7 +673,7 @@ func TestScanOnce_RescansWhatItCouldNotCompletelyScan(t *testing.T) {
 	s := New(eb, nil, func(_ context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
 		analyzed++
 		return &models.AnalysisReport{FlowID: doc.ID}, nil
-	}, nil, 0, notify.AllowLoopbackTargets)
+	}, nil, 0, loopbackChannels(eb))
 	s.SetRuleSetDigest(func(context.Context, string) string { return "rules" })
 	s.ScanOnce(ctx)
 	s.ScanOnce(ctx)
@@ -679,7 +691,7 @@ func TestScanOnce_WithoutARuleSetDigestNothingIsSkipped(t *testing.T) {
 	s := New(b, nil, func(_ context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
 		n++
 		return &models.AnalysisReport{FlowID: doc.ID}, nil
-	}, nil, 0, notify.AllowLoopbackTargets)
+	}, nil, 0, loopbackChannels(b))
 	s.ScanOnce(context.Background())
 	s.ScanOnce(context.Background())
 	if n != 2 {

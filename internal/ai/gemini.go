@@ -53,15 +53,12 @@ const geminiEmbedModelDefault = "gemini-embedding-001"
 
 func (g *GeminiProvider) SupportsTools() bool { return true }
 
-func (g *GeminiProvider) ID() string           { return "gemini" }
-func (g *GeminiProvider) Name() string         { return "Gemini" }
-func (g *GeminiProvider) ContextLimit() int    { return 1048576 }
-func (g *GeminiProvider) DefaultModel() string { return "gemini-2.5-pro" }
-func (g *GeminiProvider) FreeModel() string    { return "" }
-
-func (g *GeminiProvider) PricePerMillionTokens() Pricing {
-	return Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0}
-}
+func (g *GeminiProvider) ID() string                     { return geminiSpec.ID }
+func (g *GeminiProvider) Name() string                   { return geminiSpec.Name }
+func (g *GeminiProvider) ContextLimit() int              { return 1048576 }
+func (g *GeminiProvider) DefaultModel() string           { return geminiSpec.DefaultModel }
+func (g *GeminiProvider) FreeModel() string              { return "" }
+func (g *GeminiProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(geminiSpec) }
 
 // geminiEmbedBatchSize caps one batchEmbedContents request: Gemini rejects
 // oversized batches (~100 documented) and callers embed up to
@@ -152,7 +149,7 @@ func (g *GeminiProvider) EstimateTokens(text string) int {
 }
 
 func (g *GeminiProvider) Models(_ context.Context) ([]ModelInfo, error) {
-	return catalogModels("gemini"), nil
+	return catalogModels(geminiSpec.Catalog), nil
 }
 
 var geminiURL = defaultGeminiURL

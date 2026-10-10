@@ -3,10 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/migration"
 	"pad-analyzer/internal/storage/contract"
 	"pad-analyzer/internal/storage/filesystem"
@@ -56,8 +59,8 @@ func TestMigrationRunner_DisabledWhenNoMigrator(t *testing.T) {
 	if r.Enabled() {
 		t.Fatal("runner with nil migrator should be disabled")
 	}
-	if r.Start() {
-		t.Fatal("Start on disabled runner should return false (503 path)")
+	if err := r.Start(); !errors.Is(err, ErrMigrationDisabled) {
+		t.Fatalf("Start on disabled runner = %v, want ErrMigrationDisabled (503 path)", err)
 	}
 	st := r.Status()
 	if st.Configured {
@@ -74,8 +77,8 @@ func TestMigrationRunner_StartRunsAndCompletes(t *testing.T) {
 		t.Fatal("runner should be enabled when migrator is wired")
 	}
 
-	if !r.Start() {
-		t.Fatal("first Start should succeed")
+	if err := r.Start(); err != nil {
+		t.Fatalf("first Start: %v", err)
 	}
 	waitDone(t, r, 3*time.Second)
 
@@ -111,12 +114,12 @@ func TestMigrationRunner_DoubleStartRejected(t *testing.T) {
 	dst := testutil.NewFakeBackend()
 
 	r := NewMigrationRunner(migration.New(src, dst).WithBatchSize(5))
-	if !r.Start() {
-		t.Fatal("first Start should succeed")
+	if err := r.Start(); err != nil {
+		t.Fatalf("first Start: %v", err)
 	}
 	// A second Start while the first is running must be rejected (409 path).
-	if r.Start() {
-		t.Fatal("second Start while running should return false (409 path)")
+	if err := r.Start(); !errors.Is(err, ErrMigrationRunning) {
+		t.Fatalf("second Start while running = %v, want ErrMigrationRunning (409 path)", err)
 	}
 	waitDone(t, r, 10*time.Second)
 }
@@ -132,11 +135,11 @@ func TestMigrationRunner_RejectedStartAsKeepsTheRunsAdopter(t *testing.T) {
 	}
 	dst := testutil.NewFakeBackend()
 	r := NewMigrationRunner(migration.New(legacySource(t, flows...), dst).WithBatchSize(1))
-	if !r.StartAs("admin-a") {
-		t.Fatal("first StartAs should succeed")
+	if err := r.StartAs("admin-a"); err != nil {
+		t.Fatalf("first StartAs: %v", err)
 	}
-	if r.StartAs("admin-b") {
-		t.Fatal("a second StartAs while running should be rejected")
+	if err := r.StartAs("admin-b"); !errors.Is(err, ErrMigrationRunning) {
+		t.Fatalf("a second StartAs while running = %v, want ErrMigrationRunning", err)
 	}
 	waitDone(t, r, 10*time.Second)
 	for _, f := range flows {
@@ -170,8 +173,8 @@ func TestMigrationRunner_LockHeldElsewhereRejectsStart(t *testing.T) {
 	dst := testutil.NewFakeBackend()
 	r := NewMigrationRunner(migration.New(src, dst)).WithLocker(&fakeLocker{acquired: false})
 
-	if r.Start() {
-		t.Fatal("Start should be rejected when another replica holds the lock")
+	if err := r.Start(); !errors.Is(err, ErrMigrationRunning) {
+		t.Fatalf("Start while another replica holds the lock = %v, want ErrMigrationRunning", err)
 	}
 	// The in-process running flag must be rolled back so a later Start (once
 	// the other replica finishes) is not wedged behind a stale guard.
@@ -186,8 +189,8 @@ func TestMigrationRunner_LockAcquiredRunsAndReleases(t *testing.T) {
 	lk := &fakeLocker{acquired: true, released: make(chan struct{})}
 	r := NewMigrationRunner(migration.New(src, dst)).WithLocker(lk)
 
-	if !r.Start() {
-		t.Fatal("Start should succeed when the lock is acquired")
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start with the lock acquired: %v", err)
 	}
 	waitDone(t, r, 3*time.Second)
 
@@ -209,5 +212,70 @@ func TestMigrationStatus_JSONShape(t *testing.T) {
 	// present — consumers rely on it).
 	if string(out) != `{"configured":false,"running":false}` {
 		t.Errorf("disabled status JSON = %s, want {\"configured\":false,\"running\":false}", out)
+	}
+}
+
+// TestMigrationRunner_LockErrorIsNotInProgress: a lock that cannot be asked for (a database error) rejects the start
+// as unavailable, not as a run in progress, and leaves no run claimed.
+func TestMigrationRunner_LockErrorIsNotInProgress(t *testing.T) {
+	r := NewMigrationRunner(migration.New(legacySource(t), testutil.NewFakeBackend())).
+		WithLocker(&fakeLocker{err: errors.New("connection refused")})
+	if err := r.Start(); !errors.Is(err, ErrMigrationLockUnavailable) || errors.Is(err, ErrMigrationRunning) {
+		t.Fatalf("Start with the lock unavailable = %v, want ErrMigrationLockUnavailable", err)
+	}
+	if r.Status().Running {
+		t.Fatal("running flag not rolled back after the lock error")
+	}
+}
+
+// TestMigrationStart_LockErrorAnswers503: the endpoint answered a database error at the lock with 409 "migration
+// already in progress", sending the admin to wait for a run that did not exist (R16). It is a 503: try again.
+func TestMigrationStart_LockErrorAnswers503(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	moduleOf[*AdminHandler](t, rt).runner = NewMigrationRunner(migration.New(legacySource(t), testutil.NewFakeBackend())).
+		WithLocker(&fakeLocker{err: errors.New("connection refused")})
+	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/admin/migration/start", bearer, nil)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("lock error: got %d, want 503 (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// blockingDestination is a destination whose first call, the migrator's Ping, waits for the run's context: a run
+// that stays in flight until something cancels it.
+type blockingDestination struct {
+	*testutil.FakeBackend
+	pinged chan struct{}
+}
+
+func (d *blockingDestination) Ping(ctx context.Context) error {
+	close(d.pinged)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestMigrationRunner_StopCancelsTheRun: the hour-long run was a bare goroutine nothing cancelled, so shutdown
+// closed the pool under it (R16). Stop (and shutdown's lifecycle.DrainAll) cancels it, waits for it to record its
+// end, and refuses later starts.
+func TestMigrationRunner_StopCancelsTheRun(t *testing.T) {
+	dst := &blockingDestination{FakeBackend: testutil.NewFakeBackend(), pinged: make(chan struct{})}
+	r := NewMigrationRunner(migration.New(legacySource(t), dst))
+	if err := r.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-dst.pinged:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the run did not start")
+	}
+	r.Stop()
+	st := r.Status()
+	if st.Running || st.Error == nil {
+		t.Fatalf("after Stop: running %v error %v, want a cancelled run that has ended", st.Running, st.Error)
+	}
+	if err := r.Start(); !errors.Is(err, ErrMigrationLockUnavailable) {
+		t.Errorf("Start after Stop = %v, want it refused", err)
 	}
 }

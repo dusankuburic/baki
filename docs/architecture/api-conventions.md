@@ -117,6 +117,11 @@ An endpoint returns its error and `render.Error` writes it:
 A 5xx is logged at ERROR once, cause included, as before; `render.ErrorUnlogged` writes the same bytes without
 the log line.
 
+The server's drain refusal is the exception (ADR 0024): `drain.Refuse` answers 503 `SERVER_RESTARTING` with its
+fixed message unmasked, `details.retryAfterSeconds` and a `Retry-After` header, and logs nothing. A stopping
+server refuses every new chat stream, event stream and socket, and one ERROR per refusal would flood the log at
+every deploy.
+
 | Kind | Constructor | Status | Default code |
 |---|---|---|---|
 | `KindInvalid` | `apperr.Invalid` | 400 | `BAD_REQUEST` |
@@ -139,6 +144,18 @@ the log line.
 - `apperr` lives in `internal/platform/apperr`, so services may return an `Error` where they know the kind and the
   code the client should see. Where a sentinel already maps right (`ErrNotFound`, `ErrPermissionDenied`, …), keep
   it.
+
+### Provider codes (ADR 0025)
+
+| Code | Where | Meaning |
+|---|---|---|
+| `PROVIDER_UNKNOWN` | 400 on `POST /api/keys/{save,has,delete}`, `POST /api/chat/stream` and `POST /api/chat/preview-context`; `{ok: false, code}` (200) on `POST /api/providers/test`; the `error` event's `code` on a stream | the provider id is not in the registry (`ai.Specs()`): a typo or a client newer than the server, never an outage |
+| `USE_PROVIDER_CONFIG` | 400 on `POST /api/keys/save` | the provider stores a document, not a bare key: use its own config route |
+| `PROVIDER_NOT_ALLOWED` | the `error` event's `code` on a stream; `{ok: false, code}` (200) on `POST /api/providers/test`, the org test and the Azure AI Foundry resource/model tests; 400 on the knowledge routes (`upload`, `reindex`) and on `POST /api/chat/preview-context` | the provider policy refused the provider before any key was read (ADR 0028): disabled in the deployment's AI settings, or off the organisation's `allowedProviders` list; the message says which and what to do |
+| `PROVIDER_POLICY_UNAVAILABLE` | `{ok: false, code}` (200) on the org test and the Azure AI Foundry tests; 503 on the knowledge routes (`upload`, `reindex`) | the provider policy could not be read (the organisation's settings document failed to load): nothing was admitted or refused; the message is fixed copy, the cause is in the log (ADR 0028) |
+| `AI_BUDGET_EXCEEDED`, `AI_BUDGET_UNAVAILABLE` | `{ok: false, code}` (200) on `POST /api/providers/test` and the org test (the stream codes are unchanged) | the daily AI budget gate in the provider chain refused the test's billed call (ADR 0028); nothing was sent |
+
+`ProviderTestResult.code` is optional and empty for the free-text failures the test has always reported.
 
 ## Lists
 

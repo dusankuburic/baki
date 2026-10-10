@@ -1,0 +1,29 @@
+From: "PAD Analyzer" <no-reply@pad.example.com>
+To: <una@example.com>
+Subject: [TEST] Test notification
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Message-ID: <golden@pad.example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary=GOLDEN-BOUNDARY
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain; charset=UTF-8
+
+Flow:=20
+Event: test
+
+This is a test from PAD Analyzer.
+
+Time: 2026-10-10T12:00:00Z
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html; charset=UTF-8
+
+<table cellpadding=3D"0" cellspacing=3D"0" style=3D"font-family:sans-serif;=
+font-size:14px"><tr><td style=3D"color:#666;padding:2px 12px 2px 0">Flow</t=
+d><td></td></tr><tr><td style=3D"color:#666;padding:2px 12px 2px 0">Event</=
+td><td>test</td></tr></table><p>This is a test from PAD Analyzer.</p>
+--GOLDEN-BOUNDARY--

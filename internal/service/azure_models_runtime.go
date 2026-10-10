@@ -431,7 +431,7 @@ func (s *AzureModelService) windowsFor(ctx context.Context, st *azureOwnerState,
 			if st.owner.IsOrg() {
 				ref.OrgID = st.owner.ID
 			}
-			if p, err := s.factory.ForAzureConnection(st.scope, ref, use); err == nil {
+			if p, err := s.factory.ForAzureConnection(ctx, st.scope, ref, use); err == nil {
 				if ms, err := p.Models(ctx); err == nil {
 					for _, m := range ms {
 						listed[m.ID] = m
@@ -661,7 +661,7 @@ func (s *AzureModelService) KnowledgeEmbedder(ctx context.Context, scope, orgID 
 				return nil, &azureEmbedderError{sentinel: ai.ErrOrgEmbeddingDeploymentMissing,
 					msg: "the organisation has Azure AI Foundry resources but none of its embedding models is used for the knowledge base — ask an org admin to mark one \"Use for knowledge base\" (Settings → Organizations)"}
 			}
-			p, err := s.factory.ForAzureConnectionEmbedding(scope, ai.AzureConnectionRef{OrgID: orgID, ConnID: m.ConnectionID}, registeredModel(m))
+			p, err := s.factory.ForAzureConnectionEmbedding(ctx, scope, ai.AzureConnectionRef{OrgID: orgID, ConnID: m.ConnectionID}, registeredModel(m))
 			return knowledgeEmbedderResult(owner, m, p, err)
 		}
 	}
@@ -679,7 +679,7 @@ func (s *AzureModelService) KnowledgeEmbedder(ctx context.Context, scope, orgID 
 		return nil, &azureEmbedderError{sentinel: ai.ErrEmbeddingDeploymentMissing,
 			msg: "no Azure AI Foundry embedding model is used for the knowledge base — mark one \"Use for knowledge base\" under Settings → AI Accounts → Azure AI Foundry"}
 	}
-	p, err = s.factory.ForAzureConnectionEmbedding(scope, ai.AzureConnectionRef{ConnID: m.ConnectionID}, registeredModel(m))
+	p, err = s.factory.ForAzureConnectionEmbedding(ctx, scope, ai.AzureConnectionRef{ConnID: m.ConnectionID}, registeredModel(m))
 	return knowledgeEmbedderResult(owner, m, p, err)
 }
 
@@ -698,7 +698,9 @@ func knowledgeEmbedderResult(owner storageif.AzureOwner, m storageif.AzureModelR
 		return nil, &azureEmbedderError{sentinel: ai.ErrProviderConfigInvalid,
 			msg: fmt.Sprintf("the knowledge base's model %q cannot be used: its resource's stored credentials could not be read — enter them again under Settings → AI Accounts → Azure AI Foundry", m.DisplayName)}
 	case errors.Is(err, ai.ErrKeyNotConfigured), errors.Is(err, ai.ErrProviderConfigInvalid),
-		errors.Is(err, ai.ErrEmbeddingDeploymentMissing), errors.Is(err, ai.ErrOrgEmbeddingDeploymentMissing):
+		errors.Is(err, ai.ErrEmbeddingDeploymentMissing), errors.Is(err, ai.ErrOrgEmbeddingDeploymentMissing),
+		errors.Is(err, ai.ErrProviderNotAllowed), errors.Is(err, ai.ErrProviderPolicyUnavailable):
+		// The policy's answers are the admin's to act on (or its own fixed copy), not a transient setup failure.
 		return nil, err
 	}
 	return nil, knowledgeEmbedderUnavailable(owner, err)
@@ -749,6 +751,13 @@ func (s *AzureModelService) Test(ctx context.Context, as AzureScope, in AzureTes
 	defer logger.Guard("AzureModels.Test", &err)
 	owner, err := s.ownerFor(as)
 	if err != nil {
+		return AzureTestResult{}, err
+	}
+	// The probes run around the factory: ask the policy here, as every builder does, before any credential is read.
+	if err := s.admitProbe(ctx, as); err != nil {
+		if code := connectionTestCode(err); code != "" {
+			return AzureTestResult{OK: false, Error: err.Error(), Code: code}, nil
+		}
 		return AzureTestResult{}, err
 	}
 	s.prepareOwner(ctx, owner, as.Scope)
@@ -834,6 +843,15 @@ func (s *AzureModelService) Test(ctx context.Context, as AzureScope, in AzureTes
 		s.recordTest(ctx, owner, connID, savedModelID(savedModel, nil), out.OK, latency, out.Error)
 	}
 	return out, nil
+}
+
+// admitProbe asks the provider policy whether azure-foundry may be exercised for as (the deployment's disable,
+// the organisation's list): the probes build a raw provider around the factory, so they ask themselves.
+func (s *AzureModelService) admitProbe(ctx context.Context, as AzureScope) error {
+	if s.factory == nil {
+		return nil
+	}
+	return s.factory.Admit(ctx, as.Scope, as.OrgID, ai.AzureFoundryProviderID)
 }
 
 // savedModelID is the entry id a test result is recorded on ("" = the resource's).
@@ -942,6 +960,12 @@ func (s *AzureModelService) Discover(ctx context.Context, as AzureScope, connID 
 	defer logger.Guard("AzureModels.Discover", &err)
 	owner, err := s.ownerFor(as)
 	if err != nil {
+		return AzureDiscoveryView{}, err
+	}
+	if err := s.admitProbe(ctx, as); err != nil {
+		if code := connectionTestCode(err); code != "" {
+			return AzureDiscoveryView{Deployments: []AzureDiscoveryItemView{}, Agents: []AzureDiscoveryItemView{}, Warnings: []string{}, Error: err.Error(), Code: code}, nil
+		}
 		return AzureDiscoveryView{}, err
 	}
 	s.prepareOwner(ctx, owner, as.Scope)

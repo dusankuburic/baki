@@ -195,16 +195,17 @@ func TestFlowAccessChecker_TranslatesServiceErrors(t *testing.T) {
 		t.Fatalf("add member: %v", err)
 	}
 
-	if err := checker.CheckAccess(ctx, "f1", "alice"); err != nil {
+	if _, err := checker.CheckAccess(ctx, "f1", sessionActor("alice")); err != nil {
 		t.Errorf("owner should join: %v", err)
 	}
-	if err := checker.CheckAccess(ctx, "f2", "bob"); err != nil {
-		t.Errorf("org member should join: %v", err)
+	// The owner and organisation it read are what the hub's access-change rechecks match on.
+	if owner, err := checker.CheckAccess(ctx, "f2", sessionActor("bob")); err != nil || owner != (wshub.FlowOwner{UserID: "alice", OrgID: org.ID}) {
+		t.Errorf("org member should join, with the flow's owner and organisation: %+v, %v", owner, err)
 	}
-	if err := checker.CheckAccess(ctx, "f1", "mallory"); !errors.Is(err, wshub.ErrAccessDenied) {
+	if _, err := checker.CheckAccess(ctx, "f1", sessionActor("mallory")); !errors.Is(err, wshub.ErrAccessDenied) {
 		t.Errorf("expected ErrAccessDenied for stranger, got %v", err)
 	}
-	if err := checker.CheckAccess(ctx, "missing", "alice"); !errors.Is(err, wshub.ErrFlowNotFound) {
+	if _, err := checker.CheckAccess(ctx, "missing", sessionActor("alice")); !errors.Is(err, wshub.ErrFlowNotFound) {
 		t.Errorf("expected ErrFlowNotFound for missing flow, got %v", err)
 	}
 }

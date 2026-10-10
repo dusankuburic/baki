@@ -26,6 +26,12 @@ func TestRequiredScope(t *testing.T) {
 		{http.MethodPost, "/api/auth/tokens", ScopeDeny},
 		{http.MethodPost, "/api/auth/password", ScopeDeny},
 		{http.MethodGet, "/api/ws-ticket", ScopeRead},
+		{http.MethodGet, "/api/orgs/o1/ci-credentials", ScopeRead},
+		{http.MethodPost, "/api/orgs/o1/ci-credentials", ScopeDeny},
+		{http.MethodDelete, "/api/orgs/o1/ci-credentials/k1", ScopeDeny},
+		{http.MethodPost, "/api/orgs/o1/ci-credentials-x", ScopeWrite},
+		{http.MethodPost, "/api/orgs//ci-credentials", ScopeWrite},
+		{http.MethodPost, "/api/integrations/ci", ScopeCI},
 	}
 	for _, tc := range cases {
 		if got := RequiredScope(tc.method, tc.path); got != tc.want {
@@ -65,11 +71,18 @@ func TestRouteAllowed(t *testing.T) {
 	if !RouteAllowed(http.MethodPost, "/api/chat/fix-decision", []string{ScopeChat, ScopeWrite}) {
 		t.Error("chat+write token must be able to approve a fix")
 	}
-	if RouteAllowed(http.MethodGet, "/api/auth/tokens", []string{ScopeRead, ScopeWrite, ScopeChat, ScopeAdmin}) {
+	if RouteAllowed(http.MethodGet, "/api/auth/tokens", ValidTokenScopes) {
 		t.Error("no scope grants credential management")
 	}
 	if RouteAllowed(http.MethodGet, "/api/analysis/rules", nil) {
 		t.Error("scoped-with-empty-list must allow nothing (restriction is the point)")
+	}
+	ci := []string{ScopeCI}
+	if RouteAllowed(http.MethodGet, "/api/analysis/rules", ci) || RouteAllowed(http.MethodPost, "/api/analysis/analyze", ci) || RouteAllowed(http.MethodGet, "/api/auth/me", ci) {
+		t.Error("the ci scope must grant nothing outside the CI webhook")
+	}
+	if !RouteAllowed(http.MethodPost, "/api/integrations/ci", ci) || RouteAllowed(http.MethodPost, "/api/integrations/ci", readWrite) {
+		t.Error("the CI webhook takes the ci scope, and read+write is not it")
 	}
 }
 

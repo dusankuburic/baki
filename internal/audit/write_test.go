@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"pad-analyzer/internal/metrics"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -119,13 +118,13 @@ func TestWriteOne_RetryRecovers(t *testing.T) {
 	w := &fakeWriter{err: errors.New("transient")}
 	w.failFirst.Store(1) // first SaveAuditEvent fails, retry succeeds
 
-	before := metrics.AuditDroppedCount("write_failed")
+	before := auditDroppedCount("write_failed")
 	writeOne(w, events(1)[0])
 
 	if w.count() != 2 {
 		t.Errorf("expected 2 attempts (1 fail + 1 retry), got %d", w.count())
 	}
-	if n := metrics.AuditDroppedCount("write_failed") - before; n != 0 {
+	if n := auditDroppedCount("write_failed") - before; n != 0 {
 		t.Errorf("drop metric incremented by %v, want 0 (retry recovered)", n)
 	}
 }
@@ -134,13 +133,13 @@ func TestWriteOne_RetryRecovers(t *testing.T) {
 func TestWriteOne_PersistentFailureBumpsMetric(t *testing.T) {
 	w := &fakeWriter{err: errors.New("db down")} // every call fails
 
-	before := metrics.AuditDroppedCount("write_failed")
+	before := auditDroppedCount("write_failed")
 	writeOne(w, events(1)[0])
 
 	if w.count() != 2 {
 		t.Errorf("expected 2 attempts (initial + 1 retry), got %d", w.count())
 	}
-	if n := metrics.AuditDroppedCount("write_failed") - before; n != 1 {
+	if n := auditDroppedCount("write_failed") - before; n != 1 {
 		t.Errorf("drop metric incremented by %v, want 1 (persistent failure)", n)
 	}
 }
@@ -160,14 +159,14 @@ func (p *panicWriter) SaveAuditEvent(context.Context, *storageif.AuditEvent) err
 // double-panicking.
 func TestSalvageBatch_PanicIsolation(t *testing.T) {
 	w := &panicWriter{}
-	before := metrics.AuditDroppedCount("salvage_failed")
+	before := auditDroppedCount("salvage_failed")
 
 	salvageBatch(w, events(3))
 
 	if w.calls.Load() != 3 {
 		t.Errorf("SaveAuditEvent attempted %d times, want 3 (each event isolated)", w.calls.Load())
 	}
-	if n := metrics.AuditDroppedCount("salvage_failed") - before; n != 3 {
+	if n := auditDroppedCount("salvage_failed") - before; n != 3 {
 		t.Errorf("salvage_failed metric incremented by %v, want 3 (one per event)", n)
 	}
 }

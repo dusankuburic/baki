@@ -13,19 +13,21 @@ import (
 
 // Claims are the custom JWT claims stored in every access token.
 //
-// SrcJTI / SrcExp are ONLY populated on WebSocket connect tickets: they carry
-// the JTI and expiry of the ACCESS token that authorized the ticket-issuance
-// request, so the WebSocket handler can re-check the access token's revocation
-// and close the connection when it expires. Omitted on ordinary access tokens.
+// SrcJTI / SrcExp / WSV are ONLY populated on WebSocket connect tickets: SrcJTI
+// and SrcExp carry the JTI and expiry of the ACCESS token that authorized the
+// ticket-issuance request, so the WebSocket handler can re-check the access
+// token's revocation and close the connection when it expires; WSV is the
+// ticket format version (WSTicketVersion). Omitted on ordinary access tokens.
 type Claims struct {
 	UserID string           `json:"uid"`
 	Email  string           `json:"email"`
 	Role   Role             `json:"role"`
 	SrcJTI string           `json:"src_jti,omitempty"`
 	SrcExp *jwt.NumericDate `json:"src_exp,omitempty"`
+	WSV    int              `json:"wsv,omitempty"`
 	// Scopes carries a PAT's capability restriction (empty = unscoped = full
-	// access). Only ever set on PAT-derived claims (ClaimsForPAT); JWT logins
-	// are interactive and unrestricted.
+	// access). Only ever set on PAT-derived claims (ClaimsForPAT) and on the WS
+	// tickets issued from them; JWT logins are interactive and unrestricted.
 	Scopes []string `json:"scopes,omitempty"`
 	jwt.RegisteredClaims
 }
@@ -168,29 +170,56 @@ func (m *Manager) Issue(userID, email string, role Role) (*TokenPair, error) {
 	}, nil
 }
 
+// WSTicketVersion is the format version every WebSocket ticket carries in its
+// wsv claim. Version 1 tickets carry the source credential's scopes; a ticket
+// without the claim comes from a server that predates them, and reading its
+// absent scopes as "unscoped" would widen a scoped token, so it is refused.
+const WSTicketVersion = 1
+
+// WSTicketSource is the credential a WebSocket ticket is issued from: the
+// user it names, its token scopes, and the access token (or PAT) whose
+// revocation and expiry the live socket follows.
+type WSTicketSource struct {
+	UserID string
+	Email  string
+	Role   Role
+	// Scopes restrict a scoped API token; nil means unscoped. Copied into the ticket.
+	Scopes []string
+	// AccessJTI / AccessExp identify the authorizing credential (an access
+	// token's jti, PATJTI for a PAT). Empty / zero disable the socket's
+	// revocation re-check and expiry timer (local mode).
+	AccessJTI string
+	AccessExp time.Time
+}
+
 // IssueWSTicket creates a short-lived, single-use ticket the client exchanges
 // for a WebSocket connection, keeping the long-lived access token out of the
 // WS URL (otherwise recorded in proxy/server logs and browser history).
-// accessJTI / accessExp (the authorizing access token's) are embedded so the
-// WebSocket handler can re-check its revocation (logout) and enforce its
-// expiry on the live socket. Returns the signed ticket and its expiry.
-func (m *Manager) IssueWSTicket(userID, email string, role Role, accessJTI string, accessExp time.Time) (string, time.Time, error) {
+// The source's AccessJTI / AccessExp are embedded so the WebSocket handler can
+// re-check its revocation (logout) and enforce its expiry on the live socket,
+// and its scopes so the socket acts with no more than the credential may
+// (ActorFromWSTicket). Returns the signed ticket and its expiry.
+func (m *Manager) IssueWSTicket(src WSTicketSource) (string, time.Time, error) {
 	now := time.Now()
 	expiresAt := now.Add(wsTicketTTL)
 	claims := Claims{
-		UserID: userID,
-		Email:  email,
-		Role:   role,
-		SrcJTI: accessJTI,
+		UserID: src.UserID,
+		Email:  src.Email,
+		Role:   src.Role,
+		SrcJTI: src.AccessJTI,
+		WSV:    WSTicketVersion,
 	}
-	if !accessExp.IsZero() {
-		claims.SrcExp = jwt.NewNumericDate(accessExp)
+	if len(src.Scopes) > 0 {
+		claims.Scopes = append([]string(nil), src.Scopes...)
+	}
+	if !src.AccessExp.IsZero() {
+		claims.SrcExp = jwt.NewNumericDate(src.AccessExp)
 	}
 	claims.RegisteredClaims = jwt.RegisteredClaims{
 		ID:        uuid.NewString(),
 		IssuedAt:  jwt.NewNumericDate(now),
 		ExpiresAt: jwt.NewNumericDate(expiresAt),
-		Subject:   userID,
+		Subject:   src.UserID,
 		Issuer:    m.issuer,
 		Audience:  jwt.ClaimStrings{wsTicketAudience},
 	}
@@ -203,7 +232,8 @@ func (m *Manager) IssueWSTicket(userID, email string, role Role, accessJTI strin
 
 // VerifyWSTicket parses and validates a WebSocket connect ticket. It enforces
 // the ticket audience so an ordinary access token cannot be presented in its
-// place. Single-use enforcement (replay prevention) is the caller's job.
+// place, and the ticket version (WSTicketVersion). Single-use enforcement
+// (replay prevention) is the caller's job.
 func (m *Manager) VerifyWSTicket(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
 		jwt.WithAudience(wsTicketAudience), jwt.WithIssuer(m.issuer))
@@ -214,22 +244,20 @@ func (m *Manager) VerifyWSTicket(tokenStr string) (*Claims, error) {
 	if !ok || !token.Valid {
 		return nil, errors.New("auth: invalid ws ticket claims")
 	}
+	if claims.WSV < WSTicketVersion {
+		return nil, errors.New("auth: ws ticket from an older server")
+	}
 	return claims, nil
 }
 
-// ConsumeWSTicket verifies a WS ticket and immediately marks its jti as
-// consumed via the shared blacklist (AddIfAbsent), making the ticket truly
-// single-use across all replicas (equivalent to the old process-local map in
-// local mode).
+// ConsumeWSTicket verifies a WS ticket (VerifyWSTicket) and immediately marks
+// its jti as consumed via the shared blacklist (AddIfAbsent), making the
+// ticket truly single-use across all replicas (equivalent to the old
+// process-local map in local mode).
 func (m *Manager) ConsumeWSTicket(tokenStr string) (*Claims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, m.keyFunc,
-		jwt.WithAudience(wsTicketAudience), jwt.WithIssuer(m.issuer))
+	claims, err := m.VerifyWSTicket(tokenStr)
 	if err != nil {
-		return nil, fmt.Errorf("auth: verify ws ticket: %w", err)
-	}
-	claims, ok := token.Claims.(*Claims)
-	if !ok || !token.Valid {
-		return nil, errors.New("auth: invalid ws ticket claims")
+		return nil, err
 	}
 	if m.blacklist != nil && claims.ID != "" {
 		ttl := time.Until(claims.ExpiresAt.Time)

@@ -157,6 +157,9 @@ export const enDashboard = {
     org_channel_delete: 'Deleted a notification channel',
     org_rule_save: 'Saved a custom rule',
     org_rule_delete: 'Deleted a custom rule',
+    org_ci_credential_create: 'Created a CI credential',
+    org_ci_credential_revoke: 'Revoked a CI credential',
+    ci_webhook_run: 'Recorded a CI run',
   },
   home: {
     morning: 'Good morning',

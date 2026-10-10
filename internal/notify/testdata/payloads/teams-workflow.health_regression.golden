@@ -1,0 +1,8 @@
+POST /workflows/x/triggers/manual/paths/invoke
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: health_regression
+X-Baki-Timestamp: 1790856001
+
+{"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","contentUrl":null,"content":{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json","type":"AdaptiveCard","version":"1.4","body":[{"type":"RichTextBlock","inlines":[{"type":"TextRun","text":"Health regressed in Invoice Bot","weight":"Bolder","size":"Medium","color":"Attention"}]},{"type":"RichTextBlock","inlines":[{"type":"TextRun","text":"Health score dropped from 90 to 70."}]},{"type":"RichTextBlock","inlines":[{"type":"TextRun","text":"Flow: ","weight":"Bolder"},{"type":"TextRun","text":"Invoice Bot"}]},{"type":"RichTextBlock","spacing":"None","inlines":[{"type":"TextRun","text":"Health: ","weight":"Bolder"},{"type":"TextRun","text":"90 → 70"}]}]}}]}

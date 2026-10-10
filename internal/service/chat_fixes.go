@@ -9,31 +9,12 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/metrics"
 	"pad-core/ai/scrubber"
 	"pad-core/logger"
 	"pad-core/models"
 
 	"github.com/google/uuid"
 )
-
-// fixDecisionTimeout bounds the apply_fix approval wait; a var so tests can shorten it (fixDecisionWait).
-var fixDecisionTimeout = ai.FixDecisionTimeout
-
-// decisionWait resolves the effective approval-wait duration (test override aware).
-func (s *ChatService) decisionWait() time.Duration {
-	if s.fixDecisionWait > 0 {
-		return s.fixDecisionWait
-	}
-	return fixDecisionTimeout
-}
-
-// fixDecisionKeepalive is how often the approval wait touches the activity clock: without it the idle watchdog
-// (counting only provider chunks + explicit touches) could cancel a healthy stream while the user reads.
-const fixDecisionKeepalive = 15 * time.Second
-
-// ErrNoPendingFix is returned by ResolveFixDecision for an unknown, already-decided or other-stream proposal ID.
-var ErrNoPendingFix = errors.New("no pending fix proposal for this stream")
 
 // errFixNeedsWriteScope refuses a chat fix for a scoped API token without the write scope. The HTTP scope gate
 // never sees this mutation: it runs inside the chat stream, which a chat-only token is allowed to start.
@@ -55,23 +36,6 @@ func requireFixWriteScope(ctx context.Context) error {
 		return errFixNeedsWriteScope
 	}
 	return err
-}
-
-// fixDecisionState is one registered approval prompt; decided is buffered so ResolveFixDecision never blocks and
-// the FIRST decision wins.
-type fixDecisionState struct {
-	streamID string
-	decided  chan fixDecision
-}
-
-// fixDecision is one user verdict, delivered whole on the channel.
-// excludedBatchIdx carries per-item OPT-OUTS for a batch approval (U4.1): indices into the card's item list the
-// user deselected. It lives in the message, not on fixDecisionState: a dropped send (a double-clicked Approve or
-// retry) still wrote the shared field, racing the consumer on an unsynchronised slice header (proven under
-// -race); carrying the payload means only the winning decision is ever published.
-type fixDecision struct {
-	approved         bool
-	excludedBatchIdx []int
 }
 
 // chatFixApplier implements ai.ToolFixApplier for one chat stream: emits the fix_proposal SSE event, waits for
@@ -109,50 +73,23 @@ func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixPr
 	if requireFixWriteScope(ctx) != nil {
 		return fixScopeRefusal, nil
 	}
-	st := &fixDecisionState{streamID: a.streamID, decided: make(chan fixDecision, 1)}
-	a.svc.pendingFixDecisions.Store(prop.ProposalID, st)
-	defer a.svc.pendingFixDecisions.Delete(prop.ProposalID)
-
-	a.emit("fix_proposal", map[string]interface{}{
-		"proposalId": prop.ProposalID,
-		"ruleId":     prop.RuleID,
-		"fixType":    prop.FixType,
-		"blockId":    prop.BlockID,
-		// Block names are never masked by ScrubDocument (only Properties) — scrub the label as defense in depth.
-		"blockLabel": scrubber.ScrubText(prop.BlockLabel),
-		"line":       prop.Line,
-		"summary":    prop.Summary,
-	})
-
-	var approved bool
-	var timedOut bool
-	timeout := time.NewTimer(a.svc.decisionWait())
-	defer timeout.Stop()
-	keepalive := time.NewTicker(fixDecisionKeepalive)
-	defer keepalive.Stop()
-wait:
-	for {
-		select {
-		case dec := <-st.decided:
-			approved = dec.approved
-			break wait
-		case <-keepalive.C:
-			if a.touch != nil {
-				a.touch()
-			}
-		case <-timeout.C:
-			timedOut = true
-			break wait
-		case <-ctx.Done():
-			return "", ctx.Err()
+	// One item, repeated as flat fields: the card reads items[]; clients before it read the flat fields (the
+	// item's id stays inside items[]: the event's own id is proposalId).
+	item := fixProposalItem(prop)
+	flat := make(map[string]interface{}, len(item))
+	for k, v := range item {
+		if k != "id" {
+			flat[k] = v
 		}
 	}
-
-	if timedOut {
-		a.emitFixDecision(prop.ProposalID, "timeout", "")
+	dec, ended := a.svc.requestApproval(ctx, a.streamID, approvalRequestFor(fixToolSpec("apply_fix"), prop.ProposalID, []map[string]interface{}{item}, flat), a.emit, a.touch)
+	switch ended {
+	case approvalCancelled:
+		return "", ctx.Err()
+	case approvalTimedOut:
 		return "the user did not respond to the approval prompt in time — nothing was changed. Ask them whether to try again or apply it manually.", nil
 	}
-	if !approved {
+	if !dec.approved {
 		a.emitFixDecision(prop.ProposalID, "declined", "")
 		return "the user DECLINED this fix — nothing was changed. Do not call apply_fix again for the same finding unless the user explicitly asks; explain the change instead.", nil
 	}
@@ -178,12 +115,34 @@ wait:
 }
 
 func (a *chatFixApplier) emitFixDecision(proposalID, status, message string) {
-	metrics.RecordChatFixDecision(status)
-	data := map[string]interface{}{"proposalId": proposalID, "status": status}
-	if message != "" {
-		data["message"] = message
+	emitApprovalDecision(a.emit, proposalID, status, message)
+}
+
+// fixToolSpec returns the registry's spec of a fix tool; the applier only serves registered tools.
+func fixToolSpec(name string) ai.ToolSpec {
+	spec, ok := ai.ToolSpecOf(name)
+	if !ok {
+		panic("chat fixes: unknown tool " + name)
 	}
-	a.emit("fix_decision", data)
+	return spec
+}
+
+// fixItemID identifies one fix inside a request and its decision: a batch may fix the same rule on several
+// blocks, so ruleId alone cannot pair an outcome with its item. Clients prefer id when present.
+func fixItemID(p ai.FixProposal) string { return p.BlockID + ":" + p.RuleID }
+
+// fixProposalItem renders one proposal as a fix-patch item of the approval card.
+func fixProposalItem(p ai.FixProposal) map[string]interface{} {
+	return map[string]interface{}{
+		"id":      fixItemID(p),
+		"ruleId":  p.RuleID,
+		"fixType": p.FixType,
+		"blockId": p.BlockID,
+		// Block names are never masked by ScrubDocument (only Properties) — scrub the label as defense in depth.
+		"blockLabel": scrubber.ScrubText(p.BlockLabel),
+		"line":       p.Line,
+		"summary":    p.Summary,
+	}
 }
 
 // beginApplyKeepalive starts the apply-window keepalive: a ticker goroutine touching the activity clock while
@@ -225,60 +184,21 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 		return fixScopeRefusal, nil
 	}
 	batchID := props[0].ProposalID + "-batch-" + uuid.NewString()[:8]
-	st := &fixDecisionState{streamID: a.streamID, decided: make(chan fixDecision, 1)}
-	a.svc.pendingFixDecisions.Store(batchID, st)
-	defer a.svc.pendingFixDecisions.Delete(batchID)
-
 	items := make([]map[string]interface{}, len(props))
 	for i, p := range props {
-		items[i] = map[string]interface{}{
-			"ruleId":     p.RuleID,
-			"fixType":    p.FixType,
-			"blockId":    p.BlockID,
-			"blockLabel": scrubber.ScrubText(p.BlockLabel), // see single-proposal note
-			"line":       p.Line,
-			"summary":    p.Summary,
-		}
+		items[i] = fixProposalItem(p)
 	}
-	a.emit("fix_proposal", map[string]interface{}{
-		"proposalId": batchID,
-		"batch":      true,
-		"count":      len(props),
-		"items":      items,
-	})
-
-	var approved bool
-	// excluded is the winning decision's per-item opt-outs, received with it.
-	var excluded []int
-	var timedOut bool
-	timeout := time.NewTimer(a.svc.decisionWait())
-	defer timeout.Stop()
-	keepalive := time.NewTicker(fixDecisionKeepalive)
-	defer keepalive.Stop()
-wait:
-	for {
-		select {
-		case dec := <-st.decided:
-			approved = dec.approved
-			excluded = dec.excludedBatchIdx
-			break wait
-		case <-keepalive.C:
-			if a.touch != nil {
-				a.touch()
-			}
-		case <-timeout.C:
-			timedOut = true
-			break wait
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
-	}
-
-	if timedOut {
-		a.emitFixDecision(batchID, "timeout", "")
+	dec, ended := a.svc.requestApproval(ctx, a.streamID, approvalRequestFor(fixToolSpec("apply_fixes"), batchID, items,
+		map[string]interface{}{"batch": true, "count": len(props)}), a.emit, a.touch)
+	switch ended {
+	case approvalCancelled:
+		return "", ctx.Err()
+	case approvalTimedOut:
 		return "the user did not respond to the batch approval in time — nothing was changed. Ask whether to try again.", nil
 	}
-	if !approved {
+	// excluded is the winning decision's per-item opt-outs, received with it.
+	excluded := dec.excluded
+	if !dec.approved {
 		a.emitFixDecision(batchID, "declined", "")
 		return "the user DECLINED the batch — nothing was changed. Do not re-propose the same batch unless asked; explain the changes instead.", nil
 	}
@@ -323,7 +243,7 @@ wait:
 }
 
 func (a *chatFixApplier) emitBatchDecision(batchID string, outcome batchOutcome) {
-	metrics.RecordChatFixDecision(outcome.Status)
+	recordChatFixDecision(outcome.Status)
 	data := map[string]interface{}{
 		"proposalId": batchID,
 		"status":     outcome.Status,
@@ -333,7 +253,7 @@ func (a *chatFixApplier) emitBatchDecision(batchID string, outcome batchOutcome)
 	}
 	items := make([]map[string]interface{}, len(outcome.Items))
 	for i, it := range outcome.Items {
-		m := map[string]interface{}{"ruleId": it.RuleID, "status": it.Status}
+		m := map[string]interface{}{"id": it.ID, "ruleId": it.RuleID, "status": it.Status}
 		if it.Message != "" {
 			m["message"] = it.Message
 		}
@@ -398,7 +318,7 @@ func (s *ChatService) applyApprovedFix(ctx context.Context, snapshot *models.Flo
 		return chatFixOutcome{Status: "error", Detail: "not allowed to edit this flow: " + err.Error()}, nil, err
 	}
 
-	metrics.RecordFlowOp("chat_apply_fix")
+	RecordFlowOp("chat_apply_fix")
 	updated, err := s.applyFixHook()(ctx, doc, prop.BlockID, prop.FixType, prop.RuleID, prop.Variable, prop.Property)
 	if err != nil {
 		return chatFixOutcome{Status: "error", Detail: err.Error()}, nil, err
@@ -458,27 +378,6 @@ func (s *ChatService) applyApprovedFix(ctx context.Context, snapshot *models.Flo
 	}, updated, nil
 }
 
-// ResolveFixDecision delivers the user's approve/decline; first decision wins, and the stream must own it.
-func (s *ChatService) ResolveFixDecision(streamID, proposalID string, approved bool, excludedBatchIdx []int) error {
-	v, ok := s.pendingFixDecisions.Load(proposalID)
-	if !ok {
-		return ErrNoPendingFix
-	}
-	st := v.(*fixDecisionState)
-	if st.streamID != streamID {
-		return ErrNoPendingFix
-	}
-	dec := fixDecision{approved: approved}
-	if approved {
-		dec.excludedBatchIdx = excludedBatchIdx
-	}
-	select {
-	case st.decided <- dec:
-	default: // already decided — first decision wins
-	}
-	return nil
-}
-
 // fixContentKey re-associates a batch target across sequential applies: a patch shifts line numbers and the
 // re-parse mints fresh block IDs + fingerprints, so neither survives; the block's identity content does.
 // Truly identical sibling blocks share a key — items consume matches in order, which may swap siblings, but
@@ -506,8 +405,9 @@ func fixContentKeyOf(ruleID string, f *models.Finding, doc *models.FlowDocument)
 	return k
 }
 
-// batchItemOutcome is one fix's verified result inside a batch.
+// batchItemOutcome is one fix's verified result inside a batch; ID is the request item's (fixItemID).
 type batchItemOutcome struct {
+	ID      string
 	RuleID  string
 	Status  string // "applied" | "applied-unresolved" | "error" | "already-resolved"
 	Message string
@@ -556,7 +456,7 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, snapshot *models.F
 		return out, nil, err
 	}
 
-	metrics.RecordFlowOp("chat_apply_fixes")
+	RecordFlowOp("chat_apply_fixes")
 
 	type pending struct {
 		prop ai.FixProposal
@@ -665,7 +565,7 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, snapshot *models.F
 		curReport = nil
 		appliedFlags[i] = true
 		anyApplied = true
-		metrics.RecordFlowOp("chat_apply_fix")
+		RecordFlowOp("chat_apply_fix")
 		// Placeholder keeps out.Items index-aligned with pend; the verification pass fills it.
 		out.Items = append(out.Items, batchItemOutcome{RuleID: pend[i].prop.RuleID})
 	}
@@ -707,8 +607,10 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, snapshot *models.F
 			}
 		}
 	}
-	// Fill statuses for skipped items ("already-resolved" already set above).
+	// Fill statuses for skipped items ("already-resolved" already set above); out.Items[i] is pend[i]'s (one
+	// outcome appended per item, in order), so the request item's id is stamped here for all of them.
 	for i := range out.Items {
+		out.Items[i].ID = fixItemID(pend[i].prop)
 		if out.Items[i].Status == "" {
 			out.Items[i].Status = "error"
 			out.Items[i].Message = "not attempted"

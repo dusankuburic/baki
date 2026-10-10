@@ -161,7 +161,7 @@ var modelCatalog = map[string][]ModelInfo{
 // a call named or was served by. Anthropic publishes per-family rates (0.025x on Fable/Mythos 5.1, 0.05x on
 // Opus 5.5, 0.1x on every other Claude); everyone else keeps the full input rate.
 func cacheReadMultiplier(providerID, modelID, servedModel string) float64 {
-	claudeRoute := providerID == "claude" || IsClaudeModel(modelID) || isClaudeModelName(servedModel)
+	claudeRoute := wireOf(providerID) == WireAnthropic || IsClaudeModel(modelID) || isClaudeModelName(servedModel)
 	if !claudeRoute {
 		return 1.0
 	}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
@@ -32,7 +33,16 @@ func (s *APITokenService) List(ctx context.Context, userID string) ([]*storageif
 	return tokens, nil
 }
 
-// Delete revokes userID's token id; idempotent, and one user cannot revoke another's.
-func (s *APITokenService) Delete(ctx context.Context, userID, id string) error {
-	return s.store.DeleteAPIToken(ctx, userID, id)
+// Delete revokes userID's token id and reports whether it was userID's: idempotent, and one user cannot revoke
+// another's. What follows a revocation (blacklisting the token's sockets, the audit row) must wait for owned: keyed by
+// the token id alone, it would let anyone who learned another user's token id cut that token's sockets off.
+func (s *APITokenService) Delete(ctx context.Context, userID, id string) (owned bool, err error) {
+	tokens, err := s.store.ListAPITokens(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if !slices.ContainsFunc(tokens, func(t *storageif.APIToken) bool { return t.ID == id }) {
+		return false, nil
+	}
+	return true, s.store.DeleteAPIToken(ctx, userID, id)
 }

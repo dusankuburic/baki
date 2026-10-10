@@ -29,17 +29,19 @@ type FixItemSnapshot struct {
 	Message    string `json:"message,omitempty"`
 }
 
-// FixProposalSnapshot mirrors models.FixProposalSnapshot — the persisted apply_fix approval record (single or batch).
+// FixProposalSnapshot mirrors models.FixProposalSnapshot — the persisted approval record (single or batch).
 type FixProposalSnapshot struct {
-	ProposalID string            `json:"proposalId"`
-	RuleID     string            `json:"ruleId"`
-	FixType    string            `json:"fixType"`
-	BlockLabel string            `json:"blockLabel"`
-	Line       int               `json:"line"`
-	Summary    string            `json:"summary"`
-	Status     string            `json:"status"`
-	Message    string            `json:"message,omitempty"`
-	Items      []FixItemSnapshot `json:"items,omitempty"`
+	ProposalID  string            `json:"proposalId"`
+	Tool        string            `json:"tool,omitempty"`
+	PreviewKind string            `json:"previewKind,omitempty"`
+	RuleID      string            `json:"ruleId"`
+	FixType     string            `json:"fixType"`
+	BlockLabel  string            `json:"blockLabel"`
+	Line        int               `json:"line"`
+	Summary     string            `json:"summary"`
+	Status      string            `json:"status"`
+	Message     string            `json:"message,omitempty"`
+	Items       []FixItemSnapshot `json:"items,omitempty"`
 }
 
 // ChatMessage mirrors models.ChatMessage for persistence; ServedModel and billed rates ride inside the messages JSON — no columns of their own.

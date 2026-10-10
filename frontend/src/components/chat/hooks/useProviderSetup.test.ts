@@ -1,7 +1,7 @@
 import {describe, it, expect, vi, beforeEach, onTestFinished} from 'vitest'
 import {renderHook, waitFor, act} from '@testing-library/react'
 import {useChatStore, threadModelOf, type ChatThread} from '@/stores/chatStore'
-import {useSettingsStore} from '@/stores/settingsStore'
+import {providerConfig, useSettingsStore} from '@/stores/settingsStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {useFlowStore} from '@/stores/flowStore'
 import type {AIProviderConfig, AISettings, ChatMessage, ModelDetail, ProviderID, ProviderInfo} from '@/types'
@@ -89,12 +89,11 @@ function listing(...providers: object[]) {
 
 // ---- stores ----
 
-function setAI(activeProvider: ProviderID, defaults: Partial<Record<ProviderID, string>> = {}) {
+function setAI(activeProvider: ProviderID, defaults: Record<ProviderID, string> = {}) {
   const s = useSettingsStore.getState().settings
   const providers = {...s.ai.providers}
   for (const [id, model] of Object.entries(defaults)) {
-    const key = id as ProviderID
-    providers[key] = {...providers[key], defaultModel: model}
+    providers[id] = {...providerConfig(s.ai, id), defaultModel: model}
   }
   useSettingsStore.setState({settings: {...s, ai: {...s.ai, activeProvider, providers}}})
 }
@@ -162,7 +161,7 @@ beforeEach(() => {
     useSettingsStore.setState({
       settings: {
         ...cur,
-        ai: {...cur.ai, providers: {...cur.ai.providers, [id]: {...cur.ai.providers[id], ...config}}},
+        ai: {...cur.ai, providers: {...cur.ai.providers, [id]: {...providerConfig(cur.ai, id), ...config}}},
       },
     })
     return true
@@ -216,8 +215,11 @@ describe('useProviderSetup listing', () => {
   })
 
   // Tolerant wire enums: a newer server's provider, auth type, kind or status
-  // renders the rest of the listing; what the chat cannot use is left out.
-  it('leaves out a provider a newer server added, and keeps a kind or status it added so it reads as unusable', async () => {
+  // renders the rest of the listing. A provider this bundle has no catalogue
+  // entry for is listed as sent — the server resolves its credential, so a
+  // turn can go to it; a model kind or status the chat cannot use is kept so
+  // it reads as unusable.
+  it('lists a provider a newer server added, as sent, and keeps a kind or status it added', async () => {
     const voice = {...GPT, id: 'm/voice00000', displayName: 'Voice', kind: 'realtime', aliases: undefined}
     const paused = {...DOCS, status: 'suspended'}
     listing(
@@ -227,8 +229,9 @@ describe('useProviderSetup listing', () => {
     )
     const {result} = renderHook(() => useProviderSetup())
     await waitFor(() => expect(result.current.listingLoaded).toBe(true))
-    expect(result.current.providers.map(p => p.id)).toEqual(['claude', 'azure-foundry'])
+    expect(result.current.providers.map(p => p.id)).toEqual(['claude', 'azure-foundry', 'mistral'])
     expect(result.current.providers[0]!.authType).toBe('workload_identity')
+    expect(result.current.providers[2]).toMatchObject({id: 'mistral', name: 'Mistral', configured: true})
     const models = result.current.providers.find(p => p.id === 'azure-foundry')!.models
     expect(models.find(m => m.id === 'm/voice00000')).toMatchObject({kind: 'realtime'})
     expect(models.find(m => m.id === DOCS.id)).toMatchObject({status: 'suspended'})

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/service"
+	"pad-core/models"
 )
 
 type ProviderHandler struct {
@@ -33,7 +35,7 @@ func NewProviderHandler(providerSvc *service.ProviderService, security *Security
 // @Tags         providers
 // @Param        orgId query string false "Organisation whose shared credentials to include"
 // @Produce      json
-// @Success      200 {object} []map[string]interface{} "OK"
+// @Success      200 {object} []models.ProviderInfo "OK"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/providers/list [get]
 func (h *ProviderHandler) handleListProviders(w http.ResponseWriter, r *http.Request) {
@@ -45,15 +47,46 @@ func (h *ProviderHandler) handleListProviders(w http.ResponseWriter, r *http.Req
 	render.JSON(w, providers)
 }
 
+// @Summary      Provider catalogue
+// @Description  Lists every registered AI provider of this deployment's profile in display order, configured or not — the generic settings panel renders from it (ADR 0025). Each entry carries id, name, authType (api_key|oauth), modes[] (the deployment profiles it is offered in), caps[] (chat, stream, embeddings, tools, reasoning, model_aliases, live_listing, org_shared, prompt_cache), credential {kind: api_key|oauth_device|document|none, fields[] {name, label, type: text|secret|url|select|number|json, required, placeholder?, help?, options? [{value, label}]}, helpUrl?}, endpoints {save?, test?, start?, poll?, revoke?, user?} (the routes that manage the credential), configured (the caller holds a credential, or — with orgId, as /api/providers/list — their organisation shares one), color?, icon?, pricing (catalog|free|unpriced) and configurable (the credential can be managed through endpoints; false for a document provider without a panel: "configured on the server"). Network-free: no live model listing.
+// @Tags         providers
+// @Param        orgId query string false "Organisation whose shared credentials count as configured"
+// @Produce      json
+// @Success      200 {object} providerCatalogOut "OK"
+// @Failure      500 {object} render.ErrorResponse "Internal Server Error"
+// @Router       /api/providers/catalog [get]
+func (h *ProviderHandler) providerCatalog(ctx context.Context, req providerCatalogRequest) (providerCatalogOut, error) {
+	entries, err := h.providerSvc.ProviderCatalog(ctx, h.security.KeyScopeFromContext(ctx), h.listingOrgFor(ctx, req.OrgID))
+	if err != nil {
+		return providerCatalogOut{}, err
+	}
+	if entries == nil {
+		entries = []models.ProviderCatalogEntry{}
+	}
+	return providerCatalogOut{Providers: entries}, nil
+}
+
+type providerCatalogRequest struct {
+	OrgID string `query:"orgId"`
+}
+
+type providerCatalogOut struct {
+	Providers []models.ProviderCatalogEntry `json:"providers"`
+}
+
 // listingOrg returns the ?orgId= the caller may list shared credentials for: the parameter when the
 // caller's role may run on the org's shared credential (admin or member — the rule the chat turn
 // applies), else "" — a non-member learns nothing.
 func (h *ProviderHandler) listingOrg(r *http.Request) string {
-	orgID := r.URL.Query().Get("orgId")
+	return h.listingOrgFor(r.Context(), r.URL.Query().Get("orgId"))
+}
+
+// listingOrgFor is listingOrg for a typed endpoint.
+func (h *ProviderHandler) listingOrgFor(ctx context.Context, orgID string) string {
 	if orgID == "" || h.security.OrgSvc == nil {
 		return ""
 	}
-	role, err := h.security.OrgSvc.MemberRole(r.Context(), orgID, h.security.CallerID(r))
+	role, err := h.security.OrgSvc.MemberRole(ctx, orgID, h.security.CallerIDFromContext(ctx))
 	if err != nil || !service.OrgRoleUsesSharedCredential(role) {
 		return ""
 	}
@@ -61,7 +94,7 @@ func (h *ProviderHandler) listingOrg(r *http.Request) string {
 }
 
 // @Summary      Test provider connection
-// @Description  Tests the connection to a specific AI provider. For azure-foundry this form is deprecated (one release): it tests the caller's resource "default" (else their first resource) as a resource — an authenticated probe, no model call; use POST /api/providers/azure-foundry/test to test one resource or model.
+// @Description  Tests the connection to a specific AI provider with one tiny billed chat call per candidate model. Every outcome is a 200 {ok, latencyMs, error?, code?}; code names a refusal the client branches on: PROVIDER_UNKNOWN (no such provider), PROVIDER_NOT_ALLOWED (the provider policy refused it: disabled in this deployment — this route tests the caller's own credential, so the organisation's allowed-provider list applies to the org test route, POST /api/orgs/{id}/providers/azure-foundry/test, instead), AI_BUDGET_EXCEEDED / AI_BUDGET_UNAVAILABLE (the daily AI budget gates the test like any other call — nothing was sent). For azure-foundry this form is deprecated (one release): it tests the caller's resource "default" (else their first resource) as a resource — an authenticated probe, no model call; use POST /api/providers/azure-foundry/test to test one resource or model.
 // @Tags         providers
 // @Param        request body object true "request"
 // @Accept       json
@@ -421,6 +454,8 @@ func auditURLHost(raw string) string {
 func (h *ProviderHandler) Mount(rb *route.Builder) {
 	rb.Route("/api/providers", func(rb *route.Builder) {
 		rb.Get("/list", h.handleListProviders, route.NoTx())
+		// The catalogue reads the keystore only (no live listing): the same policy as /list.
+		rb.Get("/catalog", Query(h.providerCatalog), route.NoTx())
 		// Up to three billed completions per call: the chat bucket.
 		rb.Post("/test", h.handleTestProviderConnection, route.RateLimit(route.RateChat), route.NoTx())
 		rb.Route("/github", func(rb *route.Builder) {

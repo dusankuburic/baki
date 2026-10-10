@@ -143,7 +143,8 @@ func (s *KnowledgeService) embedQuery(ctx context.Context, provider ai.Provider,
 			return append([]float32(nil), v...), true, nil
 		}
 	}
-	emb, err := provider.Embed(ctx, []string{query})
+	// Charged to the caller in the org (the wrapper's hook and usage row read it from ctx), as Search set it.
+	emb, err := provider.Embed(ai.WithBudgetScope(ctx, scope, orgID), []string{query})
 	if err != nil || len(emb) == 0 {
 		return nil, false, err
 	}

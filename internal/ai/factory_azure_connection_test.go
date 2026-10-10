@@ -59,7 +59,7 @@ func TestForAzureConnection_PersonalRef(t *testing.T) {
 	}}, map[string]map[string]string{"org-1": {"azure-foundry/abc123def4": connTestDoc}}, nil)
 	models := []AzureRegisteredModel{entry("aaaaaaaaa1", AzureModelKindChat, "gpt-4o"), entry("aaaaaaaaa2", AzureModelKindClaude, "sonnet")}
 
-	p, err := f.ForAzureConnection("u1", AzureConnectionRef{ConnID: "abc123def4"}, models)
+	p, err := f.ForAzureConnection(context.Background(), "u1", AzureConnectionRef{ConnID: "abc123def4"}, models)
 	if err != nil {
 		t.Fatalf("ForAzureConnection: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestForAzureConnection_PersonalRef(t *testing.T) {
 	}
 
 	// The default resource is the legacy key.
-	p, err = f.ForAzureConnection("u1", AzureConnectionRef{ConnID: AzureDefaultConnectionID}, models)
+	p, err = f.ForAzureConnection(context.Background(), "u1", AzureConnectionRef{ConnID: AzureDefaultConnectionID}, models)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestForAzureConnection_PersonalRef(t *testing.T) {
 func TestForAzureConnection_OrgRef(t *testing.T) {
 	f, seen := connTestFactory(map[string]map[string]string{"u1": {"azure-foundry/abc123def4": connTestDoc}},
 		map[string]map[string]string{"org-1": {"azure-foundry/abc123def4": strings.Replace(connTestDoc, "my-res", "shared-res", 1)}}, nil)
-	p, err := f.ForAzureConnection("u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, nil)
+	p, err := f.ForAzureConnection(context.Background(), "u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, nil)
 	if err != nil {
 		t.Fatalf("ForAzureConnection: %v", err)
 	}
@@ -109,17 +109,17 @@ func TestForAzureConnection_OrgRef(t *testing.T) {
 func TestForAzureConnection_NoCredentialFallback(t *testing.T) {
 	ref := AzureConnectionRef{ConnID: "abc123def4"}
 	f, seen := connTestFactory(nil, map[string]map[string]string{"org-1": {"azure-foundry/abc123def4": connTestDoc}}, nil)
-	if _, err := f.ForAzureConnection("u1", ref, nil); !errors.Is(err, ErrKeyNotConfigured) || len(seen.org) != 0 {
+	if _, err := f.ForAzureConnection(context.Background(), "u1", ref, nil); !errors.Is(err, ErrKeyNotConfigured) || len(seen.org) != 0 {
 		t.Errorf("personal ref without a personal key: err %v, org lookups %v; want ErrKeyNotConfigured and no org read", err, seen.org)
 	}
 
 	f, seen = connTestFactory(map[string]map[string]string{"u1": {"azure-foundry/abc123def4": connTestDoc}}, nil, nil)
-	if _, err := f.ForAzureConnection("u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, nil); !errors.Is(err, ErrKeyNotConfigured) || len(seen.personal) != 0 {
+	if _, err := f.ForAzureConnection(context.Background(), "u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, nil); !errors.Is(err, ErrKeyNotConfigured) || len(seen.personal) != 0 {
 		t.Errorf("org ref without an org key: err %v, personal lookups %v; want ErrKeyNotConfigured and no personal read", err, seen.personal)
 	}
 
 	noStore := NewProviderFactory(func(_, _ string) (string, error) { return connTestDoc, nil }, nil, nil, nil)
-	if _, err := noStore.ForAzureConnection("u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, nil); !errors.Is(err, ErrKeyNotConfigured) {
+	if _, err := noStore.ForAzureConnection(context.Background(), "u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, nil); !errors.Is(err, ErrKeyNotConfigured) {
 		t.Errorf("org ref without an org store: %v, want ErrKeyNotConfigured", err)
 	}
 
@@ -127,19 +127,19 @@ func TestForAzureConnection_NoCredentialFallback(t *testing.T) {
 	memberErr := errors.New("keystore: message authentication failed")
 	f = NewProviderFactory(func(_, _ string) (string, error) { return "", memberErr }, nil, nil, nil)
 	f.SetOrgKeyLookup(func(_, _ string) (string, error) { return connTestDoc, nil })
-	if _, err := f.ForAzureConnection("u1", ref, nil); !errors.Is(err, memberErr) {
+	if _, err := f.ForAzureConnection(context.Background(), "u1", ref, nil); !errors.Is(err, memberErr) {
 		t.Errorf("member lookup error: %v, want it surfaced", err)
 	}
 	orgErr := errors.New("db down")
 	f.SetOrgKeyLookup(func(_, _ string) (string, error) { return "", orgErr })
-	if _, err := f.ForAzureConnection("u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, nil); !errors.Is(err, orgErr) || !strings.Contains(err.Error(), "org key") {
+	if _, err := f.ForAzureConnection(context.Background(), "u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, nil); !errors.Is(err, orgErr) || !strings.Contains(err.Error(), "org key") {
 		t.Errorf("org lookup error: %v, want it surfaced as the org's", err)
 	}
 
 	// An id no resource can have never becomes a key-store read.
 	f, seen = connTestFactory(nil, nil, nil)
 	for _, id := range []string{"", "Default", "../../x", "abc123def4/x", "ABC123DEF4"} {
-		if _, err := f.ForAzureConnection("u1", AzureConnectionRef{ConnID: id}, nil); err == nil || errors.Is(err, ErrKeyNotConfigured) {
+		if _, err := f.ForAzureConnection(context.Background(), "u1", AzureConnectionRef{ConnID: id}, nil); err == nil || errors.Is(err, ErrKeyNotConfigured) {
 			t.Errorf("resource id %q: err %v, want a refusal", id, err)
 		}
 	}
@@ -158,7 +158,7 @@ func TestForAzureConnectionEmbedding(t *testing.T) {
 	f.SetEmbeddingDimensions(512)
 	emb := AzureRegisteredModel{EntryID: "aaaaaaaaa1", Kind: AzureModelKindEmbedding, Deployment: "kb-embed"}
 
-	p, err := f.ForAzureConnectionEmbedding("u1", AzureConnectionRef{ConnID: "abc123def4"}, emb)
+	p, err := f.ForAzureConnectionEmbedding(context.Background(), "u1", AzureConnectionRef{ConnID: "abc123def4"}, emb)
 	if err != nil {
 		t.Fatalf("ForAzureConnectionEmbedding: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestForAzureConnectionEmbedding(t *testing.T) {
 		t.Errorf("chain usageOrg %q namer %v", ap.usageOrg, ap.embedNamer)
 	}
 
-	p, err = f.ForAzureConnectionEmbedding("u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, emb)
+	p, err = f.ForAzureConnectionEmbedding(context.Background(), "u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, emb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,10 +179,10 @@ func TestForAzureConnectionEmbedding(t *testing.T) {
 	}
 
 	chat := AzureRegisteredModel{EntryID: "aaaaaaaaa2", Kind: AzureModelKindChat, Deployment: "gpt-4o"}
-	if _, err := f.ForAzureConnectionEmbedding("u1", AzureConnectionRef{ConnID: "abc123def4"}, chat); !errors.Is(err, ErrEmbeddingDeploymentMissing) || errors.Is(err, ErrOrgEmbeddingDeploymentMissing) {
+	if _, err := f.ForAzureConnectionEmbedding(context.Background(), "u1", AzureConnectionRef{ConnID: "abc123def4"}, chat); !errors.Is(err, ErrEmbeddingDeploymentMissing) || errors.Is(err, ErrOrgEmbeddingDeploymentMissing) {
 		t.Errorf("a chat entry: %v, want ErrEmbeddingDeploymentMissing", err)
 	}
-	if _, err := f.ForAzureConnectionEmbedding("u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, AzureRegisteredModel{Kind: AzureModelKindEmbedding}); !errors.Is(err, ErrOrgEmbeddingDeploymentMissing) {
+	if _, err := f.ForAzureConnectionEmbedding(context.Background(), "u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, AzureRegisteredModel{Kind: AzureModelKindEmbedding}); !errors.Is(err, ErrOrgEmbeddingDeploymentMissing) {
 		t.Errorf("an org ref without a deployment: %v, want ErrOrgEmbeddingDeploymentMissing", err)
 	}
 }
@@ -209,7 +209,7 @@ func TestForAzureConnection_UsageFollowsTheCredential(t *testing.T) {
 		map[string]map[string]string{"org-1": {"azure-foundry/abc123def4": seamKeyDoc("shared")}}, rec)
 	models := []AzureRegisteredModel{entry("aaaaaaaaa1", AzureModelKindChat, "gpt-4o")}
 
-	org, err := f.ForAzureConnection("u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, models)
+	org, err := f.ForAzureConnection(context.Background(), "u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"}, models)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestForAzureConnection_UsageFollowsTheCredential(t *testing.T) {
 		t.Errorf("org usage row = org %q user %q model %q, want org-1 / u1 / gpt-4o", m.OrgID, m.UserID, m.Model)
 	}
 
-	own, err := f.ForAzureConnection("u1", AzureConnectionRef{ConnID: "abc123def4"}, models)
+	own, err := f.ForAzureConnection(context.Background(), "u1", AzureConnectionRef{ConnID: "abc123def4"}, models)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestForAzureConnection_UsageFollowsTheCredential(t *testing.T) {
 		t.Errorf("own usage row = org %q user %q, want personal", m.OrgID, m.UserID)
 	}
 
-	embedder, err := f.ForAzureConnectionEmbedding("u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"},
+	embedder, err := f.ForAzureConnectionEmbedding(context.Background(), "u1", AzureConnectionRef{OrgID: "org-1", ConnID: "abc123def4"},
 		AzureRegisteredModel{EntryID: "aaaaaaaaa2", Kind: AzureModelKindEmbedding, Deployment: "kb-embed"})
 	if err != nil {
 		t.Fatal(err)

@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+
+	"pad-analyzer/internal/auth"
 	"pad-core/logger"
 )
 
@@ -37,12 +39,20 @@ const (
 	// still lets one connection push ~12 MB/s of 64 KiB frames.
 	inboundRate  = 200
 	inboundBurst = 512
+	// deniedNoticeEvery bounds the permission_denied answers to one
+	// connection, so a client that keeps sending edits it may not make is
+	// told without the answers becoming an outbound flood.
+	deniedNoticeEvery = 5 * time.Second
 )
 
 // Client represents a single WebSocket connection.
 type Client struct {
+	// UserID is actor.UserID, kept as a field for the hub's many readers.
 	UserID      string
 	DisplayName string
+	// actor is who the connection acts as (Identity.Actor), immutable for its
+	// lifetime: the re-authz loop asks the FlowAccessChecker about it.
+	actor *auth.Actor
 
 	blockMu         sync.Mutex
 	selectedBlockID string
@@ -76,10 +86,25 @@ type Client struct {
 	// is revoked. readPump checks it per-message so a revoked user can't inject
 	// events between revocation detection and connection close.
 	authorized atomic.Bool
-	// canEdit mirrors the "editor" rank the HTTP write endpoints require,
-	// set at connect and refreshed by the re-authz loop, so a demotion to
-	// viewer takes effect on a live connection.
+	// canEdit mirrors the "editor" rank and write scope the HTTP write
+	// endpoints require (FlowAccessChecker.CanEdit), set at connect and
+	// refreshed by the re-authz loop, so a demotion to viewer takes effect on
+	// a live connection.
 	canEdit atomic.Bool
+	// deniedNotice rate-limits the permission_denied answers (readPump only).
+	deniedNotice noticeGate
+
+	// flowOwner (from the connect check) and accessJTI (Identity.AccessJTI)
+	// are what the hub matches an access change against (Hub.RecheckOrg,
+	// RecheckOwner, RecheckCredential); admittedAt is Hub.accessChanges as of
+	// the connect check. Set before Run, never changed.
+	flowOwner  FlowOwner
+	accessJTI  string
+	admittedAt uint64
+	// recheckNow asks the re-authz loop for a pass now rather than at its
+	// next tick (Client.requestRecheck). One slot: a burst of access changes
+	// leaves one pass pending, not one per change.
+	recheckNow chan struct{}
 
 	// done is closed when Run returns — after BOTH pumps have exited — so
 	// Hub.Shutdown can wait for every client's pumps to fully exit before
@@ -139,16 +164,19 @@ func selectionStamp() int64 {
 	}
 }
 
-// NewClient wraps an already-upgraded WebSocket connection.
-func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID string, canEdit bool) *Client {
+// NewClient wraps an already-upgraded WebSocket connection for actor, who must
+// not be nil.
+func NewClient(hub *Hub, conn *websocket.Conn, actor *auth.Actor, displayName, flowID string, canEdit bool) *Client {
 	c := &Client{
-		UserID:      userID,
+		UserID:      actor.UserID,
 		DisplayName: displayName,
+		actor:       actor,
 		hub:         hub,
 		flowID:      flowID,
 		connID:      uuid.NewString(),
 		conn:        conn,
 		send:        make(chan Envelope, sendBufferCap),
+		recheckNow:  make(chan struct{}, 1),
 		done:        make(chan struct{}),
 		stop:        make(chan struct{}),
 		writerDone:  make(chan struct{}),
@@ -162,6 +190,13 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID, displayName, flowID strin
 // blocks until the connection is closed.
 func (c *Client) Run() {
 	c.hub.Join(c.flowID, c)
+	// An access change that committed after the connect check looked for this
+	// socket before it was in its room: re-check once now, not at the first
+	// 2-minute pass. A recheck bumps accessChanges before it looks, so it
+	// either found the socket or is seen here.
+	if c.hub.accessChanges.Load() != c.admittedAt {
+		c.requestRecheck()
+	}
 	defer func() {
 		// Cleanup order:
 		//   1. Mark disconnected first: Send becomes a no-op and the room
@@ -200,13 +235,14 @@ func (c *Client) Run() {
 	c.readPump()
 }
 
-// runReauthzLoop periodically re-validates this client's access — access-token
-// revocation (blacklist hit) and flow ACL changes — and disconnects it the
-// moment either happens, plus a one-shot timer for the access token's own
-// expiry (a live socket would otherwise outlive its credential indefinitely).
-// Runs until ctx is cancelled; the caller (Handler) derives ctx from its own
-// request scope and cancels it via a deferred call so the goroutine can't
-// outlive the connection even if a panic unwinds the handler early.
+// runReauthzLoop re-validates this client's access — access-token revocation
+// (blacklist hit) and flow ACL changes — every 2 minutes and whenever an access
+// change reaches it (recheckNow), and disconnects it once either is gone, plus
+// a one-shot timer for the access token's own expiry (a live socket would
+// otherwise outlive its credential indefinitely). Runs until ctx is cancelled;
+// the caller (Handler) derives ctx from its own request scope and cancels it
+// via a deferred call so the goroutine can't outlive the connection even if a
+// panic unwinds the handler early.
 //
 // authorized is set false BEFORE closing the connection so readPump's
 // per-message check stops processing inbound events immediately, closing the
@@ -218,8 +254,10 @@ func (c *Client) runReauthzLoop(ctx context.Context, checker FlowAccessChecker, 
 		}
 	}()
 	// Re-check at a 2-minute cadence (matches the SSE channel) so a
-	// revocation is observed promptly rather than up to 5 minutes.
-	ticker := time.NewTicker(2 * time.Minute)
+	// revocation is observed promptly rather than up to 5 minutes. The
+	// periodic pass is the backstop for what no event reaches here: another
+	// replica's change, a change nothing announces.
+	ticker := time.NewTicker(c.hub.reauthzPeriod)
 	defer ticker.Stop()
 	if accessJTI != "" && !accessExp.IsZero() {
 		if d := time.Until(accessExp); d > 0 {
@@ -236,20 +274,60 @@ func (c *Client) runReauthzLoop(ctx context.Context, checker FlowAccessChecker, 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Check the ACCESS token's revocation (logout, password change,
-			// admin revoke) — the ticket's own JTI was only blacklisted for
-			// ~30s at consumption, so re-checking it would never fire after that.
-			if isRevoked != nil && accessJTI != "" && isRevoked(accessJTI) {
-				slog.Info("websocket: disconnecting client after token revoked",
-					"flowId", c.flowID, "userID", c.UserID)
-				c.authorized.Store(false)
-				c.conn.Close()
-				return
-			}
-			if checker != nil && !c.recheckAccess(ctx, checker) {
+		case <-c.recheckNow:
+			// An access change committed (Hub.RecheckFlow and the rest): pass
+			// now, holding one of the hub's recheck slots, so a change that
+			// reaches hundreds of sockets at once (an organisation deleted)
+			// runs a few authz lookups at a time. The periodic pass never
+			// waits behind the slots: if it falls due first, it runs as always.
+			select {
+			case c.hub.recheckSlots <- struct{}{}:
+				if !c.reauthorizeInSlot(ctx, checker, accessJTI, isRevoked) {
+					return
+				}
+				continue
+			case <-ticker.C:
+			case <-ctx.Done():
 				return
 			}
 		}
+		if !c.reauthorize(ctx, checker, accessJTI, isRevoked) {
+			return
+		}
+	}
+}
+
+// reauthorize is one pass of the re-authz loop: the access token's
+// revocation, then the flow ACL. It reports false once it has disconnected
+// the client.
+func (c *Client) reauthorize(ctx context.Context, checker FlowAccessChecker, accessJTI string, isRevoked func(string) bool) bool {
+	// Check the ACCESS token's revocation (logout, password change,
+	// admin revoke) — the ticket's own JTI was only blacklisted for
+	// ~30s at consumption, so re-checking it would never fire after that.
+	if isRevoked != nil && accessJTI != "" && isRevoked(accessJTI) {
+		slog.Info("websocket: disconnecting client after token revoked",
+			"flowId", c.flowID, "userID", c.UserID)
+		c.authorized.Store(false)
+		c.conn.Close()
+		return false
+	}
+	return checker == nil || c.recheckAccess(ctx, checker)
+}
+
+// reauthorizeInSlot is reauthorize for a caller holding a hub recheck slot,
+// which it gives back however the pass ends.
+func (c *Client) reauthorizeInSlot(ctx context.Context, checker FlowAccessChecker, accessJTI string, isRevoked func(string) bool) bool {
+	defer func() { <-c.hub.recheckSlots }()
+	return c.reauthorize(ctx, checker, accessJTI, isRevoked)
+}
+
+// requestRecheck asks the re-authz loop for a pass now. It never waits: when a
+// pass is already pending it has not started yet, so it will read the change
+// this request is for as well.
+func (c *Client) requestRecheck() {
+	select {
+	case c.recheckNow <- struct{}{}:
+	default:
 	}
 }
 
@@ -262,9 +340,9 @@ func (c *Client) runReauthzLoop(ctx context.Context, checker FlowAccessChecker, 
 // so the read check — a second full authz lookup per connection every 2
 // minutes — only runs for a user who cannot edit.
 func (c *Client) recheckAccess(ctx context.Context, checker FlowAccessChecker) bool {
-	canEdit := checker.CanEdit(ctx, c.flowID, c.UserID)
+	canEdit := checker.CanEdit(ctx, c.flowID, c.actor)
 	if !canEdit {
-		if err := checker.CheckAccess(ctx, c.flowID, c.UserID); err != nil {
+		if _, err := checker.CheckAccess(ctx, c.flowID, c.actor); err != nil {
 			slog.Info("websocket: disconnecting client after access revoked",
 				"flowId", c.flowID, "userID", c.UserID)
 			c.authorized.Store(false)
@@ -353,6 +431,7 @@ func (c *Client) readPump() {
 
 		var in inboundEnvelope
 		if err := json.Unmarshal(msg, &in); err != nil {
+			recordWSInboundRefused(refusedTypeLabel(in.Type), refusedInvalid)
 			c.Send(Envelope{
 				Type:      EventError,
 				Timestamp: time.Now(),
@@ -463,8 +542,81 @@ func parsePresenceUpdate(raw any) (string, error) {
 	return p.SelectedBlockID, nil
 }
 
-// handleIncoming processes a validated inbound event from the client.
+// need is what an inbound frame type requires of the connection sending it.
+type need uint8
+
+const (
+	// needJoined: what joining the room took, FlowRead (checked at the upgrade,
+	// on an access change and every 2 minutes; losing it disconnects).
+	needJoined need = iota + 1
+	// needEdit: FlowEdit, the editor rank and the write scope (canEdit, set at
+	// connect and refreshed on an access change and every 2 minutes; one
+	// atomic load per frame).
+	needEdit
+)
+
+// inboundNeeds declares every event type a client may send and what sending it
+// needs. A type missing here is refused as unknown_event, and
+// TestInboundNeeds_CoverEveryEventType fails an EventType that is neither here
+// nor in serverOnly, so a new client-sendable type cannot ship undeclared.
+var inboundNeeds = map[EventType]need{
+	EventPing:           needJoined,
+	EventPresenceUpdate: needJoined,
+	EventBlockUpdate:    needEdit,
+	EventBlockCreate:    needEdit,
+	EventBlockDelete:    needEdit,
+}
+
+// serverOnly lists the event types only the server sends; a client sending one
+// is answered unknown_event.
+var serverOnly = map[EventType]bool{
+	EventPresenceJoin:  true,
+	EventPresenceLeave: true,
+	EventPresenceSync:  true,
+	EventFlowChanged:   true,
+	EventError:         true,
+	EventPong:          true,
+}
+
+// Reasons of pad_ws_inbound_refused_total.
+const (
+	refusedEdit    = "edit"
+	refusedUnknown = "unknown"
+	refusedInvalid = "invalid"
+)
+
+// refusedTypeLabel bounds the type label of pad_ws_inbound_refused_total: a
+// declared event type keeps its name, anything a client made up is "other".
+func refusedTypeLabel(t EventType) string {
+	if _, ok := inboundNeeds[t]; ok || serverOnly[t] {
+		return string(t)
+	}
+	return "other"
+}
+
+// handleIncoming processes a validated inbound event from the client: it
+// checks the need inboundNeeds declares for the type, then handles the event.
+// A refused frame is dropped, counted and answered to the sender, and the
+// connection stays open: the shipped client reconnects after every close, so
+// closing would turn a refusal into a reconnect loop.
 func (c *Client) handleIncoming(env Envelope) {
+	switch inboundNeeds[env.Type] {
+	case needJoined:
+	case needEdit:
+		// Mutations require the same rank and scope as the HTTP write
+		// endpoints. Without this, a read-only collaborator or a read-scoped
+		// token refused by POST /api/flow/save-source could send the identical
+		// edit here and have it relayed verbatim to every member of the room
+		// and out over the Redis backplane.
+		if !c.canEdit.Load() {
+			c.refuseEdit(env.Type)
+			return
+		}
+	default:
+		c.refuseUnknown(env.Type)
+		return
+	}
+
 	switch env.Type {
 	case EventPing:
 		c.Send(Envelope{Type: EventPong, FlowID: c.flowID, Timestamp: time.Now()})
@@ -479,6 +631,7 @@ func (c *Client) handleIncoming(env Envelope) {
 		// refused to the sender, never stored or broadcast.
 		sel, err := parsePresenceUpdate(env.Payload)
 		if err != nil {
+			recordWSInboundRefused(refusedTypeLabel(env.Type), refusedInvalid)
 			c.Send(Envelope{
 				Type:      EventError,
 				Timestamp: time.Now(),
@@ -502,31 +655,43 @@ func (c *Client) handleIncoming(env Envelope) {
 		c.presenceMu.Unlock()
 
 	case EventBlockUpdate, EventBlockCreate, EventBlockDelete:
-		// Mutations require the same rank as the HTTP write endpoints.
-		// Without this, a read-only collaborator refused by POST
-		// /api/flow/save-source could send the identical edit here and have
-		// it relayed verbatim to every member of the room and out over the
-		// Redis backplane.
-		if !c.canEdit.Load() {
-			c.Send(Envelope{
-				Type:      EventError,
-				Timestamp: time.Now(),
-				Payload: ErrorPayload{
-					Code:    "permission_denied",
-					Message: "editor access is required to modify this flow",
-				},
-			})
-			return
-		}
 		c.hub.Broadcast(c.flowID, c.UserID, env, c)
 
 	default:
-		c.Send(Envelope{
-			Type:      EventError,
-			Timestamp: time.Now(),
-			Payload:   ErrorPayload{Code: "unknown_event", Message: fmt.Sprintf("unknown event type: %s", env.Type)},
-		})
+		// Declared in inboundNeeds but handled nowhere: refuse rather than
+		// guess (TestInboundNeeds_EveryDeclaredTypeIsHandled).
+		c.refuseUnknown(env.Type)
 	}
+}
+
+// refuseEdit drops a mutation the connection may not send, counts it, and
+// tells the sender at most once per deniedNoticeEvery.
+func (c *Client) refuseEdit(t EventType) {
+	recordWSInboundRefused(refusedTypeLabel(t), refusedEdit)
+	if !c.deniedNotice.allow(time.Now(), deniedNoticeEvery) {
+		return
+	}
+	msg := "editor access is required to modify this flow"
+	if c.actor.Scoped() && !c.actor.Allows(auth.ScopeWrite) {
+		msg = "this API token lacks the write scope required to modify this flow"
+	}
+	c.Send(Envelope{
+		Type:      EventError,
+		Timestamp: time.Now(),
+		Payload:   ErrorPayload{Code: "permission_denied", Message: msg},
+	})
+}
+
+// refuseUnknown drops a frame of a type no client may send, counts it, and
+// answers unknown_event to every such frame, as before (the inbound limiter
+// bounds them).
+func (c *Client) refuseUnknown(t EventType) {
+	recordWSInboundRefused(refusedTypeLabel(t), refusedUnknown)
+	c.Send(Envelope{
+		Type:      EventError,
+		Timestamp: time.Now(),
+		Payload:   ErrorPayload{Code: "unknown_event", Message: fmt.Sprintf("unknown event type: %s", t)},
+	})
 }
 
 // inboundPayload turns a client frame's raw payload into Envelope.Payload. It
@@ -617,5 +782,20 @@ func (l *inboundLimiter) shouldWarn() bool {
 	}
 	l.warned = true
 	l.warnedAt = now
+	return true
+}
+
+// noticeGate lets a notice to the sender through at most once per period. Owned
+// by the readPump goroutine, like inboundLimiter, so it needs no lock.
+type noticeGate struct {
+	sent bool
+	at   time.Time
+}
+
+func (g *noticeGate) allow(now time.Time, period time.Duration) bool {
+	if g.sent && now.Sub(g.at) < period {
+		return false
+	}
+	g.sent, g.at = true, now
 	return true
 }

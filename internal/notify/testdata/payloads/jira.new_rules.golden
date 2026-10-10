@@ -1,0 +1,9 @@
+POST /rest/api/3/issue
+Authorization: Basic Ym90QGV4YW1wbGUuY29tOmppcmEtdG9rZW4=
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: new_rules
+X-Baki-Timestamp: 1790856001
+
+{"fields":{"description":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Flow: "}]},{"type":"paragraph","content":[{"type":"text","text":"Event: new_rules"}]},{"type":"paragraph","content":[{"type":"text","text":"Rules newer than the flows' baselines report findings in 3 flow(s): rule-a, rule-b."}]},{"type":"paragraph","content":[{"type":"text","text":"Time: 2026-10-01T12:00:00Z"}]}]},"issuetype":{"name":"Task"},"project":{"key":"PAD"},"summary":"2 new rules report findings"}}

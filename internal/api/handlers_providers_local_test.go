@@ -277,7 +277,7 @@ func TestSaveApiKey_RejectsLocal(t *testing.T) {
 	if msg, _ := got["message"].(string); !strings.Contains(msg, "/api/providers/local/config") {
 		t.Errorf("message %q does not point at the config route", msg)
 	}
-	if !validProviders[ai.LocalProviderID] {
+	if !ai.KnownProvider(ai.LocalProviderID) {
 		t.Error("local must be a valid provider id for keys/has and keys/delete")
 	}
 }

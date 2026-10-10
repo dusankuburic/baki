@@ -1,0 +1,8 @@
+POST /webhookb2/x
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: drift
+X-Baki-Timestamp: 1790856001
+
+{"@context":"http://schema.org/extensions","@type":"MessageCard","sections":[{"activityTitle":"New findings in Invoice Bot","facts":[{"name":"Flow","value":"Invoice Bot"},{"name":"New findings","value":"1 error(s), 1 warning(s)"}],"markdown":false,"text":"2 new finding(s) since baseline (1 error, 1 warning)."}],"summary":"New findings in Invoice Bot","themeColor":"D13438"}

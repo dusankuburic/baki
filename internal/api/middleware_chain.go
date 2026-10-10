@@ -32,10 +32,11 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		analysisRl := newRL(cfg.Runtime.RateLimitExpensiveRPS, cfg.Runtime.RateLimitExpensiveBurst).SetGroup("analysis")
 		chatRl := newRL(cfg.Runtime.RateLimitChatRPS, cfg.Runtime.RateLimitChatBurst).SetGroup("chat")
 		uploadRl := newRL(cfg.Runtime.RateLimitUploadRPS, cfg.Runtime.RateLimitUploadBurst).SetGroup("upload")
+		channelTestRl := newRL(cfg.Runtime.RateLimitChannelTestRPS, cfg.Runtime.RateLimitChannelTestBurst).SetGroup(route.RateChannelTest)
 		if redisClient != nil {
-			logger.Info("rate limiting: using shared Redis backplane", "url_set", cfg.Redis.URL != "")
+			logger.Info("rate limiting: using shared Redis backplane", "url_set", cfg.Redis.URL.IsSet())
 		}
-		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl)
+		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl, channelTestRl)
 
 		// Per-user write throttle: one bucket per authenticated user capping their total write volume across endpoints; cloud only (local is single-user and would self-DoS). Installed on the Router; appended to rateLimiters so Stop() runs on shutdown.
 		perUserRl := newRL(cfg.Runtime.RateLimitPerUserRPS, cfg.Runtime.RateLimitPerUserBurst).SetGroup("peruser")
@@ -50,6 +51,8 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 			"analysis": analysisRl,
 			"chat":     chatRl,
 			"upload":   uploadRl,
+
+			route.RateChannelTest: channelTestRl,
 		}
 
 		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,9 +69,10 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		})
 	}
 
-	timeoutDur := 30 * time.Second
-	if d, err := time.ParseDuration(cfg.Runtime.RequestTimeout); err == nil {
-		timeoutDur = d
+	// config.Load refuses a non-positive one; 0 is a Config built without config.Default (tests).
+	timeoutDur := cfg.Runtime.RequestTimeout.Std()
+	if timeoutDur <= 0 {
+		timeoutDur = 30 * time.Second
 	}
 
 	handler := otelhttp.NewHandler(
@@ -180,7 +184,7 @@ func rateLimitGroup(method string, u *url.URL) string {
 		return rlGroupAnalysis
 	}
 	if method == "POST" {
-		if strings.HasPrefix(path, "/api/analysis/") {
+		if strings.HasPrefix(path, "/api/analysis/") || path == "/api/integrations/ci" {
 			return rlGroupAnalysis
 		}
 		if path == "/api/chat/stream" {
@@ -195,6 +199,10 @@ func rateLimitGroup(method string, u *url.URL) string {
 		}
 		if path == "/api/flow/upload" {
 			return rlGroupUpload
+		}
+		// The channel test makes the server POST to an admin-chosen URL for up to 15 s (B13).
+		if isOrgChannelTestPath(path) {
+			return route.RateChannelTest
 		}
 	}
 	return rlGroupGeneral

@@ -14,7 +14,6 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/metrics"
 	"pad-core/ai/scrubber"
 	"pad-core/cache"
 	"pad-core/logger"
@@ -230,7 +229,7 @@ func (s *ChatService) ragGuidelines(ctx context.Context, scope string, doc *mode
 		return ""
 	}
 	if !s.isOrgMember(ctx, doc.OrganizationID, scope) {
-		metrics.RecordRAGLookup("skipped")
+		recordRAGLookup("skipped")
 		return ""
 	}
 	guidelines, err := s.knowledge.Search(ctx, scope, doc.OrganizationID, userMessage)
@@ -238,14 +237,14 @@ func (s *ChatService) ragGuidelines(ctx context.Context, scope string, doc *mode
 	switch {
 	case err != nil:
 		if ctx.Err() == nil { // deadline skips are expected under load, not errors
-			metrics.RecordRAGLookup("error")
+			recordRAGLookup("error")
 		} else {
-			metrics.RecordRAGLookup("skipped")
+			recordRAGLookup("skipped")
 		}
 	case guidelines == "":
-		metrics.RecordRAGLookup("miss")
+		recordRAGLookup("miss")
 	default:
-		metrics.RecordRAGLookup("hit")
+		recordRAGLookup("hit")
 	}
 	if err != nil || guidelines == "" {
 		return ""
@@ -619,6 +618,7 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 	if doc != nil {
 		orgID = doc.OrganizationID
 	}
+	ctx = ai.WithBudgetScope(ctx, scope, orgID) // the flow's org for the policy, as the worker seeds it
 	azure, err := s.resolveAzureModel(ctx, scope, doc, req)
 	if err != nil {
 		return nil, err

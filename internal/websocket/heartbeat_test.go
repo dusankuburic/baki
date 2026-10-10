@@ -90,6 +90,17 @@ func TestHeartbeat_DoesNotStallTheWriter(t *testing.T) {
 	t.Logf("flow.changed reached the socket %v after the broadcast", time.Since(start))
 }
 
+// flushPresence waits until every presence upsert enqueued so far has reached the store. The writer is
+// asynchronous, and a delete is ordered after the upserts enqueued before it, so the delete of a connection that
+// does not exist is a barrier; a test that counts store writes or reads the store right after a join, a heartbeat
+// or a selection change flushes first (without it the count or the read raced the writer, about one run in five).
+func flushPresence(t *testing.T, h *Hub, flowID string) {
+	t.Helper()
+	if h.presenceW != nil {
+		h.presenceW.delete(flowID, "flush-barrier", 2*time.Second)
+	}
+}
+
 // presenceUpdates drains c's queue and returns the user of every
 // presence.update in it, in order.
 func presenceUpdates(c *Client) []string {
@@ -133,9 +144,11 @@ func TestHeartbeat_OneStoreRoundTripPerRoom(t *testing.T) {
 		h, fb := hubWithFake()
 		t.Cleanup(h.Close)
 		clients := joinRoomOf(t, h, "flow-1", "u1", "u2", "u3", "u4", "u5")
+		flushPresence(t, h, "flow-1")
 		writes, lists := fb.writes.Load(), fb.lists.Load()
 
 		h.heartbeat(h.liveClients(roomOf(h, "flow-1")))
+		flushPresence(t, h, "flow-1")
 
 		if n := fb.lists.Load() - lists; n != 1 {
 			t.Fatalf("heartbeat of a room of %d read the store %d times, want 1", K, n)
@@ -282,7 +295,7 @@ func TestHeartbeat_StaleRoomTickDoesNotHeartbeatItsSuccessor(t *testing.T) {
 }
 
 // TestPublisher_CloseHonoursTheContext: Hub.Shutdown runs on a 3 s budget
-// (main.go) and ends in close; a publisher stuck on a slow backplane must not
+// (internal/app) and ends in close; a publisher stuck on a slow backplane must not
 // hold it past that.
 func TestPublisher_CloseHonoursTheContext(t *testing.T) {
 	fb := newFakeBackplane()

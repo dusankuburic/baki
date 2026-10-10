@@ -129,11 +129,10 @@ func TestArch_HandlerStoreHandleCallsRatchet(t *testing.T) {
 }
 
 // handlerStoreHandleCalls pins the store-handle calls left per file. The infrastructure ones stay: the request
-// transaction (rls_middleware.go), the Idempotency-Key store, PAT authentication (router.go), the migration lock
-// and the health probes; the rest move into services.
+// transaction (rls_middleware.go), the Idempotency-Key store, PAT authentication (router.go) and the health
+// probes; the rest move into services. The migration's lock is taken by its lifecycle.Singleton.
 var handlerStoreHandleCalls = map[string]int{
-	"internal/api/handlers_system.go":  2, // health probe (Redis): infrastructure
-	"internal/api/idempotency.go":      2, // the Idempotency-Key store: infrastructure
-	"internal/api/migration_runner.go": 1, // the migration's global lock: infrastructure
-	"internal/api/router.go":           1, // PAT authentication: infrastructure
+	"internal/api/handlers_system.go": 2, // health probe (Redis): infrastructure
+	"internal/api/idempotency.go":     2, // the Idempotency-Key store: infrastructure
+	"internal/api/router.go":          1, // PAT authentication: infrastructure
 }

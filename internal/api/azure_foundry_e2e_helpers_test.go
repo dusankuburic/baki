@@ -23,11 +23,13 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/egress"
 	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/platform/secret"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -341,7 +343,7 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 	store := testutil.NewFakeBackend()
 	cfg := config.Default()
 	cfg.Auth.Enabled = true
-	cfg.Auth.Secret = testToken
+	cfg.Auth.Secret = secret.New(testToken)
 	routePolicyFromEnv(cfg)
 
 	shutdown := make(chan struct{})
@@ -391,13 +393,13 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 		JWTEnabled:     true,
 		LocalUserID:    "local",
 		LocalName:      "You",
-		Token:          testToken,
+		Token:          secret.New(testToken),
 		AuthMgr:        auth.NewManager(testToken, auth.NewTokenBlacklist()),
 		Backend:        store,
 		OrgSvc:         orgSvc,
 		TrustedProxies: cfg.Server.TrustedProxies,
 	}
-	mail := mailer.NewService(config.EmailConfig{}, config.ModeLocal)
+	mail := mailer.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop))
 	dashboardSvc := service.NewDashboardService(store, analysisSvc, flowSvc, scopes)
 	triageSvc := service.NewTriageService(store, store, store, bus)
 	shareSvc := service.NewShareTokenService(store, store, bus)
@@ -411,13 +413,13 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 		NewFlowHandler(flowSvc, docProv, store, security, shareSvc, auditRec),
 		NewLibraryHandler(libSvc, store, security, auditRec),
 		NewChatHandler(chatSvc, flowSvc, security, auditRec),
-		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, store, security, service.NewWebhookNotifier(nil), mail, "", service.NewPolicyService(store), service.NewGovernanceAlertService(store), triageSvc, service.NewCommentService(store, triageSvc, nil), shareSvc, auditRec, exportSvc),
+		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, store, security, service.NewWebhookNotifier(nil), mail, nil, service.NewPolicyService(store), service.NewGovernanceAlertService(store), triageSvc, service.NewCommentService(store, triageSvc, nil), shareSvc, auditRec, exportSvc),
 		NewDashboardHandler(dashboardSvc, security),
 		NewExportHandler(exportSvc, flowSvc, analysisSvc, security, auditRec),
-		NewAuthHandler(service.NewSessionService(newMockTokenStore()), store, security, nil, service.NewIdentityService(store, nil), mail, service.NewAuthService(store, mail), service.NewAccountLifecycleService(store, nil, nil), service.NewAPITokenService(store), auditRec),
+		NewAuthHandler(service.NewSessionService(newMockTokenStore()), store, security, nil, service.NewIdentityService(store, nil), service.NewAuthService(store, mail), service.NewAccountLifecycleService(store, nil, nil), service.NewAPITokenService(store), auditRec, bus),
 		NewAdminHandler(auditRec, security, NewMigrationRunner(nil), nil, authzSvc, service.NewUserAdminService(store)),
 		NewProviderHandler(providerSvc, security, auditRec),
-		NewOrgHandler(orgSvc, store, nil, security, mail, service.NewOrgRuleService(store, store, nil), providerSvc, authzSvc, service.NewChannelService(store), service.NewUserDirectory(store), auditRec),
+		NewOrgHandler(orgSvc, store, nil, security, mail, service.NewOrgRuleService(store, store, nil), providerSvc, authzSvc, service.NewChannelService(store), service.NewUserDirectory(store), auditRec, nil),
 		NewSharingHandler(store, flowSvc, service.NewCollaboratorService(store, bus), security, auditRec),
 	}
 	rt, err := NewRouter(RouterParams{Lifecycle: noopLifecycle{}, Security: security, Events: events, Modules: modules, Config: cfg, ShutdownCh: shutdown})

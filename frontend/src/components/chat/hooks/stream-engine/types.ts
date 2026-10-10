@@ -21,8 +21,19 @@ export interface StreamMeta {
 // What an accumulator is primed with: a stream's meta — none for a
 // re-attached stream with no record of its turn — and whether the server
 // owns the answer's stored copy: a turn sent without history (see send) or
-// re-attached without a record of it (see resumeAfterReload).
-export type AccMeta = Partial<StreamMeta> & {serverOwned?: boolean}
+// re-attached without a record of it (see resumeAfterReload). A sent turn
+// also keeps what sending it again takes (resend), and whether its one
+// automatic retry after a server restart is spent (autoRetried).
+export type AccMeta = Partial<StreamMeta> & {serverOwned?: boolean; resend?: TurnResend; autoRetried?: boolean}
+
+// TurnResend is a sent turn as the engine would send it again after a server
+// restart cut it short: the question (and the message carrying it, which the
+// resend replaces) and how it was sent.
+export interface TurnResend {
+  text: string
+  userMessageId: string
+  opts: Pick<SendOptions, 'provider' | 'model' | 'modelLabel' | 'files' | 'excludeContext'>
+}
 
 // StreamAcc is one in-flight stream's local accumulation state: the growing
 // text plus the RAF batching bookkeeping. Keyed by streamId in a ref so
@@ -63,6 +74,9 @@ export interface SendOptions extends StreamMeta {
   // server by the next save), and the question needs no trip back to the
   // composer, which may hold another draft.
   restore?: readonly ChatMessage[]
+  // This send is the engine's automatic retry of a turn a server restart
+  // (SERVER_RESTARTING) cut short: it gets no automatic retry of its own.
+  autoRetry?: boolean
 }
 
 // TurnModel is the model half of a send: the thread's pair as resolved when

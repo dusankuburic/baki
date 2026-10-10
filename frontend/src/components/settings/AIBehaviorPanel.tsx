@@ -1,16 +1,27 @@
-import {useState} from 'react'
+import {useEffect, useMemo, useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {useSettingsStore} from '@/stores/settingsStore'
+import {providerConfig, useSettingsStore} from '@/stores/settingsStore'
 import {useChatStore} from '@/stores/chatStore'
 import {useSystemStore} from '@/stores/systemStore'
+import {providersApi} from '@/api'
 import Switch from '@/components/shared/Switch'
 import Input from '@/components/shared/Input'
 import {NumberField} from '@/components/shared'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import SettingRow from './SettingRow'
 import {isTauri} from '@/platform/guards'
-import type {ProviderID, AIProviderConfig} from '@/types'
-import {PROVIDER_OPTIONS} from '@/types/providers'
+import type {ProviderID, AIProviderConfig, ProviderSpec} from '@/types'
+import {PROVIDER_CAP_EMBEDDINGS, PROVIDER_OPTIONS, isKnownProviderId} from '@/types/providers'
+
+// The embedding-capable providers of a server without the catalogue (one
+// older than Phase 4b): the server's SupportsEmbeddings list of that time.
+const LEGACY_EMBEDDING_OPTIONS: {value: ProviderID; label: string}[] = [
+  {value: 'openai', label: 'OpenAI'},
+  {value: 'gemini', label: 'Gemini'},
+  {value: 'glm', label: 'GLM'},
+  {value: 'github-models', label: 'GitHub Models'},
+  {value: 'azure-foundry', label: 'Azure AI Foundry'},
+]
 
 export default function AIBehaviorPanel() {
   const {t} = useTranslation('settings')
@@ -29,10 +40,64 @@ export default function AIBehaviorPanel() {
   // info has loaded — it missed the browser-served local case entirely.
   const systemInfo = useSystemStore(s => s.info)
   const localBackend = systemInfo ? systemInfo.capabilities.sessionAnalytics : isTauri()
+  // The server's catalogue (GET /api/providers/catalog): the names of the
+  // providers this bundle has no label for (ones a newer server added), and
+  // which providers embed. Best effort: without it (an older server, or a
+  // failed read) the bundle's own lists apply, and an unknown provider is
+  // labelled by its id.
+  const [catalog, setCatalog] = useState<ProviderSpec[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    providersApi
+      .getProviderCatalog()
+      .then(specs => {
+        if (!cancelled) setCatalog(specs)
+      })
+      .catch(() => {
+        // The bundle's own labels and lists still render.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   // The local model provider exists only on a local backend (the server
   // refuses it elsewhere, LOCAL_MODELS_UNAVAILABLE): offering it on a cloud
-  // server picked an assistant the chat could never use.
-  const assistantOptions = localBackend ? PROVIDER_OPTIONS : PROVIDER_OPTIONS.filter(o => o.value !== 'local')
+  // server picked an assistant the chat could never use. After the
+  // catalogue: the providers the server lists but the bundle does not know,
+  // under their server names — and the saved choice itself when it is
+  // neither, under its id, so a settings file a newer build (or a hand)
+  // wrote still shows what it selected instead of nothing.
+  const assistantOptions = useMemo(() => {
+    const options: {value: ProviderID; label: string}[] = localBackend
+      ? [...PROVIDER_OPTIONS]
+      : PROVIDER_OPTIONS.filter(o => o.value !== 'local')
+    for (const p of catalog ?? []) {
+      if (!isKnownProviderId(p.id) && p.id && !options.some(o => o.value === p.id)) {
+        options.push({value: p.id, label: p.name || p.id})
+      }
+    }
+    if (activeProvider && !options.some(o => o.value === activeProvider)) {
+      options.push({value: activeProvider, label: activeProvider})
+    }
+    return options
+  }, [localBackend, catalog, activeProvider])
+
+  // The embedding providers: the catalogue's `embeddings` capability, in
+  // its order and under its names; the literal list without a catalogue.
+  // The saved choice stays selectable, under its id, when the server does
+  // not list it at all (a provider it dropped) rather than selecting
+  // nothing; one the catalogue lists without the capability is not offered —
+  // the server would refuse it.
+  const embeddingOptions = useMemo(() => {
+    const options: {value: ProviderID; label: string}[] = catalog
+      ? catalog.filter(p => p.caps.includes(PROVIDER_CAP_EMBEDDINGS)).map(p => ({value: p.id, label: p.name || p.id}))
+      : [...LEGACY_EMBEDDING_OPTIONS]
+    const saved = ai.embeddingProvider
+    if (saved && !options.some(o => o.value === saved) && !catalog?.some(p => p.id === saved)) {
+      options.push({value: saved, label: saved})
+    }
+    return options
+  }, [catalog, ai.embeddingProvider])
 
   return (
     <div className="space-y-8">
@@ -57,20 +122,15 @@ export default function AIBehaviorPanel() {
 
       <div>
         <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.embeddingAssistant')}</label>
-        {/* Embedding-capable providers only (the server's SupportsEmbeddings
-            list): never 'local', whose provider cannot embed. */}
+        {/* Embedding-capable providers only (the catalogue's caps, or the
+            server's SupportsEmbeddings list of before it): never 'local',
+            whose provider cannot embed. */}
         <SegmentedControl
           value={ai.embeddingProvider}
-          onChange={v => updateAI({embeddingProvider: v as ProviderID})}
+          onChange={v => updateAI({embeddingProvider: v})}
           label={t('behavior.embeddingAssistant')}
           activation="manual"
-          options={[
-            {value: 'openai', label: 'OpenAI'},
-            {value: 'gemini', label: 'Gemini'},
-            {value: 'glm', label: 'GLM'},
-            {value: 'github-models', label: 'GitHub Models'},
-            {value: 'azure-foundry', label: 'Azure AI Foundry'},
-          ]}
+          options={embeddingOptions}
           className="flex-wrap"
         />
         <p className="text-xs text-text-tertiary mt-2">{t('behavior.embeddingAssistantHint')}</p>
@@ -164,7 +224,7 @@ export default function AIBehaviorPanel() {
         <h3 className="text-base font-semibold text-text-primary mb-1">{t('behavior.advanced')}</h3>
         <ProviderAdvancedSettings
           provider={activeProvider}
-          config={ai.providers[activeProvider]}
+          config={providerConfig(ai, activeProvider)}
           onUpdate={patch => updateProvider(activeProvider, patch)}
         />
       </div>

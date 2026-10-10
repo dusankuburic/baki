@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/config"
 	mailer "pad-analyzer/internal/mail"
 )
@@ -54,8 +55,8 @@ func TestHandleGetRules_UninitializedAppReturnsJSON(t *testing.T) {
 // email field was accepted as a parameter but never assigned to the struct,
 // silently disabling all finding-assignment/comment email notifications.
 func TestNewAnalysisHandler_EmailWired(t *testing.T) {
-	svc := mailer.NewService(config.EmailConfig{}, config.ModeLocal)
-	h := NewAnalysisHandler(nil, nil, nil, nil, nil, nil, svc, "", nil, nil, nil, nil, nil, nil, nil)
+	svc := mailer.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop))
+	h := NewAnalysisHandler(nil, nil, nil, nil, nil, nil, svc, nil, nil, nil, nil, nil, nil, nil, nil)
 	if h.email == nil {
 		t.Fatal("email field is nil — notifications are dead code; assign email in the constructor")
 	}

@@ -63,6 +63,7 @@ var rlsHeavyExactPaths = map[string]bool{
 	// Provider routes that dial OUTBOUND while the handler runs: live model listings (~8.5 s), the billed connection test, the GitHub/Copilot device-flow polls.
 	// None touches the RLS-scoped backend (credentials go through the keystore's own connection) — the transaction pinned a pooled connection for the whole dial. The local siblings (revoke, the config read/save) keep their RLS transaction.
 	"/api/providers/list":          true,
+	"/api/providers/catalog":       true, // keystore and registry reads only, the same policy as /list (ADR 0025)
 	"/api/providers/test":          true,
 	"/api/providers/github/start":  true,
 	"/api/providers/github/poll":   true,

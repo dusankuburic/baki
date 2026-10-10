@@ -41,7 +41,7 @@ func TestProvideKnowledgeService_ConsultsTheAIBudget(t *testing.T) {
 	cfg := config.Default()
 	budget := ProvideAIBudget(settings, backend)
 
-	err := ProvideKnowledgeService(testutil.NewFakeBackend(), factory, settings, cfg, nil, budget, nil).AddDocument(context.Background(), "u1", "org-1", "a.md", "content")
+	err := ProvideKnowledgeService(testutil.NewFakeBackend(), factory, settings, cfg, nil, budget, nil, nil).AddDocument(context.Background(), "u1", "org-1", "a.md", "content")
 	if !errors.Is(err, service.ErrAIBudgetExceeded) {
 		t.Errorf("upload on a spent budget: %v, want ErrAIBudgetExceeded", err)
 	}

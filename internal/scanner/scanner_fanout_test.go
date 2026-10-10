@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"pad-analyzer/internal/notify"
+	"pad-analyzer/internal/egress"
+	"pad-analyzer/internal/lifecycle"
+	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 
 	"pad-core/models"
@@ -83,11 +85,11 @@ func waitFor(cond func() bool, d time.Duration) bool {
 
 // TestScanOnce_ReusesOneNotifierPerOrgPerSweep is the connection-churn gate.
 //
-// dispatchOrgChannels called BuildChannelNotifier per event per channel, and
-// that clones http.DefaultTransport — so every alert got a fresh connection
-// pool, a fresh DNS resolution, and left a transport behind with idle
-// connections nothing closes. Caching the built notifier for the sweep means
-// keep-alive actually works.
+// dispatchOrgChannels once built a notifier per event per channel, and each
+// cloned http.DefaultTransport — so every alert got a fresh connection pool, a
+// fresh DNS resolution, and left a transport behind with idle connections
+// nothing closes. The channel service's shared client and the per-sweep build
+// cache mean keep-alive actually works.
 func TestScanOnce_ReusesOneNotifierPerOrgPerSweep(t *testing.T) {
 	const flows = 20
 	b, reports := alertingFlows(t, flows)
@@ -99,17 +101,20 @@ func TestScanOnce_ReusesOneNotifierPerOrgPerSweep(t *testing.T) {
 	}
 
 	global := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
+	// Two deliveries at a time: a pooled transport then opens about two connections, a transport per event one per
+	// delivery. With the default limit (32) all 20 could overlap and open 20 connections even when pooled, which
+	// failed this test under load.
+	const limit = 2
+	channels := service.NewChannelService(b, service.ChannelOptions{Policy: egress.AllowLoopback,
+		Runner: (&lifecycle.Group{}).NewBounded("scanner-fanout-test", limit)})
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, channels)
 	s.ScanOnce(context.Background())
 	s.Stop() // drains in-flight deliveries
 
 	if got := int(hook.requests.Load()); got != flows {
 		t.Fatalf("deliveries = %d, want %d", got, flows)
 	}
-	// One connection per delivery means no pooling at all. Concurrency is capped
-	// at maxConcurrentDeliveries, so a correctly-pooled run opens at most that
-	// many; the assertion is deliberately loose to avoid flaking on scheduling.
-	if conns := int(hook.conns.Load()); conns >= flows {
+	if conns := int(hook.conns.Load()); conns > 2*limit {
 		t.Errorf("opened %d connections for %d deliveries — the notifier (and its transport) "+
 			"is being rebuilt per event instead of cached per sweep", conns, flows)
 	}
@@ -136,7 +141,7 @@ func TestScanner_StopWaitsForInFlightDeliveries(t *testing.T) {
 	}
 
 	global := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(context.Background())
 
 	// Let the delivery finish once Stop is already waiting.
@@ -180,12 +185,12 @@ func TestScanOnce_BoundsConcurrentDeliveries(t *testing.T) {
 	}
 
 	global := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, global.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(context.Background())
 	s.Stop()
 
-	if got := peak.Load(); got > maxConcurrentDeliveries {
-		t.Errorf("peak concurrent deliveries = %d, cap is %d", got, maxConcurrentDeliveries)
+	if got := peak.Load(); got > service.ChannelDeliveryLimit {
+		t.Errorf("peak concurrent deliveries = %d, cap is %d", got, service.ChannelDeliveryLimit)
 	}
 	if !waitFor(func() bool { return inFlight.Load() == 0 }, 2*time.Second) {
 		t.Error("deliveries still in flight after Stop")

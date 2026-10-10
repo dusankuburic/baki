@@ -335,7 +335,9 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 		// (a later write failure leaves the earlier ones changed, and those must stay undoable).
 		current := make(map[string]string, len(snap.Files))
 		for name := range snap.Files {
-			if data, rerr := os.ReadFile(filepath.Join(snap.TargetPath, name)); rerr == nil { // #nosec G304 -- recorded member of the flow folder
+			// On its own line: gosec ties the annotation to the statement it ends, not to an if's init clause.
+			data, rerr := os.ReadFile(filepath.Join(snap.TargetPath, name)) // #nosec G304 -- recorded member of the flow folder
+			if rerr == nil {
 				current[name] = string(data)
 			}
 		}

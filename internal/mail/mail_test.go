@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/config"
 )
 
@@ -22,10 +24,10 @@ func TestPortOfDefault(t *testing.T) {
 }
 
 func TestNewFallsBackToLogMailer(t *testing.T) {
-	if New(config.EmailConfig{}, config.ModeLocal).Enabled() {
+	if New(config.EmailConfig{}, capability.NewSet(capability.Desktop)).Enabled() {
 		t.Error("unconfigured mailer should report Enabled()=false (log-only)")
 	}
-	if !New(config.EmailConfig{SMTPHost: "smtp.example.com", From: "no-reply@example.com"}, config.ModeCloud).Enabled() {
+	if !New(config.EmailConfig{SMTPHost: "smtp.example.com", From: "no-reply@example.com"}, capability.NewSet(capability.Cloud)).Enabled() {
 		t.Error("configured mailer should report Enabled()=true")
 	}
 }
@@ -34,142 +36,17 @@ func TestNewFallsBackToLogMailer(t *testing.T) {
 // must NOT write the token-bearing body to logs in cloud mode (a credential leak
 // harvestable from logs/telemetry), while local/dev keeps it for recovery.
 func TestLogMailer_CloudModeRedactsBody(t *testing.T) {
-	cloud, ok := New(config.EmailConfig{}, config.ModeCloud).(*logMailer)
+	cloud, ok := New(config.EmailConfig{}, capability.NewSet(capability.Cloud)).(*logMailer)
 	if !ok || cloud.logBody {
 		t.Fatal("cloud-mode log-only mailer must have logBody=false (body redacted)")
 	}
-	local, ok := New(config.EmailConfig{}, config.ModeLocal).(*logMailer)
+	local, ok := New(config.EmailConfig{}, capability.NewSet(capability.Desktop)).(*logMailer)
 	if !ok || !local.logBody {
 		t.Fatal("local-mode log-only mailer should keep logBody=true for dev recovery")
 	}
 	// Sending must not error in either mode (the body is simply omitted in cloud).
-	if err := cloud.Send(context.Background(), "u@x.com", "Reset", "https://app/#resetPassword=SECRET-TOKEN", ""); err != nil {
+	if err := cloud.Send(context.Background(), "u@x.com", Message{Subject: "Reset", Text: "https://app/#resetPassword=SECRET-TOKEN"}); err != nil {
 		t.Fatalf("cloud Send errored: %v", err)
-	}
-}
-
-func TestBuildMIME(t *testing.T) {
-	plain := string(buildMIME("a@x.com", "b@y.com", "Hi", "hello", ""))
-	if !strings.Contains(plain, "Content-Type: text/plain") || strings.Contains(plain, "multipart") {
-		t.Errorf("plain message should be text/plain only:\n%s", plain)
-	}
-	multi := string(buildMIME("a@x.com", "b@y.com", "Hi", "hello", "<b>hi</b>"))
-	for _, want := range []string{"multipart/alternative", "text/plain", "text/html", "<b>hi</b>"} {
-		if !strings.Contains(multi, want) {
-			t.Errorf("multipart message missing %q:\n%s", want, multi)
-		}
-	}
-}
-
-func TestBuildMIME_StripsHeaderCRLF(t *testing.T) {
-	msg := string(buildMIME("a@x.com", "b@y.com\r\nBcc: evil@x.com", "Hi\r\nX-Evil: 1", "hello", ""))
-	if strings.Contains(msg, "\r\nBcc:") || strings.Contains(msg, "\r\nX-Evil:") {
-		t.Errorf("CRLF in header values must not smuggle extra header lines:\n%s", msg)
-	}
-	if !strings.Contains(msg, "To: b@y.comBcc: evil@x.com\r\n") {
-		t.Errorf("expected CR/LF stripped from To header:\n%s", msg)
-	}
-}
-
-// captureMailer records the last message instead of sending it.
-type captureMailer struct {
-	to, subject, text, html string
-	calls                   int
-}
-
-func (c *captureMailer) Enabled() bool { return true }
-func (c *captureMailer) Send(_ context.Context, to, subject, text, html string) error {
-	c.to, c.subject, c.text, c.html = to, subject, text, html
-	c.calls++
-	return nil
-}
-
-func TestServiceLinkAndSend(t *testing.T) {
-	cap := &captureMailer{}
-	svc := &Service{mailer: cap, baseURL: "https://app.example.com"}
-
-	if err := svc.SendPasswordReset(context.Background(), "user@example.com", "TOKEN123"); err != nil {
-		t.Fatalf("SendPasswordReset: %v", err)
-	}
-	if cap.calls != 1 {
-		t.Fatalf("expected 1 send, got %d", cap.calls)
-	}
-	if cap.to != "user@example.com" {
-		t.Errorf("to = %q", cap.to)
-	}
-	wantLink := "https://app.example.com/#resetPassword=TOKEN123"
-	if !strings.Contains(cap.text, wantLink) || !strings.Contains(cap.html, wantLink) {
-		t.Errorf("reset link %q missing from bodies:\ntext=%s\nhtml=%s", wantLink, cap.text, cap.html)
-	}
-}
-
-func TestSendOrgInvite_EscapesOrgName(t *testing.T) {
-	cap := &captureMailer{}
-	svc := &Service{mailer: cap, baseURL: "https://app.example.com"}
-
-	evil := `<img src=x onerror=alert(1)>"Corp"`
-	if err := svc.SendOrgInvite(context.Background(), "u@x.com", evil, "TOK"); err != nil {
-		t.Fatalf("SendOrgInvite: %v", err)
-	}
-	if strings.Contains(cap.html, "<img") {
-		t.Errorf("org name must be HTML-escaped in the invite body:\n%s", cap.html)
-	}
-	if !strings.Contains(cap.html, "&lt;img") {
-		t.Errorf("expected escaped org name in HTML body:\n%s", cap.html)
-	}
-}
-
-func TestServiceLinkWithoutBaseURLFallsBackToToken(t *testing.T) {
-	cap := &captureMailer{}
-	svc := &Service{mailer: cap, baseURL: ""}
-	if err := svc.SendEmailVerification(context.Background(), "u@x.com", "RAWTOKEN"); err != nil {
-		t.Fatalf("SendEmailVerification: %v", err)
-	}
-	if !strings.Contains(cap.text, "RAWTOKEN") {
-		t.Errorf("expected bare token in body when no base URL set:\n%s", cap.text)
-	}
-}
-
-// The assignment email used to take the link from its caller, and the only
-// caller passed "" — so "View the finding" never rendered, and the comment
-// email had no link at all. Both now build it from the service's base URL.
-func TestFindingEmails_LinkBackToTheApp(t *testing.T) {
-	cap := &captureMailer{}
-	svc := &Service{mailer: cap, baseURL: "https://app.example.com"}
-	want := "https://app.example.com/"
-
-	if err := svc.SendFindingAssigned(context.Background(), "u@x.com", "Una", "Ari", "Invoices", "Unhandled error"); err != nil {
-		t.Fatalf("SendFindingAssigned: %v", err)
-	}
-	if !strings.Contains(cap.text, want) || !strings.Contains(cap.html, `<a href="`+want+`">View the finding</a>`) {
-		t.Errorf("assignment email missing app link:\ntext=%s\nhtml=%s", cap.text, cap.html)
-	}
-
-	if err := svc.SendFindingComment(context.Background(), "u@x.com", "Una", "Ari", "Invoices", "Unhandled error", "looks risky"); err != nil {
-		t.Fatalf("SendFindingComment: %v", err)
-	}
-	if !strings.Contains(cap.text, want) || !strings.Contains(cap.html, `<a href="`+want+`">View the finding</a>`) {
-		t.Errorf("comment email missing app link:\ntext=%s\nhtml=%s", cap.text, cap.html)
-	}
-}
-
-// Without a public base URL there is nothing absolute to link to; a relative
-// href in an email resolves against the mail client, so the link is omitted.
-func TestFindingEmails_NoBaseURLOmitsLink(t *testing.T) {
-	cap := &captureMailer{}
-	svc := &Service{mailer: cap}
-
-	if err := svc.SendFindingAssigned(context.Background(), "u@x.com", "Una", "Ari", "Invoices", "Unhandled error"); err != nil {
-		t.Fatalf("SendFindingAssigned: %v", err)
-	}
-	if strings.Contains(cap.html, "<a ") || strings.Contains(cap.text, "View it") {
-		t.Errorf("no base URL must mean no link:\ntext=%s\nhtml=%s", cap.text, cap.html)
-	}
-	if err := svc.SendFindingComment(context.Background(), "u@x.com", "Una", "Ari", "Invoices", "Unhandled error", "hi"); err != nil {
-		t.Fatalf("SendFindingComment: %v", err)
-	}
-	if strings.Contains(cap.html, "<a ") || strings.Contains(cap.text, "View it") {
-		t.Errorf("no base URL must mean no link:\ntext=%s\nhtml=%s", cap.text, cap.html)
 	}
 }
 
@@ -270,8 +147,7 @@ func TestSMTP_RequiresSTARTTLS_NoSTARTTLS(t *testing.T) {
 	m := &smtpMailer{cfg: config.EmailConfig{
 		SMTPHost: host, SMTPPort: port, From: "from@example.com",
 	}}
-	err := m.Send(context.Background(), "to@example.com", "reset",
-		"https://app.example.com/reset?token=SECRET", "")
+	err := m.Send(context.Background(), "to@example.com", Message{Subject: "reset", Text: "https://app.example.com/reset?token=SECRET"})
 	if err == nil {
 		t.Fatal("expected error when STARTTLS is not advertised, got nil")
 	}
@@ -284,5 +160,57 @@ func TestSMTP_RequiresSTARTTLS_NoSTARTTLS(t *testing.T) {
 		t.Errorf("message body was transmitted in plaintext: %q", body)
 	case <-time.After(100 * time.Millisecond):
 		// expected — no body sent
+	}
+}
+
+// TestSMTP_StalledRelayHonoursContext: a relay that accepts the connection and never greets must not hold a send
+// past its context (the mail runner's per-send timeout, or shutdown).
+func TestSMTP_StalledRelayHonoursContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	held := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			held <- c // accept, say nothing
+		}
+	}()
+	defer func() {
+		select {
+		case c := <-held:
+			c.Close()
+		default:
+		}
+	}()
+	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	m := &smtpMailer{cfg: config.EmailConfig{SMTPHost: "127.0.0.1", SMTPPort: port, From: "from@example.com"}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := m.Send(ctx, "to@example.com", Message{Subject: "s", Text: "t"}); err == nil {
+		t.Fatal("a stalled relay must fail the send")
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("send took %v against a 200ms context", d)
+	}
+}
+
+// TestSMTP_RefusesBadAddressesBeforeDialing: a recipient or sender with a line break or a list is an error, never
+// a stripped header (the old writer removed CR/LF and sent "b@y.comBcc: evil@x.com").
+func TestSMTP_RefusesBadAddressesBeforeDialing(t *testing.T) {
+	m := &smtpMailer{cfg: config.EmailConfig{SMTPHost: "127.0.0.1", SMTPPort: 1, From: "from@example.com"}}
+	for _, to := range []string{"b@y.com\r\nBcc: evil@x.com", "b@y.com\nX-Evil: 1", "a@x.com, b@y.com", "not-an-address"} {
+		err := m.Send(context.Background(), to, Message{Subject: "s", Text: "t"})
+		if err == nil || !strings.Contains(err.Error(), "address") {
+			t.Errorf("Send(%q) = %v, want an address error before any dial", to, err)
+		}
+	}
+	bad := &smtpMailer{cfg: config.EmailConfig{SMTPHost: "127.0.0.1", SMTPPort: 1, From: "from@example.com\r\nBcc: x@y.com"}}
+	if err := bad.Send(context.Background(), "to@example.com", Message{Subject: "s", Text: "t"}); err == nil || !strings.Contains(err.Error(), "PAD_EMAIL_FROM") {
+		t.Errorf("a bad sender = %v, want a PAD_EMAIL_FROM error", err)
 	}
 }

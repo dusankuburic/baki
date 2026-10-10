@@ -1,4 +1,3 @@
-import {PROVIDERS} from '@/types'
 import type {ProviderID, ToolCallRecord} from '@/types'
 
 // Mirrors the backend per-caller concurrency cap in internal/service/chat.go
@@ -19,10 +18,6 @@ export const MAX_THREADS = 50
 // single stored conversation and overwrote each other's history.
 export function conversationKey(thread: Pick<ChatThread, 'id'>): string {
   return thread.id
-}
-
-export function isProviderId(value: unknown): value is ProviderID {
-  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(PROVIDERS, value)
 }
 
 export interface ChatThread {
@@ -111,46 +106,75 @@ export interface ModelRefusal extends ThreadModel {
   epoch: number
 }
 
-// FixProposalItem is one fix inside a (possibly batch) approval prompt, with
-// its own resolved outcome after the batch decision lands.
-export interface FixProposalItem {
-  ruleId: string
-  fixType: string
-  blockLabel: string
-  line: number
+// ApprovalItem is one item inside a (possibly batch) approval request, with
+// its own resolved outcome after the batch decision lands. A fix carries the
+// rule and the block it patches; an item of another kind has only the
+// generic fields.
+export interface ApprovalItem {
+  // The item's key on the wire — the id the server stamped (a fix's
+  // blockId:ruleId), or its ruleId from a server before that — by which a
+  // decision's per-item outcomes are matched (helpers decisionTargets).
+  id: string
+  // What the item is about (a fix's block label); the summary is the
+  // server-rendered preview text.
+  label: string
   summary: string
   // pending → applied | applied-unresolved | error | already-resolved.
   status: 'pending' | 'applied' | 'applied-unresolved' | 'error' | 'already-resolved'
   message?: string
+  // fix-patch only.
+  ruleId?: string
+  fixType?: string
+  blockLabel?: string
+  line?: number
 }
 
-// FixProposalCard is one approval prompt on a thread's stream slot (single or
+// ApprovalCard is one approval request on a thread's stream slot (single or
 // batch). Lives on the StreamSlot (transient by design): cards appear when
-// the model requests fix(es), resolve when the user decides / the backend
-// reports the outcome, and disappear with the slot when the stream ends —
-// the committed message carries the persisted snapshots.
-export interface FixProposalCard {
+// the model calls a tool that needs approval, resolve when the user decides
+// / the backend reports the outcome, and disappear with the slot when the
+// stream ends — the committed message carries the persisted snapshots.
+export interface ApprovalCard {
   proposalId: string
+  // The tool awaiting approval ('' from a server that did not say) and how
+  // its request is previewed: 'fix-patch' (apply_fix / apply_fixes, the
+  // default for a server that sends no kind); any other kind renders the
+  // generic preview.
+  tool: string
+  previewKind: string
+  // Which event carried the request, and so which route takes the decision:
+  // 'fix' (fix_proposal → /api/chat/fix-decision) or 'approval'
+  // (approval_request → /api/chat/approval-decision).
+  source: 'fix' | 'approval'
+  // The actor scope the tool needs (shown as a hint when sent).
+  requiredScope?: string
   // pending → applying (approved, mutation in flight) → applied |
-  // applied-unresolved | declined | timeout | error. 'pending' is the only
-  // state with enabled buttons.
-  status: 'pending' | 'applying' | 'applied' | 'applied-unresolved' | 'declined' | 'timeout' | 'error'
+  // applied-unresolved | declined | timeout | error | cancelled (the stream
+  // ended before a decision). 'pending' is the only state with enabled
+  // buttons.
+  status: 'pending' | 'applying' | 'applied' | 'applied-unresolved' | 'declined' | 'timeout' | 'error' | 'cancelled'
   message?: string
-  // items carries per-fix state; single-fix prompts have exactly one item and
-  // ALSO mirror it on the flat fields below (rendering + legacy persistence).
-  items: FixProposalItem[]
-  // Flat mirrors of items[0] for single-fix prompts (empty for pure batches).
-  ruleId: string
-  fixType: string
-  blockLabel: string
-  line: number
-  summary: string
-  // When the proposal first reached this client (ms epoch). The approval
+  // items carries per-item state; single-fix prompts have exactly one item
+  // and ALSO mirror it on the flat fields below (rendering + legacy
+  // persistence).
+  items: ApprovalItem[]
+  // Flat mirrors of items[0] for single-fix prompts (empty for pure batches
+  // and for other kinds).
+  ruleId?: string
+  fixType?: string
+  blockLabel?: string
+  line?: number
+  summary?: string
+  // When the request first reached this client (ms epoch). The approval
   // countdown derives from it, so a card that remounts (thread switch,
   // pop-out) keeps counting down instead of restarting at the full window
   // while the server's timer runs on. Stamped by setFixProposal.
   receivedAt?: number
 }
+
+/** The pre-4b names: a fix was the only approval. */
+export type FixProposalItem = ApprovalItem
+export type FixProposalCard = ApprovalCard
 
 // StreamSlot is one thread's in-flight AI response. Streams are per-thread so
 // several threads can generate in parallel; the thinking/tokens/tool state
@@ -167,10 +191,10 @@ export interface StreamSlot {
   // for the response being streamed; committed onto the assistant message
   // when the stream ends.
   toolCalls: ToolCallRecord[]
-  // fixProposals stacks this stream's approval prompts: a stream can carry
-  // several sequential proposals (fix → continue → next fix), and each batch
-  // proposal is one card with per-item rows.
-  fixProposals: FixProposalCard[]
+  // approvals stacks this stream's approval requests: a stream can carry
+  // several sequential ones (fix → continue → next fix), and each batch
+  // request is one card with per-item rows.
+  approvals: ApprovalCard[]
 }
 
 // QueuedMessage is a follow-up composed while its thread was streaming, sent

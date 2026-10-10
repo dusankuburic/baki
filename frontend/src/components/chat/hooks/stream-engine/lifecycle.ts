@@ -1,4 +1,4 @@
-import {useCallback, useRef} from 'react'
+import {useCallback, useEffect, useRef} from 'react'
 import type {MutableRefObject} from 'react'
 import {getErrorMessage} from '@/lib/getErrorMessage'
 import i18n from '@/i18n'
@@ -9,7 +9,13 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import {logger} from '@/lib/logger'
 import {storableModelLabel} from '@/lib/modelIds'
 import {uuid} from '@/lib/uuid'
-import {classifyChatFailure, budgetDetail, providerErrorInfo} from '@/lib/chatErrors'
+import {
+  classifyChatFailure,
+  budgetDetail,
+  providerErrorInfo,
+  retryAfterHint,
+  serverRestartDelayMs,
+} from '@/lib/chatErrors'
 import type {ChatMessage} from '@/types'
 import {buildChatRequest} from '../useChatRequestBuilder'
 import type {AccMeta, ChatStoreState, SendOptions, StreamAcc, StreamMeta, ToastApi} from './types'
@@ -24,7 +30,11 @@ interface LifecycleDeps {
   toastRef: MutableRefObject<ToastApi | null>
   streamAccRef: MutableRefObject<Map<string, StreamAcc>>
   teardownRef: MutableRefObject<(streamId: string) => void>
+  // Filled with scheduleAutoResend, for the error path (useStreamEvents)
+  // that is built before this hook.
+  autoResendRef: MutableRefObject<(streamId: string) => string | null>
   registerStream: StreamingApi['registerStream']
+  confirmStream: StreamingApi['confirmStream']
   resumeInto: StreamingApi['resumeInto']
   cancelStream: (streamId: string) => void
   dropAcc: (streamId: string) => void
@@ -33,19 +43,23 @@ interface LifecycleDeps {
   notifyBudget: (detail: string) => void
   startStream: ChatStoreState['startStream']
   endStream: ChatStoreState['endStream']
+  updateStream: ChatStoreState['updateStream']
   appendMessage: ChatStoreState['appendMessage']
   updateThread: ChatStoreState['updateThread']
 }
 
-// useTurnLifecycle owns one turn's life: sending (send), re-attaching after
-// a reload (resumeAfterReload), and the user-driven exits (stop, abandon,
+// useTurnLifecycle owns one turn's life: sending (send), sending it again
+// once after a server restart (scheduleAutoResend), re-attaching after a
+// reload (resumeAfterReload), and the user-driven exits (stop, abandon,
 // stopAndCommit) — plus the per-thread generation tokens used to discard
 // stale sends.
 export function useTurnLifecycle({
   toastRef,
   streamAccRef,
   teardownRef,
+  autoResendRef,
   registerStream,
+  confirmStream,
   resumeInto,
   cancelStream,
   dropAcc,
@@ -54,6 +68,7 @@ export function useTurnLifecycle({
   notifyBudget,
   startStream,
   endStream,
+  updateStream,
   appendMessage,
   updateThread,
 }: LifecycleDeps) {
@@ -226,7 +241,16 @@ export function useTurnLifecycle({
       // it ends, so the save on done (a full-replace POST of the whole
       // thread) is skipped. A turn that carried its history (resend, history
       // off) owns persistence itself, as before.
-      beginAcc(sid, threadId, {...meta, serverOwned: req.messages === undefined})
+      beginAcc(sid, threadId, {
+        ...meta,
+        serverOwned: req.messages === undefined,
+        resend: {
+          text,
+          userMessageId: userMsg.id,
+          opts: {...meta, files: opts.files, excludeContext: opts.excludeContext},
+        },
+        ...(opts.autoRetry ? {autoRetried: true} : {}),
+      })
       // Recorded with the thread (persisted) until the turn ends, so a reload
       // mid-turn re-attaches it labelled with the model it went to.
       updateThread(threadId, {inFlight: {streamId: sid, messageId: msgId, ...meta}})
@@ -245,7 +269,32 @@ export function useTurnLifecycle({
           // and — because clientStreamId is set — closes ctl.started immediately,
           // so the worker emits over SSE to the already-subscribed listener.
           req.clientStreamId = sid
-          const returnedId = await chatApi.streamChatMessage(req)
+          let returnedId: string
+          try {
+            returnedId = await chatApi.streamChatMessage(req)
+          } catch (e) {
+            // Refused while the server drains for a restart: nothing was
+            // created, so the same request may go again — once per turn,
+            // after the server's Retry-After, once the event connection is
+            // open again (it re-dials the new instance meanwhile).
+            const acc = streamAccRef.current.get(sid)
+            const restarting = e instanceof ApiError && classifyChatFailure(e.message, e.code) === 'serverRestarting'
+            if (!restarting || !acc || acc.autoRetried) throw e
+            acc.autoRetried = true
+            updateStream(threadId, {toolStatus: i18n.t('chat:errors.serverRestarting')})
+            await new Promise(resolve => setTimeout(resolve, serverRestartDelayMs(retryAfterHint(e))))
+            if (!isCurrentGen(threadId, myGen)) {
+              abortSend()
+              return
+            }
+            teardownRef.current(sid)
+            if (!(await registerStream(sid, /*begin*/ false)) || !isCurrentGen(threadId, myGen)) {
+              abortSend()
+              return
+            }
+            updateStream(threadId, {toolStatus: null})
+            returnedId = await chatApi.streamChatMessage(req)
+          }
           if (!isCurrentGen(threadId, myGen)) {
             // Cancelled while the create POST was in flight; tear down the
             // stream the backend just recorded (abortSend frees the slot only
@@ -259,7 +308,9 @@ export function useTurnLifecycle({
             return
           }
           // Stream is live; chunks (or a fail-fast error/done) arrive over SSE and
-          // are dispatched by the handlers above.
+          // are dispatched by the handlers above. A reconnect that cannot
+          // resume it from here on means it is lost (useStreamingMessage).
+          confirmStream(sid)
         } catch (e: unknown) {
           if (!isCurrentGen(threadId, myGen)) return
           const errMsg = getErrorMessage(e) || i18n.t('chat:errors.sendFailed')
@@ -306,6 +357,9 @@ export function useTurnLifecycle({
             const detail = budgetDetail(errMsg)
             notifyBudget(detail)
             appendErrorBubble(i18n.t('chat:errors.budgetBubble', {detail}))
+          } else if (kind === 'serverRestarting') {
+            // Refused again after the one retry (the 503's message is masked).
+            appendErrorBubble(i18n.t('chat:errors.generic', {message: i18n.t('chat:errors.serverRestarted')}))
           } else if (e instanceof ApiError && providerErrorInfo(e.code)) {
             // A provider failure the create POST already knew about (no
             // credentials for this provider in the flow's scope): same
@@ -329,16 +383,94 @@ export function useTurnLifecycle({
       beginAcc,
       bumpGen,
       cancelStream,
+      confirmStream,
       dropAcc,
       endStreamIfOwn,
       isCurrentGen,
       notifyBudget,
       registerStream,
       startStream,
+      streamAccRef,
+      teardownRef,
       toastRef,
+      updateStream,
       updateThread,
     ],
   )
+
+  // Automatic resends waiting out their delay, by the stream they replace.
+  const autoResendTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  useEffect(() => {
+    const timers = autoResendTimersRef.current
+    return () => {
+      for (const t of timers.values()) clearTimeout(t)
+      timers.clear()
+    }
+  }, [])
+
+  // scheduleAutoResend takes over a stream a server restart ended
+  // (SERVER_RESTARTING) and sends its turn again once, after a short delay,
+  // the way Retry does: the question comes off and goes again with the
+  // history before it, so the server's copy of the cut-short attempt is
+  // replaced by the save on done. Meanwhile the slot stays, its partial text
+  // under a status line, so Stop still keeps that text and a queued
+  // follow-up waits. Returns the thread, or null when the turn gets the
+  // error bubble instead: its retry is spent, it was re-attached (no record
+  // of its question), it asked for an approval (it may have changed the
+  // flow — the user decides), or the local history is not the server's yet.
+  const scheduleAutoResend = useCallback(
+    (streamId: string): string | null => {
+      const acc = streamAccRef.current.get(streamId)
+      if (!acc?.resend || acc.autoRetried) return null
+      const threadId = acc.threadId
+      const st = useChatStore.getState()
+      const slot = st.streams[threadId]
+      if (!slot || slot.streamId !== streamId || slot.approvals.length > 0) return null
+      if (!st.isHistorySynced(threadId)) return null
+      const msgs = st.getMessages(threadId)
+      if (msgs[msgs.length - 1]?.id !== acc.resend.userMessageId) return null
+
+      acc.autoRetried = true
+      teardownRef.current(streamId)
+      if (acc.raf !== null) {
+        cancelAnimationFrame(acc.raf)
+        acc.raf = null
+      }
+      updateStream(threadId, {
+        text: acc.text,
+        isThinking: !acc.text,
+        toolStatus: i18n.t('chat:errors.serverRestarting'),
+      })
+      const resend = acc.resend
+      const gen = threadGenRef.current.get(threadId) ?? 0
+      const timer = setTimeout(() => {
+        autoResendTimersRef.current.delete(streamId)
+        // Stopped, abandoned, closed or logged out meanwhile: those paths
+        // bumped the generation and own the slot.
+        if (!isCurrentGen(threadId, gen) || streamAccRef.current.get(streamId) !== acc) return
+        dropAcc(streamId)
+        endStreamIfOwn(threadId, streamId)
+        const now = useChatStore.getState()
+        const before = now.getMessages(threadId)
+        now.removeMessage(threadId, resend.userMessageId)
+        const accepted = send(threadId, resend.text, {
+          ...resend.opts,
+          includeHistory: true,
+          // The first send pinned what it should; a pick made since stays.
+          pinThread: false,
+          restore: before,
+          autoRetry: true,
+        })
+        if (!accepted) now.setThreadMessages(threadId, before)
+      }, serverRestartDelayMs())
+      autoResendTimersRef.current.set(streamId, timer)
+      return threadId
+    },
+    [dropAcc, endStreamIfOwn, isCurrentGen, send, streamAccRef, teardownRef, updateStream],
+  )
+  useEffect(() => {
+    autoResendRef.current = scheduleAutoResend
+  }, [autoResendRef, scheduleAutoResend])
 
   // resumeAfterReload re-attaches a stream the server reports as still
   // in-flight for a conversation the client just (re)loaded: a page

@@ -7,7 +7,6 @@ import (
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
@@ -51,7 +50,7 @@ func (h *FlowHandler) handleBlockEdit(w http.ResponseWriter, r *http.Request, ki
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("block_" + kind)
+	service.RecordFlowOp("block_" + kind)
 	var updated *models.FlowDocument
 	var err error
 	if kind == "remove" {
@@ -93,7 +92,7 @@ func (h *FlowHandler) handleUpdateBlockProperties(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("block_properties")
+	service.RecordFlowOp("block_properties")
 	updated, err := h.flowSvc.UpdateBlockProperties(r.Context(), doc, req.BlockID, req.Changes)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {
@@ -129,7 +128,7 @@ func (h *FlowHandler) handleMoveBlock(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("block_move")
+	service.RecordFlowOp("block_move")
 	updated, err := h.flowSvc.MoveBlock(r.Context(), doc, req.BlockID, req.Direction)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {
@@ -164,7 +163,7 @@ func (h *FlowHandler) handleRemoveBlocks(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("block_remove_batch")
+	service.RecordFlowOp("block_remove_batch")
 	updated, err := h.flowSvc.RemoveBlocks(r.Context(), doc, req.BlockIDs)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {
@@ -201,7 +200,7 @@ func (h *FlowHandler) handleRenameBlock(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("block_rename")
+	service.RecordFlowOp("block_rename")
 	updated, gotoRefs, err := h.flowSvc.RenameBlock(r.Context(), doc, req.BlockID, req.Name)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {
@@ -240,7 +239,7 @@ func (h *FlowHandler) handleMoveBlockTo(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("block_move_to")
+	service.RecordFlowOp("block_move_to")
 	updated, err := h.flowSvc.MoveBlockTo(r.Context(), doc, req.BlockID, req.RefBlockID, req.Position)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {

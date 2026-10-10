@@ -86,10 +86,17 @@ func TestProvideAzureModelService_Wiring(t *testing.T) {
 		t.Errorf("database with auth off: orgs %v, export hook installed %v; want the file registry's single owner", authOff.OrgRegistriesAvailable(), db.export != nil)
 	}
 
-	cfg.Mode = config.ModeCloud
+	// The knowledge-base designation needs the organisations' shared corpus: a server store with accounts, in the
+	// cloud or in the local development profile alike.
+	cfg.Storage.Backend = config.StorageDatabase
 	cfg.Auth.Enabled = true
 	cfg.Storage.EmbeddingProvider = "azure-foundry"
 	keys := testutil.NewFakeSecretStore()
+	localDB := ProvideAzureModelService(storagedb.NewPostgresAzureRegistry(nil), keys, keys, testutil.NewFakeOrgSecretStore(), nil, nil, testutil.NewFakeBackend(), db, cfg)
+	if !localDB.OrgRegistriesAvailable() || !localDB.KnowledgeEmbeddingEnabled() {
+		t.Errorf("local with a database and accounts: orgs %v, knowledge %v", localDB.OrgRegistriesAvailable(), localDB.KnowledgeEmbeddingEnabled())
+	}
+	cfg.Mode = config.ModeCloud
 	cloud := ProvideAzureModelService(storagedb.NewPostgresAzureRegistry(nil), keys, keys, testutil.NewFakeOrgSecretStore(), nil, nil, testutil.NewFakeBackend(), db, cfg)
 	if !cloud.OrgRegistriesAvailable() || !cloud.KnowledgeEmbeddingEnabled() {
 		t.Errorf("cloud: orgs %v, knowledge %v", cloud.OrgRegistriesAvailable(), cloud.KnowledgeEmbeddingEnabled())
@@ -102,11 +109,11 @@ func TestProvideAzureModelService_Wiring(t *testing.T) {
 	}
 
 	// The knowledge service embeds through the registry when wired.
-	ks := ProvideKnowledgeService(nil, nil, nil, cfg, cloud, nil, nil)
+	ks := ProvideKnowledgeService(nil, nil, nil, cfg, cloud, nil, nil, nil)
 	if !ks.AzureEmbedderEnabled() {
 		t.Error("the knowledge service does not embed through the registry")
 	}
-	if ProvideKnowledgeService(nil, nil, nil, cfg, nil, nil, nil).AzureEmbedderEnabled() {
+	if ProvideKnowledgeService(nil, nil, nil, cfg, nil, nil, nil, nil).AzureEmbedderEnabled() {
 		t.Error("no registry, no registry embedder")
 	}
 }

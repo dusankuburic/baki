@@ -1,0 +1,26 @@
+From: "PAD Analyzer" <no-reply@pad.example.com>
+To: <una@example.com>
+Subject: You've been invited to PAD Analyzer
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Message-ID: <golden@pad.example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary=GOLDEN-BOUNDARY
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain; charset=UTF-8
+
+You've been invited to join the "Contoso & "Partners" <EU>" organization on=
+ PAD Analyzer.
+
+Accept the invitation:
+https://pad.example.com/#invite=3Dtok_INVITE-789
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html; charset=UTF-8
+
+<p>You've been invited to join the <strong>Contoso &amp; &#34;Partners&#34;=
+ &lt;EU&gt;</strong> organization on PAD Analyzer.</p><p><a href=3D"https:/=
+/pad.example.com/#invite=3Dtok_INVITE-789">Accept the invitation</a>.</p>
+--GOLDEN-BOUNDARY--

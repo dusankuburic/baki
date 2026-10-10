@@ -1,0 +1,25 @@
+From: "PAD Analyzer" <no-reply@pad.example.com>
+To: <una@example.com>
+Subject: Confirm your PAD Analyzer email
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Message-ID: <golden@pad.example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary=GOLDEN-BOUNDARY
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain; charset=UTF-8
+
+Welcome to PAD Analyzer!
+
+Confirm your email address with this link (valid for 24 hours):
+https://pad.example.com/#verifyEmail=3Dtok_VERIFY-456
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html; charset=UTF-8
+
+<p>Welcome to PAD Analyzer!</p><p><a href=3D"https://pad.example.com/#verif=
+yEmail=3Dtok_VERIFY-456">Confirm your email address</a> (valid for 24 hours=
+).</p>
+--GOLDEN-BOUNDARY--

@@ -1,0 +1,9 @@
+Flow: Invoices
+Event: analysis_complete
+
+Errors: 3
+Warnings: 5
+Info: 7
+Health: 72/100
+
+Time: 2026-10-10T12:00:00Z

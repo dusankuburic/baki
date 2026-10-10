@@ -27,7 +27,7 @@ func TestSystemService_SettingsChangedAudiences(t *testing.T) {
 	if err := cloud.UpdateUserSettings(context.Background(), "user-9", *models.DefaultSettings()); err != nil {
 		t.Fatal(err)
 	}
-	if err := cloud.UpdateOrgSettings(context.Background(), "org-a", *models.DefaultSettings()); err != nil {
+	if err := cloud.UpdateOrgSettings(context.Background(), "org-a", *models.DefaultSettings(), OrgSettingsWrite{}); err != nil {
 		t.Fatal(err)
 	}
 	desktop := NewSystemService(newTestSettingsStore(t), nil, n, nil, config.ModeLocal, nil, nil)

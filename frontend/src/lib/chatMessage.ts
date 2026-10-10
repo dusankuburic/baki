@@ -1,4 +1,11 @@
-import type {ChatMessage, FixItemSnapshot, FixProposalSnapshot, ToolCallRecord} from '@/types'
+import type {
+  ApprovalItemSnapshot,
+  ApprovalSnapshot,
+  ChatMessage,
+  FixItemSnapshot,
+  FixProposalSnapshot,
+  ToolCallRecord,
+} from '@/types'
 import {storableModelLabel} from './modelIds'
 
 // Known message roles the backend may send. A payload with any other role is
@@ -59,6 +66,10 @@ function parseFixProposal(raw: unknown): FixProposalSnapshot | null {
     summary: typeof p.summary === 'string' ? p.summary : '',
     status: typeof p.status === 'string' ? p.status : '',
   }
+  // Kept as stamped: the client re-saves whole threads, so dropping them
+  // here would turn a later server's record back into a plain fix patch.
+  if (typeof p.tool === 'string' && p.tool) snap.tool = p.tool
+  if (typeof p.previewKind === 'string' && p.previewKind) snap.previewKind = p.previewKind
   if (typeof p.message === 'string' && p.message) snap.message = p.message
   if (Array.isArray(p.items)) {
     const items: FixItemSnapshot[] = []
@@ -68,6 +79,45 @@ function parseFixProposal(raw: unknown): FixProposalSnapshot | null {
     }
     if (items.length > 0) snap.items = items
   }
+  return snap
+}
+
+// A persisted approval of another kind is read leniently — an id and a
+// status are all a strip needs — so an older bundle can show a newer
+// server's record instead of nothing.
+function parseApprovalItem(raw: unknown): ApprovalItemSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null
+  const i = raw as Record<string, unknown>
+  const item: ApprovalItemSnapshot = {
+    id: typeof i.id === 'string' ? i.id : '',
+    label: typeof i.label === 'string' ? i.label : '',
+    summary: typeof i.summary === 'string' ? i.summary : '',
+    status: typeof i.status === 'string' ? i.status : '',
+  }
+  if (typeof i.message === 'string' && i.message) item.message = i.message
+  return item
+}
+
+function parseApproval(raw: unknown): ApprovalSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null
+  const a = raw as Record<string, unknown>
+  if (typeof a.proposalId !== 'string' || !a.proposalId) return null
+  const items: ApprovalItemSnapshot[] = []
+  if (Array.isArray(a.items)) {
+    for (const entry of a.items) {
+      const item = parseApprovalItem(entry)
+      if (item) items.push(item)
+    }
+  }
+  const snap: ApprovalSnapshot = {
+    proposalId: a.proposalId,
+    status: typeof a.status === 'string' ? a.status : '',
+    items,
+  }
+  if (typeof a.tool === 'string' && a.tool) snap.tool = a.tool
+  if (typeof a.previewKind === 'string' && a.previewKind) snap.previewKind = a.previewKind
+  if (typeof a.requiredScope === 'string' && a.requiredScope) snap.requiredScope = a.requiredScope
+  if (typeof a.message === 'string' && a.message) snap.message = a.message
   return snap
 }
 
@@ -133,6 +183,14 @@ export function parseChatMessage(raw: unknown): ChatMessage | null {
       if (parsed) proposals.push(parsed)
     }
     if (proposals.length > 0) out.fixProposals = proposals
+  }
+  if (Array.isArray(m.approvals)) {
+    const approvals: ApprovalSnapshot[] = []
+    for (const entry of m.approvals) {
+      const parsed = parseApproval(entry)
+      if (parsed) approvals.push(parsed)
+    }
+    if (approvals.length > 0) out.approvals = approvals
   }
   return out
 }

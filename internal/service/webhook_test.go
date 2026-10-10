@@ -44,7 +44,7 @@ func TestWebhookNotifier_CapsInFlightDispatches(t *testing.T) {
 	}()
 
 	d, err := notify.New(notify.Config{
-		WebhookURL:  srv.URL,
+		Channels:    []notify.ChannelConfig{{Kind: "webhook", Values: notify.Values{"url": srv.URL}}},
 		Policy:      notify.AllowLoopbackTargets,
 		Timeout:     10 * time.Second,
 		MaxAttempts: 1,

@@ -457,6 +457,9 @@ async function doRequest(path: string, opts: RequestOptions): Promise<ParsedBody
 
   if (!response.ok) throw await errorFor(response)
 
+  // A typed endpoint's Status(http.StatusNoContent) answers without a body.
+  if (response.status === 204) return {value: undefined, size: 0}
+
   // Read as text so the body's size is known for the cache gate; a 200 with
   // a non-JSON body (misconfigured proxy) must throw a clean Error.
   try {

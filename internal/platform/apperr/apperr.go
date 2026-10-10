@@ -30,6 +30,7 @@ const (
 	KindRateLimited
 	KindUnavailable
 	KindNotImplemented
+	KindBadGateway
 )
 
 type kindInfo struct {
@@ -52,6 +53,7 @@ var kinds = [...]kindInfo{
 	KindRateLimited:     {http.StatusTooManyRequests, "RATE_LIMITED", "rate limited"},
 	KindUnavailable:     {http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "unavailable"},
 	KindNotImplemented:  {http.StatusNotImplemented, "NOT_IMPLEMENTED", "not implemented"},
+	KindBadGateway:      {http.StatusBadGateway, "INTERNAL_ERROR", "bad gateway"},
 }
 
 // info returns the kind's entry; an unknown kind is treated as internal.
@@ -116,6 +118,10 @@ func Unavailable(code, msg string) *Error { return New(KindUnavailable, code, ms
 
 // NotImplemented is a feature this deployment does not offer (501).
 func NotImplemented(code, msg string) *Error { return New(KindNotImplemented, code, msg) }
+
+// BadGateway is an upstream the server called on the caller's behalf that failed, such as a notification channel's
+// endpoint (502). render masks the message, so put what the caller may see in Details.
+func BadGateway(code, msg string) *Error { return New(KindBadGateway, code, msg) }
 
 // Internal is a failure the caller cannot fix (500).
 func Internal(code, msg string) *Error { return New(KindInternal, code, msg) }

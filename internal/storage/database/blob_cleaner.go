@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"pad-analyzer/internal/metrics"
 	"pad-core/logger"
 )
 
@@ -75,7 +74,7 @@ func (c *blobCleaner) enqueue(notBefore time.Time, desc string, run func(ctx con
 		return false
 	}
 	heap.Push(&c.pending, &blobCleanupJob{notBefore: notBefore, run: run, desc: desc})
-	metrics.SetBlobCleanerPending(len(c.pending))
+	setBlobCleanerPending(len(c.pending))
 	c.mu.Unlock()
 	select {
 	case c.wake <- struct{}{}:
@@ -97,7 +96,7 @@ func (c *blobCleaner) dispatch() {
 				wait = time.Until(c.pending[0].notBefore)
 			}
 		}
-		metrics.SetBlobCleanerPending(len(c.pending))
+		setBlobCleanerPending(len(c.pending))
 		c.mu.Unlock()
 
 		if ready != nil {

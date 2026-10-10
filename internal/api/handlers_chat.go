@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/http"
 
+	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/platform/drain"
 	"pad-analyzer/internal/service"
 	"pad-core/models"
 )
@@ -18,6 +20,8 @@ type ChatHandler struct {
 	flowSvc *service.FlowService
 	common  *SecurityConfig
 	audit   *audit.Recorder
+	// draining is the server's draining state; nil is the process's (drain.Process), tests set their own.
+	draining *drain.State
 }
 
 // maxChatMessageBodyBytes bounds bodies carrying user-authored chat content: a turn with inline
@@ -29,17 +33,23 @@ func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, 
 }
 
 // @Summary      Stream chat message
-// @Description  Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, MODEL_NOT_AVAILABLE, …). For provider azure-foundry the model is a model registry id ("m/<entryId>"; "" for the server default; a pre-registry deployment, "claude:" or "agent:" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE.
+// @Description  Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, AI_BUDGET_UNAVAILABLE, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, PROVIDER_UNKNOWN when the turn names a provider no spec describes, PROVIDER_NOT_ALLOWED when the provider policy refused it — disabled in the deployment or off the organisation's allowed-provider list (ADR 0028), MODEL_NOT_AVAILABLE, SERVER_RESTARTING when the server's stop ended the stream, …). A provider id the registry does not know is refused before any stream starts with 400 and code PROVIDER_UNKNOWN. For provider azure-foundry the model is a model registry id ("m/<entryId>"; "" for the server default; a pre-registry deployment, "claude:" or "agent:" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE. While the server is stopping no stream starts: 503 with code SERVER_RESTARTING, a Retry-After header and details.retryAfterSeconds; the request may be sent again once after that wait.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} string "Stream ID"
-// @Failure      400 {object} render.ErrorResponse "Bad Request (code MODEL_NOT_AVAILABLE: the Azure AI Foundry model is not available to the caller)"
+// @Failure      400 {object} render.ErrorResponse "Bad Request: malformed body, code MODEL_NOT_AVAILABLE (the Azure AI Foundry model is not available to the caller) or PROVIDER_UNKNOWN (no provider spec describes the id)"
 // @Failure      429 {object} render.ErrorResponse "Too many concurrent chat streams (code CHAT_CAPACITY_REACHED)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
+// @Failure      503 {object} render.ErrorResponse "The server is restarting (code SERVER_RESTARTING; Retry-After and details.retryAfterSeconds say when to send it again)"
 // @Router       /api/chat/stream [post]
 func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Request) {
+	// Refused before the body is read: a stream started now would be cut off by the stop within seconds.
+	if h.draining.Draining() {
+		drain.Refuse(w)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxChatMessageBodyBytes)
 	var req models.ChatRequest
 	if !decodeBody(w, r, &req) {
@@ -59,6 +69,11 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 			render.ErrorWithCode(w, err, http.StatusTooManyRequests, "CHAT_CAPACITY_REACHED")
 			return
 		}
+		// The chat service's shutdown began after the check above: the same refusal.
+		if errors.Is(err, service.ErrServerRestarting) {
+			drain.Refuse(w)
+			return
+		}
 		if renderModelNotAvailable(w, err) {
 			return
 		}
@@ -73,12 +88,20 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 
 // renderModelNotAvailable answers a chat request whose Azure AI Foundry model the caller cannot use
 // (removed, another owner's, no longer shared) with 400 MODEL_NOT_AVAILABLE — the client restores
-// the composer text and offers another model. false for any other error.
+// the composer text and offers another model — one naming a provider the server does not know with
+// 400 PROVIDER_UNKNOWN (ADR 0025), and one the provider policy refused with 400 PROVIDER_NOT_ALLOWED (ADR 0028;
+// the preview asks the policy synchronously, a stream reports it on its error event). false for any other error.
 func renderModelNotAvailable(w http.ResponseWriter, err error) bool {
-	if !errors.Is(err, service.ErrModelNotAvailable) {
+	switch {
+	case errors.Is(err, service.ErrModelNotAvailable):
+		render.ErrorWithCode(w, service.ErrModelNotAvailable, http.StatusBadRequest, service.AzureCodeModelNotAvailable)
+	case errors.Is(err, service.ErrProviderUnknown):
+		render.ErrorWithCode(w, err, http.StatusBadRequest, service.ProviderCodeUnknown)
+	case errors.Is(err, ai.ErrProviderNotAllowed):
+		render.ErrorWithCode(w, err, http.StatusBadRequest, service.ProviderCodeNotAllowed)
+	default:
 		return false
 	}
-	render.ErrorWithCode(w, service.ErrModelNotAvailable, http.StatusBadRequest, service.AzureCodeModelNotAvailable)
 	return true
 }
 
@@ -160,11 +183,12 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
-// handleFixDecision delivers the user's approve/decline for an apply_fix proposal in their chat
-// stream. Only the stream's owner may decide; the flow mutation separately re-checks EDITOR
-// permission at apply time (the stream itself only required viewer).
-// @Summary      Respond to a fix approval prompt
-// @Description  Delivers the user's approve/decline for an apply_fix proposal pending in one of the caller's chat streams. First decision wins; unknown or already-decided proposals return 404.
+// handleFixDecision delivers the user's approval decision for a tool request (apply_fix, apply_fixes)
+// pending in their chat stream. Only the stream's owner may decide, and a scoped token must hold the
+// scope the tool requires; the flow mutation separately re-checks EDITOR permission at apply time
+// (the stream itself only required viewer).
+// @Summary      Respond to an approval prompt
+// @Description  Approval decision: delivers the user's approve/decline (with per-item opt-outs for a batch) for a tool request — a fix_proposal event — pending in one of the caller's chat streams. The stream must be the caller's, and a scoped API token must hold the scope the tool requires (write for the fix tools). First decision wins; unknown or already-decided proposals return 404.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
@@ -172,6 +196,7 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 // @Success      200 {object} map[string]string "OK"
 // @Failure      400 {object} map[string]string "Bad Request"
 // @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      403 {object} render.ErrorResponse "Not the stream's owner (code STREAM_NOT_FOUND), or a token without the scope the tool requires"
 // @Failure      404 {object} map[string]string "Not Found"
 // @Router       /api/chat/fix-decision [post]
 func (h *ChatHandler) handleFixDecision(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +218,11 @@ func (h *ChatHandler) handleFixDecision(w http.ResponseWriter, r *http.Request) 
 	if !h.ownsStream(w, r, req.StreamID) {
 		return
 	}
-	if err := h.chatSvc.ResolveFixDecision(req.StreamID, req.ProposalID, req.Approved, req.ExcludedItemIndices); err != nil {
+	if err := h.chatSvc.ResolveApproval(r.Context(), req.StreamID, req.ProposalID, req.Approved, req.ExcludedItemIndices); err != nil {
+		if errors.Is(err, service.ErrPermissionDenied) {
+			render.Error(w, err, http.StatusForbidden)
+			return
+		}
 		render.Error(w, err, http.StatusNotFound)
 		return
 	}
@@ -201,13 +230,15 @@ func (h *ChatHandler) handleFixDecision(w http.ResponseWriter, r *http.Request) 
 }
 
 // @Summary      Resume a chat stream
-// @Description  Reconnect to an in-flight AI stream and catch up on missed chunks.
+// @Description  Reconnect to an in-flight AI stream and catch up on missed chunks. A stream the server does not know — it restarted without the resume backplane, the stream finished more than two minutes ago, or it is another user's — answers code STREAM_NOT_FOUND: 403 with accounts (an unknown stream and another user's are not told apart), 404 without. The client reports such a stream as interrupted.
 // @Tags         chat
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "OK"
 // @Failure      400 {object} map[string]string "Bad Request"
 // @Failure      401 {object} map[string]string "Unauthorized"
+// @Failure      403 {object} render.ErrorResponse "Unknown stream, or another user's (code STREAM_NOT_FOUND; with accounts)"
+// @Failure      404 {object} render.ErrorResponse "Unknown stream (code STREAM_NOT_FOUND; without accounts)"
 // @Failure      500 {object} map[string]string "Error"
 // @Router       /api/chat/resume [post]
 func (h *ChatHandler) handleResumeStream(w http.ResponseWriter, r *http.Request) {
@@ -223,11 +254,16 @@ func (h *ChatHandler) handleResumeStream(w http.ResponseWriter, r *http.Request)
 	}
 	res, err := h.chatSvc.ResumeStream(r.Context(), req.ID, req.From)
 	if err != nil {
-		render.Error(w, err, http.StatusNotFound)
+		render.ErrorWithCode(w, err, http.StatusNotFound, codeStreamNotFound)
 		return
 	}
 	render.JSON(w, res)
 }
+
+// codeStreamNotFound answers a stream id the server does not know (or, with accounts, that is not the caller's):
+// after a restart without the resume backplane every stream is such a one, and the client reports it interrupted
+// at once instead of waiting out its stall probe. The statuses stay the ones clients already treat as gone.
+const codeStreamNotFound = "STREAM_NOT_FOUND"
 
 // ownsStream verifies that the caller owns the given stream ID. In local mode (no JWT) there is only
 // one user; in JWT mode the stream's creator scope must match, and an unknown stream ID is treated
@@ -241,7 +277,7 @@ func (h *ChatHandler) ownsStream(w http.ResponseWriter, r *http.Request, streamI
 	if owner == "" || owner != caller {
 		// The standard JSON error envelope, so frontend handlers parsing
 		// {code,message,requestId} don't choke on a plain-text body.
-		render.Error(w, fmt.Errorf("forbidden"), http.StatusForbidden)
+		render.ErrorWithCode(w, fmt.Errorf("stream not found"), http.StatusForbidden, codeStreamNotFound)
 		return false
 	}
 	return true
@@ -370,13 +406,13 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 }
 
 // @Summary      Preview AI context
-// @Description  Returns a preview of the context that will be sent to the AI provider: the system prompt, the context text, the user message, an estimate of their tokens and the model's context window. The model resolves as the turn's would: for provider azure-foundry a model registry id the caller cannot use is refused with 400 and code MODEL_NOT_AVAILABLE.
+// @Description  Returns a preview of the context that will be sent to the AI provider: the system prompt, the context text, the user message, an estimate of their tokens and the model's context window. The model and the provider resolve as the turn's would: for provider azure-foundry a model registry id the caller cannot use is refused with 400 and code MODEL_NOT_AVAILABLE; a provider no spec describes with 400 PROVIDER_UNKNOWN; one the provider policy refuses (disabled in the deployment, or off the flow's organisation's allowed-provider list) with 400 PROVIDER_NOT_ALLOWED.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} models.ContextPreview "OK"
-// @Failure      400 {object} render.ErrorResponse "Bad Request (code MODEL_NOT_AVAILABLE: the Azure AI Foundry model is not available to the caller)"
+// @Failure      400 {object} render.ErrorResponse "Bad Request: malformed body, code MODEL_NOT_AVAILABLE (the Azure AI Foundry model is not available to the caller), PROVIDER_UNKNOWN (no provider spec describes the id) or PROVIDER_NOT_ALLOWED (the provider policy refused it)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/chat/preview-context [post]
 func (h *ChatHandler) handlePreviewContext(w http.ResponseWriter, r *http.Request) {

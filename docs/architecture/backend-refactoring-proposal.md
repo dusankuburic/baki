@@ -2,9 +2,375 @@
 
 ## Status (2026-10-10)
 
-**Fix first:** R1–R6 and S1–S3 are done. R7 and R8 come with Phase 4c.
+**Fix first:** R1–R8 and S1–S3 are done (R7 and R8 with Phase 4c).
 
-**Phase 4a: done** (2026-10-10, uncommitted). Migration 0037, `expand`.
+**Phase 4b: done** (2026-10-10, uncommitted). Migration 0042, `expand`.
+
+*Delivered:*
+- **Provider specs** (ADR 0025, `docs/architecture/ai-providers.md`): `ai.ProviderSpec` (id, name, auth type,
+  caps, modes as capability profiles, egress policy, credential schema, keystore keys, catalog, default model,
+  pricing mode, wire family, resolver, constructor, listing hook, colour, icon, order), one `spec_<id>.go` per
+  provider, registered at init and pinned by `testdata/providers.golden`; every provider list is derived from
+  `ai.Specs()` (the available and embedding-capable sets, the fallback order, the constructors, the keystore key
+  names, the alias set, the valid-id check, the listing filter by profile). Copilot and github-models are spec
+  fields (keys, resolver, no org sharing); Azure AI Foundry stays a family behind a `Listing` hook, its registry
+  untouched; the nine per-provider pricing constants are gone (the catalog row of the default model). A
+  go/packages ratchet pins the provider-id literals per file (95 in 21 files before; 22 in 15 now). The wire adds
+  `GET /api/providers/catalog` (every registered provider of the running profile, configured or not, with its
+  credential schema and endpoints; same policy as `/list`) and optional `ProviderInfo` fields; `authType` is
+  unchanged. `PROVIDER_UNKNOWN` (400) on the key routes, the connection test and chat create for an id the registry
+  does not know.
+- **Tool specs and approvals** (ADR 0026): `ai.ToolSpec` declares `RequiresApproval`, `RequiredScope` and
+  `PreviewKind`; `ToolDefinitionsFor(gate)` offers a token's model only the tools its scopes allow, and
+  `ExecuteTool` refuses a gated tool before its handler runs (an Azure agent's foreign `function_call` never runs
+  one). One approvals component on `ChatService` (request, keepalive, timeout, resolve with ownership and scope
+  checks) serves both fix paths; `fix_proposal` carries `tool`, `previewKind` (`fix-patch`), `requiredScope` and
+  always `items[]`, `fix_decision` gains `cancelled` (emitted at shutdown or a stop before the error event), the
+  endpoint and its policy are unchanged; `testdata/tools.golden`; the authz matrix gains a `pat:chat+write` actor.
+- **Budget and metering** (ADR 0028): `ai.BudgetChecker` is consulted first in the audited wrapper's `Chat`,
+  `Stream` and `Embed`, above the breaker and retries, so every billed call is covered (connection tests and the
+  knowledge query embed were not); the chat turn keeps its two checks and seeds a request memo and the stream's own
+  spend into the context, so the hook costs no extra usage read; `Embed` attributes usage to the org the run was
+  gated on; the in-flight ledger sits behind a `spendLedger` seam whose error fails closed (Phase 5b's Redis
+  ledger). `ai.ProviderPolicy` is consulted by every factory builder before any key is read: the deployment's
+  `Enabled` rule and a new org-settings `ai.allowedProviders` (empty = all); refusals are `PROVIDER_NOT_ALLOWED`
+  on streams, the test result and the knowledge routes. `pad_ai_budget_refusals_total{provider,call,reason}`.
+- **RAG identity** (ADR 0027, migration 0042): `knowledge_chunks.embedding_identity` (per chunk, the frozen
+  `label|baseURL|model|dims` string) and `knowledge_documents.chunker_version`; search filters by the current
+  identity (legacy NULL rows match leniently and are stamped on the first proven same-model upload); a
+  column compare replaces the billed three-sample guard for stamped corpora; the empty-result classification is
+  precise (`pad_rag_stranded_search_total` vs the width metric, which over-counted); an unforced re-index walks
+  only non-current chunks; `embeddingStranded` per document on the list and in the panel; a declared on-demand
+  `knowledge_reembed` job (`{"background": true}` on the reindex route, 202, org credential required, never
+  automatic spend); the per-org advisory lock in the page transactions (two replicas can no longer interleave an
+  upload and a re-index); a contract scenario on the fake; a chunker geometry golden.
+- **Frontend:** `ProviderID` is a string with a `KnownProviderID` set (an unknown provider is listed as sent,
+  not dropped; a saved unknown `activeProvider` still selects); the settings panel renders from the catalogue
+  (a `CredentialForm` by `credential.kind`, bespoke panels only for Azure, local and Copilot, a
+  `GenericProviderCard` for an unknown provider, kind or field type, the old panel when the catalogue answers
+  404); the embedding list and the picker glyphs come from the catalogue; `ApprovalCard` renders by `previewKind`
+  with a generic fallback, parses the generic `approval_request`/`approval_decision` events of a later server, and
+  the persisted strip does the same; the device-login button draws the provider's icon.
+- **Safety nets:** providers, tools, chunker goldens; the literal ratchet; `TestProviderSpecs_Complete`,
+  `TestToolSpecs_Complete`, `TestEmbeddingIdentity_FormatFrozen`, `TestFactory_PolicyRefusesEveryBuilderBeforeTheKeyRead`,
+  `TestApprovals_RoundTripThroughRouter`, the knowledge contract scenario; frontend tolerance tests for the
+  catalogue, the card and the codes; an e2e spec per feature.
+
+*Bugs fixed on the way:*
+- The default Gemini model id `gemini-2-5-pro` does not exist (catalog `gemini-2.5-pro`); three names for the
+  local provider; an unknown provider id in a chat turn was logged as an operator incident ("provider setup
+  failed") and told the user to retry.
+- A chat-only token's model was offered `apply_fix`, called it, burned an iteration and got a refusal string; a
+  pending approval at shutdown was left hanging (nothing written, no event) until the slot was torn down.
+- Connection tests ran billed calls that no budget gated (the org variant billed the org); a member's key
+  embedding into an org corpus was never counted against the org; a disabled provider was refused only in chat,
+  after the provider was built, without a code; the usage-runner refusal at the 1024 cap counted as "shutdown".
+- A same-width embedding model switch was invisible until the next write, every search returned nothing and the
+  width metric counted it; every upload into a non-empty corpus bought a three-sample embed; a forced re-index
+  re-bought chunks already converted; two replicas could interleave an upload and a re-index (process-local lock).
+- An unknown saved `activeProvider` broke the chat with a codeless error; the chat-stream e2e spec was red on the
+  base tree (its provider stub lacked fields the schema requires).
+
+*Behaviour changes users will notice:*
+- **Providers:** `/api/keys/has` answers 400 `PROVIDER_UNKNOWN` for an unknown id (was 200 `{has:false}`); a
+  provider disabled in the deployment settings is refused everywhere with `PROVIDER_NOT_ALLOWED`; `ai.allowedProviders`
+  in the org settings restricts an org's flows and corpus (no UI yet); the settings panel lists every provider of
+  the profile from the catalogue in the server's order.
+- **Budget:** a connection test on a spent daily budget answers `{ok:false, code:"AI_BUDGET_EXCEEDED"}` without a
+  call; an org corpus embedded through a member's key now shows in the org's daily usage.
+- **Approvals:** a stop or deploy during a pending card shows "Cancelled — nothing was changed"; the card for a
+  single fix also carries `items[]`.
+- **Knowledge:** the list and the panel say how many chunks were indexed with another embedding model; a
+  background re-index answers 202 and runs as a job (`pad_job_*`, `job_runs`); the search over a stranded corpus
+  counts as stranded, not as a width mismatch.
+- **Operations:** schema v42; new metrics `pad_ai_budget_refusals_total`, `pad_chat_tool_refused_total`,
+  `pad_rag_stranded_search_total`; `pad_usage_dropped_total{reason="runner"}` (was `shutdown` for the 1024 cap: an
+  alert on `shutdown` goes quiet); new code `PROVIDER_POLICY_UNAVAILABLE`; the org settings route refuses an
+  unknown provider id in `ai.allowedProviders`; new goldens
+  (`-update-provider-specs`, `-update-tools`).
+
+*Found in review and fixed:* the org allowlist was wiped by this release's own partial org-settings writes (a
+rule toggle posts only the rules section, and an absent list meant "all providers"): a write that does not name
+`ai.allowedProviders` now keeps it, `[]` clears it, and an unknown id is refused with `PROVIDER_UNKNOWN`; the
+background re-embed job checked the org credential only at its start and could finish on the starting admin's
+personal key (now every page re-checks and the run fails instead); a failed org-settings read inside the policy
+reached admins as `EMBEDDING_NOT_CONFIGURED` with internal text (now 503 `PROVIDER_POLICY_UNAVAILABLE`, fixed copy);
+a batch card matched outcomes by rule id, so two fixes of one rule on different blocks shared a row (items carry
+`id = blockId:ruleId`, the client matches by id, else by position); the settings panel read `/api/keys/has`'s
+`{has}` envelope as truthy and showed every api-key provider as configured; Azure probes, the preview context and
+the knowledge list's embedder resolution bypassed the policy or the budget scope; identity stamping wrote an
+RLS-forced table through the pool (now under the caller's scope, pinned across two orgs); the refusal metric
+always said `unavailable`; lookups keyed by server strings could hit prototype keys; the catalogue's api-key field
+was named `apiKey` while the save body takes `key`; the literal ratchet's provider list was hand-kept (now derived
+from `ai.Specs()`); swagger lacked the new codes.
+
+*Plan corrections:* the proposal's Findings row 11 was partly stale (usage writes were already drained by Phase
+0b; the frontend `authType` was already tolerant; there was no `/api/config` route and no org allowlist to
+enforce); the "41 branch lines in 11 files" were 95 literals in 21 files by the time the phase started; the fix
+flow was batch + journal + resume, so the generic approval kept the fix event names and endpoint and added fields
+instead of renaming (an old client never misses a card); the catalogue is its own route because the listing hides
+unconfigured providers; the phase ran as three waves of parallel agents plus two follow-ups and a review round,
+about the estimated four to five weeks of work.
+
+*Open:* the org allowlist has no settings UI; the policy reads the org settings once per provider build (a
+declared cache if the listing shows it); `message.approvals[]` is read by the client but the server stores only
+fix proposals; `POST /api/providers/{id}/config` for document-kind providers is deferred (bespoke panels); the
+`approval_request`/`approval_decision` names and `/api/chat/approval-decision` exist only on the client; the
+pending-approval map stays in process memory (Phase 5b); the catalog's select option labels equal their values;
+`ModelPicker` and the device-login button keep two glyph maps; a re-pointed Azure deployment behind the same name
+is undetectable by identity (force a re-index); the stale `ReservationPricer` has no caller; a re-index run on the previous release after a rollback rewrites
+vectors but keeps the stamped identity (migrate down 42 or force a re-index); the background re-embed is one job
+per deployment, so one org's run makes another's wait (409) for up to its 2 h budget; generic org
+credential routes exist only for Azure (the factory and listing support every `CapOrgShared` provider).
+
+**Phase 5a: done** (2026-10-10, uncommitted). Migration 0041, `expand`.
+
+*Delivered:*
+- **`main.go` split** (ADR 0010 updated, `di-wiring.md`): 994 lines became 74 (build stamps, the healthcheck, the
+  swag annotations); the fx graph lives in `internal/app`, one file per concern (`app.go`, `config.go`,
+  `observability.go`, `storage.go`, `keystore.go`, `auth.go`, `governance.go`, `jobs_*.go`, `server.go`), a pure
+  move pinned by an AST comparison. `TestApp_StopOrder` runs the real graph in a child process and pins the stop
+  hooks (desktop and cloud profiles); `TestDesktopBoot_Smoke` builds the binary and checks the `CONFIG:` line, the
+  session key file, `/healthz` and a clean stop that never touches the OS keychain; `TestMainPackageIsMainGoAlone`
+  keeps `go build main.go` working. The archtest ratchets now parse every root file (R12).
+- **`lifecycle.Singleton`** (ADR 0023, migration 0041 `job_runs`): every advisory-lock user (scanner, retention,
+  audit backfill, field-encryption backfill, secret re-seal, legacy migration, token-blacklist cleanup, HNSW build)
+  is a declared job (`lifecycle.DeclareJob`, `testdata/jobs.golden`, keys derived from the name with the legacy keys
+  kept, uniqueness over every `*LockKey` constant in the source). Lock errors fail closed (skip, retry sooner);
+  a panic ends the run, not the loop (R6); one run per process; no locker (desktop) runs alone. The Postgres lease
+  heartbeats on its pinned session every 15 s and cancels the run when the lock is gone (R5); `pg_advisory_unlock`
+  answering `false` is a lost lease and discards the session (R4). `job_runs` (no RLS, listed with its reason)
+  feeds `pad_job_last_success_timestamp_seconds` and the cross-replica `pad_job_overdue` gauge with a `job overdue`
+  WARN (default twice the interval); `pad_job_runs_total{outcome}`, `pad_job_skipped_total{reason}`,
+  `pad_job_duration_seconds`, `pad_advisory_lease_lost_total`, `pad_advisory_unlock_not_held_total`. `DrainAll`
+  also stops jobs their owners did not; the migration run and admin scan-now are cancelled at shutdown (R16, R17).
+- **Config** (R6 completed, R8, R13, R14): `config.Duration` (JSON string or nanoseconds, env text) for the eight
+  duration fields, parsed once at load; `config.Load` owns the bootstrap (`PAD_CONFIG` file or env), validates
+  ranges (request timeout > 0, intervals and pool durations ≥ 0, breaker and retry > 0, drain delay ≤ 10 s) on both
+  paths, resolves the instance id and copies every slice; `TestArch_ConfigNotMutatedOutsideConfig` (go/types)
+  forbids assigning, appending to or taking the address of any config field outside `internal/config`; the AI
+  factory takes a parsed `ResilienceConfig` instead of `&cfg.Runtime`; the healthcheck reads a config file's port.
+  New knobs `PAD_INSTANCE_ID` (else the ACA replica name, the host name, a UUID), `PAD_SHUTDOWN_DRAIN_DELAY`,
+  `PAD_MAX_REPLICAS`, `PAD_DB_SERVER_MAX_CONNS`; the effective log-level default is `info` in every mode (R10).
+- **Secrets in configuration** (ADR 0005 §"Secrets in configuration"): 18 credential-bearing fields are
+  `secret.Value` (database and Redis URLs, the blob connection string, the auth secret, the encryption keys, the
+  SSO client secret, the webhook URLs, the signing secrets, the Jira token, the SMTP password, the metrics token):
+  `[redacted]` under every format verb, JSON, slog and error wrapping, read only through `Reveal()` at the
+  boundary, compared with `Equal`; `TestConfig_FormatAndJSONNeverShowSecrets` proves it; `SecretEphemeral` can no
+  longer be set from a config file; a malformed `PAD_REDIS_URL` no longer echoes its password (R9).
+- **Observability** (R15): modules register their own metrics (`metrics.MustRegister` at package init, 47 of 56
+  collectors moved, the central list pinned at 9 shared ones and only allowed to shrink) and
+  `testdata/metrics.golden` lists every family with its labels, help and registering package; the OTel resource
+  carries `service.instance.id` and honours `OTEL_RESOURCE_ATTRIBUTES`; every log line carries `instance_id`; the
+  logger and telemetry are installed before any module runs (migration lines are JSON now) and telemetry flushes
+  last; `errreport` events carry the instance id; `application_name=baki-backend/<instance>` on every Postgres
+  session. KQL alerts in Bicep for `job overdue`, `job lease lost`, the two advisory-lock lines and `chat workers
+  still running at shutdown`; the readiness alert counts per replica, above what a deploy's drain can produce.
+- **Graceful shutdown** (ADR 0024, `internal/platform/drain`): the drain hook runs first (`/readyz` and
+  `/api/health` 503 `draining`, new chat streams, event streams and `/ws` refused with 503 `SERVER_RESTARTING`,
+  `Retry-After` and `details.retryAfterSeconds`, a pause of `PAD_SHUTDOWN_DRAIN_DELAY`), then `ChatService.Shutdown`
+  ends every stream with `SERVER_RESTARTING` and waits up to 2 s for the workers, final snapshots and persists
+  (R1, R2); the SSE handler writes what is queued before it closes; a resume of an unknown stream says
+  `STREAM_NOT_FOUND`. The client resends the turn once automatically (status line, 2–3 s jittered, the server's
+  hint capped at 10 s; not for turns with fix cards, reattached streams or unsynced history) and reports a stream
+  whose reconnect resume answers 403/404/410 as interrupted at once instead of "stalled" 90 s later. `StopTimeout`
+  28 s with the budget table in the ADR (the scanner's stop capped at 5 s), `terminationGracePeriodSeconds` 35,
+  compose `stop_grace_period: 35s` (R7), pinned by `TestApp_StopEndsChatStreamsBeforeSSECloses` and
+  `deploy_pool_test.go`.
+- **Pool size per replica** (`operations.md`): Bicep derives `PAD_DB_MAX_OPEN_CONNS` from `dbServerMaxConnections`
+  minus the reserved connections over `maxReplicas` plus the deploy surge, capped at the app default; the app warns
+  at boot when the pools could exceed `max_connections` and when the DSN points at PgBouncer's 6432 (session
+  advisory locks); PgBouncer transaction mode is documented as unsupported; the stale
+  `idle_in_transaction_session_timeout` comment is corrected (R19).
+- **Safety nets:** metrics and jobs goldens; `TestApp_StopOrder`, `TestDesktopBoot_Smoke`,
+  `TestApp_LogsAreJSONFromTheFirstLine`, `TestApp_StopEndsChatStreamsBeforeSSECloses`; the config immutability and
+  secret-redaction tests; `deploy_pool_test.go` (pool formula, grace periods, alert log strings still in the
+  source); `TestMetrics_NoUnboundedLabelNames` over every registered family.
+
+*Bugs fixed on the way:*
+- The image build and CI's go-build job compiled `main.go` alone and had been broken since Phase 4c's
+  `secret_reseal.go` (both build `.` now).
+- Retention and the scanner ran without the lock when the lock query failed (R3); a scanner panic ended the loop
+  (R6); a job kept running after its session died (R5); a lost lease leaked the lock silently (R4).
+- `PAD_REQUEST_TIMEOUT=0s` timed out every request at once, and a malformed duration in a config file silently
+  disabled scanning or retention (R8); the log level was ignored on desktop and local+db (R10); a malformed Redis
+  URL printed its password (R9); the healthcheck probed `PAD_PORT` even with a config file (R14).
+- A deploy with an open chat lost the terminal event: the client showed "stalled" 90–120 s later (R1); a finished
+  answer's persist raced the pool close (R2); compose killed the app after 10 s (R7); a refused `/ws` upgrade burned
+  its single-use ticket; migration logs went to the text logger in the cloud.
+- The migration runner's lock error answered 409 "already running" (R16); admin scan-now and the migration run were
+  not cancelled at shutdown (R17); local+db with accounts had no scan-now (R20).
+
+*Behaviour changes users will notice:*
+- **Deploys:** a cut-short answer shows "The server restarted — sending your message again…" and is answered again;
+  a message sent while the server drains waits and goes through; `/readyz` is 503 for the drain delay; the stop
+  takes `PAD_SHUTDOWN_DRAIN_DELAY` (3 s) longer.
+- **Boot refusals:** a malformed duration in a config file, a request timeout ≤ 0, `0s` for the breaker or retry
+  durations, negative intervals or pool durations, a drain delay over 10 s, a `[redacted]` marker in any secret.
+  `"RetentionPurgeInterval": ""` in a file means the 24 h default now (write `"0s"` for off).
+- **Logs:** JSON from the first line in the cloud, `instance_id` on every line; a cloud config file without a log
+  level logs at info (was debug); the re-seal and backfill lines are the job's (`job run failed`, `interrupted`).
+- **Operations:** schema v41; `pad_background_task_*{field_encryption_backfill|secret_reseal}` become `pad_job_*`;
+  `postgres` sessions named `baki-backend/<instance>`; `OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` now override
+  the service name; retention skips on a lock error and logs `job overdue` after twice its interval; a partial purge
+  is a failed run; the audit backfill retries a lock error after 5 minutes instead of waiting for the next boot.
+
+*Plan corrections:* "modules register their own metrics" was not in the survey's agent plan and was added as its own
+item; the Singleton's heartbeat reached the scanner, audit backfill and migration only once the leaser was wired
+in wave 2; `fx.Supply(app.Build)` carries the version (one leaf value, no closure in the Invoke list); the phase
+ran as three waves of parallel agents plus an integrator, about the estimated two weeks of work.
+
+*Open:* admin scan-now answers `{started: true}` even when the sweep then skips (needs `ScanNow(ctx) error` and a
+409/503); the safety-net waits at stop (cancelled jobs ≤ 5 s each, telemetry 5 s, blob cleaner 15 s) have fixed
+budgets outside the table, so two of them at once overrun the 28 s (context-aware stops are the structural fix);
+`maxShutdownDrainDelay` 10 s exceeds what the budget absorbs (about 5 s); the stall probe outside a reconnect still
+takes about 90 s to report a gone stream; `ApiError` carries no response headers (the client reads
+`details.retryAfterSeconds`); a stuck chat worker past the 2 s budget can emit a second terminal event (the client
+acts on the first); the `ReplicaName_s` column, ACA's probe logging during termination and the Workflows/Jira
+payloads are unverified against live services; the desktop boot smoke test's CTRL_BREAK on GitHub's Windows runner
+is unverified; `cmd/bakicli` has two load-sensitive tests (`TestWatch_ConfigDiscovery`,
+`TestCLI_InvalidBaselineExits2`).
+
+**Phase 4c: done** (2026-10-10, uncommitted). Migrations 0038–0040, all `expand`.
+
+*Delivered:*
+- **Organisation CI credentials** (R8, ADR 0019): `org_ci_credentials` (0038) holds server-minted keys
+  (`baki_ci_<keyId>_<secret>`), sealed at rest, members-only under row-level security, at most 10 active per
+  organisation, expiring after 1 to 365 days or never. Org admins list, mint (shown once) and revoke them
+  (`/api/orgs/{id}/ci-credentials`, no API tokens), in Settings > Organisation > CI credentials with the `bakicli
+  report` command to copy. `CIService` authenticates the webhook by `X-Baki-Key-Id`, then the deployment secret, then
+  (old bakicli, no key id) the credentials of the organisation owning the flow; a credential reaches only its
+  organisation's flows (`LoadFlowHeaderInOrg`, contract-tested). The run carries an integration actor, is audited
+  (`ci.webhook_run`) and counted (`pad_ci_webhook_auth_total{method}`). With accounts the deployment secret is
+  deprecated (boot WARN, `Deprecation` and `Link` headers). `internal/platform/hmacsig` is the one signing
+  implementation (bakicli, the webhook, the channel envelope).
+- **Socket actors from the ticket** (R7, ADR 0020): a ws-ticket carries the token's scopes and a version (`wsv`; a
+  ticket without it is refused); the socket's actor is the PAT, not its user. Every inbound frame type declares what
+  it needs (a completeness test walks the event constants; an undeclared type is refused), `block.*` needs `write`
+  on the flow, rechecked every 2 minutes; refusals are counted (`pad_ws_inbound_refused_total`) and answered at most
+  once per 5 s. `POST /api/ws-ticket` adds `expiresAt`. The first end-to-end WebSocket test runs through the router.
+- **Channel-kind registry** (ADR 0021, `docs/webhooks.md`): one file per kind (webhook, Slack, Teams, Jira, email)
+  declares its fields (secret or not), egress and signing; validation, building and the public view go through the
+  registry. `ChannelService` owns the organisation channels: write-only secrets kept when omitted and removed with
+  `clear`, the URL redacted in every list (`hasSecret` added), a stale tab's redacted URL read as unchanged, a test
+  delivery on its own rate-limit bucket (`channel_test`) with a coarse answer. Typed channel routes. A versioned
+  webhook envelope: `schemaVersion`, `id`, `deliveryId`, `orgId` in the body; `X-Baki-Event`, `X-Baki-Delivery`,
+  `X-Baki-Timestamp` and a timed `X-Baki-Signature-V2` on every HTTP kind (the body-only signature stays);
+  `User-Agent: baki/<version>`. One egress answer for tenant channels (`egress.ForDeployment`: accounts decide) and
+  one for the operator's (`egress.ForOperator`). The scanner hands org-channel deliveries to the shared bounded
+  runner (`GoWait`), and `new_rules` notices reach the channels once each. Payload goldens per kind and event.
+- **Mail template registry** (ADR 0022): typed templates registered at init (each executed once against zero data, so
+  a typo fails the boot), `html/template` for the HTML part; one bounded `mail` runner (32 slots, 8 kept for password
+  reset, verification and invitations), so no request waits on SMTP; a MIME writer with a random boundary,
+  quoted-printable parts, RFC 2047 subjects, `Date` and `Message-ID`; addresses parsed, never stripped; every SMTP
+  phase bounded by the context. The governance alert email (notify's email kind, Jira's description) renders through
+  the registry. Mail goldens per template and variant.
+- **Safety nets:** payload goldens (26), mail goldens (48), the inbound-needs completeness test, 2 contract scenarios
+  (CI credentials, org-scoped flow reads) and 3 for channels; `docs/testing.md` lists every test file again (it
+  lacked about 100).
+
+*Bugs fixed on the way:*
+- **Channels:** every edit without a new secret, and every pause or resume, wiped the webhook or Slack signing secret
+  (receivers then rejected or accepted unsigned); editing a paused channel re-enabled it; the save answered "now" as
+  the creation time, and the fake overwrote it; org-channel events carried a zero time (`0001-01-01`, Slack `ts`
+  −62135596800); Slack and Teams URLs, the credential itself, went into WARN logs and the error sink; the Jira payload
+  used a plain-string description that Jira Cloud refuses; three egress predicates disagreed in local mode with
+  accounts; the channel test shared the general rate-limit bucket; the field-encryption backfill would have resealed
+  an empty URL on every boot.
+- **Mail:** a fixed MIME boundary let a finding comment inject a third part (phishing inside an official email);
+  forgot-password answered later for existing accounts (the SMTP round trip ran inline); a `Name <addr>` sender broke
+  `MAIL FROM`; a CR/LF in an address was stripped, joining the next header; the assignment email named a flow the
+  assignee cannot read.
+- **CI webhook:** any tenant's flow was reachable with the one deployment secret (R8); local+db analyzed the open
+  document instead of the stored flow; the dashboard was written on every call.
+- **Sockets:** a read-scoped token's socket relayed `block.*` frames as an editor (R7).
+- **UI:** the channels and custom-rules lists showed the state before a save for 5 s (GET micro-cache); opening Edit
+  on a second channel kept the first one's fields.
+
+*Behaviour changes users will notice:*
+- **CI webhook:** desktop answers 503; with accounts a call nothing verifies is 401 (was 503 "not configured"), and
+  the deployment secret's answers carry `Deprecation`; an unknown `format` is 400 (an old `bakicli -format json` now
+  exits 2); the webhook is on the `analysis` rate-limit bucket, whose 429 now says `Retry-After`, and `bakicli
+  report` retries a 429 up to four times; a `failOn` other than error, warning, info or none gates as `error`; one
+  audit row per completed run.
+- **Channels:** admins see the redacted URL too (`host/…`, no scheme), the edit form's URL field is write-only, a
+  row says when it is signed, a secret can be removed and is refused on Teams; the save body is strict; deliveries carry
+  the envelope headers and fields; org channels get `new_rules` notices; the channel test answers 502
+  `CHANNEL_DELIVERY_FAILED` with a reason, 503 `CHANNEL_DELIVERIES_BUSY`, or 429; the list needs the server store
+  (503 on desktop, where the UI shows no organisations).
+- **Email:** `Date` and `Message-ID` headers, quoted-printable bodies, one-line subjects of at most 200 characters;
+  `PAD_EMAIL_FROM` may be `Name <addr>`, and one that does not parse fails each send; under saturation an email is
+  dropped and counted (`task="mail"`) instead of holding the request; every SMTP failure reaches the error sink
+  (`mail.send`) as its SMTP phase and code only (`mail: rcpt: 550`); governance alert emails wait up to 10 s for a
+  mail slot instead of being dropped; forgot-password no longer answers 500 when the token write fails (the token is
+  written moments later, with the email).
+- **Sockets:** a ticket from the previous release is refused for its 30 s life (the client reconnects); a PAT's
+  socket is logged as the token.
+- **Operations:** schema v40; the retention sweep also runs on local+db with accounts (it ran in cloud mode only);
+  new metrics `pad_ci_webhook_auth_total`, `pad_ws_inbound_refused_total`; runner labels `finding_email` and
+  `org_invite_email` become `mail`; new settings `PAD_RATE_LIMIT_CHANNEL_TEST_{RPS,BURST}`.
+
+*Found in review and fixed:* the old-client CI fallback read the store for any flow id an unauthenticated caller
+sent (a NUL made it a 500 with an ERROR log) and HMACed bodies of any size once per credential (now: plausible ids
+and bodies up to 4 KiB, and every failure is the caller's 401); the webhook echoed and audited any `failOn` text;
+a replayed mint handed the one-time credential out again (the mint is no longer idempotent); a stale or pasted
+URL placeholder was stored over a channel's URL (the list now shows `host/…`, which no release accepts as a URL, and
+a save refuses the marker), `urlUnchanged` with a new URL silently kept the old one, and a Teams row's legacy secret
+listed as `hasSecret`; governance alert emails were dropped once 24 were in flight; the error sink received SMTP
+replies with the recipient's address; forgot-password still wrote the token inside the request, so the response
+time still told which accounts exist (the write now runs with the email on the mail runner); the scanner
+stopped after the server had drained the runners, so alerts found by a sweep running at shutdown were recorded and
+never delivered; a loopback `PAD_NOTIFY_*` URL on local+db with accounts failed the boot after migrating (the
+operator's channels now use `ForOperator`); an account erased during a rollback left its id as a credential's
+creator name; expired CI credentials were never purged on local+db with accounts; the deployment-channel egress
+was documented wrongly; the new audit actions had no labels.
+
+*Open items closed the same day* (a follow-up round, one item at a time, each merged and tested on its own):
+- **CI webhook** (ADR 0019, migration 0039): a signed `deliveryId` in the body; a repeat from the same key is
+  409 `CI_REPLAYED` (`ci_webhook_deliveries`, kept an hour, pool-only under row-level security), a call without one
+  is accepted and counted (`pad_ci_webhook_deliveries_total{delivery}`). Personal CI access: an API-token scope `ci`
+  (refused by every other route), `Authorization: Bearer` on the webhook, flows the token's user can read (an org
+  flow also needs membership: a collaborator outside the organisation gets 404); `bakicli report -token`.
+- **Sockets and streams** (ADR 0020): access is re-checked when it changes (a collaborator removed, a member removed
+  or demoted, an organisation or flow deleted, an account erased, a logout, a deleted API token: `AccessRevoked`),
+  through the event bus after the commit, coalesced per socket, at most 4 passes at a time; the 2-minute pass stays
+  the backstop. An SSE stream of a revoked token ends at once too.
+- **Encryption key rotation** (ADR 0005): `PAD_ENCRYPTION_KEY_PREVIOUS`; reads try the current key, then the older
+  ones; a background re-seal pass per boot (one replica, resumable, compare-and-swap writes) moves secret columns,
+  stored responses and the keystore to the current key and logs when nothing is left; no format change.
+- **Channels** (ADR 0021, migration 0040): organisation `jira` and `email` kinds (`config`/`secrets` columns; email
+  only to chosen members with a verified address, looked up again per delivery, removed by erasure); per-channel
+  event subscriptions (default: today's set); `PAD_NOTIFY_ALLOWED_HOSTS`, enforced at save and at dial for
+  organisation channels, shown to admins only with `PAD_NOTIFY_ALLOWED_HOSTS_VISIBLE`
+  (`GET /api/orgs/{id}/channels/options`); a `teams-workflow` kind (Adaptive Card of `TextRun`s); tenant text shows as
+  typed in Slack (`&`, `<`, `>` escaped: no links or `@channel` from a flow name) and Teams connector cards
+  (`"markdown": false`); a channel no configured key decrypts is listed as `unreadable` instead of failing its
+  organisation's list.
+- **Mail** (ADR 0022): `PAD_SMTP_MAX_CONNECTIONS`, a cap per relay with one connection kept for password resets and
+  invitations; an unparseable `PAD_EMAIL_FROM` is an ERROR at boot (not a boot failure: the previous release sent it
+  as it was).
+- **Smaller fixes:** deleting another user's API-token id revoked that token's sockets and wrote a revoke audit row
+  (now only the owner's delete does); a failed channel test on Windows said "the connection failed" (Windows' wording
+  of refused, reset and timed-out connections is recognised); the plaintext backfill held up the shutdown drain (now
+  cancelled first); `infra/main.bicep` passes the Teams and webhook URLs as secrets; the auth handler's unused mail
+  dependency is gone; the heartbeat, scanner-pooling and Azure-model tests that flaked under load are deterministic;
+  the gosec finding in `flow_snapshots.go` is gone (golangci-lint is clean).
+- **Not a defect:** a retried API-token mint replays the same token to the same user (ADR 0007's decision; no check
+  that could have changed runs after the replay, unlike the CI credential mint).
+
+*Open:* mixed-version replicas and other replicas' sockets learn of a change at their 2-minute pass (Phase 5b);
+removing the old-client CI fallback, the untimed signature and the deployment secret with accounts, and requiring
+`deliveryId`, once their counters stay at zero; a captured bearer CI call can be resent with a new delivery id
+(inherent to bearer tokens; a sender-constrained token if it matters); a nested v2 body and retiring the body-only
+signature; retiring the `teams` kind when Microsoft's connectors stop; deliveries and mail stay at most once and in
+process (ADR 0009); the Jira ADF payload and the Workflows card are unverified against live services; the
+deployment channels receive every tenant's alerts (documented, B12); a global role change announces nothing (the
+periodic pass catches it, for ownerless legacy flows only).
+
+*Plan corrections:* the CI webhook's "output through the exporter registry" was done in Phase 4a; the phase took
+four ADRs and two waves of parallel work, more than the estimated two weeks.
+
+**Phase 4a: done** (2026-10-10, committed as c99e3ef). Migration 0037, `expand`.
 
 *Delivered:*
 - **Rule metadata at registration** (ADR 0014): each rule file registers `RuleMeta` (confidence, auto-fix, direct

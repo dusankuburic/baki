@@ -306,13 +306,18 @@ jobs:
           # Azure Foundry / knowledge-base operator knobs below come from
           # repository variables, not secrets (none is sensitive). The bool
           # comparison renders a bare true/false so an unset variable keeps
-          # the template default.
+          # the template default. The database pool knobs
+          # (docs/architecture/operations.md) are repository variables too; an
+          # int parameter cannot be empty, so an unset one renders the
+          # template's own default (internal/config/deploy_pool_test.go keeps
+          # the two equal).
           parameters: >-
             appName="${{ secrets.AZURE_CONTAINER_APP_NAME }}"
             registryName="${{ secrets.AZURE_CONTAINER_REGISTRY }}"
             image="${{ needs.build-and-push.outputs.acr-login-server }}/${{ env.ACR_IMAGE_NAME }}@${{ needs.build-and-push.outputs.image-digest }}"
             authSecret="${{ secrets.PAD_AUTH_SECRET }}"
             encryptionKey="${{ secrets.PAD_ENCRYPTION_KEY }}"
+            encryptionKeyPrevious="${{ secrets.PAD_ENCRYPTION_KEY_PREVIOUS }}"
             databaseUrl="${{ secrets.PAD_DATABASE_URL }}"
             metricsToken="${{ secrets.PAD_METRICS_TOKEN }}"
             ciWebhookSecret="${{ secrets.PAD_CI_WEBHOOK_SECRET }}"
@@ -331,6 +336,9 @@ jobs:
             aiAllowPrivateEgress=${{ vars.PAD_AI_ALLOW_PRIVATE_EGRESS == 'true' }}
             embeddingProvider="${{ vars.PAD_EMBEDDING_PROVIDER }}"
             embeddingDim="${{ vars.PAD_EMBEDDING_DIM }}"
+            dbMaxOpenConns="${{ vars.PAD_DB_MAX_OPEN_CONNS }}"
+            dbServerMaxConnections=${{ vars.PAD_DB_SERVER_MAX_CONNS || 0 }}
+            dbReservedConnections=${{ vars.DB_RESERVED_CONNECTIONS || 20 }}
             alertEmails="${{ secrets.ALERT_EMAILS }}"
             minReplicas=1
             maxReplicas=1

@@ -183,7 +183,7 @@ func TestDispatcher_FansOutIncludingSlack(t *testing.T) {
 	}))
 	defer slack.Close()
 
-	d, err := New(Config{WebhookURL: webhook.URL, SlackURL: slack.URL, Policy: AllowLoopbackTargets})
+	d, err := New(Config{Policy: AllowLoopbackTargets, Channels: chans("webhook", webhook.URL, "slack", slack.URL)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestDispatcher_FansOutToAllChannels(t *testing.T) {
 	}))
 	defer teams.Close()
 
-	d, err := New(Config{WebhookURL: webhook.URL, TeamsURL: teams.URL, Policy: AllowLoopbackTargets})
+	d, err := New(Config{Policy: AllowLoopbackTargets, Channels: chans("webhook", webhook.URL, "teams", teams.URL)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestDispatcher_FailingChannelDoesNotPropagateOrBlockOthers(t *testing.T) {
 	defer good.Close()
 
 	// webhook (bad) first, teams (good) second — the good channel must still fire.
-	d, err := New(Config{WebhookURL: bad.URL, TeamsURL: good.URL, Policy: AllowLoopbackTargets})
+	d, err := New(Config{Policy: AllowLoopbackTargets, Channels: chans("webhook", bad.URL, "teams", good.URL)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestNew_RejectsPlaintextAlertURL(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := New(Config{WebhookURL: c.url, Policy: c.policy})
+			_, err := New(Config{Policy: c.policy, Channels: chans("webhook", c.url)})
 			// Offline CI: the public-name https cases now resolve DNS (B1.9
 			// SSRF check); a resolution failure is not a validation verdict.
 			if err != nil && !c.wantErr && strings.Contains(err.Error(), "does not resolve") {
@@ -385,7 +385,7 @@ func TestNotifier_DoesNotFollowRedirects(t *testing.T) {
 	}))
 	defer redirector.Close()
 
-	d, err := New(Config{WebhookURL: redirector.URL, Policy: AllowLoopbackTargets})
+	d, err := New(Config{Policy: AllowLoopbackTargets, Channels: chans("webhook", redirector.URL)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

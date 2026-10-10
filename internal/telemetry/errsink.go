@@ -16,7 +16,7 @@ import (
 // OpenTelemetry as exception events, so an OTLP backend (Azure Application
 // Insights, Jaeger, …) aggregates and groups them for crash triage. This closes
 // the "errors live only in logs/metrics" gap without adding an external SDK: it
-// reuses the tracer provider already installed by Init.
+// reuses the tracer provider already installed by InitWith.
 //
 // When the ctx carries a live request span (the common HTTP-panic path), the
 // exception is recorded on that span so it correlates with the surrounding

@@ -266,6 +266,99 @@ describe('stall probe', () => {
   })
 })
 
+// A deploy without Redis: the SSE connection drops, re-dials the new
+// instance, and that instance does not know the stream the old one ran —
+// /api/chat/resume answers 403 (JWT: an unknown stream is "not yours") or 404.
+// That stream is lost for good: the user must see it at once, not after the
+// stall probe's three misses (90-120 s).
+describe('reconnect resume of a lost stream', () => {
+  function goneError(status: number) {
+    return Object.assign(new Error('forbidden'), {status})
+  }
+  async function reconnect() {
+    setConnState('reconnecting')
+    setConnState('open')
+    await vi.advanceTimersByTimeAsync(0)
+  }
+
+  it.each([403, 404, 410])('reports a live stream as interrupted at once when the resume answers %i', async status => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+    capturedCb!(chunkEvent('s1', 'partial'))
+
+    vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(status))
+    await reconnect()
+
+    expect(chatApi.resumeStream).toHaveBeenCalledWith('s1', 0)
+    expect(handler.onError).toHaveBeenCalledTimes(1)
+    expect(handler.onError).toHaveBeenCalledWith(expect.stringContaining('connection'), 's1', 'STREAM_INTERRUPTED')
+  })
+
+  it('counts a confirmed stream as live before its first event', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+    // The create POST answered: the stream exists, though a reasoning model
+    // may stay silent for a while.
+    result.current.confirmStream('s1')
+
+    vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(403))
+    await reconnect()
+
+    expect(handler.onError).toHaveBeenCalledWith(expect.any(String), 's1', 'STREAM_INTERRUPTED')
+  })
+
+  it('does not report a stream whose create has not answered yet', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    // Registered, create POST still in flight: the server does not know the
+    // stream yet, so a resume miss says nothing about it.
+    await result.current.registerStream('s1', false)
+
+    vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(404))
+    await reconnect()
+
+    expect(handler.onError).not.toHaveBeenCalled()
+  })
+
+  it('keeps waiting when the resume fails transiently', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+    capturedCb!(chunkEvent('s1', 'partial'))
+
+    // The new instance is still starting (a 503) or the network blipped: the
+    // stream may yet be resumable, and the stall probe stays in charge.
+    vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(503))
+    await reconnect()
+    vi.mocked(chatApi.resumeStream).mockRejectedValue(new Error('network'))
+    await reconnect()
+
+    expect(handler.onError).not.toHaveBeenCalled()
+  })
+
+  it('passes a SERVER_RESTARTING the resume reports to the handler with its code', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+    capturedCb!(chunkEvent('s1', 'partial'))
+
+    // With Redis the new instance replays the old one's coded snapshot.
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: '',
+      done: false,
+      error: 'the server is restarting',
+      errorCode: 'SERVER_RESTARTING',
+      tokensOut: 0,
+      tokensIn: 0,
+    })
+    await reconnect()
+
+    expect(handler.onError).toHaveBeenCalledWith('the server is restarting', 's1', 'SERVER_RESTARTING', undefined)
+  })
+})
+
 // Regression: the live SSE dispatch must forward a fix_decision's per-item
 // outcomes. parseChatEvent has always produced `items[]` for batch decisions and
 // useChatStreamEngine.onFixDecision has always accepted them, but the

@@ -121,7 +121,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Build server
-        run: CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o baki-backend main.go
+        run: CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o baki-backend .
       - name: Build CLI
         run: go build -o bakicli ./cmd/bakicli
 

@@ -1,6 +1,9 @@
 package models
 
-import "maps"
+import (
+	"maps"
+	"slices"
+)
 
 type ThemeMode string
 
@@ -84,8 +87,12 @@ type AISettings struct {
 	DailyBudget             float64                     `json:"dailyBudget"`
 	// PerUserDailyBudget caps an individual user's AI spend within an org, so
 	// one user cannot exhaust the org's DailyBudget alone; 0 = org budget only.
-	PerUserDailyBudget float64         `json:"perUserDailyBudget,omitempty"`
-	Prompts            AIPromptsConfig `json:"prompts"`
+	PerUserDailyBudget float64 `json:"perUserDailyBudget,omitempty"`
+	// AllowedProviders, in an ORGANISATION's settings, lists the provider ids its flows and corpus may be
+	// sent to (ADR 0028); empty = every provider the deployment offers. Unread in the deployment's and a
+	// user's settings.
+	AllowedProviders []string        `json:"allowedProviders,omitempty"`
+	Prompts          AIPromptsConfig `json:"prompts"`
 }
 
 type AIProviderConfig struct {
@@ -134,6 +141,9 @@ func (s *AppSettings) Clone() *AppSettings {
 	if s.AI.Providers != nil {
 		cp.AI.Providers = maps.Clone(s.AI.Providers)
 	}
+	if s.AI.AllowedProviders != nil {
+		cp.AI.AllowedProviders = slices.Clone(s.AI.AllowedProviders)
+	}
 	if s.Analysis.Rules != nil {
 		cp.Analysis.Rules = make(map[string]RuleConfig, len(s.Analysis.Rules))
 		for k, rc := range s.Analysis.Rules {
@@ -178,7 +188,19 @@ func DefaultSettings() *AppSettings {
 					ContextTokenBudget: 4000,
 				},
 				"gemini": {
-					DefaultModel:       "gemini-2-5-pro",
+					DefaultModel:       "gemini-2.5-pro",
+					Temperature:        0.3,
+					MaxTokens:          4096,
+					ContextTokenBudget: 4000,
+				},
+				"xai": {
+					DefaultModel:       "grok-3-mini",
+					Temperature:        0.3,
+					MaxTokens:          4096,
+					ContextTokenBudget: 4000,
+				},
+				"glm": {
+					DefaultModel:       "glm-5.2",
 					Temperature:        0.3,
 					MaxTokens:          4096,
 					ContextTokenBudget: 4000,

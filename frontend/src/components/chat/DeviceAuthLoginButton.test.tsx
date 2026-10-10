@@ -100,4 +100,50 @@ describe('DeviceAuthLoginButton', () => {
     })
     expect(provider.pollAuth.mock.calls.length).toBe(calls)
   })
+
+  // F8: a provider whose `user` route answers a shape the bundle cannot
+  // read (or fails) still completes the sign-in — the host must relist and
+  // switch; the name is the only thing missing.
+  it('completes the sign-in even when the user lookup after it fails', async () => {
+    const provider = makeProvider()
+    provider.startAuth.mockReset().mockResolvedValue({
+      device_code: 'new',
+      user_code: 'NEW-2',
+      verification_uri: 'https://x',
+      interval: 5,
+      expires_in: 900,
+    })
+    provider.pollAuth.mockReset().mockResolvedValue({status: 'success', token: 't'})
+    vi.mocked(provider.getUser).mockRejectedValue(new Error('unexpected user shape'))
+    const onAuthComplete = vi.fn()
+    render(<DeviceAuthLoginButton provider={provider} onAuthComplete={onAuthComplete} />)
+    await act(async () => {})
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /sign in with github/i}))
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000)
+    })
+    expect(onAuthComplete).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', {name: 'Disconnect'})).toBeInTheDocument()
+  })
+})
+
+describe('DeviceAuthLoginButton glyph', () => {
+  it('a non-GitHub device-flow provider draws its own glyph, not the GitHub mark', async () => {
+    const provider: DeviceAuthProvider = {...makeProvider(), name: 'acme', label: 'Sign in with Acme', icon: 'key'}
+    render(<DeviceAuthLoginButton provider={provider} />)
+    await act(async () => {})
+    const button = screen.getByRole('button', {name: 'Sign in with Acme'})
+    expect(button).toHaveAttribute('data-glyph', 'key')
+    expect(button.querySelector('path[d^="M15 22v-4"]')).toBeNull()
+  })
+
+  it('keeps the GitHub mark when no glyph is named (the pre-catalogue buttons)', async () => {
+    render(<DeviceAuthLoginButton provider={makeProvider()} />)
+    await act(async () => {})
+    const button = screen.getByRole('button', {name: /sign in with github/i})
+    expect(button).toHaveAttribute('data-glyph', 'github')
+    expect(button.querySelector('path[d^="M15 22v-4"]')).not.toBeNull()
+  })
 })

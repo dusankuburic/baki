@@ -11,7 +11,6 @@ import (
 	"unicode/utf8"
 
 	"pad-analyzer/internal/lifecycle"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 
@@ -36,6 +35,9 @@ type auditedProvider struct {
 	// usageOrg is the organisation whose SHARED credential this chain runs on ("" = the caller's own): a usage
 	// row without an org of its own is attributed to it, so every call on an org credential is capped by its budget.
 	usageOrg string
+	// budget is the pre-call gate (ADR 0028): consulted by admit before Chat, Stream and Embed reach the breaker
+	// and the retry policy. nil (a wrapper built outside the factory, the desktop) admits everything.
+	budget BudgetChecker
 	// embedNamer names the embedding model for usage records; nil falls back to a type assertion on inner.
 	embedNamer embedModelNamer
 	// embedIdentifier is the RAW provider's EmbeddingIdentifier, adopted for every provider (the wrappers hide it).
@@ -121,26 +123,63 @@ func (p *auditedProvider) adoptRawHints(raw Provider) {
 	}
 }
 
+// admit is the pre-call budget hook: the first thing Chat, Stream and Embed do, above the breaker and the
+// retry policy, so a refused call never counts as a provider failure and is never retried. An alias-model
+// provider (Azure AI Foundry) is exempt, as the chat and knowledge-base gates always had it — baki neither
+// prices nor counts its usage. The spender is the context's budget scope when one was set (WithBudgetScope),
+// else this chain's scope and the request's org, else the shared credential's org: the same resolution the
+// usage row makes, so what is gated is what is recorded. The checker's error is returned as is.
+func (p *auditedProvider) admit(ctx context.Context, kind BudgetCallKind, model, reqOrgID string) error {
+	if p.budget == nil || UsesModelAliases(p.providerID) || UsesModelAliases(p.inner.ID()) {
+		return nil
+	}
+	scope, orgID := p.spender(ctx, reqOrgID)
+	err := p.budget.Check(ctx, BudgetCall{Scope: scope, OrgID: orgID, ProviderID: p.providerID, Model: model, Kind: kind})
+	if err != nil {
+		reason := "unavailable"
+		if r, ok := err.(BudgetReasoner); ok {
+			reason = r.BudgetReason()
+		}
+		recordBudgetRefusal(p.providerID, string(kind), reason)
+	}
+	return err
+}
+
+// spender is who a call under ctx is charged to: the context's budget scope, else the chain's scope with the
+// request's org (reqOrgID) or, without one, the shared credential's.
+func (p *auditedProvider) spender(ctx context.Context, reqOrgID string) (scope, orgID string) {
+	if s, o, ok := BudgetScopeFrom(ctx); ok {
+		return s, o
+	}
+	if reqOrgID == "" {
+		reqOrgID = p.usageOrg
+	}
+	return p.scope, reqOrgID
+}
+
 func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, error) {
+	if err := p.admit(ctx, BudgetCallChat, req.Model, req.OrgID); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	resp, err := p.inner.Chat(ctx, req)
-	metrics.ObserveAIRequest(p.providerID, time.Since(start).Seconds())
+	observeAIRequest(p.providerID, time.Since(start).Seconds())
 	if err != nil {
-		metrics.RecordAIError(p.providerID)
+		recordAIError(p.providerID)
 		// A context-length rejection that states the window sizes the next request to this deployment (learned_window.go).
 		learnContextWindow(p.memoScope, p.providerID, req.Model, err)
 		// A failed non-streamed call can still have been billed (a content-filter finish, a stopped agent run):
 		// the usage rides on the error (heldUsageError), as the stream path does.
 		if in, out, served, ok := usageOf(err); ok && (in > 0 || out > 0) {
 			recordServedModel(p.memoScope, p.providerID, req.Model, served)
-			metrics.RecordAITokens(p.providerID, in, out)
+			recordAITokens(p.providerID, in, out)
 			cr, cw := cacheUsageOf(err)
 			p.record(ctx, req.Model, served, req.OrgID, usage{In: in, Out: out, CacheRead: cr, CacheWrite: cw})
 		}
 		return resp, err
 	}
 	if resp != nil {
-		metrics.RecordAITokens(p.providerID, resp.TokensIn, resp.TokensOut)
+		recordAITokens(p.providerID, resp.TokensIn, resp.TokensOut)
 		recordServedModel(p.memoScope, p.providerID, req.Model, resp.ServedModel)
 		p.record(ctx, req.Model, resp.ServedModel, req.OrgID, usage{
 			In:         resp.TokensIn,
@@ -153,6 +192,9 @@ func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, err
 }
 
 func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
+	if err := p.admit(ctx, BudgetCallStream, req.Model, req.OrgID); err != nil {
+		return err
+	}
 	start := time.Now()
 	var tokensIn, tokensOut int
 	var cacheRead, cacheWrite int
@@ -196,7 +238,7 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 		if c.ToolEvent != nil && c.ToolEvent.Done {
 			// Hosted steps are billed by Azure per call / session / GB-day,
 			// outside the token spend; count them so the gap is visible.
-			metrics.RecordAIHostedToolStep(p.providerID, c.ToolEvent.Name)
+			recordAIHostedToolStep(p.providerID, c.ToolEvent.Name)
 		}
 		if c.Done {
 			sawDone = true
@@ -207,16 +249,16 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 				tokensOut = estOut.total()
 				tokensIn = p.estimateRequestTokens(req)
 			}
-			metrics.RecordAITokens(p.providerID, tokensIn, tokensOut)
+			recordAITokens(p.providerID, tokensIn, tokensOut)
 			p.record(ctx, req.Model, servedModel, req.OrgID, usage{In: tokensIn, Out: tokensOut, CacheRead: cacheRead, CacheWrite: cacheWrite})
 		}
 		onChunk(c)
 	}
 
 	err := p.inner.Stream(ctx, req, wrappedOnChunk)
-	metrics.ObserveAIRequest(p.providerID, time.Since(start).Seconds())
+	observeAIRequest(p.providerID, time.Since(start).Seconds())
 	if err != nil || sawChunkErr {
-		metrics.RecordAIError(p.providerID)
+		recordAIError(p.providerID)
 	}
 	if err != nil {
 		learnContextWindow(p.memoScope, p.providerID, req.Model, err)
@@ -249,7 +291,7 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 		}
 		// The model that answered rides on every content chunk, so a stream cut before Done still teaches the memo.
 		recordServedModel(p.memoScope, p.providerID, req.Model, servedModel)
-		metrics.RecordAITokens(p.providerID, tokensIn, tokensOut)
+		recordAITokens(p.providerID, tokensIn, tokensOut)
 		p.record(ctx, req.Model, servedModel, req.OrgID, usage{In: tokensIn, Out: tokensOut, CacheRead: cacheRead, CacheWrite: cacheWrite})
 	}
 	return err
@@ -384,7 +426,7 @@ func (p *auditedProvider) record(ctx context.Context, modelID, servedModel, orgI
 	metric := p.usageMetric(ctx, modelID, servedModel, orgID, u)
 
 	// Asynchronously record the usage so it doesn't block the caller. The semaphore acquire is NON-blocking:
-	// when all slots are in flight the metric is DROPPED (metrics.RecordUsageDropped) rather than parking
+	// when all slots are in flight the metric is DROPPED (recordUsageDropped) rather than parking
 	// another goroutine — in practice never hit (~7 metrics per request against 16 slots), a valve against a stuck recorder.
 	if !p.acquireRecordSlot(modelID) {
 		return
@@ -410,9 +452,10 @@ func (p *auditedProvider) goRecord(modelID string, fn func()) {
 		defer p.releaseRecordSlot()
 		fn()
 	}) {
+		// The runner refused: at its process-wide cap or draining for shutdown (it counts which).
 		p.releaseRecordSlot()
-		metrics.RecordUsageDropped("shutdown")
-		logger.Warn("AI usage metric dropped — shutting down", "provider", p.providerID, "model", modelID)
+		recordUsageDropped("runner")
+		logger.Warn("AI usage metric dropped — usage runner refused it", "provider", p.providerID, "model", modelID)
 	}
 }
 
@@ -441,7 +484,7 @@ func (p *auditedProvider) acquireRecordSlot(modelID string) bool {
 	case p.recordSem <- struct{}{}:
 		return true
 	default:
-		metrics.RecordUsageDropped("saturated")
+		recordUsageDropped("saturated")
 		logger.Warn("AI usage metric dropped — recorder saturated",
 			"provider", p.providerID, "model", modelID)
 		return false
@@ -471,7 +514,7 @@ func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel,
 	pricing, found := p.pricingFor(ctx, modelID, servedModel)
 	if !found {
 		pricing = p.inner.PricePerMillionTokens()
-		metrics.RecordPricingFallback(p.providerID, pricingMetricModel(p.providerID, modelID))
+		recordPricingFallback(p.providerID, pricingMetricModel(p.providerID, modelID))
 		logger.Warn("AI usage priced from provider default — model not in catalog",
 			"provider", p.providerID, "model", modelID, "servedModel", servedModel)
 	}
@@ -504,7 +547,7 @@ func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel,
 	}
 	// Deployment-wide spend only: a user+org label would mint one permanent Prometheus series per user and
 	// would take the scrape down (per-tenant attribution is the UsageMetric row above).
-	metrics.RecordAIUsageCost(inputCost + outputCost)
+	recordAIUsageCost(inputCost + outputCost)
 	return metric
 }
 
@@ -533,9 +576,13 @@ func usageServedModel(providerID, modelID, servedModel string) string {
 	return served
 }
 
-// ReservationPricing is the rate the chat service reserves in-flight budget at for model. Alias providers
-// (Azure AI Foundry) are unpriced, so nothing is reserved; every other provider keeps its provider-wide rate.
+// ReservationPricing is the rate an in-flight budget reservation for model is priced at: the spec's pricing
+// mode decides — an unpriced family (Azure AI Foundry) reserves nothing; every other provider, and a provider
+// the registry does not know (a test stub), keeps its provider-wide rate.
 func (p *auditedProvider) ReservationPricing(ctx context.Context, model string) Pricing {
+	if spec, ok := lookupSpec(p.providerID); ok && spec.Pricing == PricingUnpriced {
+		return Pricing{}
+	}
 	return p.inner.PricePerMillionTokens()
 }
 
@@ -553,10 +600,10 @@ func (p *auditedProvider) UsagePricing(ctx context.Context, model, served string
 
 // pricingFor resolves the per-million rates a call is billed at; false sends the caller to the provider-wide
 // fallback. Model-name providers price by the request model's own listing entry — a live listing is
-// authoritative, including deliberate $0 entries, and the served model is never consulted; alias providers
-// (Foundry deployments, model-router, agents) are unpriced: a zero price that counts as found.
+// authoritative, including deliberate $0 entries, and the served model is never consulted; an unpriced family
+// by its spec (Foundry deployments, model-router, agents) is a zero price that counts as found.
 func (p *auditedProvider) pricingFor(ctx context.Context, modelID, servedModel string) (Pricing, bool) {
-	if aliasModelProviders[p.providerID] {
+	if spec, ok := lookupSpec(p.providerID); ok && spec.Pricing == PricingUnpriced {
 		return Pricing{}, true
 	}
 	if models, err := p.Models(ctx); err == nil {
@@ -583,15 +630,21 @@ type embedModelNamer interface {
 }
 
 func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
+	// Embed carries no Request: the model is the embedding model named below, the org the context's.
+	if err := p.admit(ctx, BudgetCallEmbed, "", ""); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	res, err := p.inner.Embed(ctx, text)
-	metrics.ObserveAIRequest(p.providerID, time.Since(start).Seconds())
+	observeAIRequest(p.providerID, time.Since(start).Seconds())
 	if err != nil {
-		metrics.RecordAIError(p.providerID)
+		recordAIError(p.providerID)
 		return res, err
 	}
 	// Embedding APIs bill per INPUT token (no output): estimate the batch's input tokens and record under the
-	// embedding model's name; spend attributes to the user, or the org when the credential is shared (usageOrg).
+	// embedding model's name; spend attributes to the user and the org the call was gated on — the context's
+	// budget scope (an org corpus embedded through a member's own key still bills the org), else the shared
+	// credential's org (usageOrg).
 	if len(text) > 0 {
 		tokensIn := 0
 		for _, t := range text {
@@ -606,10 +659,11 @@ func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32
 		if model == "" {
 			model = p.inner.DefaultModel()
 		}
-		metrics.RecordAITokens(p.providerID, tokensIn, 0)
+		recordAITokens(p.providerID, tokensIn, 0)
+		_, orgID := p.spender(ctx, "")
 		// Pricing may need the live model listing; the per-turn RAG query embeds under an 800 ms budget, which
 		// must never be spent on it.
-		p.recordDetached(ctx, model, "", "", usage{In: tokensIn})
+		p.recordDetached(ctx, model, "", orgID, usage{In: tokensIn})
 	}
 	return res, err
 }

@@ -1,4 +1,4 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {useEffect} from 'react'
 import {renderHook, render, waitFor, act, screen} from '@testing-library/react'
 import {useAIChat} from './useAIChat'
@@ -41,13 +41,16 @@ vi.mock('@/api/client', () => ({
 }))
 
 vi.mock('@/api', () => ({
-  // Mirrors the real constructor (message, status, code) so a test can build
-  // a coded rejection and exercise the code-first classification.
+  // Mirrors the real constructor (message, status, code, requestId, details)
+  // so a test can build a coded rejection and exercise the code-first
+  // classification.
   ApiError: class ApiError extends Error {
     constructor(
       message: string,
       public status = 0,
       public code: string | null = null,
+      public requestId: string | null = null,
+      public details?: Record<string, unknown>,
     ) {
       super(message)
     }
@@ -1268,5 +1271,263 @@ describe('useAIChat while nothing can be sent', () => {
     expect(chatApi.previewContext).not.toHaveBeenCalled()
     expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2)
     expect(useChatStore.getState().queuedByThread[threadId]).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Deploys: the draining server ends a running stream, or refuses a new one,
+// with SERVER_RESTARTING. The engine sends the turn again ONCE, the way Retry
+// does (the history before the question travels with it, so the server's
+// dangling copy of the question is replaced); a second refusal is the
+// ordinary error bubble with Retry. Fake timers only around the retry delay:
+// waitFor needs real ones.
+
+describe('useChatStreamEngine SERVER_RESTARTING', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const restarting = (sid: string) => errorEvent(sid, 'the server is restarting', 'SERVER_RESTARTING')
+  const callAt = (i: number) => vi.mocked(chatApi.streamChatMessage).mock.calls[i]![0]
+
+  async function sendAndListen(text: string) {
+    const view = await renderChat()
+    const threadId = view.result.current.activeThreadId!
+    await act(async () => {
+      view.result.current.handleSend(text, [])
+    })
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    return {view, threadId, sid: callAt(0).clientStreamId!}
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms)
+    })
+  }
+
+  it('re-sends the turn once, after a short delay, when its stream ends with SERVER_RESTARTING', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {threadId, sid} = await sendAndListen('first question')
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'partial'))
+    })
+
+    vi.useFakeTimers()
+    act(() => {
+      capturedCb!(restarting(sid))
+    })
+
+    // No error bubble: the partial answer stays on screen under a status.
+    expect(useChatStore.getState().getMessages(threadId)).toHaveLength(1)
+    expect(useChatStore.getState().streams[threadId]).toMatchObject({streamId: sid, text: 'partial'})
+    expect(useChatStore.getState().streams[threadId]?.toolStatus).toMatch(/server restarted/i)
+    // Not at once: the new instance gets its moment (2 s plus jitter).
+    await advance(1_900)
+    expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
+    await advance(1_200)
+    vi.useRealTimers()
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
+
+    const retry = callAt(1)
+    expect(retry.userMessage).toBe('first question')
+    expect(retry.messages).toEqual([])
+    expect(retry.clientStreamId).not.toBe(sid)
+    expect(
+      useChatStore
+        .getState()
+        .getMessages(threadId)
+        .map(m => m.content),
+    ).toEqual(['first question'])
+    expect(useChatStore.getState().streams[threadId]?.streamId).toBe(retry.clientStreamId)
+
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(chunkEvent(retry.clientStreamId!, 'full answer'))
+    })
+    act(() => {
+      capturedCb!(doneEvent(retry.clientStreamId!))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    expect(useChatStore.getState().getMessages(threadId)[1]).toMatchObject({
+      content: 'full answer',
+      finishReason: 'stop',
+    })
+    // The turn carried its history, so it saves the thread: the server's
+    // copy of the cut-short attempt is replaced.
+    await waitFor(() => expect(chatApi.saveConversation).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(chatApi.saveConversation).mock.calls[0]![2].map(m => m.content)).toEqual([
+      'first question',
+      'full answer',
+    ])
+  })
+
+  it('shows the error bubble with Retry when the re-sent turn is cut short again (no loop)', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {threadId, sid} = await sendAndListen('q')
+    vi.useFakeTimers()
+    act(() => {
+      capturedCb!(restarting(sid))
+    })
+    await advance(3_100)
+    vi.useRealTimers()
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
+    const sid2 = callAt(1).clientStreamId!
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+
+    vi.useFakeTimers()
+    act(() => {
+      capturedCb!(chunkEvent(sid2, 'second partial'))
+    })
+    act(() => {
+      capturedCb!(restarting(sid2))
+    })
+    await advance(30_000)
+
+    expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2)
+    const msgs = useChatStore.getState().getMessages(threadId)
+    expect(msgs).toHaveLength(2)
+    expect(msgs[1]).toMatchObject({role: 'assistant', finishReason: 'error'})
+    expect(msgs[1]!.content).toContain('second partial')
+    expect(msgs[1]!.content).toMatch(/server restarted/i)
+    expect(useChatStore.getState().streams[threadId]).toBeUndefined()
+  })
+
+  it('retries a create refused with 503 SERVER_RESTARTING once, after its Retry-After', async () => {
+    vi.mocked(chatApi.streamChatMessage)
+      .mockRejectedValueOnce(
+        new ApiError('Service Unavailable', 503, 'SERVER_RESTARTING', null, {retryAfterSeconds: 5}),
+      )
+      .mockResolvedValueOnce('sid')
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+
+    vi.useFakeTimers()
+    await act(async () => {
+      result.current.handleSend('hello', [])
+    })
+    await advance(0)
+    expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
+    // Waiting, not failed: the question stays, no bubble, the status says why.
+    expect(useChatStore.getState().getMessages(threadId)).toHaveLength(1)
+    expect(useChatStore.getState().streams[threadId]?.toolStatus).toMatch(/server restarted/i)
+
+    await advance(4_900)
+    expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
+    await advance(1_200)
+    vi.useRealTimers()
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
+    // Nothing was created the first time: the same request goes again.
+    const sid = callAt(1).clientStreamId!
+    expect(sid).toBeTruthy()
+    expect(callAt(1).userMessage).toBe('hello')
+    expect(useChatStore.getState().streams[threadId]).toMatchObject({streamId: sid, toolStatus: null})
+
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'answer'))
+    })
+    act(() => {
+      capturedCb!(doneEvent(sid))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    expect(
+      useChatStore
+        .getState()
+        .getMessages(threadId)
+        .map(m => m.content),
+    ).toEqual(['hello', 'answer'])
+  })
+
+  it('shows the error bubble when the retried create is refused again', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockRejectedValue(
+      new ApiError('Service Unavailable', 503, 'SERVER_RESTARTING'),
+    )
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+
+    vi.useFakeTimers()
+    await act(async () => {
+      result.current.handleSend('hello', [])
+    })
+    await advance(30_000)
+
+    expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2)
+    const msgs = useChatStore.getState().getMessages(threadId)
+    expect(msgs.map(m => m.role)).toEqual(['user', 'assistant'])
+    expect(msgs[1]).toMatchObject({finishReason: 'error'})
+    expect(msgs[1]!.content).toMatch(/server restarted/i)
+    expect(useChatStore.getState().streams[threadId]).toBeUndefined()
+  })
+
+  it('spends one retry per turn: a turn whose create was retried is not re-sent when its stream is cut short', async () => {
+    vi.mocked(chatApi.streamChatMessage)
+      .mockRejectedValueOnce(new ApiError('Service Unavailable', 503, 'SERVER_RESTARTING'))
+      .mockResolvedValueOnce('sid')
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+
+    vi.useFakeTimers()
+    await act(async () => {
+      result.current.handleSend('hello', [])
+    })
+    await advance(3_100)
+    vi.useRealTimers()
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+
+    vi.useFakeTimers()
+    act(() => {
+      capturedCb!(restarting(callAt(1).clientStreamId!))
+    })
+    await advance(30_000)
+
+    expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2)
+    expect(useChatStore.getState().getMessages(threadId)[1]).toMatchObject({finishReason: 'error'})
+  })
+
+  it('a Stop during the wait keeps the partial answer and sends nothing', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {view, threadId, sid} = await sendAndListen('q')
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'partial'))
+    })
+
+    vi.useFakeTimers()
+    act(() => {
+      capturedCb!(restarting(sid))
+    })
+    act(() => {
+      view.result.current.handleCancelStream()
+    })
+    await advance(30_000)
+
+    expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().getMessages(threadId)[1]).toMatchObject({
+      content: 'partial',
+      finishReason: 'interrupted',
+    })
+    expect(useChatStore.getState().streams[threadId]).toBeUndefined()
+  })
+
+  it('leaves a turn that proposed a fix to the user: the error bubble, no automatic resend', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {threadId, sid} = await sendAndListen('fix it')
+    act(() => {
+      capturedCb!({
+        name: 'chat:event',
+        data: {streamId: sid, type: 'fix_proposal', data: {proposalId: 'p1', ruleId: 'r1', summary: 'Rename'}},
+      })
+    })
+
+    vi.useFakeTimers()
+    act(() => {
+      capturedCb!(restarting(sid))
+    })
+    await advance(30_000)
+
+    expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().getMessages(threadId)[1]).toMatchObject({finishReason: 'error'})
   })
 })

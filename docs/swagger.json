@@ -119,7 +119,7 @@
         },
         "/api/admin/migration/start": {
             "post": {
-                "description": "Copies flows, settings and chat conversations from a legacy filesystem-backed server's data directory (PAD_DATA_DIR) into the database (admin only, cloud mode). Idempotent and non-blocking; the status result lists what is not migrated. Users are not migrated, so flows whose recorded owner is absent here are assigned to the admin who starts the run (reported as FlowsAdopted).",
+                "description": "Copies flows, settings and chat conversations from a legacy filesystem-backed server's data directory (PAD_DATA_DIR) into the database (admin only, deployments with a server store). Idempotent and non-blocking; the status result lists what is not migrated. Users are not migrated, so flows whose recorded owner is absent here are assigned to the admin who starts the run (reported as FlowsAdopted).",
                 "produces": [
                     "application/json"
                 ],
@@ -147,7 +147,7 @@
                         }
                     },
                     "409": {
-                        "description": "Conflict",
+                        "description": "A migration is already running (on any replica)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -156,7 +156,7 @@
                         }
                     },
                     "503": {
-                        "description": "Migration not configured",
+                        "description": "Migration not configured, or its cross-replica lock is unavailable (try again)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3276,7 +3276,7 @@
         },
         "/api/chat/fix-decision": {
             "post": {
-                "description": "Delivers the user's approve/decline for an apply_fix proposal pending in one of the caller's chat streams. First decision wins; unknown or already-decided proposals return 404.",
+                "description": "Approval decision: delivers the user's approve/decline (with per-item opt-outs for a batch) for a tool request — a fix_proposal event — pending in one of the caller's chat streams. The stream must be the caller's, and a scoped API token must hold the scope the tool requires (write for the fix tools). First decision wins; unknown or already-decided proposals return 404.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3286,7 +3286,7 @@
                 "tags": [
                     "chat"
                 ],
-                "summary": "Respond to a fix approval prompt",
+                "summary": "Respond to an approval prompt",
                 "parameters": [
                     {
                         "description": "request",
@@ -3324,6 +3324,12 @@
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "403": {
+                        "description": "Not the stream's owner (code STREAM_NOT_FOUND), or a token without the scope the tool requires",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "404": {
@@ -3392,7 +3398,7 @@
         },
         "/api/chat/preview-context": {
             "post": {
-                "description": "Returns a preview of the context that will be sent to the AI provider: the system prompt, the context text, the user message, an estimate of their tokens and the model's context window. The model resolves as the turn's would: for provider azure-foundry a model registry id the caller cannot use is refused with 400 and code MODEL_NOT_AVAILABLE.",
+                "description": "Returns a preview of the context that will be sent to the AI provider: the system prompt, the context text, the user message, an estimate of their tokens and the model's context window. The model and the provider resolve as the turn's would: for provider azure-foundry a model registry id the caller cannot use is refused with 400 and code MODEL_NOT_AVAILABLE; a provider no spec describes with 400 PROVIDER_UNKNOWN; one the provider policy refuses (disabled in the deployment, or off the flow's organisation's allowed-provider list) with 400 PROVIDER_NOT_ALLOWED.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3422,7 +3428,7 @@
                         }
                     },
                     "400": {
-                        "description": "Bad Request (code MODEL_NOT_AVAILABLE: the Azure AI Foundry model is not available to the caller)",
+                        "description": "Bad Request: malformed body, code MODEL_NOT_AVAILABLE (the Azure AI Foundry model is not available to the caller), PROVIDER_UNKNOWN (no provider spec describes the id) or PROVIDER_NOT_ALLOWED (the provider policy refused it)",
                         "schema": {
                             "$ref": "#/definitions/render.ErrorResponse"
                         }
@@ -3441,7 +3447,7 @@
         },
         "/api/chat/resume": {
             "post": {
-                "description": "Reconnect to an in-flight AI stream and catch up on missed chunks.",
+                "description": "Reconnect to an in-flight AI stream and catch up on missed chunks. A stream the server does not know — it restarted without the resume backplane, the stream finished more than two minutes ago, or it is another user's — answers code STREAM_NOT_FOUND: 403 with accounts (an unknown stream and another user's are not told apart), 404 without. The client reports such a stream as interrupted.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3476,6 +3482,18 @@
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "403": {
+                        "description": "Unknown stream, or another user's (code STREAM_NOT_FOUND; with accounts)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown stream (code STREAM_NOT_FOUND; without accounts)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "500": {
@@ -3547,7 +3565,7 @@
         },
         "/api/chat/stream": {
             "post": {
-                "description": "Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, MODEL_NOT_AVAILABLE, …). For provider azure-foundry the model is a model registry id (\"m/\u003centryId\u003e\"; \"\" for the server default; a pre-registry deployment, \"claude:\" or \"agent:\" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE.",
+                "description": "Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, AI_BUDGET_UNAVAILABLE, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, PROVIDER_UNKNOWN when the turn names a provider no spec describes, PROVIDER_NOT_ALLOWED when the provider policy refused it — disabled in the deployment or off the organisation's allowed-provider list (ADR 0028), MODEL_NOT_AVAILABLE, SERVER_RESTARTING when the server's stop ended the stream, …). A provider id the registry does not know is refused before any stream starts with 400 and code PROVIDER_UNKNOWN. For provider azure-foundry the model is a model registry id (\"m/\u003centryId\u003e\"; \"\" for the server default; a pre-registry deployment, \"claude:\" or \"agent:\" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE. While the server is stopping no stream starts: 503 with code SERVER_RESTARTING, a Retry-After header and details.retryAfterSeconds; the request may be sent again once after that wait.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3577,7 +3595,7 @@
                         }
                     },
                     "400": {
-                        "description": "Bad Request (code MODEL_NOT_AVAILABLE: the Azure AI Foundry model is not available to the caller)",
+                        "description": "Bad Request: malformed body, code MODEL_NOT_AVAILABLE (the Azure AI Foundry model is not available to the caller) or PROVIDER_UNKNOWN (no provider spec describes the id)",
                         "schema": {
                             "$ref": "#/definitions/render.ErrorResponse"
                         }
@@ -3595,6 +3613,12 @@
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "503": {
+                        "description": "The server is restarting (code SERVER_RESTARTING; Retry-After and details.retryAfterSeconds say when to send it again)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -3794,7 +3818,7 @@
         },
         "/api/events": {
             "get": {
-                "description": "Long-lived SSE channel for analysis, chat, and collaboration events. Chunks stream incrementally; reconnect with Last-Event-ID to resume.",
+                "description": "Long-lived SSE channel for analysis, chat, and collaboration events. Chunks stream incrementally; reconnect with Last-Event-ID to resume. While the server is stopping a new stream is refused with 503 and code SERVER_RESTARTING (Retry-After); one already open stays open until the server has delivered the chat streams' terminal events.",
                 "produces": [
                     "text/event-stream"
                 ],
@@ -3807,6 +3831,12 @@
                         "description": "Event stream",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "The server is restarting (code SERVER_RESTARTING; reconnect after Retry-After), or too many connections",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -5832,7 +5862,7 @@
         },
         "/api/health": {
             "get": {
-                "description": "Returns 200 when downstream dependencies (DB) are reachable, 503 otherwise.",
+                "description": "Returns 200 when downstream dependencies (DB) are reachable, 503 otherwise. While the server is stopping it answers 503 {\"status\":\"draining\"} from the first probe on, whatever its dependencies say.",
                 "produces": [
                     "application/json"
                 ],
@@ -5851,7 +5881,7 @@
                         }
                     },
                     "503": {
-                        "description": "Service Unavailable",
+                        "description": "Service Unavailable (status draining while the server stops)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5864,7 +5894,7 @@
         },
         "/api/integrations/ci": {
             "post": {
-                "description": "Analyzes a stored flow for a CI runner. Authenticated by an HMAC-SHA256 of \"\u003cX-Baki-Timestamp\u003e.\" + body under PAD_CI_WEBHOOK_SECRET, sent as X-Baki-Signature: sha256=\u003chex\u003e; the timestamp must be within 5 minutes. Body: {flowId, failOn, format}. failOn is error (default), warning, info or none; findings of preview rules never fail the gate and are counted in `preview`. format \"summary\" (default) returns {flowId, flowName, passed, gate, errors, warnings, info, preview}, \"report\" adds the findings, \"sarif\" returns the SARIF 2.1.0 document instead (application/sarif+json).",
+                "description": "Analyzes a stored flow for a CI runner. Authenticated by an HMAC-SHA256 of \"\u003cX-Baki-Timestamp\u003e.\" + body, sent as X-Baki-Signature: sha256=\u003chex\u003e; the timestamp must be within 5 minutes. The key is an organisation CI credential (baki_ci_\u003ckeyId\u003e_\u003csecret\u003e, minted under /api/orgs/{id}/ci-credentials; send X-Baki-Key-Id: \u003ckeyId\u003e), which reaches that organisation's flows only, or the deprecated deployment-wide PAD_CI_WEBHOOK_SECRET (answered with Deprecation and Link headers where organisations exist). Instead of a signature, Authorization: Bearer \u003cAPI token\u003e with the ci scope reaches the flows the token's user can read, an organisation's flow only when the user is a member of it; an unscoped token or one without ci is a 401, and another user's flow is a 404 like an unknown one. Body: {flowId, failOn, format, deliveryId}. failOn is error (default), warning, info or none; findings of preview rules never fail the gate and are counted in `preview`. format \"summary\" (default) returns {flowId, flowName, passed, gate, errors, warnings, info, preview}, \"report\" adds the findings, \"sarif\" returns the SARIF 2.1.0 document instead (application/sarif+json); any other format is a 400. deliveryId (16 to 128 characters of A-Z, a-z, 0-9, - and _; bakicli sends 128 random bits) makes the call run once per key: a call whose key sent the same deliveryId before is a 409 CI_REPLAYED and runs nothing. It is optional for now.",
                 "consumes": [
                     "application/json"
                 ],
@@ -5878,7 +5908,31 @@
                 "summary": "CI webhook",
                 "parameters": [
                     {
-                        "description": "{flowId, failOn, format}",
+                        "type": "string",
+                        "description": "sha256=\u003chex HMAC-SHA256 of timestamp.body\u003e; required without Authorization",
+                        "name": "X-Baki-Signature",
+                        "in": "header"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Unix seconds; required with X-Baki-Signature",
+                        "name": "X-Baki-Timestamp",
+                        "in": "header"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Key id of the organisation CI credential",
+                        "name": "X-Baki-Key-Id",
+                        "in": "header"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bearer \u003cAPI token with the ci scope\u003e, instead of a signature",
+                        "name": "Authorization",
+                        "in": "header"
+                    },
+                    {
+                        "description": "{flowId, failOn, format, deliveryId}",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -5896,7 +5950,7 @@
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Bad Request (no flowId, unknown format, malformed deliveryId)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5905,7 +5959,7 @@
                         }
                     },
                     "401": {
-                        "description": "Missing or invalid signature or timestamp",
+                        "description": "Missing or invalid signature, key, timestamp or API token",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5914,7 +5968,16 @@
                         }
                     },
                     "404": {
-                        "description": "Flow not found",
+                        "description": "Flow not found (or outside what the credential or token reaches)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "CI_REPLAYED: this key already sent the deliveryId",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5941,7 +6004,7 @@
                         }
                     },
                     "503": {
-                        "description": "PAD_CI_WEBHOOK_SECRET not set",
+                        "description": "Not configured (no accounts and no PAD_CI_WEBHOOK_SECRET), or no server store",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -6020,12 +6083,9 @@
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Malformed body, or a provider id no spec describes (PROVIDER_UNKNOWN)",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "500": {
@@ -6066,18 +6126,18 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "boolean"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
+                        "description": "{has: bool}",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
-                                "type": "string"
+                                "type": "boolean"
                             }
+                        }
+                    },
+                    "400": {
+                        "description": "Malformed body, or a provider id no spec describes (PROVIDER_UNKNOWN)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "500": {
@@ -6127,12 +6187,9 @@
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Malformed body, a provider id no spec describes (PROVIDER_UNKNOWN), or a provider configured through its own routes rather than a bare key (USE_PROVIDER_CONFIG: azure-foundry, local)",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "500": {
@@ -6943,6 +7000,7 @@
         },
         "/api/orgs/{id}/channels": {
             "get": {
+                "description": "Every channel of the org, to its members. url is redacted to \"host/…\" (no scheme) for everyone, admins included; hasSecret (and hasToken on jira) says whether a secret is set (never returned). events lists what the channel receives; unreadable marks a channel whose stored URL cannot be decrypted (listed without it: enter it again or remove the channel).",
                 "produces": [
                     "application/json"
                 ],
@@ -6963,13 +7021,16 @@
                     "200": {
                         "description": "Channels",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/api.channelOut"
+                            }
                         }
                     }
                 }
             },
             "post": {
+                "description": "Create: kind (webhook, slack, teams, teams-workflow, jira, email; GET .../channels/options lists what this deployment delivers) and its fields are required: url for every kind but email; jira adds email, token and project; email takes recipients, member user ids (members with a verified address only, never an address). Edit (id of a saved channel): every omitted field keeps its stored value; secret or token \"\" keeps it and clear [\"secret\"] removes the secret; url \"\" or the url the list shows (with or without urlUnchanged true) keeps the url; urlUnchanged with another url, or any other url containing the redaction marker \"…\", is refused. events chooses the event types the channel receives (drift, health_regression, new_rules; the test always). A field the kind does not have (a secret on teams or teams-workflow) or a target the deployment refuses (an internal address, a host off PAD_NOTIFY_ALLOWED_HOSTS) is a 400 INVALID_CHANNEL with details.field.",
                 "consumes": [
                     "application/json"
                 ],
@@ -6979,7 +7040,7 @@
                 "tags": [
                     "org"
                 ],
-                "summary": "Create/update an org notification channel",
+                "summary": "Create or update an org notification channel",
                 "parameters": [
                     {
                         "type": "string",
@@ -6993,8 +7054,42 @@
                     "200": {
                         "description": "Channel",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/api.channelOut"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid channel",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/orgs/{id}/channels/options": {
+            "get": {
+                "description": "To org admins: the channel kinds this deployment delivers (email only with mail settings), the events a channel can subscribe to and the default set, and whether channel hosts are restricted (PAD_NOTIFY_ALLOWED_HOSTS). The host list itself is included only when the operator set PAD_NOTIFY_ALLOWED_HOSTS_VISIBLE, since it may name other customers' hosts.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "org"
+                ],
+                "summary": "Org notification channel options",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Org ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Options",
+                        "schema": {
+                            "$ref": "#/definitions/api.channelOptionsOut"
                         }
                     }
                 }
@@ -7029,10 +7124,7 @@
                     "200": {
                         "description": "Deleted",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/api.statusResponse"
                         }
                     }
                 }
@@ -7040,6 +7132,7 @@
         },
         "/api/orgs/{id}/channels/{channelId}/test": {
             "post": {
+                "description": "Delivers a synthetic \"test\" event to the channel and waits for the answer (up to 15 s; an email channel answers once its messages are queued). A failed delivery is a 502 CHANNEL_DELIVERY_FAILED whose details.reason says what failed (details.status: the endpoint's HTTP status); 503 CHANNEL_DELIVERIES_BUSY when the deliveries are saturated; a channel that no longer validates (an internal target, a host off PAD_NOTIFY_ALLOWED_HOSTS, no recipient still a member) is a 400 INVALID_CHANNEL, one whose stored URL cannot be decrypted a 400 CHANNEL_UNREADABLE, and neither is dialled.",
                 "produces": [
                     "application/json"
                 ],
@@ -7067,10 +7160,156 @@
                     "200": {
                         "description": "Delivered",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
+                            "$ref": "#/definitions/api.statusResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Delivery failed",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/orgs/{id}/ci-credentials": {
+            "get": {
+                "description": "Org admins only. Every credential, expired ones included until the retention sweep removes them 30 days after expiry; never the secret, only its last four characters (secretHint). expiresAt and lastUsedAt are null for never.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "org"
+                ],
+                "summary": "List an organisation's CI credentials",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Org ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Credentials, newest first",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/api.ciCredentialOut"
                             }
+                        }
+                    },
+                    "403": {
+                        "description": "Not an admin of the organisation",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Org admins only; API tokens are refused. Returns the credential string (baki_ci_\u003ckeyId\u003e_\u003csecret\u003e) once, in `credential`: give it to the CI runner as PAD_CI_WEBHOOK_SECRET for `bakicli report`. name is required (at most 100 characters); expiresInDays is 1 to 365, or left out for a credential that never expires. At most 10 unexpired credentials per organisation (409 CI_CREDENTIAL_LIMIT). The server must encrypt secrets at rest (503 CI_CREDENTIALS_UNAVAILABLE without PAD_ENCRYPTION_KEY). Supports Idempotency-Key; a retry gets the same answer, credential included.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "org"
+                ],
+                "summary": "Mint an organisation CI credential",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Org ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "{name, expiresInDays?}",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.createCICredentialRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "The credential, with the credential string shown once",
+                        "schema": {
+                            "$ref": "#/definitions/api.ciCredentialCreated"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid name or expiry",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Not an admin of the organisation, or an API token",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "CI_CREDENTIAL_LIMIT",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "CI_CREDENTIALS_UNAVAILABLE",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/orgs/{id}/ci-credentials/{credId}": {
+            "delete": {
+                "description": "Org admins only; API tokens are refused. The credential is deleted: a runner signing with it gets 401 from its next call on. To rotate, mint a new credential, update the CI secret, then revoke the old one.",
+                "tags": [
+                    "org"
+                ],
+                "summary": "Revoke an organisation CI credential",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Org ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Credential key id",
+                        "name": "credId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Revoked"
+                    },
+                    "403": {
+                        "description": "Not an admin of the organisation, or an API token",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "No such credential in this organisation",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -7165,6 +7404,7 @@
         },
         "/api/orgs/{id}/knowledge": {
             "get": {
+                "description": "The org's documents, newest first, each with its chunk counts: chunkCount, vectorIndexed (in the vector index at the deployment's width) and embeddingStranded (embedded under another embedding model than the caller's, so the caller's searches never return them; re-index converts them).",
                 "produces": [
                     "application/json"
                 ],
@@ -7214,7 +7454,7 @@
                         "required": true
                     },
                     {
-                        "description": "Optional. force=true re-indexes even when the corpus was indexed with a different embedding model (first request of a run only); cursor = the previous answer's nextCursor resumes the run after it",
+                        "description": "Optional. force=true re-indexes even when the corpus was indexed with a different embedding model (first request of a run only); cursor = the previous answer's nextCursor resumes the run after it; background=true runs the whole re-index as the knowledge_reembed job (202; no cursor), on the organisation's shared embedding credential only",
                         "name": "request",
                         "in": "body",
                         "schema": {
@@ -7224,13 +7464,22 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "Re-indexed this request's pages ({chunks, docs}); nextCursor (with truncated=true) means chunks remain — post again with {force, cursor: nextCursor}. Every page is committed as it completes, so a later failure keeps the earlier pages — a request that FAILS after committing pages answers its error code with details {nextCursor, chunks} to resume from",
+                        "description": "Re-indexed this request's pages ({chunks, docs}); nextCursor (with truncated=true) means chunks remain — post again with {force, cursor: nextCursor}. Every page is committed as it completes, so a later failure keeps the earlier pages — a request that FAILS after committing pages answers its error code with details {nextCursor, chunks} to resume from. Unforced, only the chunks not yet embedded under the caller's model are converted",
                         "schema": {
                             "$ref": "#/definitions/rag.ReindexResult"
                         }
                     },
+                    "202": {
+                        "description": "background=true: the knowledge_reembed job was started ({status: accepted, job}); its progress is the job's run state (pad_job_* metrics, the job_runs row) and the document list's embeddingStranded counts",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "400": {
-                        "description": "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body / cursor",
+                        "description": "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment, or a background run was asked for on a personal key), not allowed here (PROVIDER_NOT_ALLOWED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body / cursor",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -7239,7 +7488,7 @@
                         }
                     },
                     "409": {
-                        "description": "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to) or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)",
+                        "description": "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to) or another upload/re-index of this org — or a background re-index on any replica — is in flight (KNOWLEDGE_BUSY)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -7266,7 +7515,7 @@
                         }
                     },
                     "503": {
-                        "description": "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE) or the budget could not be checked (BUDGET_UNAVAILABLE)",
+                        "description": "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE), the budget could not be checked (BUDGET_UNAVAILABLE) or the background job could not be started (KNOWLEDGE_JOB_UNAVAILABLE)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -7317,7 +7566,7 @@
                         }
                     },
                     "400": {
-                        "description": "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)",
+                        "description": "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), not allowed here (PROVIDER_NOT_ALLOWED: disabled in the deployment or off the organisation's allowed-provider list), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -8391,7 +8640,7 @@
         },
         "/api/orgs/{id}/providers/azure-foundry/test": {
             "post": {
-                "description": "POST /api/providers/azure-foundry/test for the organisation's registry, on the organisation's credentials only (never the caller's own): {connectionId}, {config} (a draft; with connectionId the stored secret carries over), optional model ({id} or a draft {kind, deployment}) — every outcome a 200 service.AzureTestResult {ok, latencyMs, error?, code?}, a 4xx only for an invalid request. A resource test makes no model call; a model test one tiny request Azure bills to the organisation's resource (baki's daily budget does not count Azure usage); an agent test only looks the agent up. Deprecated form (one release): an EMPTY body tests the organisation's resource \"default\" (else its first) as a resource — an authenticated probe, no model call — and answers the legacy models.ProviderTestResult {ok, latencyMs, error?} (no code). Org admins only. Rides the chat rate-limit bucket; audited (providers.test).",
+                "description": "POST /api/providers/azure-foundry/test for the organisation's registry, on the organisation's credentials only (never the caller's own): {connectionId}, {config} (a draft; with connectionId the stored secret carries over), optional model ({id} or a draft {kind, deployment}) — every outcome a 200 service.AzureTestResult {ok, latencyMs, error?, code?}, a 4xx only for an invalid request. A resource test makes no model call; a model test one tiny request Azure bills to the organisation's resource (baki's daily budget does not count Azure usage); an agent test only looks the agent up. Before any probe the provider policy is asked for the organisation (ADR 0028): code PROVIDER_NOT_ALLOWED when azure-foundry is disabled in this deployment or off the organisation's allowed-provider list, PROVIDER_POLICY_UNAVAILABLE when the organisation's settings could not be read; a model test is also gated on the organisation's daily budget (AI_BUDGET_EXCEEDED / AI_BUDGET_UNAVAILABLE). Deprecated form (one release): an EMPTY body tests the organisation's resource \"default\" (else its first) as a resource — an authenticated probe, no model call — and answers the legacy models.ProviderTestResult {ok, latencyMs, error?, code?} (code: PROVIDER_UNKNOWN, PROVIDER_NOT_ALLOWED, PROVIDER_POLICY_UNAVAILABLE or the budget codes). Org admins only. Rides the chat rate-limit bucket; audited (providers.test).",
                 "consumes": [
                     "application/json"
                 ],
@@ -9278,6 +9527,40 @@
                 }
             }
         },
+        "/api/providers/catalog": {
+            "get": {
+                "description": "Lists every registered AI provider of this deployment's profile in display order, configured or not — the generic settings panel renders from it (ADR 0025). Each entry carries id, name, authType (api_key|oauth), modes[] (the deployment profiles it is offered in), caps[] (chat, stream, embeddings, tools, reasoning, model_aliases, live_listing, org_shared, prompt_cache), credential {kind: api_key|oauth_device|document|none, fields[] {name, label, type: text|secret|url|select|number|json, required, placeholder?, help?, options? [{value, label}]}, helpUrl?}, endpoints {save?, test?, start?, poll?, revoke?, user?} (the routes that manage the credential), configured (the caller holds a credential, or — with orgId, as /api/providers/list — their organisation shares one), color?, icon?, pricing (catalog|free|unpriced) and configurable (the credential can be managed through endpoints; false for a document provider without a panel: \"configured on the server\"). Network-free: no live model listing.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Provider catalogue",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Organisation whose shared credentials count as configured",
+                        "name": "orgId",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.providerCatalogOut"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/providers/copilot/poll": {
             "post": {
                 "description": "Polls GitHub for the status of the Copilot device flow authentication.",
@@ -9592,8 +9875,7 @@
                         "schema": {
                             "type": "array",
                             "items": {
-                                "type": "object",
-                                "additionalProperties": true
+                                "$ref": "#/definitions/pad-core_models.ProviderInfo"
                             }
                         }
                     },
@@ -9702,7 +9984,7 @@
         },
         "/api/providers/test": {
             "post": {
-                "description": "Tests the connection to a specific AI provider. For azure-foundry this form is deprecated (one release): it tests the caller's resource \"default\" (else their first resource) as a resource — an authenticated probe, no model call; use POST /api/providers/azure-foundry/test to test one resource or model.",
+                "description": "Tests the connection to a specific AI provider with one tiny billed chat call per candidate model. Every outcome is a 200 {ok, latencyMs, error?, code?}; code names a refusal the client branches on: PROVIDER_UNKNOWN (no such provider), PROVIDER_NOT_ALLOWED (the provider policy refused it: disabled in this deployment — this route tests the caller's own credential, so the organisation's allowed-provider list applies to the org test route, POST /api/orgs/{id}/providers/azure-foundry/test, instead), AI_BUDGET_EXCEEDED / AI_BUDGET_UNAVAILABLE (the daily AI budget gates the test like any other call — nothing was sent). For azure-foundry this form is deprecated (one release): it tests the caller's resource \"default\" (else their first resource) as a resource — an authenticated probe, no model call; use POST /api/providers/azure-foundry/test to test one resource or model.",
                 "consumes": [
                     "application/json"
                 ],
@@ -10002,7 +10284,7 @@
                 }
             },
             "post": {
-                "description": "handleUpdateOrgSettings overwrites org-wide settings. Writing requires org admin.",
+                "description": "handleUpdateOrgSettings overwrites org-wide settings. Writing requires org admin. The organisation's allowed-provider list (ai.allowedProviders, ADR 0028) is replaced only when the body names it — an explicit [] clears it (every provider allowed); a body without the field keeps the stored list. Each listed id must be a registered provider.",
                 "consumes": [
                     "application/json"
                 ],
@@ -10029,6 +10311,12 @@
                             "type": "object",
                             "additionalProperties": true
                         }
+                    },
+                    "400": {
+                        "description": "Malformed body, or an id in ai.allowedProviders that no provider spec describes (PROVIDER_UNKNOWN)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
                     }
                 }
             }
@@ -10047,8 +10335,7 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/api.wsTicketResponse"
                         }
                     },
                     "401": {
@@ -10097,7 +10384,7 @@
         },
         "/readyz": {
             "get": {
-                "description": "Returns 200 when downstream dependencies (DB) are reachable, 503 otherwise.",
+                "description": "Returns 200 when downstream dependencies (DB) are reachable, 503 otherwise. While the server is stopping it answers 503 {\"status\":\"draining\"} from the first probe on, whatever its dependencies say.",
                 "produces": [
                     "application/json"
                 ],
@@ -10116,7 +10403,7 @@
                         }
                     },
                     "503": {
-                        "description": "Service Unavailable",
+                        "description": "Service Unavailable (status draining while the server stops)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -10129,7 +10416,7 @@
         },
         "/ws": {
             "get": {
-                "description": "Authenticated WebSocket for collaborative presence and live updates; obtain a one-time ticket via /api/ws-ticket.",
+                "description": "Authenticated WebSocket for collaborative presence and live updates; obtain a one-time ticket via /api/ws-ticket. While the server is stopping the upgrade is refused with 503 and code SERVER_RESTARTING (Retry-After) before the ticket is redeemed, so the reconnect may present it again.",
                 "produces": [
                     "application/json"
                 ],
@@ -10142,6 +10429,12 @@
                         "description": "Switching Protocols",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "The server is restarting (code SERVER_RESTARTING; reconnect after Retry-After)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -10266,6 +10559,155 @@
                 }
             }
         },
+        "api.channelOptionsOut": {
+            "type": "object",
+            "properties": {
+                "allowedHosts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "defaultEvents": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "hostsRestricted": {
+                    "type": "boolean"
+                },
+                "kinds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "api.channelOut": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "email": {
+                    "description": "Jira: the account's email and the project key; hasToken whether the API token is set (jira channels only).",
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "events": {
+                    "description": "The event types the channel receives (the default set when it never chose).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "hasSecret": {
+                    "type": "boolean"
+                },
+                "hasToken": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "recipients": {
+                    "description": "Email: the members (user ids) who receive it.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "unreadable": {
+                    "description": "The stored URL or secrets cannot be decrypted (the encryption key changed): enter the URL again or remove it.",
+                    "type": "boolean"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ciCredentialCreated": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdBy": {
+                    "type": "string"
+                },
+                "createdByName": {
+                    "description": "CreatedByName is the minter's display name or email; it and createdBy are \"\" once the account is gone.",
+                    "type": "string"
+                },
+                "credential": {
+                    "type": "string"
+                },
+                "expiresAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastUsedAt": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "secretHint": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ciCredentialOut": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdBy": {
+                    "type": "string"
+                },
+                "createdByName": {
+                    "description": "CreatedByName is the minter's display name or email; it and createdBy are \"\" once the account is gone.",
+                    "type": "string"
+                },
+                "expiresAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastUsedAt": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "secretHint": {
+                    "type": "string"
+                }
+            }
+        },
         "api.conversationResponse": {
             "type": "object",
             "properties": {
@@ -10278,6 +10720,18 @@
                     "items": {
                         "$ref": "#/definitions/pad-core_models.ChatMessage"
                     }
+                }
+            }
+        },
+        "api.createCICredentialRequest": {
+            "type": "object",
+            "properties": {
+                "expiresInDays": {
+                    "description": "ExpiresInDays is 1..365; absent, null or 0: the credential never expires.",
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         },
@@ -10298,6 +10752,9 @@
         "api.knowledgeReindexRequest": {
             "type": "object",
             "properties": {
+                "background": {
+                    "type": "boolean"
+                },
                 "cursor": {
                     "$ref": "#/definitions/interfaces.KnowledgeChunkCursor"
                 },
@@ -10382,6 +10839,17 @@
                 }
             }
         },
+        "api.providerCatalogOut": {
+            "type": "object",
+            "properties": {
+                "providers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/pad-core_models.ProviderCatalogEntry"
+                    }
+                }
+            }
+        },
         "api.roleCounts": {
             "type": "object",
             "properties": {
@@ -10425,6 +10893,17 @@
                 },
                 "unverified": {
                     "type": "integer"
+                }
+            }
+        },
+        "api.wsTicketResponse": {
+            "type": "object",
+            "properties": {
+                "expiresAt": {
+                    "type": "string"
+                },
+                "ticket": {
+                    "type": "string"
                 }
             }
         },
@@ -10577,6 +11056,64 @@
                 }
             }
         },
+        "pad-core_models.CredentialField": {
+            "type": "object",
+            "properties": {
+                "help": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "options": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/pad-core_models.CredentialOption"
+                    }
+                },
+                "placeholder": {
+                    "type": "string"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "pad-core_models.CredentialOption": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "pad-core_models.CredentialSchema": {
+            "type": "object",
+            "properties": {
+                "fields": {
+                    "description": "Fields are the generic form's inputs; empty (never null) for a flow that needs none.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/pad-core_models.CredentialField"
+                    }
+                },
+                "helpUrl": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                }
+            }
+        },
         "pad-core_models.FixItemSnapshot": {
             "type": "object",
             "properties": {
@@ -10584,6 +11121,9 @@
                     "type": "string"
                 },
                 "fixType": {
+                    "type": "string"
+                },
+                "id": {
                     "type": "string"
                 },
                 "line": {
@@ -10624,6 +11164,9 @@
                 "message": {
                     "type": "string"
                 },
+                "previewKind": {
+                    "type": "string"
+                },
                 "proposalId": {
                     "type": "string"
                 },
@@ -10635,6 +11178,226 @@
                 },
                 "summary": {
                     "type": "string"
+                },
+                "tool": {
+                    "type": "string"
+                }
+            }
+        },
+        "pad-core_models.ModelDetail": {
+            "type": "object",
+            "properties": {
+                "aliases": {
+                    "description": "Aliases are the pre-registry ids the entry answers for (\"gpt-4.1\", \"claude:x\", \"agent:y\").",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "connectionId": {
+                    "description": "ConnectionID / ConnectionName name the entry's resource.",
+                    "type": "string"
+                },
+                "connectionName": {
+                    "type": "string"
+                },
+                "contextLimit": {
+                    "type": "integer"
+                },
+                "description": {
+                    "description": "Description is shown under the name in the picker; admin-written, plain text only.",
+                    "type": "string"
+                },
+                "displayName": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "inputCostPerM": {
+                    "type": "number"
+                },
+                "isDefault": {
+                    "description": "IsDefault marks the server default for new chats; IsOrgDefault the organisation's default.",
+                    "type": "boolean"
+                },
+                "isOrgDefault": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "The fields below describe an Azure AI Foundry registry entry (ID\n\"m/\u003centryId\u003e\"); catalogue models leave them empty, embedding entries are\nnever listed.\nKind is the entry's kind: \"chat\", \"claude\" or \"agent\".",
+                    "type": "string"
+                },
+                "orgId": {
+                    "type": "string"
+                },
+                "orgName": {
+                    "type": "string"
+                },
+                "outputCostPerM": {
+                    "type": "number"
+                },
+                "purpose": {
+                    "description": "Purpose is a preset key (general, documentation, fixes, review,\nrefactoring, testing) or \"custom\" with PurposeCustom's text; the picker\ngroups by it.",
+                    "type": "string"
+                },
+                "purposeCustom": {
+                    "type": "string"
+                },
+                "shared": {
+                    "description": "Shared marks an organisation's entry (not the caller's own); OrgID and OrgName name it.",
+                    "type": "boolean"
+                },
+                "status": {
+                    "description": "Status is \"ready\" or why the entry cannot be used right now\n(needs_credentials, unreadable, invalid_config, unsupported);\nStatusReason carries the copy.",
+                    "type": "string"
+                },
+                "statusReason": {
+                    "type": "string"
+                },
+                "supportsTools": {
+                    "description": "SupportsTools reports whether the provider family behind this model\nsupports the agentic tool loop. Provider-level granularity: mixed\nfamilies (GitHub Models) report true — the runtime degrades per model\n(ErrToolsUnsupported).",
+                    "type": "boolean"
+                }
+            }
+        },
+        "pad-core_models.ProviderCatalogEntry": {
+            "type": "object",
+            "properties": {
+                "authType": {
+                    "type": "string"
+                },
+                "caps": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "color": {
+                    "type": "string"
+                },
+                "configurable": {
+                    "description": "Configurable: the credential can be managed through Endpoints (false for a document provider the client\nhas no panel for: \"configured on the server\").",
+                    "type": "boolean"
+                },
+                "configured": {
+                    "description": "Configured: the caller holds a credential of their own, or their organisation shares one.",
+                    "type": "boolean"
+                },
+                "credential": {
+                    "$ref": "#/definitions/pad-core_models.CredentialSchema"
+                },
+                "endpoints": {
+                    "$ref": "#/definitions/pad-core_models.ProviderEndpoints"
+                },
+                "icon": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "modes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "pricing": {
+                    "type": "string"
+                }
+            }
+        },
+        "pad-core_models.ProviderEndpoints": {
+            "type": "object",
+            "properties": {
+                "poll": {
+                    "type": "string"
+                },
+                "revoke": {
+                    "type": "string"
+                },
+                "save": {
+                    "type": "string"
+                },
+                "start": {
+                    "type": "string"
+                },
+                "test": {
+                    "type": "string"
+                },
+                "user": {
+                    "type": "string"
+                }
+            }
+        },
+        "pad-core_models.ProviderInfo": {
+            "type": "object",
+            "properties": {
+                "authType": {
+                    "type": "string"
+                },
+                "caps": {
+                    "description": "The provider spec on the wire (ADR 0025), all optional so an older server's listing still parses: what the\nprovider can do, the deployment profiles it is offered in, how its credential is entered, where its prices\ncome from, the generic panel's accent and glyph, and whether the caller can manage the credential through\nthe catalogue's routes.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "color": {
+                    "type": "string"
+                },
+                "configurable": {
+                    "type": "boolean"
+                },
+                "configured": {
+                    "type": "boolean"
+                },
+                "contextLimit": {
+                    "type": "integer"
+                },
+                "credential": {
+                    "$ref": "#/definitions/pad-core_models.CredentialSchema"
+                },
+                "defaultModel": {
+                    "type": "string"
+                },
+                "endpoints": {
+                    "$ref": "#/definitions/pad-core_models.ProviderEndpoints"
+                },
+                "icon": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/pad-core_models.ModelDetail"
+                    }
+                },
+                "modes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "pricing": {
+                    "type": "string"
+                },
+                "shared": {
+                    "description": "Shared is true when the caller has no credential of their own and the listing runs on the organisation's shared one.",
+                    "type": "boolean"
+                },
+                "suggestDiscovery": {
+                    "description": "SuggestDiscovery (Azure AI Foundry) offers the \"your project has models\nyou haven't added\" prompt: the caller's migrated resource can list its\nproject and the prompt was not dismissed.",
+                    "type": "boolean"
                 }
             }
         },

@@ -13,7 +13,9 @@ import (
 	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/drain"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -112,6 +114,14 @@ type EventManager struct {
 
 	// roster resolves EmitToOrg's audience; nil (no server store) reaches no one.
 	roster OrgRoster
+
+	// revokers holds, per access-token id, a channel for each stream opened with that token: Revoke closes them, so
+	// a logout or a deleted API token ends its streams at once instead of at the 2-minute blacklist check.
+	revokeMu sync.Mutex
+	revokers map[string]map[chan struct{}]struct{}
+
+	// draining is the server's draining state; nil is the process's (drain.Process), tests set their own.
+	draining *drain.State
 }
 
 // dropWarnInterval is the minimum gap between two "send buffer full" warnings; the drops in
@@ -150,6 +160,60 @@ func (m *EventManager) SetOriginChecker(fn func(string) bool) {
 // JWT mode, else per proxy-aware client IP — proxied clients don't collapse onto one shared bucket.
 func (m *EventManager) SetClientKeyFunc(fn func(*http.Request) string) {
 	m.clientKey = fn
+}
+
+// Revoke ends, at once, the streams opened with the access token jti (a session's at logout, auth.PATJTI of a
+// deleted API token) and returns how many. The periodic blacklist check stays: it covers a revocation made on
+// another replica.
+func (m *EventManager) Revoke(jti string) int {
+	m.revokeMu.Lock()
+	defer m.revokeMu.Unlock()
+	streams := m.revokers[jti]
+	for kick := range streams {
+		close(kick)
+	}
+	delete(m.revokers, jti)
+	return len(streams)
+}
+
+// SubscribeRevocations ends a revoked token's streams at once (events.AccessRevoked: a logout, a deleted API token).
+// Async, after the revocation committed; inline when the bus is saturated, as it only closes channels.
+func (m *EventManager) SubscribeRevocations(bus *eventbus.Bus) {
+	eventbus.Subscribe(bus, eventbus.Async, "sse-access-revoked", func(_ context.Context, e events.AccessRevoked) {
+		m.Revoke(e.JTI)
+	}, eventbus.InlineWhenSaturated())
+}
+
+// watchRevocation registers a stream of the token jti; the returned channel closes when Revoke ends it, and stop
+// unregisters it.
+func (m *EventManager) watchRevocation(jti string) (revoked <-chan struct{}, stop func()) {
+	kick := make(chan struct{})
+	m.revokeMu.Lock()
+	if m.revokers == nil {
+		m.revokers = map[string]map[chan struct{}]struct{}{}
+	}
+	if m.revokers[jti] == nil {
+		m.revokers[jti] = map[chan struct{}]struct{}{}
+	}
+	m.revokers[jti][kick] = struct{}{}
+	m.revokeMu.Unlock()
+	return kick, func() {
+		m.revokeMu.Lock()
+		defer m.revokeMu.Unlock()
+		if streams := m.revokers[jti]; streams != nil {
+			delete(streams, kick)
+			if len(streams) == 0 {
+				delete(m.revokers, jti)
+			}
+		}
+	}
+}
+
+// revocationWatchers is how many open streams the token jti has (tests).
+func (m *EventManager) revocationWatchers(jti string) int {
+	m.revokeMu.Lock()
+	defer m.revokeMu.Unlock()
+	return len(m.revokers[jti])
 }
 
 // SetRevocationChecker injects the auth manager's blacklist check so the SSE loop can periodically
@@ -437,14 +501,40 @@ func lightweightEvent(ev Event) (Event, bool) {
 	return Event{Name: ev.Name, Data: service.FlowLoadedSummaryOf(doc), TargetUser: ev.TargetUser, all: ev.all}, true
 }
 
+// sseShutdownFlushTimeout bounds the final write of the frames still queued when the server closes SSE: a
+// stalled client must not hold the stop.
+const sseShutdownFlushTimeout = time.Second
+
+// flushQueued writes the frames already queued on ch, under one sseShutdownFlushTimeout deadline, and stops at
+// the first failed write; frames offered after it started are left (the stream is ending).
+func flushQueued(w http.ResponseWriter, flusher http.Flusher, rc *http.ResponseController, ch chan []byte, queuedBytes *atomic.Int64) {
+	_ = rc.SetWriteDeadline(time.Now().Add(sseShutdownFlushTimeout))
+	for n := len(ch); n > 0; n-- {
+		frame := <-ch
+		if queuedBytes != nil {
+			queuedBytes.Add(-int64(len(frame)))
+		}
+		if _, err := w.Write(frame); err != nil {
+			return
+		}
+	}
+	flusher.Flush()
+}
+
 // HandleEvents is the HTTP handler for the SSE endpoint.
 // @Summary      Server-sent events stream
-// @Description  Long-lived SSE channel for analysis, chat, and collaboration events. Chunks stream incrementally; reconnect with Last-Event-ID to resume.
+// @Description  Long-lived SSE channel for analysis, chat, and collaboration events. Chunks stream incrementally; reconnect with Last-Event-ID to resume. While the server is stopping a new stream is refused with 503 and code SERVER_RESTARTING (Retry-After); one already open stays open until the server has delivered the chat streams' terminal events.
 // @Tags         realtime
 // @Produce      text/event-stream
 // @Success      200 {string} string "Event stream"
+// @Failure      503 {object} render.ErrorResponse "The server is restarting (code SERVER_RESTARTING; reconnect after Retry-After), or too many connections"
 // @Router       /api/events [get]
 func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
+	// A stopping server takes no new stream: the client's reconnect reaches another replica, or this one restarted.
+	if m.draining.Draining() {
+		drain.Refuse(w)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		render.Error(w, fmt.Errorf("streaming unsupported"), http.StatusInternalServerError)
@@ -498,7 +588,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			delete(m.sseConnCount, key)
 		}
 		m.clientsMu.Unlock()
-		metrics.SSEClientEnd()
+		sseClientEnd()
 	}()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -519,7 +609,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	metrics.SSEClientStart()
+	sseClientStart()
 
 	// Token JTI and expiry for periodic re-validation; empty in local mode.
 	jti := ""
@@ -545,9 +635,15 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	heartbeat := time.NewTicker(m.heartbeatTick())
 	defer heartbeat.Stop()
 
-	// Drop the stream once the access token is blacklisted. Checked on a slow
-	// ticker because it hits the shared blacklist store.
+	// Drop the stream once the access token is revoked: at once when this replica revokes it (Revoke), else when
+	// the blacklist says so, checked on a slow ticker because it hits the shared blacklist store.
 	var revokeC <-chan time.Time
+	var revoked <-chan struct{}
+	if jti != "" {
+		var stopWatching func()
+		revoked, stopWatching = m.watchRevocation(jti)
+		defer stopWatching()
+	}
 	if m.isRevoked != nil && jti != "" {
 		revokeTicker := time.NewTicker(2 * time.Minute)
 		defer revokeTicker.Stop()
@@ -568,6 +664,12 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-m.shutdownCh:
+			// The stop ends the chat streams before it closes SSE (ADR 0024): their terminal events may still be
+			// queued, and a select with both ready picks at random. Write what is queued first.
+			flushQueued(w, flusher, rc, ch, queuedBytes)
+			return
+		case <-revoked:
+			logger.Info("SSE: disconnecting client after token revoked", "jti", jti)
 			return
 		case <-revokeC:
 			if m.isRevoked(jti) {

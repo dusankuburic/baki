@@ -73,7 +73,7 @@ func TestSearchKnowledge_Pgvector_ServerSideRanking(t *testing.T) {
 		}
 	}
 
-	got, err := b.SearchKnowledge(ctx, orgID, []float32{1, 0, 0}, 3)
+	got, err := b.SearchKnowledge(ctx, orgID, []float32{1, 0, 0}, 3, "")
 	if err != nil {
 		t.Fatalf("SearchKnowledge: %v", err)
 	}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,6 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/errreport"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/storage"
@@ -57,13 +57,14 @@ func inFlightPricing(_ context.Context, p ai.Provider, _ string) ai.Pricing {
 	return p.PricePerMillionTokens()
 }
 
-// self is the calling stream (nil before registration); its own ledger entry is excluded.
+// self is the calling stream (nil before registration); its own ledger entry is excluded. Reads through the
+// turn's usage memo when the worker seeded one (ai.WithBudgetMemo), so the wrapper's hook costs no second read.
 func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, inflight float64, self *streamCtl) error {
-	return s.enforceBudgetMemo(ctx, nil, scope, orgID, inflight, self)
+	return s.enforceBudgetMemo(ctx, ai.BudgetMemoFrom(ctx), scope, orgID, inflight, self)
 }
 
-// enforceBudgetMemo is enforceBudget with a per-loop usage memo; the in-flight ledger covers its staleness gap.
-func (s *ChatService) enforceBudgetMemo(ctx context.Context, memo *turnBudgetUsage, scope, orgID string, inflight float64, self *streamCtl) error {
+// enforceBudgetMemo is enforceBudget with a per-turn usage memo; the in-flight ledger covers its staleness gap.
+func (s *ChatService) enforceBudgetMemo(ctx context.Context, memo *ai.BudgetMemo, scope, orgID string, inflight float64, self *streamCtl) error {
 	var spend inFlightSpend
 	if self != nil {
 		spend = self
@@ -90,7 +91,7 @@ func (s *ChatService) enforceTurnBudget(ctx context.Context, provider ai.Provide
 	return s.enforceBudget(ctx, scope, orgID, inflight, self)
 }
 
-func (s *ChatService) enforceTurnBudgetMemo(ctx context.Context, provider ai.Provider, memo *turnBudgetUsage, scope, orgID string, inflight float64, self *streamCtl) error {
+func (s *ChatService) enforceTurnBudgetMemo(ctx context.Context, provider ai.Provider, memo *ai.BudgetMemo, scope, orgID string, inflight float64, self *streamCtl) error {
 	if provider != nil && ai.UsesModelAliases(provider.ID()) {
 		return nil
 	}
@@ -157,6 +158,9 @@ var errStreamIDInUse = errors.New("clientStreamId already in use")
 // ErrTooManyChatStreams is returned when the caller's concurrent-stream cap is exceeded; exported so the HTTP layer maps it to a distinct code.
 var ErrTooManyChatStreams = errors.New("too many chat responses running at once")
 
+// ErrServerRestarting refuses a stream asked for once the server's stop has begun ending them (Shutdown).
+var ErrServerRestarting = errors.New("the server is restarting — try again in a moment")
+
 // convMutexStripes: per-conversation locks are striped for bounded memory, not exact-keyed.
 const convMutexStripes = 256
 
@@ -185,10 +189,14 @@ func (s *ChatService) reconstructAndPersistUserTurn(ctx context.Context, doc *mo
 	return s.persistInitialUserTurn(ctx, doc, *req)
 }
 
-// tryStartStream checks the per-caller cap and reserves the stream ID atomically.
+// tryStartStream checks the per-caller cap and reserves the stream ID atomically, counting the stream's worker for
+// Shutdown; a server that is shutting down refuses with ErrServerRestarting.
 func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bool, error) {
 	s.streamCapMu.Lock()
 	defer s.streamCapMu.Unlock()
+	if s.closing {
+		return false, ErrServerRestarting
+	}
 	if _, dup := s.finishedStreams.Load(streamID); dup {
 		return false, errStreamIDInUse
 	}
@@ -209,6 +217,7 @@ func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bo
 	}
 	// The budget's in-flight ledger holds exactly the active streams (released where activeStreams drops it).
 	s.aiBudget().hold(ctl)
+	s.workers.Add(1) // the worker StreamChatMessage starts next; it calls Done as its very last step
 	return true, nil
 }
 
@@ -263,6 +272,13 @@ type ChatService struct {
 	heartbeatTick  time.Duration
 	activeStreams  sync.Map   // map[streamID]*streamCtl — in-flight streams
 	streamCapMu    sync.Mutex // serializes the per-caller concurrency check + store
+	// workers counts each stream's worker and resume mirror, so Shutdown waits for a stream's last emit, final
+	// snapshot and answer persist. closing refuses new streams once Shutdown began; it is read and set under
+	// streamCapMu, which so orders every workers.Add before Shutdown's Wait.
+	workers sync.WaitGroup
+	closing bool
+	// shutdownBudget: test override of chatShutdownBudget; 0 ⇒ the default.
+	shutdownBudget time.Duration
 	// finishedStreams keeps completed streams for the resumeRetention grace period.
 	finishedStreams sync.Map // map[streamID]*streamCtl
 	// convMutexes stripes the reconstruct/persist critical section (bounded lock set).
@@ -284,7 +300,7 @@ type ChatService struct {
 	// azure resolves foundry model ids before the stream starts; nil keeps single-document behaviour.
 	azure *AzureModelService
 	// azureConnection builds a resource's provider; nil ⇒ the factory default. Tests script it.
-	azureConnection func(scope string, ref ai.AzureConnectionRef, entries []ai.AzureRegisteredModel) (ai.Provider, error)
+	azureConnection func(ctx context.Context, scope string, ref ai.AzureConnectionRef, entries []ai.AzureRegisteredModel) (ai.Provider, error)
 }
 
 // ChatOptions are ChatService's optional collaborators; the zero value chats without the knowledge base, the
@@ -389,9 +405,14 @@ func (m turnModel) agent() bool {
 	return m.kind == ai.AzureModelKindAgent || ai.IsAgentModel(m.resolved)
 }
 
-// resolveAzureModel resolves a foundry model id pre-stream; unusable → ErrModelNotAvailable, other failures → a setup error.
+// resolveAzureModel resolves a foundry model id pre-stream; unusable → ErrModelNotAvailable, other failures → a
+// setup error. It is also where a turn's provider id meets the registry first: an id no spec describes is
+// ErrProviderUnknown (the client's mistake, 400 before any stream), never a setup failure.
 func (s *ChatService) resolveAzureModel(ctx context.Context, scope string, doc *models.FlowDocument, req models.ChatRequest) (*AzureChatResolution, error) {
-	if s.azure == nil || req.Provider != ai.AzureFoundryProviderID {
+	if !ai.KnownProvider(req.Provider) {
+		return nil, fmt.Errorf("%w: %s", ErrProviderUnknown, req.Provider)
+	}
+	if !registryFamily(s.azure, req.Provider) {
 		return nil, nil
 	}
 	orgID := ""
@@ -416,13 +437,13 @@ func (s *ChatService) resolveAzureModel(ctx context.Context, scope string, doc *
 // turnProvider builds the turn's provider as exactly the resolved resource's credential; a gone key is a setup error.
 func (s *ChatService) turnProvider(ctx context.Context, scope, orgID string, req models.ChatRequest, res *AzureChatResolution) (ai.Provider, error) {
 	if res == nil {
-		return s.factory.ForOrg(scope, s.credentialOrg(ctx, orgID, scope), req.Provider)
+		return s.factory.ForOrg(ctx, scope, s.credentialOrg(ctx, orgID, scope), req.Provider)
 	}
 	build := s.azureConnection
 	if build == nil {
 		build = s.factory.ForAzureConnection
 	}
-	p, err := build(scope, res.ConnectionRef, res.Entries)
+	p, err := build(ctx, scope, res.ConnectionRef, res.Entries)
 	switch {
 	case errors.Is(err, ai.ErrKeyNotConfigured):
 		return nil, fmt.Errorf("%w: %w", errAzureNoCredentials, err)
@@ -432,22 +453,8 @@ func (s *ChatService) turnProvider(ctx context.Context, scope, orgID string, req
 	return p, err
 }
 
-// errProviderDisabled is the policy-disable sentinel; match with errors.Is.
-var errProviderDisabled = errors.New("AI provider disabled by policy")
-
-// providerDisabledByPolicy fires only on an unambiguous disable; absent entries read as enabled.
-func providerDisabledByPolicy(settings *models.AppSettings, providerID string) bool {
-	if settings == nil {
-		return false
-	}
-	pc, ok := settings.AI.Providers[providerID]
-	if !ok || pc.Enabled {
-		return false
-	}
-	return models.DefaultSettings().AI.Providers[providerID].Enabled
-}
-
-// prepareTurn resolves the provider, enforces the budget (one response reserved first) and starts RAG after the gates — no spend on refusal.
+// prepareTurn resolves the provider (the factory's policy refuses a provider the deployment or the org does
+// not allow), enforces the budget (one response reserved first) and starts RAG after the gates — no spend on refusal.
 func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models.FlowDocument, req models.ChatRequest, azure *AzureChatResolution, ctl *streamCtl) (turnSetup, error) {
 	// Org flows bill the org even for outsiders; the shared credential is for its admins and members.
 	orgID := ""
@@ -471,14 +478,6 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 		ctl.sharedCredential.Store(shared)
 	}
 	model := newTurnModel(req, azure)
-	// Policy gate on the resolved provider; every turn entry point enforces it here.
-	var appSettings *models.AppSettings
-	if s.settings != nil {
-		appSettings = s.settings.Get()
-	}
-	if providerDisabledByPolicy(appSettings, provider.ID()) {
-		return turnSetup{}, fmt.Errorf("%w: %s is disabled in this deployment's AI settings — pick another provider or ask your administrator to re-enable it", errProviderDisabled, provider.ID())
-	}
 
 	// Reserve one max response pre-check so overlapping starts see each other; pre-clamp MaxTokens makes over-reserving safe.
 	if ctl != nil {
@@ -645,7 +644,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	}
 	// Registry resolution before any stream exists: unusable → 400 now, other failures report on the stream; req is never changed.
 	azureRes, azureErr := s.resolveAzureModel(ctx, scope, doc, req)
-	if errors.Is(azureErr, ErrModelNotAvailable) {
+	if errors.Is(azureErr, ErrModelNotAvailable) || errors.Is(azureErr, ErrProviderUnknown) {
 		return "", azureErr
 	}
 
@@ -658,6 +657,10 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		flowID = doc.ID
 	}
 	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}), settled: make(chan struct{}), ownerID: scope, orgID: orgID, streamID: streamID, flowID: flowID, convKey: req.ConversationKey()}
+	// The turn's budget checks (the start check, the loop re-checks, the wrapper's pre-call hook on every call
+	// and on the RAG query embed) share one usage read, exclude this stream's own ledger entry and charge the
+	// flow's organisation.
+	ctx = ai.WithBudgetScope(ai.WithBudgetMemo(withStreamSpend(ctx, ctl)), scope, orgID)
 	ctl.touch() // pre-first-chunk work (context build, provider dial) counts as activity
 	ctl.lastEmit.Store(time.Now().UnixNano())
 	// Per-caller cap + stream-ID reservation, atomically (tryStartStream).
@@ -684,7 +687,8 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			mark = unpublishedMark // the mirror's first tick retries
 		}
 		mirrorFinished = make(chan struct{})
-		go s.mirrorStream(ctx, streamID, ctl, mirrorFinished, mark)
+		// Counted: its final snapshot, written after the worker exits, must land before Shutdown returns.
+		s.workers.Go(func() { s.mirrorStream(ctx, streamID, ctl, mirrorFinished, mark) })
 	}
 
 	go s.watchStream(ctx, streamID, scope, ctl)
@@ -717,8 +721,10 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	}
 
 	go func() {
-		metrics.ChatStreamStart()
-		defer metrics.ChatStreamEnd()
+		// First deferred, so it runs last: after the terminal emit, the mirror hand-off and the answer persist.
+		defer s.workers.Done()
+		chatStreamStart()
+		defer chatStreamEnd()
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Error("chat stream goroutine panicked", "streamID", streamID, "panic", r)
@@ -820,6 +826,9 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			}); ap != nil {
 				tctx.Fixes = ap
 			}
+			// The session's gate: what this actor may run decides what the model is offered, and ExecuteTool
+			// asks it again before any handler (ADR 0026).
+			tctx.Allow = ai.NewToolGate(auth.ActorFromContext(ctx), tctx.Fixes != nil)
 			if ts.provider.SupportsTools() {
 				s.runToolLoop(ctx, ts.provider, aiReq, scope, &tctx, ctl, awaitStart, emit, coalesce.flushAndCount)
 			} else {
@@ -928,8 +937,8 @@ type toolLoopState struct {
 	// started is the consumed-once record of the begin gate (ctl.started holds one token).
 	started bool
 
-	// budgetUsage memoizes the loop's daily-usage reads across iterations.
-	budgetUsage *turnBudgetUsage
+	// budgetUsage memoizes the loop's daily-usage reads across iterations: the turn's (ai.WithBudgetMemo), else its own.
+	budgetUsage *ai.BudgetMemo
 
 	// tokens memoises truncation estimates; ctxLimit is the model-aware window (catalog overrides provider default).
 	tokens   *tokenMemo
@@ -1006,7 +1015,7 @@ func (st *toolLoopState) recheckBudget() bool {
 	own := inFlightCost(st.price, st.totalIn, st.totalOut)
 	st.ctl.setInflight(own + st.reserve)
 	if st.budgetUsage == nil {
-		st.budgetUsage = &turnBudgetUsage{}
+		st.budgetUsage = cmp.Or(ai.BudgetMemoFrom(st.ctx), ai.NewBudgetMemo())
 	}
 	if err := st.s.enforceTurnBudgetMemo(st.ctx, st.provider, st.budgetUsage, st.scope, st.orgID, own, st.ctl); err != nil {
 		code, msg, report := loopBudgetFailure(st.ctx, st.ctl, err)
@@ -1068,7 +1077,7 @@ func (s *ChatService) runToolLoop(
 	emit func(string, map[string]interface{}),
 	doneChunks func() int,
 ) {
-	base.Tools = ai.ToolDefinitions()
+	base.Tools = ai.ToolDefinitionsFor(tctx.Allow)
 	msgs := base.Messages
 	st := newToolLoopState(s, ctx, provider, base, scope, ctl, awaitStart, emit, doneChunks)
 
@@ -1090,7 +1099,7 @@ func (s *ChatService) runToolLoop(
 	// pin is the current turn's index in msgs; truncation never drops it and reports where it moved.
 	pin := len(msgs) - 1
 	for i := 0; i < maxToolIterations; i++ {
-		metrics.RecordChatToolIteration()
+		recordChatToolIteration()
 		if !st.recheckBudget() {
 			return
 		}
@@ -1288,7 +1297,7 @@ func (s *ChatService) runPromptToolLoop(
 ) {
 	msgs := base.Messages
 	// APPEND to the system prompt, never inject a leading system message: truncation pins Messages[:1].
-	toolInstr := ai.ToolPromptInstructions()
+	toolInstr := ai.ToolPromptInstructionsFor(tctx.Allow)
 	if base.SystemPrompt != "" {
 		turn := base
 		turn.SystemPrompt = base.SystemPrompt + "\n\n" + toolInstr
@@ -1301,7 +1310,7 @@ func (s *ChatService) runPromptToolLoop(
 	mem := newLoopToolMemory()
 	pin := len(msgs) - 1 // the current turn (see runToolLoop)
 	for i := 0; i < maxToolIterations; i++ {
-		metrics.RecordChatToolIteration()
+		recordChatToolIteration()
 		if !st.recheckBudget() {
 			return
 		}

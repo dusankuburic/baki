@@ -55,6 +55,11 @@ const (
 	// InstanceWrite: create content at all (upload or save a flow, test a custom rule, save a conversation). The
 	// global admin or member role: global viewers and guests are read-only. Scope write.
 	InstanceWrite
+	// CIRun: run the CI webhook on a flow (analyse it and record the run) with a personal API token. Viewer access,
+	// as reading the flow's analysis, and on an organisation's flow membership of it: the run uses the organisation's
+	// custom rules, which a collaborator outside it does not see, and records onto its dashboard. Scope ci, which
+	// nothing else accepts.
+	CIRun
 )
 
 type actionSpec struct {
@@ -65,6 +70,9 @@ type actionSpec struct {
 	scopes []string
 	// flowPerm is the CheckFlowAccess permission a flow action needs; FlowDelete is CanDeleteFlow's instead.
 	flowPerm string
+	// orgMember: on an organisation's flow the action also needs membership of the organisation, whatever grants the
+	// flow (a collaborator outside it, an owner who left it).
+	orgMember bool
 	// orgRank is the orgRoleToPermRank an org action needs.
 	orgRank int
 	// role is the global role an instance action needs at least.
@@ -88,6 +96,7 @@ var actionSpecs = [...]actionSpec{
 	OrgAdmin:      {name: "org.admin", on: resOrg, scopes: writeScope, orgRank: permRank("admin")},
 	InstanceAdmin: {name: "instance.admin", on: resInstance, scopes: []string{auth.ScopeAdmin}, role: auth.RoleAdmin},
 	InstanceWrite: {name: "instance.write", on: resInstance, scopes: writeScope, role: auth.RoleMember},
+	CIRun:         {name: "ci.run", on: resFlow, scopes: []string{auth.ScopeCI}, flowPerm: "viewer", orgMember: true},
 }
 
 func (a Action) valid() bool { return a > 0 && int(a) < len(actionSpecs) }
@@ -296,7 +305,14 @@ func (a *AuthzService) checkFlow(ctx context.Context, userID string, action Acti
 		}
 		return ErrPermissionDenied
 	}
-	return a.CheckFlowAccess(ctx, h.ID, h.OwnerID, h.OrganizationID, userID, actionSpecs[action].flowPerm)
+	if err := a.CheckFlowAccess(ctx, h.ID, h.OwnerID, h.OrganizationID, userID, actionSpecs[action].flowPerm); err != nil {
+		return err
+	}
+	if actionSpecs[action].orgMember && h.OrganizationID != "" {
+		// Any role: membership is what shows a reader the organisation's custom rules (RuleProfile.Narrowed).
+		return a.requireOrgRank(ctx, h.OrganizationID, userID, permRank("viewer"), false)
+	}
+	return nil
 }
 
 // requireOrgRank checks that userID's role in orgID ranks at least need (orgRoleToPermRank), through the request's

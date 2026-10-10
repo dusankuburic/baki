@@ -4,13 +4,11 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"time"
@@ -25,8 +23,10 @@ const keystoreTimeout = 5 * time.Second
 // EncryptedKeyStore persists provider API keys in PostgreSQL, encrypted at rest with AES-256-GCM; it
 // implements storage.SecretStore as the cloud-mode secret backend (no OS keychain there). The encryption
 // key should be a dedicated deployment secret (PAD_ENCRYPTION_KEY) separate from the JWT signing key (the
-// auth secret is accepted for backward compatibility); rotating it renders stored ciphertext undecryptable
-// (Get reports not-found; the provider must be re-authenticated).
+// auth secret is accepted for backward compatibility). Rotating it lists the replaced key among the previous
+// keys (PAD_ENCRYPTION_KEY_PREVIOUS), which still open what they sealed until ResealKeys moves it; a key no
+// longer configured renders its ciphertext undecryptable (Get reports ErrSecretDecryptFailed; the provider
+// must be re-authenticated).
 //
 // RLS note: provider_keys deliberately has NO row-level-security policies — like the other auth-infra
 // tables it is keyed by user_id and every query here carries an explicit `WHERE user_id = $1`; the AES-GCM
@@ -35,7 +35,7 @@ const keystoreTimeout = 5 * time.Second
 // these methods must switch to BeginRLS (and the retention purge would need a non-request principal).
 type EncryptedKeyStore struct {
 	db   *sql.DB
-	aead cipher.AEAD
+	keys *sealKeys
 }
 
 // The keystore also holds orgs' shared credentials, lists/releases key families, and restores an org
@@ -48,13 +48,14 @@ var (
 )
 
 // NewEncryptedKeyStore builds a database-backed encrypted keystore. The secret
-// must be non-empty; the AES-256 key is its SHA-256 digest.
-func (b *PostgresStorageBackend) NewEncryptedKeyStore(secret []byte) (*EncryptedKeyStore, error) {
-	aead, err := newKeystoreAEAD(secret)
+// must be non-empty; the AES-256 key is its SHA-256 digest. previous are the keys
+// it replaced, newest first: they only open.
+func (b *PostgresStorageBackend) NewEncryptedKeyStore(secret []byte, previous ...[]byte) (*EncryptedKeyStore, error) {
+	keys, err := newSealKeys(secret, previous)
 	if err != nil {
 		return nil, err
 	}
-	return &EncryptedKeyStore{db: b.db, aead: aead}, nil
+	return &EncryptedKeyStore{db: b.db, keys: keys}, nil
 }
 
 // newKeystoreAEAD derives an AES-256-GCM AEAD from a deployment secret.
@@ -80,29 +81,26 @@ func keyAAD(scope, provider string) []byte {
 	return []byte(scope + "\x00" + provider)
 }
 
-// encrypt seals plaintext with a fresh random nonce and binds it to aad,
+// encrypt seals plaintext with the current key and a fresh random nonce and binds it to aad,
 // returning a base64(nonce||ciphertext) string suitable for text-column storage.
 func (s *EncryptedKeyStore) encrypt(plaintext string, aad []byte) (string, error) {
-	nonce := make([]byte, s.aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", fmt.Errorf("keystore: nonce: %w", err)
+	sealed, err := s.keys.seal([]byte(plaintext), aad)
+	if err != nil {
+		return "", fmt.Errorf("keystore: %w", err)
 	}
-	sealed := s.aead.Seal(nonce, nonce, []byte(plaintext), aad)
 	return base64.StdEncoding.EncodeToString(sealed), nil
 }
 
-// decrypt reverses encrypt; aad must match the value passed to encrypt.
+// decrypt reverses encrypt, with the current key or a previous one; aad must match the value passed to encrypt.
 func (s *EncryptedKeyStore) decrypt(encoded string, aad []byte) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return "", fmt.Errorf("keystore: decode: %w", err)
 	}
-	ns := s.aead.NonceSize()
-	if len(raw) < ns {
-		return "", errors.New("keystore: ciphertext too short")
+	plaintext, _, err := s.keys.open(raw, aad)
+	if errors.Is(err, errCiphertextTooShort) {
+		return "", fmt.Errorf("keystore: %w", err)
 	}
-	nonce, ct := raw[:ns], raw[ns:]
-	plaintext, err := s.aead.Open(nil, nonce, ct, aad)
 	if err != nil {
 		return "", fmt.Errorf("keystore: open: %w", err)
 	}
@@ -593,7 +591,8 @@ func (s *EncryptedKeyStore) SnapshotOrg(orgID, provider string) (snap interfaces
 
 // RestoreOrgIfUnchanged writes snap back — ciphertext, updated_by, secret_set_by and updated_at, so the
 // previous compare-and-swap token is current again — or, with snap nil, deletes the row; both only while the
-// row's updated_at is still current. restored is false when a newer save got there first.
+// row's updated_at is still current. restored is false when a newer save got there first. A ciphertext a previous
+// key sealed goes back sealed with the current key: the snapshot may predate the re-seal pass moving the row.
 func (s *EncryptedKeyStore) RestoreOrgIfUnchanged(orgID, provider string, current time.Time, snap *interfaces.OrgKeySnapshot) (restored bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
 	defer cancel()
@@ -606,7 +605,7 @@ func (s *EncryptedKeyStore) RestoreOrgIfUnchanged(orgID, provider string, curren
 			`UPDATE org_provider_keys
 			    SET ciphertext = $3, updated_by = $4, secret_set_by = $5, updated_at = $6
 			  WHERE org_id = $1 AND provider = $2 AND updated_at = $7`,
-			orgID, provider, snap.Sealed, snap.UpdatedBy, snap.SecretSetBy, snap.UpdatedAt, current)
+			orgID, provider, s.underCurrentKey(snap.Sealed, orgKeyAAD(orgID, provider)), snap.UpdatedBy, snap.SecretSetBy, snap.UpdatedAt, current)
 	}
 	if err != nil {
 		return false, fmt.Errorf("keystore: restore org key: %w", err)
@@ -616,4 +615,22 @@ func (s *EncryptedKeyStore) RestoreOrgIfUnchanged(orgID, provider string, curren
 		return false, fmt.Errorf("keystore: restore org key: %w", err)
 	}
 	return n > 0, nil
+}
+
+// underCurrentKey is a stored ciphertext as the current key seals it: one a previous key sealed is sealed again,
+// anything else (already current, or opened by no configured key) is returned as stored.
+func (s *EncryptedKeyStore) underCurrentKey(stored string, aad []byte) string {
+	raw, err := base64.StdEncoding.DecodeString(stored)
+	if err != nil {
+		return stored
+	}
+	plain, current, err := s.keys.open(raw, aad)
+	if err != nil || current {
+		return stored
+	}
+	sealed, err := s.keys.seal(plain, aad)
+	if err != nil {
+		return stored
+	}
+	return base64.StdEncoding.EncodeToString(sealed)
 }

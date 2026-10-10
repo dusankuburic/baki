@@ -73,9 +73,10 @@ export interface IdentityLinkInfo {
 }
 
 // ApiTokenScope mirrors the closed scope set in internal/auth/apitoken.go.
-// A token with NO scopes is unscoped: it can do everything its owner can.
-export type ApiTokenScope = 'read' | 'write' | 'chat' | 'admin'
-export const API_TOKEN_SCOPES: readonly ApiTokenScope[] = ['read', 'write', 'chat', 'admin']
+// A token with NO scopes is unscoped: it can do everything its owner can,
+// except call the CI webhook, which takes the ci scope only.
+export type ApiTokenScope = 'read' | 'write' | 'chat' | 'admin' | 'ci'
+export const API_TOKEN_SCOPES: readonly ApiTokenScope[] = ['read', 'write', 'chat', 'admin', 'ci']
 
 // ApiToken is the metadata for a machine token (the secret is never returned).
 export interface ApiToken {

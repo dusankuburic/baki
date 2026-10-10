@@ -249,7 +249,7 @@ func TestSSOSignIn_RecordsTheActor(t *testing.T) {
 // on a recorder (it cannot hijack); the actor is recorded once the ticket is consumed.
 func TestWebSocket_RecordsTheActor(t *testing.T) {
 	rt := newJWTTestRouter(t)
-	ticket, _, err := rt.security.AuthMgr.IssueWSTicket("u-ws", "ws@example.com", auth.RoleMember, "", time.Time{})
+	ticket, _, err := rt.security.AuthMgr.IssueWSTicket(auth.WSTicketSource{UserID: "u-ws", Email: "ws@example.com", Role: auth.RoleMember})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,4 +259,16 @@ func TestWebSocket_RecordsTheActor(t *testing.T) {
 	rr, info := serveWithInfo(rt, httptest.NewRequest(http.MethodGet, "/ws?flowId=f1&ticket="+ticket, nil))
 	checkStatus(t, rr, http.StatusUnauthorized)
 	checkActor(t, "replayed ticket", info, nil)
+
+	// A PAT's ticket is that token: kind, id and scopes come from the source credential, not the ticket's own jti.
+	ticket, _, err = rt.security.AuthMgr.IssueWSTicket(auth.WSTicketSource{
+		UserID: "u-ws", Email: "ws@example.com", Role: auth.RoleMember, Scopes: []string{auth.ScopeRead}, AccessJTI: auth.PATJTI("tok-ws"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, info = serveWithInfo(rt, httptest.NewRequest(http.MethodGet, "/ws?flowId=f1&ticket="+ticket, nil))
+	checkActor(t, "PAT websocket", info, &auth.Actor{
+		Kind: auth.ActorToken, UserID: "u-ws", Email: "ws@example.com", Role: auth.RoleMember, TokenID: "tok-ws", Scopes: []string{auth.ScopeRead},
+	})
 }

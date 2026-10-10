@@ -1,41 +1,108 @@
-import {useCallback, useState} from 'react'
+import {useCallback, useId, useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {Bell, BellOff, Plus, Send, Trash2, Pencil} from 'lucide-react'
-import {CHANNEL_KINDS, channelsApi, type ChannelKind, type OrgChannel} from '@/api/governance'
+import type {TFunction} from 'i18next'
+import {AlertTriangle, Bell, BellOff, KeyRound, Plus, Send, Trash2, Pencil} from 'lucide-react'
+import {
+  CHANNEL_EVENTS,
+  CHANNEL_KINDS,
+  LEGACY_CHANNEL_KINDS,
+  channelCreateBody,
+  channelEditBody,
+  channelHasUrl,
+  channelSigns,
+  channelToggleBody,
+  channelsApi,
+  type ChannelEvent,
+  type ChannelKind,
+  type ChannelOptions,
+  type KnownOrgChannel,
+  type OrgChannel,
+} from '@/api/governance'
+import {ApiError} from '@/api/client'
 import {Button, useToast} from '@/components/shared'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {logger} from '@/lib/logger'
-import {relativeTime} from '@/lib/time'
+import {relativeTimeText} from '@/lib/time'
 import {useAsync} from '@/hooks/useAsync'
 import {useConfirm} from '@/components/shared'
+import type {OrgMember} from '@/stores/orgStore'
 import {isKnown} from '@/types'
 import clsx from 'clsx'
 
 // A channel of a kind a newer server added is listed as sent and can be
 // tested and removed, but not paused or edited: both save the kind back, and
 // this bundle sends only the kinds it knows.
-type KnownChannel = OrgChannel & {kind: ChannelKind}
-const isKnownChannel = (ch: OrgChannel): ch is KnownChannel => isKnown(CHANNEL_KINDS, ch.kind)
+const isKnownChannel = (ch: OrgChannel): ch is KnownOrgChannel => isKnown(CHANNEL_KINDS, ch.kind)
 
 // OrgChannelsSection manages an org's own notification destinations
-// (webhook/Teams/Slack): governance events for the org's flows are delivered
-// here IN ADDITION to the deployment-global channels — routing by
+// (webhook/Teams/Slack/Jira/email): governance events for the org's flows are
+// delivered here IN ADDITION to the deployment-global channels — routing by
 // ownership. Admin-only edits; members read.
 // Keys, not literals: this list is module-level and cannot call t(). Each entry
 // names its label/hint keys, resolved at render time by the consuming component.
 const KINDS: {id: ChannelKind; labelKey: string; hintKey: string}[] = [
   {id: 'webhook', labelKey: 'channels.kindWebhook', hintKey: 'channels.kindWebhookHint'},
+  // Before Teams: Microsoft is retiring the incoming webhooks it replaces.
+  {id: 'teams-workflow', labelKey: 'channels.kindTeamsWorkflow', hintKey: 'channels.kindTeamsWorkflowHint'},
   {id: 'teams', labelKey: 'channels.kindTeams', hintKey: 'channels.kindTeamsHint'},
   {id: 'slack', labelKey: 'channels.kindSlack', hintKey: 'channels.kindSlackHint'},
+  {id: 'jira', labelKey: 'channels.kindJira', hintKey: 'channels.kindJiraHint'},
+  {id: 'email', labelKey: 'channels.kindEmail', hintKey: 'channels.kindEmailHint'},
 ]
 
-export default function OrgChannelsSection({orgId, isAdmin}: {orgId: string; isAdmin: boolean}) {
+const EVENT_LABELS: Record<ChannelEvent, {labelKey: string; shortKey: string}> = {
+  drift: {labelKey: 'channels.eventDrift', shortKey: 'channels.eventDriftShort'},
+  health_regression: {labelKey: 'channels.eventHealthRegression', shortKey: 'channels.eventHealthRegressionShort'},
+  new_rules: {labelKey: 'channels.eventNewRules', shortKey: 'channels.eventNewRulesShort'},
+}
+
+// The events a channel receives: what it lists, or every event from a server
+// before subscriptions (which delivered every event).
+const channelEvents = (ch?: OrgChannel): ChannelEvent[] =>
+  ch?.events ? CHANNEL_EVENTS.filter(e => ch.events?.includes(e)) : [...CHANNEL_EVENTS]
+
+const memberName = (members: OrgMember[], id: string, t: TFunction<'settings'>): string => {
+  const m = members.find(x => x.userId === id)
+  return m ? m.user?.displayName || m.user?.email || m.userId : t('channels.formerMember')
+}
+
+// testFailure says why a test delivery failed. The server masks a 5xx's
+// message, so a failed delivery is told by its details: the endpoint's HTTP
+// status, or a fixed reason such as "the connection timed out".
+function testFailure(e: unknown, t: TFunction<'settings'>): string {
+  if (e instanceof ApiError) {
+    if (e.code === 'CHANNEL_DELIVERIES_BUSY') return t('channels.testBusy')
+    if (e.status === 429) return t('channels.testRateLimited')
+    const {status, reason} = e.details ?? {}
+    if (typeof status === 'number') return t('channels.testFailedStatus', {status})
+    if (typeof reason === 'string' && reason) return reason.charAt(0).toUpperCase() + reason.slice(1)
+  }
+  return getErrorMessage(e)
+}
+
+export default function OrgChannelsSection({
+  orgId,
+  isAdmin,
+  members = [],
+}: {
+  orgId: string
+  isAdmin: boolean
+  // The org's roster: an email channel's recipients are chosen from it.
+  members?: OrgMember[]
+}) {
   const {t} = useTranslation('settings')
   const toast = useToast()
-  const [editing, setEditing] = useState<KnownChannel | null>(null)
+  const [editing, setEditing] = useState<KnownOrgChannel | null>(null)
   const [creating, setCreating] = useState(false)
 
-  const {data, isLoading, error, refetch} = useAsync<OrgChannel[]>(() => channelsApi.list(orgId), [orgId])
+  const {data, isLoading, error, refetch} = useAsync<OrgChannel[]>(signal => channelsApi.list(orgId, signal), [orgId])
   const channels = data ?? []
+  // The form's choices, for admins only (the route is theirs). A failed read
+  // reads as a server without them: the legacy kinds, no host hint.
+  const {data: options} = useAsync<ChannelOptions | null>(
+    async signal => (isAdmin ? ((await channelsApi.options(orgId, signal)) ?? null) : null),
+    [orgId, isAdmin],
+  )
 
   const handleDelete = useCallback(
     async (ch: OrgChannel) => {
@@ -44,7 +111,7 @@ export default function OrgChannelsSection({orgId, isAdmin}: {orgId: string; isA
         toast.success(t('channels.removed', {name: ch.name || ch.kind}))
         refetch()
       } catch (e) {
-        toast.error(t('channels.removeFailed'), {description: String(e)})
+        toast.error(t('channels.removeFailed'), {description: getErrorMessage(e)})
       }
     },
     [orgId, refetch, t, toast],
@@ -56,25 +123,21 @@ export default function OrgChannelsSection({orgId, isAdmin}: {orgId: string; isA
         await channelsApi.test(orgId, ch.id)
         toast.success(t('channels.testSent'), {description: ch.name || ch.kind})
       } catch (e) {
-        toast.error(t('channels.testFailed'), {description: String(e)})
+        toast.error(t('channels.testFailed'), {description: testFailure(e, t)})
       }
     },
     [orgId, t, toast],
   )
 
+  // Pausing changes `enabled` only: the URL goes back as "unchanged" and no
+  // secret is sent, so the stored ones are kept.
   const handleToggle = useCallback(
-    async (ch: KnownChannel) => {
+    async (ch: KnownOrgChannel) => {
       try {
-        await channelsApi.save(orgId, {
-          id: ch.id,
-          name: ch.name,
-          kind: ch.kind,
-          url: ch.url,
-          enabled: !ch.enabled,
-        })
+        await channelsApi.save(orgId, channelToggleBody(ch, !ch.enabled))
         refetch()
       } catch (e) {
-        toast.error(t('channels.toggleFailed'), {description: String(e)})
+        toast.error(t('channels.toggleFailed'), {description: getErrorMessage(e)})
       }
     },
     [orgId, refetch, t, toast],
@@ -102,8 +165,11 @@ export default function OrgChannelsSection({orgId, isAdmin}: {orgId: string; isA
 
       {(creating || editing) && (
         <ChannelForm
+          key={editing?.id ?? 'new'}
           orgId={orgId}
           initial={editing ?? undefined}
+          options={options ?? null}
+          members={members}
           onDone={done}
           onCancel={() => {
             setCreating(false)
@@ -112,7 +178,7 @@ export default function OrgChannelsSection({orgId, isAdmin}: {orgId: string; isA
         />
       )}
 
-      {isLoading ? (
+      {isLoading && !data ? (
         <p className="text-xs text-text-tertiary py-3">{t('channels.loading')}</p>
       ) : error ? (
         <p className="text-xs text-red-400 py-3">{t('channels.loadFailed')}</p>
@@ -125,6 +191,7 @@ export default function OrgChannelsSection({orgId, isAdmin}: {orgId: string; isA
               key={ch.id}
               ch={ch}
               isAdmin={isAdmin}
+              members={members}
               onTest={handleTest}
               onToggle={handleToggle}
               onEdit={setEditing}
@@ -140,6 +207,7 @@ export default function OrgChannelsSection({orgId, isAdmin}: {orgId: string; isA
 function ChannelRow({
   ch,
   isAdmin,
+  members,
   onTest,
   onToggle,
   onEdit,
@@ -147,21 +215,39 @@ function ChannelRow({
 }: {
   ch: OrgChannel
   isAdmin: boolean
+  members: OrgMember[]
   onTest: (ch: OrgChannel) => void
-  onToggle: (ch: KnownChannel) => void
-  onEdit: (ch: KnownChannel) => void
+  onToggle: (ch: KnownOrgChannel) => void
+  onEdit: (ch: KnownOrgChannel) => void
   onDelete: (ch: OrgChannel) => void
 }) {
   const {t} = useTranslation('settings')
   const {confirm} = useConfirm()
   const kind = KINDS.find(k => k.id === ch.kind)
   const known = isKnownChannel(ch)
+  // A Teams row may still hold a secret an older server stored; it signs nothing.
+  const signed = ch.hasSecret === true && (!isKnownChannel(ch) || channelSigns(ch.kind))
+  // Pausing saves the stored URL back, which the server cannot read: only an edit with a new URL helps.
+  const canToggle = isAdmin && known && !ch.unreadable
+  const events = channelEvents(ch)
+  const where =
+    ch.kind === 'email'
+      ? t('channels.recipientsListed', {names: (ch.recipients ?? []).map(id => memberName(members, id, t)).join(', ')})
+      : ch.url
   return (
     <li className="flex items-center gap-2 p-2 bg-surface-2 border border-border-default rounded-lg group">
       <button
-        onClick={() => isAdmin && isKnownChannel(ch) && onToggle(ch)}
-        disabled={!isAdmin || !known}
-        title={!known ? t('channels.unknownKind') : ch.enabled ? t('channels.enabledTitle') : t('channels.pausedTitle')}
+        onClick={() => canToggle && isKnownChannel(ch) && onToggle(ch)}
+        disabled={!canToggle}
+        title={
+          !known
+            ? t('channels.unknownKind')
+            : ch.unreadable
+              ? t('channels.unreadableTitle')
+              : ch.enabled
+                ? t('channels.enabledTitle')
+                : t('channels.pausedTitle')
+        }
         aria-label={ch.enabled ? t('channels.pauseAria') : t('channels.enableAria')}
         className={clsx(
           'p-1.5 rounded shrink-0 transition-colors',
@@ -176,8 +262,41 @@ function ChannelRow({
           {ch.name || <span className="text-text-tertiary">{t('channels.unnamed')}</span>}
           <span className="text-text-tertiary/60"> · {kind ? t(kind.labelKey as never) : ch.kind}</span>
         </div>
-        <div className="text-2xs text-text-tertiary truncate" title={ch.url}>
-          {ch.url} · added {relativeTime(ch.createdAt)}
+        <div className="flex items-center gap-1 min-w-0 text-2xs text-text-tertiary">
+          {ch.unreadable ? (
+            <span
+              className="inline-flex shrink-0 items-center gap-0.5 text-semantic-warning"
+              title={t('channels.unreadableTitle')}
+            >
+              <AlertTriangle size={9} aria-hidden="true" />
+              {t('channels.unreadable')}
+            </span>
+          ) : (
+            <span className="truncate" title={where}>
+              {where}
+            </span>
+          )}
+          {ch.kind === 'jira' && ch.project && (
+            <span className="shrink-0">· {t('channels.jiraProjectListed', {project: ch.project})}</span>
+          )}
+          {signed && (
+            <>
+              <span className="shrink-0">·</span>
+              <span className="inline-flex shrink-0 items-center gap-0.5" title={t('channels.signedTitle')}>
+                <KeyRound size={9} aria-hidden="true" />
+                {t('channels.signed')}
+              </span>
+            </>
+          )}
+          {events.length < CHANNEL_EVENTS.length && (
+            <span className="shrink-0">
+              ·{' '}
+              {t('channels.eventsListed', {
+                events: events.map(e => t(EVENT_LABELS[e].shortKey as never)).join(', '),
+              })}
+            </span>
+          )}
+          <span className="shrink-0">· {t('channels.addedWhen', {when: relativeTimeText(ch.createdAt)})}</span>
         </div>
       </div>
       {isAdmin && (
@@ -220,53 +339,142 @@ function ChannelRow({
   )
 }
 
+type FormField = 'kind' | 'url' | 'secret' | 'email' | 'token' | 'project' | 'recipients' | 'events'
+
+const FORM_FIELDS: readonly FormField[] = ['kind', 'url', 'secret', 'email', 'token', 'project', 'recipients', 'events']
+
+// fieldErrorOf maps a refused save (400 INVALID_CHANNEL) to the form field its
+// details name; anything else is null.
+function fieldErrorOf(e: unknown): {field: FormField; message: string} | null {
+  if (!(e instanceof ApiError) || e.status !== 400) return null
+  const field = e.details?.field
+  return isKnown(FORM_FIELDS, field) ? {field, message: e.message} : null
+}
+
+const inputClass =
+  'w-full px-2.5 py-1.5 bg-surface-3 border rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-hidden focus:border-brand-500 font-mono'
+
 function ChannelForm({
   orgId,
   initial,
+  options,
+  members,
   onDone,
   onCancel,
 }: {
   orgId: string
-  initial?: KnownChannel
+  initial?: KnownOrgChannel
+  options: ChannelOptions | null
+  members: OrgMember[]
   onDone: () => void
   onCancel: () => void
 }) {
   const {t} = useTranslation('settings')
   const toast = useToast()
+  const uid = useId()
   const [name, setName] = useState(initial?.name ?? '')
   const [kind, setKind] = useState<ChannelKind>(initial?.kind ?? 'webhook')
-  const [url, setUrl] = useState(initial?.url ?? '')
+  // An edit starts with the URL empty: the list shows it redacted, and an
+  // empty field keeps the stored one.
+  const [url, setUrl] = useState('')
   const [secret, setSecret] = useState('')
+  const [clearSecret, setClearSecret] = useState(false)
+  // Jira: the email and project as listed; the token, like the secret, is never returned.
+  const [jiraEmail, setJiraEmail] = useState(initial?.email ?? '')
+  const [token, setToken] = useState('')
+  const [project, setProject] = useState(initial?.project ?? '')
+  const [recipients, setRecipients] = useState<string[]>(initial?.recipients ?? [])
+  const initialEvents = initial ? channelEvents(initial) : [...CHANNEL_EVENTS]
+  const [events, setEvents] = useState<ChannelEvent[]>(initialEvents)
+  const [fieldError, setFieldError] = useState<{field: FormField; message: string} | null>(null)
   const [saving, setSaving] = useState(false)
 
-  // The secret is never returned by the API; editing keeps the stored one
-  // unless a new value is typed.
+  // The kinds this deployment delivers; a server without the options route offers the legacy ones.
+  const offered = KINDS.filter(k =>
+    options ? options.kinds.includes(k.id) || k.id === initial?.kind : LEGACY_CHANNEL_KINDS.includes(k.id),
+  )
+  const signs = channelSigns(kind)
+  const hasUrl = channelHasUrl(kind)
+  const errorOf = (field: FormField) => (fieldError?.field === field ? fieldError.message : null)
+  const errorId = (field: FormField) => `${uid}-${field}-error`
+  const clearError = (field: FormField) => {
+    if (fieldError?.field === field) setFieldError(null)
+  }
+  // Events go only when changed: an unchanged choice keeps what is stored (a newer server's events included).
+  const changedEvents =
+    events.length !== initialEvents.length || events.some(e => !initialEvents.includes(e)) ? events : undefined
+
+  // The secret is never returned by the API: an edit sends one only when a
+  // new value is typed, or clears it on request.
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!url.trim()) {
-      toast.error(t('channels.urlRequired'))
+    if (hasUrl && (!initial || initial.unreadable) && !url.trim()) {
+      if (initial?.unreadable) setFieldError({field: 'url', message: t('channels.unreadableHint')})
+      else toast.error(t('channels.urlRequired'))
       return
     }
+    if (kind === 'jira' && (!jiraEmail.trim() || !project.trim() || (!initial?.hasToken && !token.trim()))) {
+      toast.error(t('channels.jiraFieldsRequired'))
+      return
+    }
+    if (kind === 'email' && recipients.length === 0) {
+      toast.error(t('channels.recipientsRequired'))
+      return
+    }
+    if (events.length === 0) {
+      toast.error(t('channels.eventsRequired'))
+      return
+    }
+    const fields = {
+      email: jiraEmail,
+      token,
+      project,
+      recipients,
+      events: changedEvents,
+    }
     setSaving(true)
+    setFieldError(null)
     try {
-      await channelsApi.save(orgId, {
-        id: initial?.id,
-        name: name.trim(),
-        kind,
-        url: url.trim(),
-        secret: secret.trim() || undefined,
-      })
+      await channelsApi.save(
+        orgId,
+        initial
+          ? channelEditBody(initial, {name, url, secret, clearSecret, ...fields})
+          : channelCreateBody({name, kind, url, secret, ...fields}),
+      )
       toast.success(initial ? t('channels.updated') : t('channels.added'))
       onDone()
     } catch (err) {
       logger.warn(err)
-      toast.error(t('channels.saveFailed'), {description: String(err)})
+      const fe = fieldErrorOf(err)
+      if (fe && (fe.field !== 'secret' || (signs && !clearSecret))) setFieldError(fe)
+      else toast.error(t('channels.saveFailed'), {description: getErrorMessage(err)})
     } finally {
       setSaving(false)
     }
   }
 
   const activeKind = KINDS.find(k => k.id === kind)
+  const urlDescribedBy = [
+    initial && !initial.unreadable && `${uid}-url-hint`,
+    options?.hostsRestricted && `${uid}-hosts-hint`,
+    errorOf('url') && errorId('url'),
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  const errorText = (field: FormField) =>
+    errorOf(field) ? (
+      <p id={errorId(field)} className="text-2xs text-semantic-error">
+        {errorOf(field)}
+      </p>
+    ) : null
+  const fieldProps = (field: FormField) => ({
+    'aria-invalid': !!errorOf(field) || undefined,
+    'aria-describedby': errorOf(field) ? errorId(field) : undefined,
+    className: clsx(inputClass, errorOf(field) ? 'border-semantic-error' : 'border-border-default'),
+  })
+  // Recipients the roster no longer has (they left) stay listed, so an admin can drop them.
+  const choosable = [...members.map(m => m.userId), ...recipients.filter(id => !members.some(m => m.userId === id))]
 
   return (
     <form
@@ -283,33 +491,217 @@ function ChannelForm({
         />
         <select
           value={kind}
-          onChange={e => setKind(e.target.value as ChannelKind)}
+          onChange={e => {
+            setKind(e.target.value as ChannelKind)
+            setFieldError(null)
+          }}
           disabled={!!initial}
-          className="px-2 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary outline-hidden focus:border-brand-500 disabled:opacity-60"
+          className={clsx(
+            'px-2 py-1.5 bg-surface-3 border rounded-md text-xs text-text-primary outline-hidden focus:border-brand-500 disabled:opacity-60',
+            errorOf('kind') ? 'border-semantic-error' : 'border-border-default',
+          )}
           aria-label={t('channels.kindAria')}
+          aria-invalid={!!errorOf('kind') || undefined}
+          aria-describedby={errorOf('kind') ? errorId('kind') : undefined}
         >
-          {KINDS.map(k => (
+          {offered.map(k => (
             <option key={k.id} value={k.id}>
               {t(k.labelKey as never)}
             </option>
           ))}
         </select>
       </div>
-      <input
-        value={url}
-        onChange={e => setUrl(e.target.value)}
-        placeholder="https://hooks.example.com/…"
-        className="w-full px-2.5 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-hidden focus:border-brand-500 font-mono"
-      />
-      <input
-        value={secret}
-        onChange={e => setSecret(e.target.value)}
-        placeholder={initial ? t('channels.secretPlaceholderExisting') : t('channels.secretPlaceholderNew')}
-        type="password"
-        className="w-full px-2.5 py-1.5 bg-surface-3 border border-border-default rounded-md text-xs text-text-primary placeholder:text-text-tertiary/60 outline-hidden focus:border-brand-500 font-mono"
-      />
+      {errorText('kind')}
+      {hasUrl && (
+        <>
+          <input
+            value={url}
+            onChange={e => {
+              setUrl(e.target.value)
+              clearError('url')
+            }}
+            placeholder={
+              initial && !initial.unreadable
+                ? initial.url
+                : kind === 'jira'
+                  ? t('channels.jiraUrlPlaceholder')
+                  : 'https://hooks.example.com/…'
+            }
+            aria-label={t('channels.urlAria')}
+            aria-invalid={!!errorOf('url') || undefined}
+            aria-describedby={urlDescribedBy || undefined}
+            className={clsx(inputClass, errorOf('url') ? 'border-semantic-error' : 'border-border-default')}
+          />
+          {initial && !initial.unreadable && (
+            <p id={`${uid}-url-hint`} className="text-2xs text-text-tertiary/70">
+              {t('channels.urlKeepHint')}
+            </p>
+          )}
+          {options?.hostsRestricted && (
+            <p id={`${uid}-hosts-hint`} className="text-2xs text-text-tertiary/70">
+              {options.allowedHosts?.length
+                ? t('channels.hostsAllowed', {hosts: options.allowedHosts.join(', ')})
+                : t('channels.hostsRestricted')}
+            </p>
+          )}
+          {errorText('url')}
+        </>
+      )}
+      {kind === 'jira' && (
+        <>
+          <input
+            value={jiraEmail}
+            onChange={e => {
+              setJiraEmail(e.target.value)
+              clearError('email')
+            }}
+            placeholder={t('channels.jiraEmailPlaceholder')}
+            aria-label={t('channels.jiraEmailAria')}
+            autoComplete="off"
+            {...fieldProps('email')}
+          />
+          {errorText('email')}
+          <input
+            value={token}
+            onChange={e => {
+              setToken(e.target.value)
+              clearError('token')
+            }}
+            placeholder={
+              initial?.hasToken ? t('channels.jiraTokenPlaceholderReplace') : t('channels.jiraTokenPlaceholderNew')
+            }
+            type="password"
+            autoComplete="new-password"
+            aria-label={t('channels.jiraTokenAria')}
+            {...fieldProps('token')}
+          />
+          {errorText('token')}
+          <input
+            value={project}
+            onChange={e => {
+              setProject(e.target.value)
+              clearError('project')
+            }}
+            placeholder={t('channels.jiraProjectPlaceholder')}
+            aria-label={t('channels.jiraProjectAria')}
+            {...fieldProps('project')}
+          />
+          {errorText('project')}
+        </>
+      )}
+      {kind === 'email' && (
+        <fieldset
+          className="space-y-1"
+          aria-invalid={!!errorOf('recipients') || undefined}
+          aria-describedby={[`${uid}-recipients-hint`, errorOf('recipients') && errorId('recipients')]
+            .filter(Boolean)
+            .join(' ')}
+        >
+          <legend className="text-2xs text-text-secondary">{t('channels.recipientsLabel')}</legend>
+          {choosable.length === 0 ? (
+            <p className="text-2xs text-text-tertiary">{t('channels.recipientsNone')}</p>
+          ) : (
+            choosable.map(id => (
+              <label key={id} className="flex items-center gap-2 text-xs text-text-primary">
+                <input
+                  type="checkbox"
+                  checked={recipients.includes(id)}
+                  onChange={e => {
+                    setRecipients(prev => (e.target.checked ? [...prev, id] : prev.filter(r => r !== id)))
+                    clearError('recipients')
+                  }}
+                />
+                {memberName(members, id, t)}
+              </label>
+            ))
+          )}
+          <p id={`${uid}-recipients-hint`} className="text-2xs text-text-tertiary/70">
+            {t('channels.recipientsHint')}
+          </p>
+          {errorText('recipients')}
+        </fieldset>
+      )}
+      {signs &&
+        (clearSecret ? (
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-2xs text-text-secondary">{t('channels.secretWillBeRemoved')}</p>
+            <Button variant="ghost" size="sm" type="button" onClick={() => setClearSecret(false)}>
+              {t('channels.keepSecret')}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <input
+              value={secret}
+              onChange={e => {
+                setSecret(e.target.value)
+                clearError('secret')
+              }}
+              placeholder={
+                !initial || initial.hasSecret === false
+                  ? t('channels.secretPlaceholderNew')
+                  : initial.hasSecret
+                    ? t('channels.secretPlaceholderReplace')
+                    : t('channels.secretPlaceholderExisting')
+              }
+              type="password"
+              autoComplete="new-password"
+              aria-label={t('channels.secretAria')}
+              aria-invalid={!!errorOf('secret') || undefined}
+              aria-describedby={errorOf('secret') ? errorId('secret') : undefined}
+              className={clsx(
+                inputClass,
+                'flex-1',
+                errorOf('secret') ? 'border-semantic-error' : 'border-border-default',
+              )}
+            />
+            {initial?.hasSecret && (
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={() => {
+                  setClearSecret(true)
+                  setSecret('')
+                  clearError('secret')
+                }}
+              >
+                {t('channels.removeSecret')}
+              </Button>
+            )}
+          </div>
+        ))}
+      {signs && !clearSecret && errorText('secret')}
+      <fieldset className="space-y-1" aria-describedby={`${uid}-events-hint`}>
+        <legend className="text-2xs text-text-secondary">{t('channels.eventsLabel')}</legend>
+        {CHANNEL_EVENTS.map(ev => (
+          <label key={ev} className="flex items-center gap-2 text-xs text-text-primary">
+            <input
+              type="checkbox"
+              checked={events.includes(ev)}
+              onChange={e => {
+                setEvents(prev =>
+                  e.target.checked
+                    ? CHANNEL_EVENTS.filter(x => x === ev || prev.includes(x))
+                    : prev.filter(x => x !== ev),
+                )
+                clearError('events')
+              }}
+            />
+            {t(EVENT_LABELS[ev].labelKey as never)}
+          </label>
+        ))}
+        <p id={`${uid}-events-hint`} className="text-2xs text-text-tertiary/70">
+          {t('channels.eventsHint')}
+        </p>
+        {errorText('events')}
+      </fieldset>
       {activeKind && (
-        <p className="text-2xs text-text-tertiary/70">{t(activeKind.hintKey as never)}. HTTPS required.</p>
+        <p className="text-2xs text-text-tertiary/70">
+          {hasUrl
+            ? t('channels.formHint', {kind: t(activeKind.hintKey as never)})
+            : t('channels.formHintNoUrl', {kind: t(activeKind.hintKey as never)})}
+        </p>
       )}
       <div className="flex justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={onCancel} type="button">

@@ -1,0 +1,9 @@
+audit_org_backfill | key 0x62616b696175646f "bakiaudo" (legacy) | once per boot, in the background (server store)
+field_encryption_backfill | key 0x62616b6966656e63 "bakifenc" (legacy) | once per boot, in the background (database with PAD_ENCRYPTION_KEY)
+knowledge_reembed | key 0x6e4f10784827b866 (derived) | on demand (admin re-index in the background; server store, org-scoped embedding credential)
+legacy_migration | key 0x62616b696d696772 "bakimigr" (legacy) | on demand (admin migration start; cloud with PAD_DATA_DIR)
+retention_purge | key 0x62616b697265746e "bakiretn" (legacy) | every PAD_RETENTION_PURGE_INTERVAL and once at boot (server store with accounts)
+scanner | key 0x62616b697363616e "bakiscan" (legacy) | every PAD_SCAN_INTERVAL (cloud), and on demand (admin scan-now)
+secret_reseal | key 0x62616b696b726f74 "bakikrot" (legacy) | once per boot, in the background, while a key rotation is under way (database with PAD_ENCRYPTION_KEY_PREVIOUS)
+token_blacklist_cleanup | key 0x62616b69626c636b "bakiblck" (legacy) | every 5 minutes while the server runs with the Postgres token blacklist
+vector_index_build | key 0x62616b69686e7377 "bakihnsw" (legacy) | once per boot, in the background (database with pgvector)

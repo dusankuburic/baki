@@ -357,7 +357,7 @@ func postCIWebhook(t *testing.T, rt *Router, secret string, body map[string]stri
 func TestCIWebhook_SARIFIsCompressed(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	const secret = "topsecret"
-	moduleOf[*AnalysisHandler](t, rt).ciSecret = secret
+	setCIGlobalSecret(t, rt, secret)
 	const flowID = "flow-ci-gzip"
 	seedCloudFlowWithSource(t, rt, flowID, "alice", rawSampleFlow)
 	h := fullChain(t, rt, nil)
@@ -391,7 +391,7 @@ func TestCIWebhook_Formats(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	const secret = "topsecret"
 	ah := moduleOf[*AnalysisHandler](t, rt)
-	ah.ciSecret = secret
+	setCIGlobalSecret(t, rt, secret)
 	const flowID = "flow-ci-formats"
 	seeded := seedCloudFlowWithSource(t, rt, flowID, "alice", rawSampleFlow)
 
@@ -464,7 +464,7 @@ func TestCIWebhook_Formats(t *testing.T) {
 func TestCIWebhook_PreviewNeverGates(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	const secret = "topsecret"
-	moduleOf[*AnalysisHandler](t, rt).ciSecret = secret
+	setCIGlobalSecret(t, rt, secret)
 	const flowID = "flow-ci-preview"
 	seedCloudFlowWithSource(t, rt, flowID, "alice", rawSampleFlow)
 	verdict := func() (passed bool, errs, preview int) {

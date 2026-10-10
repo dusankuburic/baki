@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"pad-analyzer/internal/auth"
 	"pad-core/ai/scrubber"
 	"pad-core/analyzer"
 	"pad-core/models"
@@ -80,6 +81,11 @@ type ToolContext struct {
 	RealDoc  *models.FlowDocument
 	Analysis ToolAnalysis
 	Fixes    ToolFixApplier
+	// Allow is the session's tool gate (NewToolGate): the same one that decided which tools were offered, asked
+	// again by ExecuteTool before any handler runs. A model can name a tool it was not offered (a hallucinated
+	// call, a replayed history, an Azure agent's own function_call), so the offer is not the boundary; this is.
+	// nil allows every tool (local mode, tests).
+	Allow ToolGate
 }
 
 // analysisDoc returns the document analyses run against: RealDoc when wired, else the scrubbed Doc. The block
@@ -93,55 +99,131 @@ func (tctx ToolContext) analysisDoc() *models.FlowDocument {
 
 type toolHandler func(tctx ToolContext, input json.RawMessage) (string, error)
 
-type registeredTool struct {
-	def     ToolDefinition
-	label   string // friendly status-line label, e.g. "Searching flow"
-	handler toolHandler
-	// timeout bounds this tool's execution (0 ⇒ defaultToolTimeout). Only
-	// apply_fix overrides it — its decision wait alone can exceed the default.
-	timeout time.Duration
+// PreviewKindFixPatch is the preview kind of the fix tools: the approval card renders each item as a patch
+// preview. The frontend's ApprovalCard keys its previews on this value (ADR 0026).
+const PreviewKindFixPatch = "fix-patch"
+
+// ToolSpec is one registered tool: its wire definition plus what the loop, the gate and the approval card need
+// to know about it. Def is the only part a provider sees; the converters stay untouched by the rest.
+type ToolSpec struct {
+	Def   ToolDefinition
+	Label string // friendly status-line label, e.g. "Searching flow"
+	// Timeout bounds this tool's execution (0 ⇒ defaultToolTimeout). Only the
+	// approval-gated tools override it — their decision wait alone can exceed the default.
+	Timeout time.Duration
+	// RequiresApproval: the handler asks the stream's owner before any effect (an approval card).
+	RequiresApproval bool
+	// RequiredScope is the token scope an actor needs to run the tool ("" for read-only tools); a scoped API
+	// token without it is not offered the tool and is refused if it calls it anyway.
+	RequiredScope string
+	// PreviewKind names how the approval card previews the request ("" for read-only tools).
+	PreviewKind string
+	Exec        toolHandler
 }
 
-// toolRegistry is the read-only grounding tool set offered to the model.
+// ToolGate decides whether a session may use a tool: built once per stream with NewToolGate, it selects the
+// tools offered to the model (ToolDefinitionsFor) and is asked again at execution (ToolContext.Allow).
+type ToolGate func(ToolSpec) bool
+
+// The reasons ToolRefusal gives, the label values of pad_chat_tool_refused_total.
+const (
+	// ToolRefusedScope: a scoped API token without the tool's RequiredScope.
+	ToolRefusedScope = "scope"
+	// ToolRefusedApprovalUnavailable: the tool needs an approval and the session has no applier wired (ToolContext.Fixes).
+	ToolRefusedApprovalUnavailable = "approval_unavailable"
+)
+
+// ToolRefusal reports why actor may not use spec in a session where approvalsWired says whether an approval
+// applier exists, or "" when it may. A nil actor is local mode, which restricts nothing (the same rule as the
+// fix applier's scope check); an unscoped session or token allows every scope.
+func ToolRefusal(spec ToolSpec, actor *auth.Actor, approvalsWired bool) string {
+	if spec.RequiresApproval && !approvalsWired {
+		return ToolRefusedApprovalUnavailable
+	}
+	if spec.RequiredScope != "" && actor != nil && !actor.Allows(spec.RequiredScope) {
+		return ToolRefusedScope
+	}
+	return ""
+}
+
+// NewToolGate builds the gate of one session from its actor and whether approvals can be requested.
+func NewToolGate(actor *auth.Actor, approvalsWired bool) ToolGate {
+	return func(spec ToolSpec) bool { return ToolRefusal(spec, actor, approvalsWired) == "" }
+}
+
+// toolRegistry is the grounding and fix tool set the model can be offered.
 var toolRegistry = buildToolRegistry()
 
-// ToolDefinitions returns the tool schemas to attach to a provider Request, in a
-// stable order.
-func ToolDefinitions() []ToolDefinition {
+// ToolSpecs returns every registered tool, in a stable order.
+func ToolSpecs() []ToolSpec {
 	names := make([]string, 0, len(toolRegistry))
 	for n := range toolRegistry {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	out := make([]ToolDefinition, 0, len(names))
+	out := make([]ToolSpec, 0, len(names))
 	for _, n := range names {
-		out = append(out, toolRegistry[n].def)
+		out = append(out, toolRegistry[n])
 	}
 	return out
+}
+
+// ToolSpecOf returns the spec of a registered tool.
+func ToolSpecOf(name string) (ToolSpec, bool) {
+	t, ok := toolRegistry[name]
+	return t, ok
+}
+
+// ToolDefinitionsFor returns the tool schemas to attach to a provider Request for a session gated by gate (nil
+// ⇒ every tool), in a stable order.
+func ToolDefinitionsFor(gate ToolGate) []ToolDefinition {
+	specs := ToolSpecs()
+	out := make([]ToolDefinition, 0, len(specs))
+	for _, s := range specs {
+		if gate == nil || gate(s) {
+			out = append(out, s.Def)
+		}
+	}
+	return out
+}
+
+// ToolDefinitions returns every tool's schema: the closed set behind the metric labels. A stream's request
+// uses ToolDefinitionsFor with its gate.
+func ToolDefinitions() []ToolDefinition { return ToolDefinitionsFor(nil) }
+
+// ToolRequiresApproval reports whether a registered tool asks the user before acting (apply_fix, apply_fixes);
+// false for an unknown name.
+func ToolRequiresApproval(name string) bool {
+	t, ok := toolRegistry[name]
+	return ok && t.RequiresApproval
 }
 
 // ToolLabel returns a short human-readable status label for a tool (for the
 // transient UI status line). Falls back to the tool name.
 func ToolLabel(name string) string {
-	if t, ok := toolRegistry[name]; ok && t.label != "" {
-		return t.label
+	if t, ok := toolRegistry[name]; ok && t.Label != "" {
+		return t.Label
 	}
 	return name
 }
 
-// ExecuteTool runs a tool and always returns a string result — unknown tools, bad input, handler errors and
-// timeouts included — so the model can read the outcome and recover instead of the loop aborting.
+// ExecuteTool runs a tool and always returns a string result — unknown tools, gated tools, bad input, handler
+// errors and timeouts included — so the model can read the outcome and recover instead of the loop aborting.
 func ExecuteTool(name string, input json.RawMessage, tctx ToolContext) string {
 	t, ok := toolRegistry[name]
 	if !ok {
 		return "error: unknown tool " + name
+	}
+	// The session's gate, before the handler: the offer is not the boundary (see ToolContext.Allow).
+	if tctx.Allow != nil && !tctx.Allow(t) {
+		return fmt.Sprintf("error: tool %s is not available in this session — nothing was changed; explain the change so the user can make it instead", name)
 	}
 	// Malformed argument JSON (a call cut mid-argument, or the malformed JSON open models emit) becomes the
 	// standard retryable error result so the model re-issues the call; empty input runs.
 	if in := bytes.TrimSpace(input); len(in) > 0 && !json.Valid(in) {
 		return fmt.Sprintf("error: the arguments for %s were not valid JSON — call it again with valid JSON arguments", name)
 	}
-	timeout := t.timeout
+	timeout := t.Timeout
 	if timeout <= 0 {
 		timeout = defaultToolTimeout
 	}
@@ -150,7 +232,7 @@ func ExecuteTool(name string, input json.RawMessage, tctx ToolContext) string {
 		defer cancel()
 		tctx.Ctx = ctx
 	}
-	res, err := t.handler(tctx, input)
+	res, err := t.Exec(tctx, input)
 	if err != nil {
 		if tctx.Ctx != nil && tctx.Ctx.Err() != nil && errors.Is(tctx.Ctx.Err(), context.DeadlineExceeded) {
 			return fmt.Sprintf("error: tool %s timed out after %s — simplify the request or try fewer results", name, timeout)
@@ -175,83 +257,89 @@ func truncateResult(s string) string {
 
 func schema(raw string) json.RawMessage { return json.RawMessage(raw) }
 
-func buildToolRegistry() map[string]registeredTool {
-	reg := map[string]registeredTool{}
-	add := func(t registeredTool) { reg[t.def.Name] = t }
+func buildToolRegistry() map[string]ToolSpec {
+	reg := map[string]ToolSpec{}
+	add := func(t ToolSpec) { reg[t.Def.Name] = t }
 
-	add(registeredTool{
-		label: "Searching flow",
-		def: ToolDefinition{
+	add(ToolSpec{
+		Label: "Searching flow",
+		Def: ToolDefinition{
 			Name:        "search_flow",
 			Description: "Search the flow for blocks whose name, action type, variables, or property values contain the query. Returns matching blocks with their IDs and subflow.",
 			InputSchema: schema(`{"type":"object","properties":{"query":{"type":"string","description":"Case-insensitive substring to search for"},"limit":{"type":"integer","description":"Max results (default 15)"}},"required":["query"]}`),
 		},
-		handler: toolSearchFlow,
+		Exec: toolSearchFlow,
 	})
-	add(registeredTool{
-		label: "Reading block",
-		def: ToolDefinition{
+	add(ToolSpec{
+		Label: "Reading block",
+		Def: ToolDefinition{
 			Name:        "get_block",
 			Description: "Get full detail for a single block by its ID: type, action, properties, variables, line number, and child count.",
 			InputSchema: schema(`{"type":"object","properties":{"blockId":{"type":"string"}},"required":["blockId"]}`),
 		},
-		handler: toolGetBlock,
+		Exec: toolGetBlock,
 	})
-	add(registeredTool{
-		label: "Listing subflow blocks",
-		def: ToolDefinition{
+	add(ToolSpec{
+		Label: "Listing subflow blocks",
+		Def: ToolDefinition{
 			Name:        "get_subflow_blocks",
 			Description: "List the top-level blocks of a subflow (by subflow ID) as an outline: block ID, type, name, line.",
 			InputSchema: schema(`{"type":"object","properties":{"subflowId":{"type":"string"}},"required":["subflowId"]}`),
 		},
-		handler: toolGetSubflowBlocks,
+		Exec: toolGetSubflowBlocks,
 	})
-	add(registeredTool{
-		label: "Listing findings",
-		def: ToolDefinition{
+	add(ToolSpec{
+		Label: "Listing findings",
+		Def: ToolDefinition{
 			Name:        "list_findings",
 			Description: "List analysis findings, optionally filtered by category (e.g. Security, Reliability, Performance) and/or subflow ID. Each line carries the ruleId, the finding key (usable as a finding:<key> link for the user), and the fix type when auto-fixable — use those with propose_fix/apply_fix. A line marked stage=preview comes from a preview rule: reported, but it never fails a CI gate or policy and is left out of the health score. Results are paginated: pass offset to page through everything. Requires analysis to be available.",
 			InputSchema: schema(`{"type":"object","properties":{"category":{"type":"string"},"subflowId":{"type":"string"},"offset":{"type":"integer","description":"Skip the first N matching findings (pagination)"}}}`),
 		},
-		handler: toolListFindings,
+		Exec: toolListFindings,
 	})
-	add(registeredTool{
-		label: "Previewing fix",
-		def: ToolDefinition{
+	add(ToolSpec{
+		Label: "Previewing fix",
+		Def: ToolDefinition{
 			Name:        "propose_fix",
 			Description: "Preview the auto-fix patch for a finding WITHOUT changing anything: what would be inserted/wrapped/removed/replaced and on which lines. Input is the finding's blockId + ruleId from list_findings. Show the preview to the user; use apply_fix only when they want it applied.",
 			InputSchema: schema(`{"type":"object","properties":{"blockId":{"type":"string","description":"Block ID of the finding"},"ruleId":{"type":"string","description":"Rule ID of the finding"}},"required":["blockId","ruleId"]}`),
 		},
-		handler: toolProposeFix,
+		Exec: toolProposeFix,
 	})
-	add(registeredTool{
-		label: "Requesting fix approval",
-		def: ToolDefinition{
+	add(ToolSpec{
+		Label: "Requesting fix approval",
+		Def: ToolDefinition{
 			Name:        "apply_fix",
 			Description: "Apply a finding's auto-fix to the flow. ALWAYS requires explicit user approval: the user sees the patch preview and an approve/decline prompt, and nothing is written unless they approve. Call this only when the user asked to fix the issue; prefer propose_fix first when they just want to see the change.",
 			InputSchema: schema(`{"type":"object","properties":{"blockId":{"type":"string","description":"Block ID of the finding"},"ruleId":{"type":"string","description":"Rule ID of the finding"}},"required":["blockId","ruleId"]}`),
 		},
-		handler: toolApplyFix,
-		timeout: fixApplyToolTimeout,
+		Exec:             toolApplyFix,
+		Timeout:          fixApplyToolTimeout,
+		RequiresApproval: true,
+		RequiredScope:    auth.ScopeWrite,
+		PreviewKind:      PreviewKindFixPatch,
 	})
-	add(registeredTool{
-		label: "Requesting batch fix approval",
-		def: ToolDefinition{
+	add(ToolSpec{
+		Label: "Requesting batch fix approval",
+		Def: ToolDefinition{
 			Name:        "apply_fixes",
 			Description: "Apply auto-fixes for MULTIPLE findings behind ONE approval prompt (use this instead of repeated apply_fix when the user wants several fixes, e.g. \"fix everything\"). All targets are previewed together and the user approves or declines the whole batch. Same approval rule as apply_fix: nothing is written without explicit approval.",
 			InputSchema: schema(`{"type":"object","properties":{"targets":{"type":"array","minItems":1,"maxItems":10,"description":"Findings to fix, each as {blockId, ruleId} from list_findings","items":{"type":"object","properties":{"blockId":{"type":"string"},"ruleId":{"type":"string"}},"required":["blockId","ruleId"]}}},"required":["targets"]}`),
 		},
-		handler: toolApplyFixes,
-		timeout: fixApplyToolTimeout,
+		Exec:             toolApplyFixes,
+		Timeout:          fixApplyToolTimeout,
+		RequiresApproval: true,
+		RequiredScope:    auth.ScopeWrite,
+		PreviewKind:      PreviewKindFixPatch,
 	})
-	add(registeredTool{
-		label: "Tracing variable",
-		def: ToolDefinition{
+	add(ToolSpec{
+		Label: "Tracing variable",
+		Def: ToolDefinition{
 			Name:        "get_variable_lineage",
 			Description: "Trace a variable's lifecycle across the flow: where it is initialized, mutated, and read (with block IDs and lines).",
 			InputSchema: schema(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`),
 		},
-		handler: toolGetVariableLineage,
+		Exec: toolGetVariableLineage,
 	})
 	return reg
 }

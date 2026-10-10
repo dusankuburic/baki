@@ -15,6 +15,7 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/events"
 	mailer "pad-analyzer/internal/mail"
@@ -77,7 +78,7 @@ func isDisableAudit(orgID, reason string) func(*storageif.AuditEvent) bool {
 // hooks ride on, as caller.
 func (f *orgProvidersFixture) orgRouter(caller string, knowledge *rag.KnowledgeService) http.Handler {
 	security := &SecurityConfig{LocalUserID: caller, OrgSvc: f.orgSvc}
-	h := NewOrgHandler(f.orgSvc, f.backend, knowledge, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(f.backend, f.backend, nil), f.svc, service.NewAuthzService(f.backend, f.orgSvc), service.NewChannelService(f.backend), service.NewUserDirectory(f.backend), testAuditRecorder(f.backend))
+	h := NewOrgHandler(f.orgSvc, f.backend, knowledge, security, mailer.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(f.backend, f.backend, nil), f.svc, service.NewAuthzService(f.backend, f.orgSvc), service.NewChannelService(f.backend), service.NewUserDirectory(f.backend), testAuditRecorder(f.backend), nil)
 	return mountedAs(h, caller)
 }
 

@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/migration"
 	"pad-analyzer/internal/platform/lock"
 	"pad-core/logger"
@@ -20,11 +22,16 @@ import (
 // the start endpoint reports 503.
 type MigrationRunner struct {
 	migrator *migration.Migrator
-	// locker, when wired (WithLocker), extends the single-run guarantee across
-	// replicas: the in-process mutex below only guards one pod, so without it
-	// two pods could both pass the guard and run Migrate concurrently (the
-	// migrator's skip-if-present check is check-then-act).
-	locker lock.GlobalLocker
+	// leaser, when wired (WithLocker, WithLeaser), extends the single-run
+	// guarantee across replicas: the in-process guard below only covers one
+	// pod, so without it two pods could both pass the guard and run Migrate
+	// concurrently (the migrator's skip-if-present check is check-then-act).
+	leaser lock.Leaser
+
+	// job runs the migration (built at the first start, once the lock is wired): on one replica at a time,
+	// bounded by migrationRunTimeout, and cancelled at shutdown (lifecycle.DrainAll) or by Stop.
+	jobOnce sync.Once
+	job     *lifecycle.Singleton
 
 	mu        sync.Mutex
 	running   bool
@@ -37,8 +44,29 @@ type MigrationRunner struct {
 // migration. Arbitrary but stable — every replica must use the same key.
 const migrationLockKey int64 = 0x62616b696d696772 // "bakimigr"
 
+// migrationJob is the legacy migration's identity across replicas.
+var migrationJob = lifecycle.DeclareJob(lifecycle.JobDecl{
+	Name:      "legacy_migration",
+	LegacyKey: migrationLockKey,
+	Schedule:  "on demand (admin migration start; cloud with PAD_DATA_DIR)",
+})
+
 // migrationLockTimeout bounds the advisory-lock acquisition round-trip.
 const migrationLockTimeout = 5 * time.Second
+
+// migrationRunTimeout bounds the whole run generously; most migrations finish far sooner, and the per-flow timeout
+// inside the migrator is the primary guard.
+const migrationRunTimeout = 1 * time.Hour
+
+var (
+	// ErrMigrationDisabled: no migrator is wired (503).
+	ErrMigrationDisabled = errors.New("migration not configured")
+	// ErrMigrationRunning: a migration is running, in this process or on another replica (409).
+	ErrMigrationRunning = errors.New("migration already in progress")
+	// ErrMigrationLockUnavailable: the cross-replica lock could not be asked for, or the server is shutting down;
+	// starting without the lock would drop the single-run guarantee (503).
+	ErrMigrationLockUnavailable = errors.New("migration lock unavailable")
+)
 
 // NewMigrationRunner wraps a migrator. A nil migrator yields a disabled runner.
 func NewMigrationRunner(m *migration.Migrator) *MigrationRunner {
@@ -47,35 +75,54 @@ func NewMigrationRunner(m *migration.Migrator) *MigrationRunner {
 
 // WithLocker wires the cross-replica lock (nil without a database).
 func (r *MigrationRunner) WithLocker(l lock.GlobalLocker) *MigrationRunner {
-	r.locker = l
+	r.leaser = lock.AsLeaser(l)
+	return r
+}
+
+// WithLeaser wires the cross-replica lock as leases, which cancel a run whose lock was lost; it replaces WithLocker.
+func (r *MigrationRunner) WithLeaser(l lock.Leaser) *MigrationRunner {
+	r.leaser = l
 	return r
 }
 
 // Enabled reports whether a migrator is wired (source + dst configured).
 func (r *MigrationRunner) Enabled() bool { return r != nil && r.migrator != nil }
 
-// Start launches a migration asynchronously. It returns false (caller responds
-// 409) if a migration is already running — in this process or, when a
-// GlobalLocker is wired, on any other replica — or false if not configured
-// (503).
 // StartAs begins a run whose orphaned flows are adopted by operatorID — the
 // admin who asked for the migration. Users are not migrated, so legacy flows
 // name owners the destination does not have; stored as-is they are invisible in
-// every library view while the run reports them migrated.
-func (r *MigrationRunner) StartAs(operatorID string) bool { return r.start(&operatorID) }
+// every library view while the run reports them migrated. It returns
+// ErrMigrationDisabled, ErrMigrationRunning (here or on another replica) or
+// ErrMigrationLockUnavailable when the run did not start.
+func (r *MigrationRunner) StartAs(operatorID string) error { return r.start(&operatorID) }
 
-func (r *MigrationRunner) Start() bool { return r.start(nil) }
+// Start begins a run without an adopting operator; see StartAs.
+func (r *MigrationRunner) Start() error { return r.start(nil) }
+
+// Stop cancels a run in flight and refuses later starts. Shutdown does the same through lifecycle.DrainAll.
+func (r *MigrationRunner) Stop() {
+	if r.Enabled() {
+		r.jobRunner().Stop()
+	}
+}
+
+func (r *MigrationRunner) jobRunner() *lifecycle.Singleton {
+	r.jobOnce.Do(func() {
+		r.job = lifecycle.NewSingleton(lifecycle.Job{Spec: migrationJob, Timeout: migrationRunTimeout, Run: r.run}, r.leaser, nil)
+	})
+	return r.job
+}
 
 // start claims the run, then sets the adopting owner: a start rejected because a run is going must not change who
 // adopts that run's flows.
-func (r *MigrationRunner) start(owner *string) bool {
+func (r *MigrationRunner) start(owner *string) error {
 	if !r.Enabled() {
-		return false
+		return ErrMigrationDisabled
 	}
 	r.mu.Lock()
 	if r.running {
 		r.mu.Unlock()
-		return false
+		return ErrMigrationRunning
 	}
 	r.running = true
 	if owner != nil {
@@ -86,48 +133,28 @@ func (r *MigrationRunner) start(owner *string) bool {
 	r.lastErr = nil
 	r.mu.Unlock()
 
-	// Cross-replica guard: acquire the advisory lock before launching. A
-	// failed acquisition (held elsewhere, or the lock round-trip errored)
-	// rejects the start — a migration that can't even reach the DB for the
-	// lock would fail anyway, and proceeding without the lock would silently
-	// drop the single-run guarantee.
-	var release func()
-	if r.locker != nil {
-		lctx, cancel := context.WithTimeout(context.Background(), migrationLockTimeout)
-		rel, acquired, err := r.locker.TryGlobalLock(lctx, migrationLockKey)
-		cancel()
-		if err != nil || !acquired {
-			if err != nil {
-				logger.Warn("migration: advisory lock acquisition failed", "err", err)
-			} else {
-				logger.Info("migration: already running on another replica; start rejected")
-			}
-			r.mu.Lock()
-			r.running = false
-			r.mu.Unlock()
-			return false
-		}
-		release = rel
+	// Cross-replica guard: the job takes its lock before launching. A failed acquisition (held elsewhere, or the
+	// lock round-trip errored) rejects the start — a migration that can't even reach the DB for the lock would fail
+	// anyway, and proceeding without the lock would silently drop the single-run guarantee.
+	lctx, cancel := context.WithTimeout(context.Background(), migrationLockTimeout)
+	err := r.jobRunner().RunNow(lctx)
+	cancel()
+	if err == nil {
+		return nil
 	}
-
-	go r.run(release)
-	return true
+	r.mu.Lock()
+	r.running = false
+	r.mu.Unlock()
+	if errors.Is(err, lifecycle.ErrJobHeld) {
+		logger.Info("migration: already running on another replica; start rejected")
+		return ErrMigrationRunning
+	}
+	return fmt.Errorf("%w: %w", ErrMigrationLockUnavailable, err)
 }
 
-// run executes one full migration. The whole run is bounded so a runaway
-// migration can't hold resources indefinitely; per-flow time is bounded inside
-// the migrator. The final result/error (including panics) are captured for the
-// status endpoint. release (the cross-replica lock, may be nil) is dropped
-// only after the run fully finishes.
-func (r *MigrationRunner) run(release func()) {
-	if release != nil {
-		defer release()
-	}
-	// Bound the whole run generously; most migrations finish far sooner, and
-	// the per-flow timeout inside the migrator is the primary guard.
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
-	defer cancel()
-
+// run is the job's run: one full migration. The final result/error (including panics) are captured for the status
+// endpoint.
+func (r *MigrationRunner) run(ctx context.Context) error {
 	res, err := r.runMigrate(ctx)
 
 	r.mu.Lock()
@@ -135,6 +162,7 @@ func (r *MigrationRunner) run(release func()) {
 	r.last = &res
 	r.lastErr = err
 	r.mu.Unlock()
+	return err
 }
 
 // runMigrate isolates the panic recovery from the mutex bookkeeping.

@@ -18,9 +18,13 @@ type PromptToolCall struct {
 // .*? keeps one block from swallowing the next. The model is instructed to emit exactly this shape.
 var toolCallRe = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
 
-// ToolPromptInstructions returns the system-prompt text teaching a function-calling-less model the grounding tools
-// and the exact marker format the parser expects; append it when running the prompt-based tool loop (runPromptToolLoop).
-func ToolPromptInstructions() string {
+// ToolPromptInstructions is ToolPromptInstructionsFor with every tool listed.
+func ToolPromptInstructions() string { return ToolPromptInstructionsFor(nil) }
+
+// ToolPromptInstructionsFor returns the system-prompt text teaching a function-calling-less model the tools the
+// session's gate allows and the exact marker format the parser expects; append it when running the prompt-based
+// tool loop (runPromptToolLoop).
+func ToolPromptInstructionsFor(gate ToolGate) string {
 	var b strings.Builder
 	b.WriteString("You have access to tools to inspect the currently open flow (and, for apply_fix, to request a user-approved fix). ")
 	b.WriteString("To call a tool, output exactly one block on its own in this format:\n")
@@ -29,7 +33,7 @@ func ToolPromptInstructions() string {
 	b.WriteString("<tool_result name=\"<tool_name>\">\n<result text>\n</tool_result>\n")
 	b.WriteString("When you have enough information for your final answer, respond normally WITHOUT any tool_call block.\n\n")
 	b.WriteString("Available tools:\n")
-	for _, td := range ToolDefinitions() {
+	for _, td := range ToolDefinitionsFor(gate) {
 		fmt.Fprintf(&b, "- %s: %s\n", td.Name, td.Description)
 	}
 	b.WriteString("\nEmit at most one tool_call per response; wait for its result before calling the next.\n")

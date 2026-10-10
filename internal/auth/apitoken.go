@@ -62,15 +62,20 @@ const (
 	// ScopeAdmin covers /api/admin/* (connector control, scanner triggers,
 	// system health).
 	ScopeAdmin = "admin"
+	// ScopeCI covers the CI webhook (POST /api/integrations/ci) alone, on the
+	// flows the token's user can read (bakicli report -token). Like chat it
+	// grants nothing elsewhere, and it is the only way a token reaches the
+	// webhook: an unscoped token does not (ADR 0019).
+	ScopeCI = "ci"
 )
 
 // ValidTokenScopes is the closed set accepted at mint time.
-var ValidTokenScopes = []string{ScopeRead, ScopeWrite, ScopeChat, ScopeAdmin}
+var ValidTokenScopes = []string{ScopeRead, ScopeWrite, ScopeChat, ScopeAdmin, ScopeCI}
 
 // ValidScope reports whether s is a member of the closed scope set.
 func ValidScope(s string) bool {
 	switch s {
-	case ScopeRead, ScopeWrite, ScopeChat, ScopeAdmin:
+	case ScopeRead, ScopeWrite, ScopeChat, ScopeAdmin, ScopeCI:
 		return true
 	}
 	return false
@@ -97,11 +102,27 @@ func RequiredScope(method, path string) string {
 	case strings.HasPrefix(path, "/api/ws-ticket"):
 		// The ticket is the entry to live updates (SSE/WS); read-level.
 		return ScopeRead
+	case path == "/api/integrations/ci":
+		// Self-authenticated: jwtAuth never asks, and the webhook itself admits a token with this scope only.
+		return ScopeCI
+	case isOrgCICredentialPath(path) && method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions:
+		// Minting or revoking an organisation's CI credential is credential management, like /api/auth/tokens.
+		return ScopeDeny
 	case method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions:
 		return ScopeRead
 	default:
 		return ScopeWrite
 	}
+}
+
+// isOrgCICredentialPath matches /api/orgs/{id}/ci-credentials and the paths below it.
+func isOrgCICredentialPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/api/orgs/")
+	if !ok {
+		return false
+	}
+	orgID, tail, ok := strings.Cut(rest, "/")
+	return ok && orgID != "" && (tail == "ci-credentials" || strings.HasPrefix(tail, "ci-credentials/"))
 }
 
 // ScopeDeny is RequiredScope's sentinel for routes scoped tokens may never

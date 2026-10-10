@@ -92,6 +92,29 @@ describe('KnowledgeBasePanel', () => {
     expect(screen.getByText(/dimension mismatch; re-index/i)).toBeInTheDocument()
   })
 
+  // ADR 0027: a document whose chunks were embedded under another embedding
+  // model than the viewer's is searchable by width but never found; the list
+  // says so next to the width warning and points at re-index.
+  it('marks documents indexed with another embedding model', async () => {
+    seedStore('admin')
+    requestMock.mockResolvedValue([
+      {
+        id: 'd1',
+        filename: 'other.md',
+        createdAt: new Date().toISOString(),
+        chunkCount: 4,
+        vectorIndexed: 4,
+        embeddingStranded: 4,
+      },
+      {id: 'd2', filename: 'mine.md', createdAt: new Date().toISOString(), chunkCount: 2, vectorIndexed: 2},
+    ])
+    renderPanel()
+
+    expect(await screen.findByText('other.md')).toBeInTheDocument()
+    expect(screen.getAllByText(/another embedding model; re-index/i)).toHaveLength(1)
+    expect(screen.queryByText(/dimension mismatch/i)).not.toBeInTheDocument()
+  })
+
   it('advertises the 1MB backend cap, not the flow-parser size limit', async () => {
     seedStore('admin')
     renderPanel()

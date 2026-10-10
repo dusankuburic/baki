@@ -4,9 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
-
-	"pad-analyzer/internal/metrics"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -54,7 +53,28 @@ type Hub struct {
 	// connects (a package-level period would race with every other test
 	// under -race).
 	heartbeatPeriod time.Duration
+
+	// reauthzPeriod is each socket's periodic access recheck, always
+	// reauthzEvery outside tests (set like heartbeatPeriod).
+	reauthzPeriod time.Duration
+	// recheckSlots bounds the access rechecks that access changes start
+	// (Hub.RecheckFlow and the rest) running at once across the hub.
+	recheckSlots chan struct{}
+	// accessChanges counts those rechecks, so a socket admitted while one
+	// looked for it can tell (Client.Run).
+	accessChanges atomic.Uint64
 }
+
+const (
+	// reauthzEvery is the periodic access recheck of every socket.
+	reauthzEvery = 2 * time.Minute
+	// maxConcurrentRechecks bounds the event-driven rechecks in flight (one or
+	// two authz lookups each, on the database pool), so an organisation
+	// deleted under hundreds of open sockets queues them instead of taking
+	// the pool. Small: a recheck is a point lookup, and a socket waiting for
+	// a slot still gets its periodic pass.
+	maxConcurrentRechecks = 4
+)
 
 // room holds all clients subscribed to a particular flow.
 type room struct {
@@ -74,7 +94,8 @@ func (r *room) stopHeartbeat() {
 
 // NewHub creates a single-replica, in-memory Hub ready to accept connections.
 func NewHub() *Hub {
-	return &Hub{rooms: make(map[string]*room), connsPerUser: make(map[string]int), heartbeatPeriod: pingPeriod}
+	return &Hub{rooms: make(map[string]*room), connsPerUser: make(map[string]int), heartbeatPeriod: pingPeriod,
+		reauthzPeriod: reauthzEvery, recheckSlots: make(chan struct{}, maxConcurrentRechecks)}
 }
 
 // NewHubWithRedis creates a Hub backed by a Redis pub/sub + presence backplane
@@ -111,7 +132,7 @@ func (h *Hub) Close() {
 
 // close is Close bounded by ctx: the publisher drains what it can before
 // ctx's deadline and is abandoned at it, so Shutdown fits the budget it was
-// given (main.go allows 3 s) even when that budget is already spent.
+// given (internal/app allows 3 s) even when that budget is already spent.
 func (h *Hub) close(ctx context.Context) {
 	h.mu.Lock()
 	h.closed = true
@@ -229,7 +250,7 @@ func (h *Hub) Join(flowID string, c *Client) {
 	r.clients[c] = true
 	h.mu.Unlock()
 
-	metrics.RecordWSConnectionChange(+1)
+	recordWSConnectionChange(+1)
 
 	// Write this client's presence and read the room in one round trip when
 	// the backplane pipelines the pair (no-op single-replica). The pipeline's
@@ -328,7 +349,7 @@ func (h *Hub) Leave(flowID string, c *Client) {
 	}
 	h.mu.Unlock()
 
-	metrics.RecordWSConnectionChange(-1)
+	recordWSConnectionChange(-1)
 
 	// presence.leave means "this user is gone"; peers key presence by user,
 	// not connection. It used to go out on every disconnect, so closing one

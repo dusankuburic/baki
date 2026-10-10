@@ -2,10 +2,20 @@
 
 import type {Tolerant} from './tolerant'
 
-export type ProviderID =
+/** The providers this bundle has a label (and a settings default) for. */
+export type KnownProviderID =
   'claude' | 'openai' | 'gemini' | 'xai' | 'glm' | 'github-models' | 'copilot' | 'azure-foundry' | 'local'
 
-// PROVIDERS is the client-side catalogue of every ProviderID. `satisfies`
+/**
+ * A provider id as the server names it. Open on the wire in both directions:
+ * the listing may name a provider a newer server added, and a thread pinned
+ * to it, a turn sent to it and the settings naming it all carry the id back.
+ * Narrow with isKnownProviderId only where the bundle needs a label, glyph or
+ * default; everything else takes the string as sent.
+ */
+export type ProviderID = string
+
+// PROVIDERS is the client-side catalogue of every KnownProviderID. `satisfies`
 // turns a new ID in the union into a compile error here until it has an
 // entry, so pickers derived from it cannot silently drop a provider — the
 // active-assistant picker once hardcoded four of seven, and a settings file
@@ -20,17 +30,110 @@ export const PROVIDERS = {
   copilot: {label: 'Copilot'},
   'azure-foundry': {label: 'Azure AI Foundry'},
   local: {label: 'Local model'},
-} as const satisfies Record<ProviderID, {label: string}>
+} as const satisfies Record<KnownProviderID, {label: string}>
 
-export const PROVIDER_IDS: readonly ProviderID[] = Object.keys(PROVIDERS) as ProviderID[]
+export const PROVIDER_IDS: readonly KnownProviderID[] = Object.keys(PROVIDERS) as KnownProviderID[]
 
-export const PROVIDER_OPTIONS: {value: ProviderID; label: string}[] = PROVIDER_IDS.map(id => ({
+export const PROVIDER_OPTIONS: {value: KnownProviderID; label: string}[] = PROVIDER_IDS.map(id => ({
   value: id,
   label: PROVIDERS[id].label,
 }))
 
+/** Whether `value` is a provider the catalogue knows (an own key, not an inherited one). */
+export function isKnownProviderId(value: unknown): value is KnownProviderID {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(PROVIDERS, value)
+}
+
 export const AUTH_TYPES = ['api_key', 'oauth'] as const
 export type AuthType = (typeof AUTH_TYPES)[number]
+
+// ---- The provider catalogue: GET /api/providers/catalog (Phase 4b) ----
+//
+// Every provider the running server registers, configured or not, in display
+// order, each with the credential form it needs. The bundle renders what it
+// can form and a generic card for the rest: a kind, field type or mode a
+// newer server added is kept as sent (tolerant), never dropped. A server
+// older than this bundle has no such route (404) and the Settings panel
+// renders its built-in sections instead.
+
+/**
+ * How a provider is credentialed: `api_key` (one secret through
+ * /api/keys/save), `oauth_device` (the device-code flow at `endpoints`),
+ * `document` (a validated settings document with a panel of its own — Azure
+ * AI Foundry, the local model — or, for a provider the bundle does not know,
+ * "configured on the server") or `none` (nothing to enter; test only).
+ */
+export const CREDENTIAL_KINDS = ['api_key', 'oauth_device', 'document', 'none'] as const
+export type CredentialKind = (typeof CREDENTIAL_KINDS)[number]
+
+/** A field's widget. A type the bundle does not know renders the generic card, never a guessed input. */
+export const CREDENTIAL_FIELD_TYPES = ['text', 'secret', 'url', 'select', 'number', 'json'] as const
+export type CredentialFieldType = (typeof CREDENTIAL_FIELD_TYPES)[number]
+
+export const PROVIDER_MODES = ['cloud', 'desktop'] as const
+export type ProviderMode = (typeof PROVIDER_MODES)[number]
+
+/** `catalog` (priced from the model catalogue), `free`, or `unpriced` (served models the server cannot price). */
+export const PROVIDER_PRICINGS = ['catalog', 'free', 'unpriced'] as const
+export type ProviderPricing = (typeof PROVIDER_PRICINGS)[number]
+
+/** The capabilities the bundle acts on; the wire set is open (`caps: string[]`). */
+export const PROVIDER_CAP_EMBEDDINGS = 'embeddings'
+
+export interface CredentialFieldOption {
+  value: string
+  label: string
+}
+
+/** One input of a credential form. `label`, `placeholder` and `help` are user-facing copy from the server. */
+export interface CredentialField {
+  name: string
+  label: string
+  type: Tolerant<CredentialFieldType>
+  required: boolean
+  placeholder?: string
+  help?: string
+  /** `select` only. */
+  options?: CredentialFieldOption[]
+}
+
+export interface CredentialSchema {
+  kind: Tolerant<CredentialKind>
+  fields: CredentialField[]
+  /** The provider's set-up documentation (shown as a link when it is an http(s) URL). */
+  helpUrl?: string
+}
+
+/** The routes a provider's credential flow uses, as paths under /api/. */
+export interface ProviderEndpoints {
+  save?: string
+  test?: string
+  start?: string
+  poll?: string
+  revoke?: string
+  user?: string
+}
+
+/** One catalogue entry. `ProviderInfo` on /list carries the same optional fields. */
+export interface ProviderSpec {
+  id: ProviderID
+  name: string
+  authType: Tolerant<AuthType>
+  modes: Tolerant<ProviderMode>[]
+  caps: string[]
+  credential: CredentialSchema
+  endpoints: ProviderEndpoints
+  configured: boolean
+  /** The section's colour dot (a CSS colour). */
+  color?: string
+  /** The chat picker's glyph: `cloud`, `hard-drive`, `github`; an unknown name falls back to the id map. */
+  icon?: string
+  pricing?: Tolerant<ProviderPricing>
+}
+
+export interface ProviderCatalog {
+  providers: ProviderSpec[]
+}
 
 export interface ModelDetail {
   id: string
@@ -72,8 +175,8 @@ export interface ModelDetail {
 }
 
 export interface ProviderInfo {
-  /** A provider this bundle does not know is listed too; the chat leaves it out (it cannot send to it). */
-  id: Tolerant<ProviderID>
+  /** A provider this bundle does not know is listed too, and chatted with as sent (the server resolves its credential). */
+  id: ProviderID
   name: string
   authType: Tolerant<AuthType>
   contextLimit: number
@@ -93,12 +196,23 @@ export interface ProviderInfo {
    * dismissed — the chat picker offers "Review". Omitted when false.
    */
   suggestDiscovery?: boolean
+  // The catalogue's descriptive fields (ProviderSpec), optional here: a
+  // server before Phase 4b sends none, and the bundle's own tables apply.
+  modes?: Tolerant<ProviderMode>[]
+  caps?: string[]
+  credential?: CredentialSchema
+  endpoints?: ProviderEndpoints
+  color?: string
+  icon?: string
+  pricing?: Tolerant<ProviderPricing>
 }
 
 export interface ProviderTestResult {
   ok: boolean
   latencyMs: number
   error?: string
+  /** Why a test failed, when the server can say: PROVIDER_UNKNOWN, AI_BUDGET_EXCEEDED, PROVIDER_NOT_ALLOWED… */
+  code?: string
 }
 
 // How baki signs in to an Azure AI Foundry resource: an API key, a Microsoft

@@ -13,6 +13,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/mail"
@@ -45,7 +46,7 @@ func TestKnowledgeReindex_CursorRoundTrip(t *testing.T) {
 	}
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", chunks)
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(directionEmbedder{vec: []float32{0, 1}}))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
 	r := mountedAs(h, "u-admin")
 	path := "/api/orgs/" + org.ID + "/knowledge/reindex"
 
@@ -176,7 +177,7 @@ func TestKnowledge_DeadlineIs504(t *testing.T) {
 	_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", []storageif.KnowledgeChunk{{ID: "c1", DocID: "doc-1", Content: "retry every call", Embedding: []float32{1, 0}}})
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(deadlineEmbedder{}))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
 	r := mountedAs(h, "u-admin")
 
 	for _, route := range []struct{ path, body string }{
@@ -295,7 +296,7 @@ func TestKnowledgeReindex_FailedPageCarriesResumeCursor(t *testing.T) {
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", chunks)
 	emb := &rateLimitOnCallEmbedder{failAt: 6}
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(emb))
-	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store))
+	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
 	r := mountedAs(h, "u-admin")
 
 	rr := postJSON(t, r, "/api/orgs/"+org.ID+"/knowledge/reindex", `{"force":true}`)

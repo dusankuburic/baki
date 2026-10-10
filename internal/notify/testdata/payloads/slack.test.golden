@@ -1,0 +1,10 @@
+POST /services/T/B/X
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: test
+X-Baki-Signature: sha256=085eb8d2f27df34694e48f9f68529047c5639e1b1d6943cd13e1b75e79198c4f
+X-Baki-Signature-V2: sha256=647c0e0bc2283f5f6bf7e02f46107d0e32f202a7277fe6eedca31dc25f91bad3
+X-Baki-Timestamp: 1790856001
+
+{"attachments":[{"color":"good","fields":[{"short":true,"title":"Flow","value":""}],"footer":"Baki PAD Flow Analyzer","text":"This is a test delivery to \"ops\" (webhook). If you can read this, the channel works.","ts":1790856000}],"text":"baki channel test"}

@@ -317,7 +317,7 @@ func TestBuildStreamRequest_ContextScrubbedOncePerCacheEntry(t *testing.T) {
 
 	registerFakeProvider()
 	factory := ai.NewProviderFactory(func(_, _ string) (string, error) { return "k", nil }, nil, nil, nil)
-	provider, err := factory.For("u1", "fake")
+	provider, err := factory.For(context.Background(), "u1", "fake")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,7 +12,6 @@ import (
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/capability"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
@@ -101,7 +100,7 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	metrics.RecordFlowOp("upload")
+	service.RecordFlowOp("upload")
 	var req struct {
 		Name  string            `json:"name"`
 		Files map[string]string `json:"files"`
@@ -158,7 +157,7 @@ func (h *FlowHandler) handleLoadFlowFromPath(w http.ResponseWriter, r *http.Requ
 		render.Error(w, fmt.Errorf("loading from local paths is not supported in cloud mode. use upload instead"), http.StatusForbidden)
 		return
 	}
-	metrics.RecordFlowOp("load_path")
+	service.RecordFlowOp("load_path")
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -190,7 +189,7 @@ func (h *FlowHandler) handleLoadFlowFolder(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("loading from local folders is not supported in cloud mode. use upload instead"), http.StatusForbidden)
 		return
 	}
-	metrics.RecordFlowOp("load_folder")
+	service.RecordFlowOp("load_folder")
 	var req struct {
 		Path string `json:"path"`
 	}

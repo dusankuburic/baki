@@ -25,6 +25,22 @@ export function onSettingsLoaded(fn: SettingsListener): () => void {
   }
 }
 
+// What a provider the catalogue does not know is tuned from until the user
+// changes something: the same numbers as every catalogue entry, no default
+// model (the server's wins).
+export const DEFAULT_PROVIDER_CONFIG: AIProviderConfig = {
+  enabled: false,
+  defaultModel: '',
+  temperature: 0.3,
+  maxTokens: 4096,
+  contextTokenBudget: 4000,
+}
+
+/** A provider's tuning, the defaults for one without an entry (a provider a newer server added). */
+export function providerConfig(ai: Pick<AISettings, 'providers'>, id: ProviderID): AIProviderConfig {
+  return ai.providers[id] ?? DEFAULT_PROVIDER_CONFIG
+}
+
 export const defaultSettings: AppSettings = {
   version: 1,
   general: {
@@ -376,7 +392,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     updateProvider: async (id, config) => {
       const prev = get().settings
       const before: AIProviderConfig | undefined = prev.ai.providers[id]
-      const next = {...prev, ai: {...prev.ai, providers: {...prev.ai.providers, [id]: {...before, ...config}}}}
+      // A provider without an entry (one a newer server added) gets a whole
+      // one: the defaults with this change on top.
+      const entry = {...(before ?? DEFAULT_PROVIDER_CONFIG), ...config}
+      const next = {...prev, ai: {...prev.ai, providers: {...prev.ai.providers, [id]: entry}}}
       set({settings: next})
       try {
         await persist(next)

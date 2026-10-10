@@ -212,23 +212,23 @@ func TestForEmbedding_AzureWithoutEmbeddingDeployment(t *testing.T) {
 		}, nil, nil, nil)
 	}
 
-	_, err := factoryFor(docs["chat-only"]).ForEmbedding("", "azure-foundry", "")
+	_, err := factoryFor(docs["chat-only"]).ForEmbedding(context.Background(), "", "azure-foundry", "")
 	if !errors.Is(err, ErrEmbeddingDeploymentMissing) {
 		t.Errorf("chat-only document: err = %v, want ErrEmbeddingDeploymentMissing", err)
 	}
 	// The deployment-wide AI.EmbeddingModel override counts as a deployment.
-	if p, err := factoryFor(docs["chat-only"]).ForEmbedding("", "azure-foundry", "shared-embed"); err != nil || p == nil {
+	if p, err := factoryFor(docs["chat-only"]).ForEmbedding(context.Background(), "", "azure-foundry", "shared-embed"); err != nil || p == nil {
 		t.Errorf("override applied: want a provider, got %v", err)
 	}
-	if p, err := factoryFor(docs["with-embed"]).ForEmbedding("", "azure-foundry", ""); err != nil || p == nil {
+	if p, err := factoryFor(docs["with-embed"]).ForEmbedding(context.Background(), "", "azure-foundry", ""); err != nil || p == nil {
 		t.Errorf("document with an embedding deployment: want a provider, got %v", err)
 	}
-	_, err = factoryFor(docs["invalid"]).ForEmbedding("", "azure-foundry", "")
+	_, err = factoryFor(docs["invalid"]).ForEmbedding(context.Background(), "", "azure-foundry", "")
 	if !errors.Is(err, ErrProviderConfigInvalid) {
 		t.Errorf("invalid document: err = %v, want ErrProviderConfigInvalid", err)
 	}
 	// Chat is unaffected: For still builds the provider.
-	if _, err := factoryFor(docs["chat-only"]).For("", "azure-foundry"); err != nil {
+	if _, err := factoryFor(docs["chat-only"]).For(context.Background(), "", "azure-foundry"); err != nil {
 		t.Errorf("For(azure-foundry) on a chat-only document: %v", err)
 	}
 }
@@ -332,18 +332,18 @@ func TestForEmbeddingOrg_OrgWithoutEmbeddingDeployment(t *testing.T) {
 		return "", nil
 	})
 
-	_, err := f.ForEmbeddingOrg("member", "org-1", "azure-foundry", "")
+	_, err := f.ForEmbeddingOrg(context.Background(), "member", "org-1", "azure-foundry", "")
 	if !errors.Is(err, ErrOrgEmbeddingDeploymentMissing) || !errors.Is(err, ErrEmbeddingDeploymentMissing) {
 		t.Errorf("org document: err = %v, want ErrOrgEmbeddingDeploymentMissing wrapping ErrEmbeddingDeploymentMissing", err)
 	}
 	if !strings.Contains(err.Error(), "ask an org admin") {
 		t.Errorf("org document: err = %v, want the copy aimed at the org admin", err)
 	}
-	_, err = f.ForEmbedding("", "azure-foundry", "")
+	_, err = f.ForEmbedding(context.Background(), "", "azure-foundry", "")
 	if !errors.Is(err, ErrEmbeddingDeploymentMissing) || errors.Is(err, ErrOrgEmbeddingDeploymentMissing) {
 		t.Errorf("member document: err = %v, want the plain ErrEmbeddingDeploymentMissing", err)
 	}
-	_, err = f.ForEmbeddingOrg("member", "org-empty", "azure-foundry", "")
+	_, err = f.ForEmbeddingOrg(context.Background(), "member", "org-empty", "azure-foundry", "")
 	if !errors.Is(err, ErrEmbeddingDeploymentMissing) || errors.Is(err, ErrOrgEmbeddingDeploymentMissing) {
 		t.Errorf("org without a credential: err = %v, want the member's plain sentinel", err)
 	}

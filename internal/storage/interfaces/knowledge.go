@@ -19,18 +19,36 @@ type KnowledgeStore interface {
 	ListKnowledgeDocumentIDsByFilename(ctx context.Context, orgID, filename string) (ids []string, total int, err error)
 	// SaveKnowledgeChunks inserts chunk rows RLS-scoped to userID; the knowledge_chunks WITH CHECK policy enforces org membership ("" only in non-authenticated local mode).
 	SaveKnowledgeChunks(ctx context.Context, userID string, chunks []KnowledgeChunk) error
-	SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int) ([]KnowledgeChunk, error)
-	// ListKnowledgeChunkContents returns up to limit chunks (no embeddings) strictly after the cursor in (doc_id, id) order — one re-index page; limit <= 0 = backend page cap.
-	ListKnowledgeChunkContents(ctx context.Context, orgID string, after KnowledgeChunkCursor, limit int) ([]KnowledgeChunk, error)
+	// SearchKnowledge ranks the org's chunks at the query's width by cosine similarity. identity restricts the hits to the chunks embedded under it plus the legacy rows (no identity); "" = any identity.
+	SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int, identity string) ([]KnowledgeChunk, error)
+	// ListKnowledgeChunkContents returns up to limit chunks (no embeddings) strictly after the cursor in (doc_id, id) order — one re-index page; limit <= 0 = backend page cap. notIdentity skips the chunks already embedded under that identity (legacy rows are walked); "" walks every chunk.
+	ListKnowledgeChunkContents(ctx context.Context, orgID string, after KnowledgeChunkCursor, limit int, notIdentity string) ([]KnowledgeChunk, error)
 	// SampleKnowledgeChunkEmbeddings returns up to n chunks WITH stored embeddings, one per document, deterministic order — RAG re-embeds their text as an embedding-model mismatch guard.
 	SampleKnowledgeChunkEmbeddings(ctx context.Context, orgID string, n int) ([]KnowledgeChunk, error)
 	// SampleKnowledgeChunkEmbeddingsUpTo returns up to n chunks at or before the cursor in (doc_id, id) order NEAREST first WITH stored embeddings — a resumed re-index model check.
 	SampleKnowledgeChunkEmbeddingsUpTo(ctx context.Context, orgID string, upTo KnowledgeChunkCursor, n int) ([]KnowledgeChunk, error)
-	// UpdateKnowledgeChunkEmbeddings replaces chunk embeddings in place (RLS-scoped like SaveKnowledgeChunks) and refreshes the pgvector column for same-dimension vectors.
+	// UpdateKnowledgeChunkEmbeddings replaces chunk embeddings and their embedding identity in place (RLS-scoped like SaveKnowledgeChunks) and refreshes the pgvector column for same-dimension vectors.
 	UpdateKnowledgeChunkEmbeddings(ctx context.Context, userID string, chunks []KnowledgeChunk) error
 	// CountKnowledgeChunks reports org totals: all chunks and how many are in the pgvector index at the configured dimension (dim-mismatch detection).
 	CountKnowledgeChunks(ctx context.Context, orgID string) (total, vectorIndexed int, err error)
+	// CountKnowledgeChunksByIdentity is CountKnowledgeChunks split by embedding identity: the chunks at identity (current), at another (stranded) and, by difference, the legacy rows; "" names nothing current or stranded.
+	CountKnowledgeChunksByIdentity(ctx context.Context, orgID, identity string) (KnowledgeChunkCounts, error)
+	// CountStrandedKnowledgeChunksByDocument counts, per document id, the org's chunks embedded under another identity than identity; documents without any are absent, and "" strands nothing.
+	CountStrandedKnowledgeChunksByDocument(ctx context.Context, orgID, identity string) (map[string]int, error)
+	// StampKnowledgeChunkIdentity rewrites the embedding identity of the org's chunks at identity from ("" = the legacy rows) to to ("" = none), RLS-scoped to userID like UpdateKnowledgeChunkEmbeddings, and reports how many rows changed.
+	StampKnowledgeChunkIdentity(ctx context.Context, userID, orgID, from, to string) (int, error)
 }
+
+// KnowledgeChunkCounts is an org's chunk census relative to one embedding identity (ADR 0027).
+type KnowledgeChunkCounts struct {
+	// Total is every chunk of the org; VectorIndexed those in the pgvector index at the configured width.
+	Total, VectorIndexed int
+	// Current are the chunks embedded under the identity asked about, Stranded those under another one.
+	Current, Stranded int
+}
+
+// Legacy is the number of chunks without an identity: rows from before the column, matched by every search.
+func (c KnowledgeChunkCounts) Legacy() int { return c.Total - c.Current - c.Stranded }
 
 type KnowledgeDocument struct {
 	ID        string    `json:"id"`
@@ -40,6 +58,10 @@ type KnowledgeDocument struct {
 	// ChunkCount / VectorIndexed are list-view extras: chunks the doc has vs how many are in the pgvector index; chunks>0 with 0 indexed = stranded by an embedding-provider switch.
 	ChunkCount    int `json:"chunkCount,omitempty"`
 	VectorIndexed int `json:"vectorIndexed,omitempty"`
+	// ChunkerVersion is the chunking geometry the document was split with (rag.chunkerVersion; 1 before the column existed). A document is chunked once, at upload.
+	ChunkerVersion int `json:"chunkerVersion,omitempty"`
+	// EmbeddingStranded is a list-view extra relative to the viewer's embedding identity: chunks embedded under another identity, which that viewer's searches never return; re-index converts them.
+	EmbeddingStranded int `json:"embeddingStranded,omitempty"`
 }
 
 type KnowledgeChunk struct {
@@ -49,6 +71,8 @@ type KnowledgeChunk struct {
 	OrgID     string    `json:"orgId,omitempty"`
 	Content   string    `json:"content"`
 	Embedding []float32 `json:"embedding"`
+	// EmbeddingIdentity names the embedder that produced Embedding (ai.EmbeddingIdentity: the frozen label|baseURL|model|dims form); "" is a legacy row (NULL), matched leniently and stamped once an upload or re-index proves the org's model reproduces it (ADR 0027).
+	EmbeddingIdentity string `json:"embeddingIdentity,omitempty"`
 	// Filename of the source document (joined at retrieval time) so RAG can attribute each chunk to its source.
 	Filename string `json:"filename,omitempty"`
 }

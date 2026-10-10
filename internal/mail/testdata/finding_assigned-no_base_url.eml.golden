@@ -1,0 +1,28 @@
+From: "PAD Analyzer" <no-reply@pad.example.com>
+To: <una@example.com>
+Subject: A finding was assigned to you
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Message-ID: <golden@pad.example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary=GOLDEN-BOUNDARY
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain; charset=UTF-8
+
+Hi Una O'Neil,
+
+Ari <admin> assigned a finding to you on the flow "Invoices & Payments "EU"=
+ <v2>":
+
+  Unused variable
+
+--GOLDEN-BOUNDARY
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html; charset=UTF-8
+
+<p>Hi Una O&#39;Neil,</p><p><strong>Ari &lt;admin&gt;</strong> assigned a f=
+inding to you on the flow <strong>Invoices &amp; Payments &#34;EU&#34; &lt;=
+v2&gt;</strong>:</p><blockquote>Unused variable</blockquote>
+--GOLDEN-BOUNDARY--

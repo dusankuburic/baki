@@ -49,3 +49,33 @@ describe('chatApi.getConversation payload shapes', () => {
     await expect(chatApi.getConversation('flow-1', 't-1')).resolves.toMatchObject({messages: [{id: 'm1'}]})
   })
 })
+
+// The wire contract of a create refused while the server drains for a
+// restart (agent F's side): a 503 envelope coded SERVER_RESTARTING, whose
+// retry hint rides in details (the client does not see the Retry-After
+// header). The engine retries such a create once (stream-engine/lifecycle).
+describe('chatApi.streamChatMessage refused while the server restarts', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it('rejects with a 503 ApiError coded SERVER_RESTARTING, its hint readable, and is not retried by the transport', async () => {
+    const fetchSpy = mockFetch(
+      {code: 'SERVER_RESTARTING', message: 'the server is restarting', details: {retryAfterSeconds: 2}},
+      503,
+    )
+    const chatApi = await getChatApi()
+    const {ApiError} = await import('./client')
+    const {classifyChatFailure, retryAfterHint} = await import('@/lib/chatErrors')
+
+    const err = await chatApi.streamChatMessage({flowId: 'flow-1', userMessage: 'q'} as never).catch(e => e)
+
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({status: 503, code: 'SERVER_RESTARTING'})
+    expect(classifyChatFailure(err.message, err.code)).toBe('serverRestarting')
+    expect(retryAfterHint(err)).toBe(2)
+    // A POST is never repeated below the engine: the one retry is the engine's.
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+})

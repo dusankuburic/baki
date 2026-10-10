@@ -79,44 +79,59 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (*st
 	return user, nil
 }
 
-// SendVerificationEmail issues an email-verification token and mails the link; best-effort, never an error.
+// SendVerificationEmail queues a new email-verification link for user on the mail runner, the token write
+// included (queueTokenEmail); best-effort, never an error, and it waits on neither the store nor SMTP.
 func (s *AuthService) SendVerificationEmail(ctx context.Context, user *storageif.User) {
-	if s.email == nil || user.Email == "" {
-		return
-	}
-	raw, hash, err := auth.GenerateOpaqueToken()
-	if err != nil {
-		logger.Error("verification token generation failed", "error", err, "userID", user.ID)
-		return
-	}
-	tok := &storageif.UserToken{
-		TokenHash: hash,
-		Purpose:   storageif.TokenPurposeEmailVerify,
-		UserID:    user.ID,
-		ExpiresAt: time.Now().UTC().Add(EmailVerifyTTL),
-	}
-	if err := s.backend.CreateUserToken(ctx, tok); err != nil {
-		logger.Error("storing verification token failed", "error", err, "userID", user.ID)
-		return
-	}
-	if err := s.email.SendEmailVerification(ctx, user.Email, raw); err != nil {
-		logger.Error("sending verification email failed", "error", err, "userID", user.ID)
-	}
+	s.queueTokenEmail(ctx, user, storageif.TokenPurposeEmailVerify, EmailVerifyTTL, false,
+		func(raw string) mailer.Mail {
+			return mailer.EmailVerification.With(mailer.EmailVerificationData{Token: raw})
+		})
 }
 
 // ResendVerification re-issues the verification link for a known, still-unverified account. Returns (nil, nil) —
 // NOT an error — for unknown or already-verified addresses, so the caller responds identically in every case
-// (anti-enumeration). Outstanding tokens are invalidated first so only the newest link redeems.
+// (anti-enumeration). The request only looks the account up: invalidating the outstanding tokens (so only the
+// newest link redeems), writing the new one and sending it run on the mail runner.
 func (s *AuthService) ResendVerification(ctx context.Context, email string) (*storageif.User, error) {
 	user, err := s.backend.LoadUserByEmail(ctx, email)
 	if err != nil || user == nil || user.EmailVerified {
 		return nil, nil
 	}
-	if err := s.backend.InvalidateUserTokens(ctx, user.ID, storageif.TokenPurposeEmailVerify); err != nil {
-		logger.Error("failed to invalidate outstanding verification tokens before resend", "error", err, "userID", user.ID)
-	}
-	s.SendVerificationEmail(ctx, user)
+	s.queueTokenEmail(ctx, user, storageif.TokenPurposeEmailVerify, EmailVerifyTTL, true,
+		func(raw string) mailer.Mail {
+			return mailer.EmailVerification.With(mailer.EmailVerificationData{Token: raw})
+		})
 	return user, nil
+}
+
+// queueTokenEmail hands a one-time-token email to the mail runner as one job: invalidating user's outstanding
+// tokens of purpose (when invalidate), writing the new token and sending its link (mail) all run there, so the
+// request pays only the account lookup, which an unknown address pays too (B7). Without a mail service nothing is
+// written: a token no email carries is of no use.
+func (s *AuthService) queueTokenEmail(ctx context.Context, user *storageif.User, purpose string, ttl time.Duration, invalidate bool, mail func(raw string) mailer.Mail) {
+	if s.email == nil || user.Email == "" {
+		return
+	}
+	userID := user.ID
+	err := s.email.EnqueueJob(ctx, user.Email, func(ctx context.Context) (mailer.Mail, error) {
+		if invalidate {
+			if err := s.backend.InvalidateUserTokens(ctx, userID, purpose); err != nil {
+				logger.Error("failed to invalidate outstanding tokens before issuing a new one", "error", err, "userID", userID, "purpose", purpose)
+			}
+		}
+		raw, hash, err := auth.GenerateOpaqueToken()
+		if err != nil {
+			return mailer.Mail{}, fmt.Errorf("%s token generation: %w", purpose, err)
+		}
+		tok := &storageif.UserToken{TokenHash: hash, Purpose: purpose, UserID: userID, ExpiresAt: time.Now().UTC().Add(ttl)}
+		if err := s.backend.CreateUserToken(ctx, tok); err != nil {
+			return mailer.Mail{}, fmt.Errorf("storing the %s token: %w", purpose, err)
+		}
+		return mail(raw), nil
+	})
+	if err != nil {
+		logger.FromContext(ctx).Error("token email not queued", "error", err, "userID", userID, "purpose", purpose)
+	}
 }
 
 // LoginOutcome distinguishes why Authenticate failed, so the caller logs the correct audit reason without
@@ -228,31 +243,19 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 	return nil
 }
 
-// RequestPasswordReset issues a reset token and emails it. Returns (nil, nil) — NOT an error — when email
-// doesn't match a user, so the caller responds identically (anti-enumeration).
+// RequestPasswordReset queues a reset token and its email. Returns (nil, nil) — NOT an error — when email doesn't
+// match a user, so the caller responds identically (anti-enumeration). The request only looks the account up: the
+// token write and the SMTP round trip, which only an existing account pays, run on the mail runner (queueTokenEmail),
+// so the response time no longer tells which accounts exist (B7).
 func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) (*storageif.User, error) {
 	user, err := s.backend.LoadUserByEmail(ctx, email)
-	if err != nil {
+	if err != nil || user == nil {
 		return nil, nil
 	}
-	raw, hash, err := auth.GenerateOpaqueToken()
-	if err != nil {
-		return user, err
-	}
-	tok := &storageif.UserToken{
-		TokenHash: hash,
-		Purpose:   storageif.TokenPurposePasswordReset,
-		UserID:    user.ID,
-		ExpiresAt: time.Now().UTC().Add(PasswordResetTTL),
-	}
-	if err := s.backend.CreateUserToken(ctx, tok); err != nil {
-		return user, err
-	}
-	if s.email != nil {
-		if err := s.email.SendPasswordReset(ctx, user.Email, raw); err != nil {
-			logger.Error("sending password reset email failed", "error", err, "userID", user.ID)
-		}
-	}
+	s.queueTokenEmail(ctx, user, storageif.TokenPurposePasswordReset, PasswordResetTTL, false,
+		func(raw string) mailer.Mail {
+			return mailer.PasswordReset.With(mailer.PasswordResetData{Token: raw})
+		})
 	return user, nil
 }
 

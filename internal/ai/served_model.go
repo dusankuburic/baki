@@ -7,12 +7,10 @@ import (
 	"time"
 )
 
-// aliasModelProviders lists the providers whose model IDs are user-chosen ALIASES, not model names (a Foundry
-// deployment called "my-gpt4o" tells the catalogue nothing): the model each alias served last is memoised
-// (recordServedModel) and folded back into the model list (enrichServedModels). They are unpriced.
-var aliasModelProviders = map[string]bool{
-	"azure-foundry": true,
-}
+// The providers whose model IDs are user-chosen ALIASES, not model names (a Foundry deployment called
+// "my-gpt4o" tells the catalogue nothing), are those with CapModelAliases — aliasModelProviders in spec.go,
+// derived at registration: the model each alias served last is memoised (recordServedModel) and folded back
+// into the model list (enrichServedModels). They are unpriced.
 
 const (
 	// servedMemoMax bounds the memo (entries are tiny; the cap only matters
@@ -241,12 +239,14 @@ func annotateServedModel(providerID string, m *ModelInfo, served string, withLim
 }
 
 // UsesModelAliases reports whether providerID's model ids are user-chosen
-// aliases (Azure AI Foundry deployment names) rather than model names.
+// aliases (Azure AI Foundry deployment names) rather than model names (CapModelAliases).
 func UsesModelAliases(providerID string) bool { return aliasModelProviders[providerID] }
 
 // ReservationPricer is implemented by the audited wrapper and answers the rate an in-flight budget
-// reservation for model is priced at; the chat service prefers it over its own listing lookup (a router's
-// listing price is the memo of an EARLIER routed call).
+// reservation for model is priced at. The chat service does not consult it today: it reserves through its own
+// inFlightPricing (the provider-wide rate, nothing for an alias provider), which answers the same; the
+// interface stays for a caller that needs the wrapper's resolution (a router's listing price is the memo of
+// an EARLIER routed call).
 type ReservationPricer interface {
 	ReservationPricing(ctx context.Context, model string) Pricing
 }

@@ -23,7 +23,9 @@ import (
 )
 
 // ScanNowFunc triggers an out-of-band governance sweep (a manual run of the scanner's periodic
-// pass). Nil when scanning isn't available (the endpoint reports 503); the run is async.
+// pass). Nil when scanning isn't available (the endpoint reports 503); the run is async. It runs
+// as the scanner's job (scanner.ScanOnce): skipped while a sweep runs on any replica or the lock
+// cannot be asked for, and cancelled when the scanner stops at shutdown.
 type ScanNowFunc func(ctx context.Context)
 
 // manualRunTimeout caps an admin-triggered background scan so a stalled sweep can't leak a
@@ -316,21 +318,26 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 }
 
 // @Summary      Start data migration
-// @Description  Copies flows, settings and chat conversations from a legacy filesystem-backed server's data directory (PAD_DATA_DIR) into the database (admin only, cloud mode). Idempotent and non-blocking; the status result lists what is not migrated. Users are not migrated, so flows whose recorded owner is absent here are assigned to the admin who starts the run (reported as FlowsAdopted).
+// @Description  Copies flows, settings and chat conversations from a legacy filesystem-backed server's data directory (PAD_DATA_DIR) into the database (admin only, deployments with a server store). Idempotent and non-blocking; the status result lists what is not migrated. Users are not migrated, so flows whose recorded owner is absent here are assigned to the admin who starts the run (reported as FlowsAdopted).
 // @Tags         admin
 // @Produce      json
 // @Success      200 {object} map[string]string "Started"
 // @Failure      403 {object} map[string]string "Forbidden"
-// @Failure      409 {object} map[string]string "Conflict"
-// @Failure      503 {object} map[string]string "Migration not configured"
+// @Failure      409 {object} map[string]string "A migration is already running (on any replica)"
+// @Failure      503 {object} map[string]string "Migration not configured, or its cross-replica lock is unavailable (try again)"
 // @Router       /api/admin/migration/start [post]
 func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Request) {
 	if !h.runner.Enabled() {
-		render.Error(w, fmt.Errorf("migration not configured: set PAD_DATA_DIR (and PAD_STORAGE=database) in cloud mode"), http.StatusServiceUnavailable)
+		render.Error(w, fmt.Errorf("migration not configured: set PAD_DATA_DIR on a deployment with a server store"), http.StatusServiceUnavailable)
 		return
 	}
-	if !h.runner.StartAs(h.security.CallerID(r)) {
+	switch err := h.runner.StartAs(h.security.CallerID(r)); {
+	case errors.Is(err, ErrMigrationRunning):
 		render.Error(w, fmt.Errorf("migration already in progress"), http.StatusConflict)
+		return
+	case err != nil:
+		// A database error is not "already in progress": the admin should retry, not wait for a run that is not there.
+		render.Error(w, fmt.Errorf("migration could not start: its cross-replica lock is unavailable; try again"), http.StatusServiceUnavailable)
 		return
 	}
 	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionMigrationStart, ResourceType: "migration", ResourceID: "start"})

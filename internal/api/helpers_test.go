@@ -17,10 +17,12 @@ import (
 	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/events"
 	mailer "pad-analyzer/internal/mail"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/platform/reqtx"
+	"pad-analyzer/internal/platform/secret"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	storagedb "pad-analyzer/internal/storage/database"
@@ -161,7 +163,7 @@ func newTestRouter(backend storageif.StorageBackend, jwtEnabled bool) *Router {
 func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClient SSOClient, identityStore storageif.IdentityLinkStore, tweak ...func(*config.Config)) *Router {
 	cfg := config.Default()
 	cfg.Auth.Enabled = jwtEnabled
-	cfg.Auth.Secret = testToken
+	cfg.Auth.Secret = secret.New(testToken)
 	routePolicyFromEnv(cfg)
 	for _, fn := range tweak {
 		fn(cfg)
@@ -178,7 +180,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		docProv = service.NewCloudDocumentProvider(backend)
 	}
 
-	// Cloud mode always runs with a blacklist (main.go creates one whenever
+	// Cloud mode always runs with a blacklist (internal/app creates one whenever
 	// auth is enabled); single-use SSO tickets and logout revocation depend
 	// on it, so the test router mirrors that.
 	var blacklist auth.BlacklistStore
@@ -222,7 +224,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		JWTEnabled:     jwtEnabled,
 		LocalUserID:    "local",
 		LocalName:      "You",
-		Token:          testToken,
+		Token:          secret.New(testToken),
 		AuthMgr:        authMgr,
 		Backend:        backend,
 		RequestTx:      testRequestTx(jwtEnabled, backend),
@@ -234,7 +236,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	eventManager := NewEventManager(make(chan struct{}))
 
 	dashboardSvc := service.NewDashboardService(backend, analysisSvc, flowSvc, scopes)
-	authSvc := service.NewAuthService(backend, mailer.NewService(config.EmailConfig{}, config.ModeLocal))
+	authSvc := service.NewAuthService(backend, mailer.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)))
 	triageSvc := service.NewTriageService(backend, backend, backend, bus)
 	shareSvc := service.NewShareTokenService(backend, backend, bus)
 	for _, s := range service.FlowCacheSubscribers(flowSvc, dashboardSvc, chatSvc) {
@@ -242,12 +244,15 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 	}
 	// Never started, as before boot: every row is a detached write to the backend.
 	auditRec := testAuditRecorder(backend)
-	orgHandler := NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, config.ModeLocal), service.NewOrgRuleService(backend, backend, bus), providerSvc, authzSvc, service.NewChannelService(backend), service.NewUserDirectory(backend), auditRec)
+	// Organisation CI credentials exist with accounts, as capability.Of derives it; no deployment secret
+	// (setCIGlobalSecret sets one).
+	ciSvc := service.NewCIService(backend, docProv, authzSvc, service.CIOptions{OrgCredentials: jwtEnabled})
+	orgHandler := NewOrgHandler(orgSvc, backend, nil, security, mailer.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(backend, backend, bus), providerSvc, authzSvc, service.NewChannelService(backend, service.ChannelOptions{Policy: egress.ForDeployment(testCaps(jwtEnabled, backend))}), service.NewUserDirectory(backend), auditRec, ciSvc)
 	// As APIModule subscribes it, on the provider service the org handler holds at delivery (tests swap it).
 	eventbus.Subscribe(bus, eventbus.Async, "lent-credential-revocation", func(ctx context.Context, e events.OrgMemberChanged) {
 		revokeLentCredentials(ctx, auditRec, orgHandler.providers, e)
 	}, eventbus.InlineWhenSaturated())
-	analysisHandler := NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier(nil), mailer.NewService(config.EmailConfig{}, config.ModeLocal), "", service.NewPolicyService(backend), service.NewGovernanceAlertService(backend), triageSvc, service.NewCommentService(backend, triageSvc, bus), shareSvc, auditRec, exportSvc)
+	analysisHandler := NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, backend, security, service.NewWebhookNotifier(nil), mailer.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), ciSvc, service.NewPolicyService(backend), service.NewGovernanceAlertService(backend), triageSvc, service.NewCommentService(backend, triageSvc, bus), shareSvc, auditRec, exportSvc)
 	// The subscriptions internal/di.SubscribeRealtime makes for the handlers.
 	eventbus.Subscribe(bus, eventbus.Async, "finding-comment-fanout", analysisHandler.OnFindingCommented, eventbus.InlineWhenSaturated())
 	eventbus.Subscribe(bus, eventbus.Async, "finding-assignment-fanout", analysisHandler.OnFindingAssigned, eventbus.InlineWhenSaturated())
@@ -260,10 +265,10 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		NewDashboardHandler(dashboardSvc, security),
 		NewExportHandler(exportSvc, flowSvc, analysisSvc, security, auditRec),
 		// Cloud/JWT mode always runs with a refresh-token store in production
-		// (main.go wires one whenever auth is enabled); mirror that here so the
+		// (internal/app wires one whenever auth is enabled); mirror that here so the
 		// refresh handler's replay/rotation path is exercised, and a nil store
 		// (which the handler now rejects as a misconfiguration) isn't relied on.
-		NewAuthHandler(service.NewSessionService(newMockTokenStore()), backend, security, ssoClient, service.NewIdentityService(backend, identityStore), mailer.NewService(config.EmailConfig{}, config.ModeLocal), authSvc, service.NewAccountLifecycleService(backend, nil, nil), service.NewAPITokenService(backend), auditRec),
+		NewAuthHandler(service.NewSessionService(newMockTokenStore()), backend, security, ssoClient, service.NewIdentityService(backend, identityStore), authSvc, service.NewAccountLifecycleService(backend, nil, nil), service.NewAPITokenService(backend), auditRec, bus),
 		NewAdminHandler(auditRec, security, NewMigrationRunner(nil), nil, authzSvc, service.NewUserAdminService(backend)),
 		NewProviderHandler(providerSvc, security, auditRec),
 		orgHandler,

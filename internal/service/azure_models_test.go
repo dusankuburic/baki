@@ -222,7 +222,10 @@ var azmUser = AzureScope{Scope: "u1"}
 func TestAzureModels_ConnectionLifecycle(t *testing.T) {
 	e := newAzureModelsEnv(t)
 	ctx := context.Background()
-	c := e.mustConn(t, azmUser, "  Contoso   prod ", azmKeyConfig("k1"))
+	// The key is a value no generated id, name or timestamp in the view can contain: "k1" matched a random id now and
+	// then, failing the leak check below.
+	const key = "Secret-Key-Sentinel"
+	c := e.mustConn(t, azmUser, "  Contoso   prod ", azmKeyConfig(key))
 	if len(c.ID) != 10 || !ai.ValidAzureConnectionID(c.ID) || c.ID == ai.AzureDefaultConnectionID {
 		t.Fatalf("id = %q, want ten [a-z0-9]", c.ID)
 	}
@@ -234,10 +237,10 @@ func TestAzureModels_ConnectionLifecycle(t *testing.T) {
 	}
 	raw, _ := e.secrets.Get("u1", "azure-foundry/"+c.ID)
 	stored, err := ai.ParseAzureFoundryConfig(raw)
-	if err != nil || stored.Auth.Key != "k1" || stored.ChatDeployment != "" || len(stored.Deployments) != 0 {
+	if err != nil || stored.Auth.Key != key || stored.ChatDeployment != "" || len(stored.Deployments) != 0 {
 		t.Fatalf("stored credential = %+v (%v)", stored, err)
 	}
-	if b, _ := json.Marshal(c); strings.Contains(string(b), "k1") {
+	if b, _ := json.Marshal(c); strings.Contains(string(b), key) {
 		t.Errorf("the view leaks the secret: %s", b)
 	}
 

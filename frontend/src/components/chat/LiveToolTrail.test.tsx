@@ -35,7 +35,7 @@ describe('LiveToolTrail', () => {
           tokens: 0,
           toolStatus: null,
           toolCalls: [],
-          fixProposals: [],
+          approvals: [],
         },
       },
     })
@@ -63,7 +63,7 @@ describe('LiveToolTrail', () => {
             {name: 'search_flow', label: 'Searching flow', ok: true, summary: 'ok'},
             {name: 'get_block', label: 'Reading block', ok: false, durationMs: 50, summary: 'error'},
           ],
-          fixProposals: [],
+          approvals: [],
         },
       },
     })
@@ -96,7 +96,7 @@ describe('LiveToolTrail', () => {
           tokens: 4,
           toolStatus: null,
           toolCalls: [{name: 'search_flow', label: 'Searching flow', ok: true, summary: '2 matches'}],
-          fixProposals: [],
+          approvals: [],
         },
       },
     })
@@ -131,7 +131,7 @@ describe('LiveToolTrail expand (V1.3)', () => {
           tokens: 0,
           toolCalls: five,
           toolStatus: null,
-          fixProposals: [],
+          approvals: [],
         },
       },
     })

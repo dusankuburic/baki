@@ -65,7 +65,7 @@ func TestForEmbedding_AppliesDimensions(t *testing.T) {
 
 	f := NewProviderFactory(func(_, _ string) (string, error) { return "k", nil }, nil, nil, nil)
 	f.SetEmbeddingDimensions(1024)
-	p, err := f.ForEmbedding("", "openai", "")
+	p, err := f.ForEmbedding(context.Background(), "", "openai", "")
 	if err != nil {
 		t.Fatal(err)
 	}

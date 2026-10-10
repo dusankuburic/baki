@@ -1,7 +1,7 @@
 // App settings tree — what /api/system/settings round-trips between the
 // settings store and the backend.
 
-import type {ProviderID} from './providers'
+import type {KnownProviderID, ProviderID} from './providers'
 import type {RuleConfig} from './analysis'
 
 export type ThemeMode =
@@ -66,12 +66,22 @@ export interface AIPromptsConfig {
   blockWithFindings: string[]
 }
 
+/**
+ * Per-provider tuning. Every provider the catalogue knows has an entry (the
+ * defaults seed them); one a newer server added has an entry only once it
+ * was tuned — read through settingsStore's providerConfig, which fills in
+ * the defaults. The settings JSON shape is unchanged.
+ */
+export type AIProvidersConfig = Record<KnownProviderID, AIProviderConfig> & {
+  [id: ProviderID]: AIProviderConfig | undefined
+}
+
 export interface AISettings {
   activeProvider: ProviderID
   embeddingProvider: ProviderID
   /** Override the embedding model name; empty keeps the provider default. */
   embeddingModel?: string
-  providers: Record<ProviderID, AIProviderConfig>
+  providers: AIProvidersConfig
   showCostEstimates: boolean
   saveConversationHistory: boolean
   systemPromptSuffix?: string

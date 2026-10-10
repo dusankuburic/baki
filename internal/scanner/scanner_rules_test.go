@@ -146,7 +146,7 @@ func TestScanOnce_NewStableRuleRaisesOneNoticePerScope(t *testing.T) {
 	sweepOnce := func() (*capture, *fakeSSE) {
 		cap := newCapture(t)
 		sse := &fakeSSE{}
-		s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+		s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 		s.SetEventNotifier(sse)
 		s.ScanOnce(ctx)
 		s.ScanOnce(ctx) // a second sweep of the same process
@@ -232,7 +232,7 @@ func TestScanOnce_NewPreviewRuleRaisesNothing(t *testing.T) {
 	reports := map[string]*models.AnalysisReport{"f1": reportUnder("f1", current, known, preview)}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(ctx)
 	if got := cap.all(); len(got) != 0 {
 		t.Errorf("a preview rule raised %+v", got)
@@ -259,7 +259,7 @@ func TestScanOnce_DriftBesideANewRuleCountsTheKnownRulesOnly(t *testing.T) {
 		finding("hardcoded-credential", "b8", models.SeverityWarning))}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(ctx)
 	got := cap.all()
 	if len(got) != 1 || got[0].Type != notify.EventDrift || got[0].NewErrors != 1 || got[0].NewWarnings != 0 ||
@@ -294,7 +294,7 @@ func TestScanOnce_LegacyRecords(t *testing.T) {
 		"revised":   reportUnder("revised", current, known, revised),
 	}
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(ctx)
 
 	byType := map[notify.EventType][]notify.Event{}
@@ -375,7 +375,7 @@ func TestScanOnce_RegressionLeavesOutOnlyTheRulesTheSnapshotDidNotScore(t *testi
 			}
 			cap := newCapture(t)
 			reports := map[string]*models.AnalysisReport{"f1": reportUnder("f1", current, tc.after...)}
-			s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+			s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 			s.ScanOnce(ctx)
 
 			got := cap.all()
@@ -419,7 +419,7 @@ func TestScanOnce_ACutSweepKeepsItsNoticeAndTheNextOneMergesIntoIt(t *testing.T)
 		once.Do(cut) // the tick ends right after the first flow
 		return reports[doc.ID], nil
 	}
-	s := New(b, nil, analyze, nil, 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyze, nil, 0, loopbackChannels(b))
 	sse := &fakeSSE{}
 	s.SetEventNotifier(sse)
 	s.ScanOnce(sweepCtx)
@@ -485,7 +485,7 @@ func TestScanOnce_AnAlertAlreadyInTheInboxIsNotDeliveredAgain(t *testing.T) {
 	ctx := context.Background()
 	b, reports := alertingFlows(t, 3)
 	first := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, first.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, first.srv.URL), 0, loopbackChannels(b))
 	s.ScanOnce(ctx)
 	if n := len(first.all()); n != 3 {
 		t.Fatalf("first process delivered %d alerts, want 3", n)
@@ -493,7 +493,7 @@ func TestScanOnce_AnAlertAlreadyInTheInboxIsNotDeliveredAgain(t *testing.T) {
 
 	restarted := newCapture(t)
 	sse := &fakeSSE{}
-	s2 := New(b, nil, analyzeReturning(reports), mustNotifier(t, restarted.srv.URL), 0, notify.AllowLoopbackTargets)
+	s2 := New(b, nil, analyzeReturning(reports), mustNotifier(t, restarted.srv.URL), 0, loopbackChannels(b))
 	s2.SetEventNotifier(sse)
 	s2.ScanOnce(ctx)
 	if n := len(restarted.all()); n != 0 {
@@ -738,7 +738,7 @@ func TestScanOnce_NoticeScopes(t *testing.T) {
 		seedOwnedFlow(t, b, "f1", owner, "")
 		setBaselineWith(t, b, "f1", old)
 		reports := map[string]*models.AnalysisReport{"f1": reportUnder("f1", current, finding("hardcoded-url", "b1", models.SeverityWarning))}
-		s := New(b, nil, analyzeReturning(reports), nil, 0, notify.AllowLoopbackTargets)
+		s := New(b, nil, analyzeReturning(reports), nil, 0, loopbackChannels(b))
 		sse := &fakeSSE{}
 		s.SetEventNotifier(sse)
 		s.SetSingleTenant(single)
@@ -827,7 +827,7 @@ func TestScanOnce_RealAnalyses_ANewRuleIsANoticeAndAPreviewRuleIsSilent(t *testi
 			cap := newCapture(t)
 			s := New(b, nil, func(ctx context.Context, d *models.FlowDocument) (*models.AnalysisReport, error) {
 				return analyzer.RunAnalysisCtx(ctx, d, all, nil, nil), nil
-			}, mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+			}, mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 			s.ScanOnce(ctx)
 
 			if got := cap.all(); len(got) != 0 {
@@ -869,7 +869,7 @@ func TestScanOnce_NoticesAreStoredPageByPage(t *testing.T) {
 		reports[id] = reportUnder(id, current, finding("hardcoded-url", "b1", models.SeverityWarning))
 	}
 	fb := &ruleSetFailingBackend{healthBackend: b}
-	s := New(fb, nil, analyzeReturning(reports), nil, 0, notify.AllowLoopbackTargets)
+	s := New(fb, nil, analyzeReturning(reports), nil, 0, loopbackChannels(fb))
 	sse := &fakeSSE{}
 	s.SetEventNotifier(sse)
 	s.ScanOnce(context.Background())
@@ -900,7 +900,7 @@ func TestScanOnce_LegacySnapshotIsReRecordedThenCompared(t *testing.T) {
 	reports := map[string]*models.AnalysisReport{"f1": first}
 
 	cap := newCapture(t)
-	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, notify.AllowLoopbackTargets)
+	s := New(b, nil, analyzeReturning(reports), mustNotifier(t, cap.srv.URL), 0, loopbackChannels(b))
 	recorded := 0
 	s.SetHealthRecorder(func(ctx context.Context, doc *models.FlowDocument, r *models.AnalysisReport) {
 		recorded++

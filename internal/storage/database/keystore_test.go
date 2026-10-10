@@ -13,11 +13,11 @@ import (
 // crypto layer (encrypt/decrypt) in isolation.
 func newTestStore(t *testing.T, secret string) *EncryptedKeyStore {
 	t.Helper()
-	aead, err := newKeystoreAEAD([]byte(secret))
+	keys, err := newSealKeys([]byte(secret), nil)
 	if err != nil {
-		t.Fatalf("newKeystoreAEAD: %v", err)
+		t.Fatalf("newSealKeys: %v", err)
 	}
-	return &EncryptedKeyStore{aead: aead}
+	return &EncryptedKeyStore{keys: keys}
 }
 
 func TestEncryptedKeyStore_EncryptDecryptRoundTrip(t *testing.T) {

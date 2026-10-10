@@ -10,6 +10,7 @@ vi.mock('@/hooks/useStreamingMessage', () => ({
     capturedHandler = handler
     return {
       registerStream: async () => true,
+      confirmStream: vi.fn(),
       cancel: vi.fn(),
       teardownStream: vi.fn(),
       resumeInto: vi.fn(),

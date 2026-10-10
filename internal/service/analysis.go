@@ -14,7 +14,6 @@ import (
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/events"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-core/analyzer"
 	"pad-core/cache"
@@ -367,7 +366,7 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 	record, progress, claim := opts.record, opts.progress, opts.claim
 
 	if record || opts.count {
-		metrics.RecordAnalysisRun()
+		recordAnalysisRun()
 	}
 
 	// Trace the run so its duration is attributable within the request trace; no-op without an OTLP exporter.
@@ -438,7 +437,7 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 
 	// Surface skipped rules (panic recovery) so ops can alert when a rule silently produces no findings.
 	if result.Stats.RulesSkipped > 0 {
-		metrics.RecordRulesSkipped(result.Stats.RulesSkipped)
+		recordRulesSkipped(result.Stats.RulesSkipped)
 	}
 
 	span.SetAttributes(

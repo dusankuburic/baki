@@ -116,7 +116,7 @@ func (e *azChatEnv) waitUsage(t *testing.T, n int) []*storageif.UsageMetric {
 func (e *azChatEnv) scriptProviders(p ai.Provider) func() []ai.AzureConnectionRef {
 	var mu sync.Mutex
 	var refs []ai.AzureConnectionRef
-	e.chat.azureConnection = func(_ string, ref ai.AzureConnectionRef, _ []ai.AzureRegisteredModel) (ai.Provider, error) {
+	e.chat.azureConnection = func(_ context.Context, _ string, ref ai.AzureConnectionRef, _ []ai.AzureRegisteredModel) (ai.Provider, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		refs = append(refs, ref)

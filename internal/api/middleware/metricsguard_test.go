@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"pad-analyzer/internal/platform/secret"
 )
 
 func TestIsPrivateIP(t *testing.T) {
@@ -35,7 +37,7 @@ func TestIsPrivateIP(t *testing.T) {
 }
 
 func TestMetricsGuard_PrivateIPAllowed(t *testing.T) {
-	handler := MetricsGuard(nil, "")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MetricsGuard(nil, secret.Value{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -50,7 +52,7 @@ func TestMetricsGuard_PrivateIPAllowed(t *testing.T) {
 }
 
 func TestMetricsGuard_PublicIPBlocked(t *testing.T) {
-	handler := MetricsGuard(nil, "")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MetricsGuard(nil, secret.Value{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called for public IP")
 	}))
 
@@ -65,7 +67,7 @@ func TestMetricsGuard_PublicIPBlocked(t *testing.T) {
 }
 
 func TestMetricsGuard_LoopbackAllowed(t *testing.T) {
-	handler := MetricsGuard(nil, "")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MetricsGuard(nil, secret.Value{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -80,7 +82,7 @@ func TestMetricsGuard_LoopbackAllowed(t *testing.T) {
 }
 
 func TestMetricsGuard_TrustedProxyXFF(t *testing.T) {
-	handler := MetricsGuard([]string{"10.0.0.0/8"}, "")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MetricsGuard([]string{"10.0.0.0/8"}, secret.Value{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -100,7 +102,7 @@ func TestMetricsGuard_PublicViaTrustedProxyXFF(t *testing.T) {
 	// X-Forwarded-For header must NOT bypass the private-IP check.
 	// Protection against public /metrics access relies on network ACLs
 	// (NSG/ingress), not on the client-controlled XFF header.
-	handler := MetricsGuard([]string{"10.0.0.0/8"}, "")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MetricsGuard([]string{"10.0.0.0/8"}, secret.Value{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -123,7 +125,7 @@ func TestMetricsGuard_TokenRequiredWhenSet(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	t.Run("private IP without token rejected when token set", func(t *testing.T) {
-		handler := MetricsGuard(nil, tok)(ok)
+		handler := MetricsGuard(nil, secret.New(tok))(ok)
 		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 		req.RemoteAddr = "10.0.0.1:12345"
 		rr := httptest.NewRecorder()
@@ -134,7 +136,7 @@ func TestMetricsGuard_TokenRequiredWhenSet(t *testing.T) {
 	})
 
 	t.Run("private IP with correct token admitted", func(t *testing.T) {
-		handler := MetricsGuard(nil, tok)(ok)
+		handler := MetricsGuard(nil, secret.New(tok))(ok)
 		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 		req.RemoteAddr = "10.0.0.1:12345"
 		req.Header.Set("Authorization", "Bearer "+tok)
@@ -146,7 +148,7 @@ func TestMetricsGuard_TokenRequiredWhenSet(t *testing.T) {
 	})
 
 	t.Run("private IP with wrong token rejected", func(t *testing.T) {
-		handler := MetricsGuard(nil, tok)(ok)
+		handler := MetricsGuard(nil, secret.New(tok))(ok)
 		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 		req.RemoteAddr = "10.0.0.1:12345"
 		req.Header.Set("Authorization", "Bearer wrong")
@@ -160,7 +162,7 @@ func TestMetricsGuard_TokenRequiredWhenSet(t *testing.T) {
 	// The scheme is case-insensitive per RFC 7235 — a scraper sending lowercase
 	// "bearer" must be admitted (consistent with auth.ExtractToken).
 	t.Run("private IP with lowercase bearer token admitted", func(t *testing.T) {
-		handler := MetricsGuard(nil, tok)(ok)
+		handler := MetricsGuard(nil, secret.New(tok))(ok)
 		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 		req.RemoteAddr = "10.0.0.1:12345"
 		req.Header.Set("Authorization", "bearer "+tok)

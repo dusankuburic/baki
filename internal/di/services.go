@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"pad-core/logger"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -19,6 +20,7 @@ import (
 	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/mail"
 	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/platform/lock"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
@@ -104,7 +106,14 @@ func ProvideHistoryStore(configDir string) *analyzer.HistoryStore {
 
 // ProvideAI builds the GitHub/Copilot auth and the provider factory. With an organisation credential store
 // (cloud) ForOrg and ForEmbeddingOrg fall back to — or, for embeddings, prefer — the org's shared credential.
-func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config, keys service.KeyStore, orgKeys service.OrgKeyStore) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory) {
+// The knowledge base's pinned embedding provider must be a registered, embedding-capable spec (config checks
+// its own copy of the ids; the registry is the authority). Every chain the factory builds consults the daily
+// AI budget before each billed call and the provider policy before any key is read (ADR 0028); both depend on
+// settings and the backend only, so there is no cycle through the services that take the factory.
+func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config, keys service.KeyStore, orgKeys service.OrgKeyStore, budget *service.AIBudget, policy *service.ProviderPolicy) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, error) {
+	if p := cfg.Storage.EmbeddingProvider; p != "" && !ai.SupportsEmbeddings(p) {
+		return nil, nil, nil, fmt.Errorf("PAD_EMBEDDING_PROVIDER=%q is not an embedding-capable provider (registered: %s)", p, strings.Join(ai.EmbeddingFallbackOrder(), ", "))
+	}
 	copilotAuth := ai.NewCopilotAuth()
 	// The storage backend is nil in local/desktop mode (no usage store). Leave the
 	// recorder nil there — the audited provider guards a nil recorder and skips
@@ -116,7 +125,22 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 			return backend.SaveUsageMetric(ctx, metric)
 		}
 	}
-	factory := ai.NewProviderFactory(memberKeyLookup(keys), copilotAuth, recorder, &cfg.Runtime)
+	// A nil *AIBudget or *ProviderPolicy (a di-only test graph) must not become a non-nil interface.
+	var opts []ai.FactoryOption
+	if budget != nil {
+		opts = append(opts, ai.WithBudgetChecker(budget))
+	}
+	if policy != nil {
+		opts = append(opts, ai.WithProviderPolicy(policy))
+	}
+	// The resilience policy, parsed once at load: the factory used to keep &cfg.Runtime and re-read it on every
+	// chain build.
+	factory := ai.NewProviderFactory(memberKeyLookup(keys), copilotAuth, recorder, &ai.ResilienceConfig{
+		Threshold: cfg.Runtime.CircuitBreakerFailures,
+		OpenFor:   cfg.Runtime.CircuitBreakerOpenDur.Std(),
+		Attempts:  cfg.Runtime.RetryMaxAttempts,
+		BaseDelay: cfg.Runtime.RetryBaseDelay.Std(),
+	}, opts...)
 	if orgKeys != nil {
 		factory.SetOrgKeyLookup(orgKeyLookup(orgKeys))
 	}
@@ -126,25 +150,16 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 	// unset) asked for nothing, and text-embedding-3-large then returned
 	// 3072-wide vectors against the 1536 index.
 	factory.SetEmbeddingDimensions(cfg.Storage.EffectiveEmbeddingDim())
-	// Azure AI Foundry endpoints are user-supplied. In cloud mode every
-	// request to one goes through the dial-time private-address guard (the
-	// operator can lift it for private-link resources); the desktop/local
-	// single-user app talks to its owner's own network and needs none.
-	policy := egress.AllowLoopback
-	if cfg.Mode == config.ModeCloud {
-		policy = egress.BlockInternal
-	}
-	ai.ConfigureAzureFoundry(ai.AzureFoundryOptions{
-		Egress:             policy,
+	// One egress policy, applied to every provider by its spec's EgressPolicy: the user-endpoint family gets the
+	// dial-time guard and the allow-list; the local models provider (Foundry Local, Ollama, LM Studio) exists
+	// only where loopback is allowed — the desktop/local single-user app, exactly the opt-in it needs.
+	ai.ConfigureProviders(ai.ProviderOptions{
+		Egress:             azureEndpointPolicy(capability.Of(cfg)),
 		ExtraAllowedHosts:  cfg.Runtime.AzureFoundryAllowedHosts,
 		AllowPrivateEgress: cfg.Runtime.AIAllowPrivateEgress,
 	})
-	// The local models provider (Foundry Local, Ollama, LM Studio) is
-	// constructible only in the desktop/local single-user app, whose loopback
-	// allowance is exactly the deliberate opt-in it needs.
-	ai.ConfigureLocalModels(ai.LocalModelsOptions{Egress: policy})
 	auth := ai.NewGitHubAuth()
-	return auth, copilotAuth, factory
+	return auth, copilotAuth, factory, nil
 }
 
 // memberKeyLookup adapts a KeyStore to the factory's contract, under which
@@ -163,6 +178,17 @@ func memberKeyLookup(keys service.KeyStore) func(scope, provider string) (string
 		}
 		return v, err
 	}
+}
+
+// azureEndpointPolicy is the egress policy of the user-supplied Azure AI Foundry endpoints: the multi-tenant
+// server sends every request to one through the dial-time private-address guard (the operator can lift it for
+// private-link resources); the desktop and the local development profiles talk to their owner's own network and
+// need none. The AI endpoints keep this policy of their own (egress.ForDeployment is the tenant channels').
+func azureEndpointPolicy(caps capability.Set) egress.Policy {
+	if caps.Profile() == capability.Cloud {
+		return egress.BlockInternal
+	}
+	return egress.AllowLoopback
 }
 
 // orgKeyLookup is memberKeyLookup for an organisation's shared credentials.
@@ -198,11 +224,23 @@ func ProvideAnalysisService(notifier service.EventNotifier, settings service.Set
 	})
 }
 
-// ProvideAIBudget builds the daily AI budget gate chat turns and the knowledge base's billed embedding runs
-// share (R-4): one in-flight ledger, so an embedding run counts what running chat streams have committed.
-// backend is nil on the desktop (no usage store: spend reads $0).
+// ProvideAIBudget builds the daily AI budget gate chat turns, the knowledge base's billed embedding runs and
+// every provider chain's pre-call hook (ProvideAI) share (R-4, ADR 0028): one in-flight ledger, so an
+// embedding run counts what running chat streams have committed. backend is nil on the desktop (no usage
+// store: spend reads $0, so only the in-flight ledger can trip there).
 func ProvideAIBudget(settings service.SettingsProvider, backend storageif.StorageBackend) *service.AIBudget {
 	return service.NewAIBudget(settings, backend)
+}
+
+// ProvideProviderPolicy builds the provider policy every factory builder consults (ADR 0028): the
+// deployment's Enabled flags from the settings, the organisation's allowed-provider list from its settings
+// document. backend is nil on the desktop: no organisations, no org list.
+func ProvideProviderPolicy(settings service.SettingsProvider, backend storageif.StorageBackend) *service.ProviderPolicy {
+	var orgs service.OrgSettingsReader
+	if backend != nil {
+		orgs = backend
+	}
+	return service.NewProviderPolicy(settings, orgs)
 }
 
 // ProvideKnowledgeService builds the org knowledge-base service.
@@ -219,8 +257,12 @@ func ProvideAIBudget(settings service.SettingsProvider, backend storageif.Storag
 // Foundry — through the model registry's "Use for knowledge base"
 // designation when azure (the registry) is wired. budget is the daily AI budget
 // a chat turn consults too (R-4); nil leaves billed runs unlimited.
-func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService, budget *service.AIBudget, bus *eventbus.Bus) *rag.KnowledgeService {
+// leaser is the jobs' lease (nil on the desktop): the background re-embed job runs under it, one replica at a time.
+func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService, budget *service.AIBudget, bus *eventbus.Bus, leaser lock.Leaser) *rag.KnowledgeService {
 	opts := []rag.Option{rag.WithEmbeddingProvider(cfg.Storage.EmbeddingProvider), rag.WithEventBus(bus)}
+	if leaser != nil {
+		opts = append(opts, rag.WithJobLeaser(leaser))
+	}
 	if azure != nil {
 		opts = append(opts, rag.WithAzureEmbedder(azure))
 	}
@@ -228,6 +270,24 @@ func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.Provi
 		opts = append(opts, rag.WithBudgetChecker(budget))
 	}
 	return rag.NewKnowledgeService(backend, factory, settings, opts...)
+}
+
+// knowledgeDeps are ProvideKnowledgeService's inputs; the leaser is internal/app's (nil without a database, absent
+// from the di-only test graphs), so it is optional.
+type knowledgeDeps struct {
+	fx.In
+	Backend  storageif.StorageBackend
+	Factory  *ai.ProviderFactory
+	Settings service.SettingsProvider
+	Cfg      *config.Config
+	Azure    *service.AzureModelService
+	Budget   *service.AIBudget
+	Bus      *eventbus.Bus
+	Leaser   lock.Leaser `optional:"true"`
+}
+
+func provideKnowledgeService(d knowledgeDeps) *rag.KnowledgeService {
+	return ProvideKnowledgeService(d.Backend, d.Factory, d.Settings, d.Cfg, d.Azure, d.Budget, d.Bus, d.Leaser)
 }
 
 // azureDatabaseRegistry is the database's registry when the registry lives
@@ -275,14 +335,15 @@ func ProvideAzureModelService(registry storageif.AzureRegistryStore, secrets ser
 	src := azureDatabaseRegistry(cfg, db)
 	perUser := src != nil
 	deps := service.AzureModelServiceDeps{
-		Registry:                  registry,
-		Secrets:                   secrets,
-		KeyFamilies:               keyFamilies,
-		OrgKeys:                   orgKeys,
-		Factory:                   factory,
-		Settings:                  settings,
-		PerUserOwners:             perUser,
-		KnowledgeEmbeddingEnabled: cfg.Mode == config.ModeCloud && cfg.Storage.EmbeddingProvider == ai.AzureFoundryProviderID,
+		Registry:      registry,
+		Secrets:       secrets,
+		KeyFamilies:   keyFamilies,
+		OrgKeys:       orgKeys,
+		Factory:       factory,
+		Settings:      settings,
+		PerUserOwners: perUser,
+		// The shared corpus is the organisations' knowledge base: a server store with accounts.
+		KnowledgeEmbeddingEnabled: capability.Of(cfg).Has(capability.ServerStore, capability.Accounts) && cfg.Storage.EmbeddingProvider == ai.AzureFoundryProviderID,
 	}
 	if backend != nil {
 		deps.UserSettings, deps.Orgs, deps.Corpus, deps.Users = backend, backend, backend, backend
@@ -311,8 +372,17 @@ func ProvideOrgRuleService(backend storageif.StorageBackend, bus *eventbus.Bus) 
 	return service.NewOrgRuleService(backend, backend, bus)
 }
 
-func ProvideChannelService(backend storageif.StorageBackend) *service.ChannelService {
-	return service.NewChannelService(backend)
+// ProvideChannelService is the organisations' notification channels under the deployment's egress policy and host
+// allow-list (PAD_NOTIFY_ALLOWED_HOSTS); its delivery runner serves the scanner and the channel test, and its email
+// channels send through the mail service.
+func ProvideChannelService(backend storageif.StorageBackend, cfg *config.Config, email *mail.Service) *service.ChannelService {
+	return service.NewChannelService(backend, service.ChannelOptions{
+		Policy:              egress.ForDeployment(capability.Of(cfg)),
+		AllowedHosts:        cfg.Governance.NotifyAllowedHosts,
+		AllowedHostsVisible: cfg.Governance.NotifyAllowedHostsVisible,
+		Mailer:              email,
+		Members:             backend,
+	})
 }
 
 func ProvideUserDirectory(backend storageif.StorageBackend) *service.UserDirectory {
@@ -334,6 +404,26 @@ func ProvideCommentService(backend storageif.StorageBackend, triage *service.Tri
 
 func ProvideShareTokenService(backend storageif.StorageBackend, bus *eventbus.Bus) *service.ShareTokenService {
 	return service.NewShareTokenService(backend, backend, bus)
+}
+
+// ProvideCIService builds the CI webhook's authentication and the organisations' CI credentials (ADR 0019): with
+// accounts, organisations mint their own, API tokens with the ci scope reach the flows their user can read (authz),
+// and the deployment-wide PAD_CI_WEBHOOK_SECRET is deprecated (warned here, once per boot); without, that secret is
+// the webhook's only key.
+func ProvideCIService(cfg *config.Config, backend storageif.StorageBackend, docs service.DocumentProvider, authz *service.AuthzService) *service.CIService {
+	caps := capability.Of(cfg)
+	gov := cfg.Governance
+	if caps.Has(capability.ServerStore) && gov.InboundWebhookSecret.IsSet() && caps.Has(capability.Accounts) {
+		logger.Warn("PAD_CI_WEBHOOK_SECRET is deprecated where organisations mint their own CI credentials: it reaches every organisation's flows. Move runners to organisation CI credentials (Settings > Organisation > CI credentials); calls signed with the secret are answered with a Deprecation header")
+	}
+	if gov.InboundWebhookSecret.IsSet() && gov.InboundWebhookAllowNoTimestamp {
+		logger.Warn("PAD_CI_WEBHOOK_ALLOW_NO_TIMESTAMP=1 is deprecated: the CI webhook accepts replayable signatures without X-Baki-Timestamp under PAD_CI_WEBHOOK_SECRET")
+	}
+	return service.NewCIService(backend, docs, authz, service.CIOptions{
+		GlobalSecret:     gov.InboundWebhookSecret,
+		AllowNoTimestamp: gov.InboundWebhookAllowNoTimestamp,
+		OrgCredentials:   caps.Has(capability.Accounts),
+	})
 }
 
 // ServiceModule bundles all internal services.
@@ -362,14 +452,15 @@ var ServiceModule = fx.Options(
 		ProvideSettingsProvider,
 		// WebhookNotifier is a thin facade over the shared notify.Dispatcher,
 		// consolidating analysis-complete alerts onto the same delivery stack as
-		// governance (scanner) alerts; provided by main.go's provideNotifier.
+		// governance (scanner) alerts; provided by internal/app's provideNotifier.
 		service.NewWebhookNotifier,
 		// service.KeyStore, service.OrgKeyStore and the key-family lister come
-		// from main.go's provideKeyStore (plain fx values, not globals).
+		// from internal/app's provideKeyStore (plain fx values, not globals).
 		ProvideAzureRegistry,
 		ProvideAzureModelService,
 		ProvideAIBudget,
-		ProvideKnowledgeService,
+		ProvideProviderPolicy,
+		provideKnowledgeService,
 		// /api/keys/has and /api/keys/delete for azure-foundry act on the
 		// model registry (any resource; resource "default").
 		service.NewSystemService,
@@ -396,6 +487,7 @@ var ServiceModule = fx.Options(
 		ProvideTriageService,
 		ProvideCommentService,
 		ProvideShareTokenService,
+		ProvideCIService,
 		// Adapter: the collaborator service takes the narrower store it uses (nil on the desktop).
 		func(backend storageif.StorageBackend, bus *eventbus.Bus) *service.CollaboratorService {
 			return service.NewCollaboratorService(backend, bus)
@@ -463,13 +555,19 @@ var ServiceModule = fx.Options(
 			secrets service.KeyStore,
 			orgKeys service.OrgKeyStore,
 			azure *service.AzureModelService,
+			cfg *config.Config,
 		) *service.ProviderService {
 			// orgKeys: organisation-shared credentials (G7), nil outside cloud
 			// mode, where the org routes report ORG_KEYSTORE_UNAVAILABLE. azure:
 			// the Azure AI Foundry model registry — the single-document routes
 			// act on its resource "default", the lifecycle and "configured"
-			// checks on every resource.
-			return service.NewProviderService(auth, copilot, factory, secrets, orgKeys, azure)
+			// checks on every resource. The registry is the azure-foundry
+			// spec's Listing hook (ADR 0025), installed here because it is
+			// built after the specs register.
+			if hook := service.AzureListing(azure, orgKeys); hook != nil {
+				ai.InstallListing(ai.AzureFoundryProviderID, hook)
+			}
+			return service.NewProviderService(auth, copilot, factory, secrets, orgKeys, azure, service.WithProfile(capability.Of(cfg).Profile()))
 		},
 	),
 	// R4: the deployment custom-rule file is its OWN graph node rather than

@@ -69,9 +69,13 @@ param memory string = '2.0Gi'
 @secure()
 param authSecret string
 
-@description('Dedicated at-rest encryption key for the provider-key keystore (AES-256-GCM). Separate from the JWT secret so that rotating one does not affect the other. Empty means the app falls back to authSecret and warns at boot. Set it before users store provider keys: changing it later makes the stored keys unreadable.')
+@description('Dedicated at-rest encryption key for the provider-key keystore (AES-256-GCM). Separate from the JWT secret so that rotating one does not affect the other. Empty means the app falls back to authSecret and warns at boot. Set it before users store provider keys. To change it later, move the old value to encryptionKeyPrevious (key rotation); replacing it outright makes every stored secret unreadable.')
 @secure()
 param encryptionKey string = ''
+
+@description('Key rotation: the keys encryptionKey replaced, comma-separated, newest first (PAD_ENCRYPTION_KEY_PREVIOUS). Values they sealed stay readable and are re-sealed with encryptionKey at boot; remove them once the log reports "secret re-seal complete". Needs encryptionKey. Empty when no rotation is under way.')
+@secure()
+param encryptionKeyPrevious string = ''
 
 @description('Postgres connection string (sslmode=require or verify-full). Becomes a Container App secret.')
 @secure()
@@ -82,7 +86,7 @@ param databaseUrl string
 param metricsToken string = ''
 
 @secure()
-@description('HMAC key for inbound CI webhooks (POST /api/integrations/ci). Empty leaves the endpoint returning 503. Treat it as a read token for the whole flow library.')
+@description('Deprecated: a deployment-wide HMAC key for POST /api/integrations/ci that reads the whole flow library. Leave it empty and have organisation admins mint CI credentials (ADR 0019); while set, the app warns at boot and marks every answer to it deprecated.')
 param ciWebhookSecret string = ''
 
 @secure()
@@ -151,8 +155,16 @@ param logLevel string = ''
 ])
 param routePolicy string = ''
 
-@description('Max open Postgres connections PER REPLICA (PAD_DB_MAX_OPEN_CONNS). Empty uses the app default of 25. Right-size against the Flexible Server SKU\'s connection cap — a Burstable B1ms tops out around 35.')
+@description('Max open Postgres connections PER REPLICA (PAD_DB_MAX_OPEN_CONNS). Wins over the derivation from dbServerMaxConnections. Empty uses that derivation when dbServerMaxConnections is set, else the app default of 25. Right-size against the Flexible Server SKU\'s connection cap — a Burstable B1ms tops out around 35.')
 param dbMaxOpenConns string = ''
+
+@description('The Flexible Server\'s max_connections (SHOW max_connections; infra/postgres.bicep outputs it as maxConnections), e.g. 50 on Burstable B1ms, 859 on General Purpose D2ds_v5. When set and dbMaxOpenConns is empty, each replica\'s pool is (this - dbReservedConnections) / (maxReplicas + max(minReplicas, 1)), at least 1 and at most the app default of 25: the second term is the rolling deploy, whose new revision starts its minReplicas beside the old replicas until the swap (maxReplicas + 1 by default). Also passed to the app (PAD_DB_SERVER_MAX_CONNS). 0 = unknown: the pool stays at the app default. See docs/architecture/operations.md.')
+@minValue(0)
+param dbServerMaxConnections int = 0
+
+@description('Connections of dbServerMaxConnections the app\'s pools leave alone: the 15 Azure Flexible Server reserves (replication and monitoring), plus 5 for an operator\'s psql or bakicli session. Only used when dbServerMaxConnections is set.')
+@minValue(0)
+param dbReservedConnections int = 20
 
 // ── Email, SSO, governance ─────────────────────────────────────────────────
 
@@ -186,11 +198,20 @@ param ssoProviderName string = ''
 @description('Periodic library re-scan interval (PAD_SCAN_INTERVAL), e.g. 1h. Empty disables drift/regression alerting.')
 param scanInterval string = ''
 
-@description('Microsoft Teams incoming-webhook URL for governance alerts.')
+@secure()
+@description('Microsoft Teams incoming-webhook URL for governance alerts. The URL is the credential (anyone holding it can post to the channel), so it is a secret.')
 param notifyTeamsUrl string = ''
 
-@description('Generic JSON webhook URL for governance alerts.')
+@secure()
+@description('Microsoft Teams Workflows webhook URL for governance alerts (PAD_NOTIFY_TEAMS_WORKFLOW_URL), the replacement of the retiring incoming webhooks. Its sig parameter is the credential, so it is a secret.')
+param notifyTeamsWorkflowUrl string = ''
+
+@secure()
+@description('Generic JSON webhook URL for governance alerts. A secret: receivers commonly put a token in the path or query.')
 param notifyWebhookUrl string = ''
+
+@description('Hosts organisation notification channels may point at, comma-separated: exact hosts or *.suffix globs (PAD_NOTIFY_ALLOWED_HOSTS). Checked when a channel is saved and at every delivery; the deployment channels are not restricted. Empty allows any public host.')
+param notifyAllowedHosts string = ''
 
 @description('Age-based purge window for audit events, analysis history, usage metrics and governance alerts (PAD_AUDIT_RETENTION_DAYS). Empty keeps the app default of 0 = forever, which grows Postgres without bound.')
 param auditRetentionDays string = ''
@@ -240,7 +261,7 @@ param startupProbePeriodSeconds int = 30
 @maxValue(10)
 param startupFailureThreshold int = 10
 
-@description('Comma-separated email addresses for operational alerts (Action Group recipients). Leave empty to skip alert provisioning — note that skips ALL four alerts.')
+@description('Comma-separated email addresses for operational alerts (Action Group recipients). Leave empty to skip alert provisioning — note that skips EVERY alert below.')
 param alertEmails string = ''
 
 // ── Computed ───────────────────────────────────────────────────────────────
@@ -482,10 +503,14 @@ var secrets = concat(
     { name: 'database-url', value: databaseUrl }
   ],
   empty(encryptionKey) ? [] : [ { name: 'encryption-key', value: encryptionKey } ],
+  empty(encryptionKeyPrevious) ? [] : [ { name: 'encryption-key-previous', value: encryptionKeyPrevious } ],
   empty(metricsToken) ? [] : [ { name: 'metrics-token', value: metricsToken } ],
   empty(ciWebhookSecret) ? [] : [ { name: 'ci-webhook-secret', value: ciWebhookSecret } ],
   empty(smtpPassword) ? [] : [ { name: 'smtp-password', value: smtpPassword } ],
   empty(ssoClientSecret) ? [] : [ { name: 'sso-client-secret', value: ssoClientSecret } ],
+  empty(notifyTeamsUrl) ? [] : [ { name: 'notify-teams-url', value: notifyTeamsUrl } ],
+  empty(notifyTeamsWorkflowUrl) ? [] : [ { name: 'notify-teams-workflow-url', value: notifyTeamsWorkflowUrl } ],
+  empty(notifyWebhookUrl) ? [] : [ { name: 'notify-webhook-url', value: notifyWebhookUrl } ],
   provisionRedis ? [ { name: 'redis-url', value: redisUrl } ] : []
 )
 
@@ -501,12 +526,25 @@ var memoryParts = split(replace(memory, 'Gi', ''), '.')
 var memoryMiB = int(memoryParts[0]) * 1024 + (length(memoryParts) > 1 ? int(take(last(memoryParts), 1)) * 1024 / 10 : 0)
 var goMemLimit = '${memoryMiB * 8 / 10}MiB'
 
+// Per-replica pool (PAD_DB_MAX_OPEN_CONNS) from the server's connection cap, when dbServerMaxConnections is known:
+// what the reserve leaves, shared by maxReplicas plus the rolling deploy's surge (in Single revision mode the new
+// revision starts its minReplicas, at least one, beside the old revision's replicas until the swap; with the
+// default minReplicas = 1 that is maxReplicas + 1), so every pool full at once still fits mid-deploy. At least 1:
+// the app reads 0 as "unset" and opens its default. At most that default: a big server is no reason to open more
+// than the app does without a cap (an explicit dbMaxOpenConns can, and wins).
+// docs/architecture/operations.md has the arithmetic; internal/config/deploy_pool_test.go evaluates it.
+var dbAppDefaultMaxOpenConns = 25 // storagedb.DefaultConfig; TestBicepPoolCeiling_IsTheAppDefault keeps them equal
+var dbDerivedMaxOpenConns = min(dbAppDefaultMaxOpenConns, max(1, (dbServerMaxConnections - dbReservedConnections) / (maxReplicas + max(minReplicas, 1))))
+var dbEffectiveMaxOpenConns = !empty(dbMaxOpenConns) ? dbMaxOpenConns : (dbServerMaxConnections > 0 ? string(dbDerivedMaxOpenConns) : '')
+
 var coreEnv = [
   { name: 'PAD_MODE', value: 'cloud' }
   { name: 'PAD_HOST', value: '0.0.0.0' }
   { name: 'PAD_PORT', value: '8080' }
   { name: 'PAD_AUTH_ENABLED', value: 'true' }
   { name: 'PAD_STORAGE', value: 'database' }
+  // How many replicas share the database: the boot check compares the pool with the server's max_connections.
+  { name: 'PAD_MAX_REPLICAS', value: string(maxReplicas) }
   // ACA terminates TLS and presents a public HTTPS URL; the app runs HTTP
   // behind it.
   { name: 'PAD_BEHIND_PROXY', value: 'true' }
@@ -530,17 +568,21 @@ var storageEnv = empty(effectiveStorageAccount) ? [] : [
 
 var optionalEnv = concat(
   empty(encryptionKey) ? [] : [ { name: 'PAD_ENCRYPTION_KEY', secretRef: 'encryption-key' } ],
+  empty(encryptionKeyPrevious) ? [] : [ { name: 'PAD_ENCRYPTION_KEY_PREVIOUS', secretRef: 'encryption-key-previous' } ],
   empty(metricsToken) ? [] : [ { name: 'PAD_METRICS_TOKEN', secretRef: 'metrics-token' } ],
   empty(ciWebhookSecret) ? [] : [ { name: 'PAD_CI_WEBHOOK_SECRET', secretRef: 'ci-webhook-secret' } ],
   provisionRedis ? [ { name: 'PAD_REDIS_URL', secretRef: 'redis-url' } ] : [],
   empty(requestTimeout) ? [] : [ { name: 'PAD_REQUEST_TIMEOUT', value: requestTimeout } ],
   empty(logLevel) ? [] : [ { name: 'PAD_LOG_LEVEL', value: logLevel } ],
   empty(routePolicy) ? [] : [ { name: 'PAD_ROUTE_POLICY', value: routePolicy } ],
-  empty(dbMaxOpenConns) ? [] : [ { name: 'PAD_DB_MAX_OPEN_CONNS', value: dbMaxOpenConns } ],
+  empty(dbEffectiveMaxOpenConns) ? [] : [ { name: 'PAD_DB_MAX_OPEN_CONNS', value: dbEffectiveMaxOpenConns } ],
+  dbServerMaxConnections > 0 ? [ { name: 'PAD_DB_SERVER_MAX_CONNS', value: string(dbServerMaxConnections) } ] : [],
   empty(auditRetentionDays) ? [] : [ { name: 'PAD_AUDIT_RETENTION_DAYS', value: auditRetentionDays } ],
   empty(scanInterval) ? [] : [ { name: 'PAD_SCAN_INTERVAL', value: scanInterval } ],
-  empty(notifyTeamsUrl) ? [] : [ { name: 'PAD_NOTIFY_TEAMS_URL', value: notifyTeamsUrl } ],
-  empty(notifyWebhookUrl) ? [] : [ { name: 'PAD_NOTIFY_WEBHOOK_URL', value: notifyWebhookUrl } ],
+  empty(notifyTeamsUrl) ? [] : [ { name: 'PAD_NOTIFY_TEAMS_URL', secretRef: 'notify-teams-url' } ],
+  empty(notifyTeamsWorkflowUrl) ? [] : [ { name: 'PAD_NOTIFY_TEAMS_WORKFLOW_URL', secretRef: 'notify-teams-workflow-url' } ],
+  empty(notifyWebhookUrl) ? [] : [ { name: 'PAD_NOTIFY_WEBHOOK_URL', secretRef: 'notify-webhook-url' } ],
+  empty(notifyAllowedHosts) ? [] : [ { name: 'PAD_NOTIFY_ALLOWED_HOSTS', value: notifyAllowedHosts } ],
   empty(azureFoundryAllowedHosts) ? [] : [ { name: 'PAD_AZURE_FOUNDRY_ALLOWED_HOSTS', value: azureFoundryAllowedHosts } ],
   aiAllowPrivateEgress ? [ { name: 'PAD_AI_ALLOW_PRIVATE_EGRESS', value: 'true' } ] : [],
   empty(embeddingProvider) ? [] : [ { name: 'PAD_EMBEDDING_PROVIDER', value: embeddingProvider } ],
@@ -574,6 +616,9 @@ var ssoEnv = !ssoConfigured ? [] : concat(
 )
 
 // ── Container App ──────────────────────────────────────────────────────────
+
+// The platform's SIGKILL deadline for a stopping replica; see terminationGracePeriodSeconds below.
+var stopGraceSeconds = 35
 
 resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
   name: appName
@@ -611,11 +656,13 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
       ]
     }
     template: {
-      // The app's own shutdown budget is fx.StopTimeout(25s) — 3s to drain
-      // WebSockets, 12s for in-flight HTTP, the rest for the audit flush and
-      // the pool close (see main.go). Stated here so the platform grace period
-      // and the application budget cannot drift apart silently.
-      terminationGracePeriodSeconds: 30
+      // The app bounds its own stop with fx.StopTimeout; the steps and their
+      // budgets are the table in docs/adr/0024-graceful-shutdown-and-server-restarting.md.
+      // This is that bound plus a margin for the process to exit, so the
+      // platform never cuts the stop short (internal/config/deploy_pool_test.go
+      // keeps it above StopTimeout). The readiness alert below allows for the
+      // probes a replica fails while it stops.
+      terminationGracePeriodSeconds: stopGraceSeconds
       containers: [
         {
           name: appName
@@ -678,8 +725,9 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
 }
 
 // ── Alerting ───────────────────────────────────────────────────────────────
-// All four alert resources are conditional on alertEmails, so a deploy that
-// does not pass it provisions NO alerting at all. The pipeline passes it.
+// Every alert resource is conditional on alertEmails, so a deploy that does
+// not pass it provisions NO alerting at all. The pipeline passes it. The list
+// is in docs/architecture/operations.md.
 
 var alertEmailList = !empty(alertEmails) ? split(alertEmails, ',') : []
 
@@ -768,13 +816,22 @@ resource errorBurstAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-prev
   }
 }
 
+// Readiness failures one replica must log in the window before the alert
+// fires. A replica stopping for a deploy answers /readyz with 503 from the
+// start of its drain (ADR 0024) and then stops listening, so every probe until
+// it exits fails: at most stopGraceSeconds / probePeriodSeconds + 1 of them.
+// The alert needs one more than that, and at least readinessFailureThreshold,
+// the count that takes a replica out of rotation. Counted per replica, so
+// several replicas stopping together do not add up either.
+var readinessAlertMinFailures = max(readinessFailureThreshold, stopGraceSeconds / probePeriodSeconds + 2)
+
 resource readinessAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = if (!empty(alertEmails)) {
   name: '${appName}-readiness-failing'
   location: location
   tags: tags
   properties: {
     displayName: '${appName}: readiness probe failing'
-    description: 'ACA reported readiness probe failures more than 3 times in 10 minutes. With one replica this means the app is out of rotation: check /readyz (Postgres, blob, Redis) and the ERROR log.'
+    description: 'A replica failed its readiness probe ${readinessAlertMinFailures} or more times in 10 minutes: enough to take it out of rotation, and more than a replica stopping for a deploy can log while it drains (503) and exits. With one replica the app is out of rotation: check /readyz (Postgres, blob, Redis) and the ERROR log.'
     severity: 1
     enabled: true
     evaluationFrequency: 'PT5M'
@@ -783,10 +840,10 @@ resource readinessAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-previ
     criteria: {
       allOf: [
         {
-          query: 'ContainerAppSystemLogs_CL | where ContainerAppName_s == "${appName}" | where Log_s contains "readiness" and Log_s contains "fail"'
+          query: 'ContainerAppSystemLogs_CL | where ContainerAppName_s == "${appName}" | where Log_s contains "readiness" and Log_s contains "fail" | summarize failures = count() by replica = tostring(column_ifexists("ReplicaName_s", "")) | where failures >= ${readinessAlertMinFailures}'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
-          threshold: 3
+          threshold: 0
           failingPeriods: {
             numberOfEvaluationPeriods: 1
             minFailingPeriodsToAlert: 1
@@ -799,6 +856,94 @@ resource readinessAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-previ
     }
   }
 }
+
+// Alerts on the fixed log messages of the background jobs, their locks and
+// the shutdown (ADR 0023, ADR 0024; never reworded). Each matches the message
+// as slog writes it, "msg":"<message>", so a longer message does not count.
+// Normal operation has no alert: a job attempt skipped on a lock error (a
+// job that keeps failing turns overdue, which does) and the drain of a stop.
+var logMessageAlerts = [
+  {
+    name: 'job-overdue'
+    displayName: 'background job overdue'
+    description: 'A background job has had no successful run on any replica for longer than its threshold (twice its interval by default). The job field of the "job overdue" line and the pad_job_overdue gauge name it; its "job run failed" lines and its lock (a leaked lock shows here too) say why. Logged when it turns overdue and then hourly per replica.'
+    severity: 2
+    evaluationFrequency: 'PT15M'
+    // Two hours, not one: the line repeats at most hourly per replica (at the
+    // job's next attempt after the hour), so an hour-long window would let
+    // the alert resolve and fire again every hour while the job stays overdue.
+    windowSize: 'PT2H'
+    messages: [
+      'job overdue'
+    ]
+  }
+  {
+    name: 'job-lease-lost'
+    displayName: 'background job lost its lock'
+    description: 'A background job lost its cross-replica lock while it ran: its pinned database session died (failover, network cut, pg_terminate_backend) or its unlock found the lock gone, so another replica may have run the job beside it. Once after a database failover is expected; repeatedly, see the advisory-lock alert.'
+    severity: 2
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    messages: [
+      'job lease lost'
+    ]
+  }
+  {
+    name: 'advisory-lock-lost'
+    displayName: 'advisory lock not held by its session'
+    description: 'An advisory lock was not on the session that took it: an unlock answered "not held", or a lease heartbeat found the lock gone. The usual cause is PgBouncer in transaction mode (Azure Flexible Server\'s built-in PgBouncer listens on 6432; the app warns at boot), which runs the lock and the unlock on different server sessions: connect to 5432 or pool in session mode. Once after a database failover or restart is expected.'
+    severity: 2
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    messages: [
+      'advisory unlock reported not held; discarding connection'
+      'advisory lease lost; discarding its session'
+    ]
+  }
+  {
+    name: 'chat-shutdown-workers'
+    displayName: 'chat workers outlived the shutdown budget'
+    description: 'At a stop, chat stream workers were still running when the chat shutdown budget ran out: their streams were ended with SERVER_RESTARTING in their place, and an answer that finished at that moment may not have been stored. Low impact; if it recurs, a provider call is not honouring cancellation.'
+    severity: 3
+    evaluationFrequency: 'PT1H'
+    windowSize: 'P1D'
+    messages: [
+      'chat workers still running at shutdown'
+    ]
+  }
+]
+
+resource logMessageAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = [for alert in logMessageAlerts: if (!empty(alertEmails)) {
+  name: '${appName}-${alert.name}'
+  location: location
+  tags: tags
+  properties: {
+    displayName: '${appName}: ${alert.displayName}'
+    description: alert.description
+    severity: alert.severity
+    enabled: true
+    evaluationFrequency: alert.evaluationFrequency
+    windowSize: alert.windowSize
+    scopes: [workspace.id]
+    criteria: {
+      allOf: [
+        {
+          query: 'ContainerAppConsoleLogs_CL | where ContainerAppName_s == "${appName}" | where ${join(map(alert.messages, m => 'Log_s contains \'"msg":"${m}"\''), ' or ')}'
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    actions: {
+      actionGroups: [actionGroup.id]
+    }
+  }
+}]
 
 output fqdn string = containerApp.properties.configuration.ingress.fqdn
 output appUrl string = 'https://${containerApp.properties.configuration.ingress.fqdn}'

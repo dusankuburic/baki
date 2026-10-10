@@ -682,10 +682,10 @@ GET /api/./health | kind=endpoint pattern=/api/health auth=none scopes=- ratelim
 GET /api/health/ | kind=endpoint pattern=/api/health auth=none scopes=- ratelimit=general tx=none deadline=default label=/api/health
 HEAD /api/health | kind=method-not-allowed pattern=/api/health auth=none scopes=- ratelimit=general tx=none deadline=default label=/api/health allow=GET
 OPTIONS /api/health | kind=method-not-allowed pattern=/api/health auth=none scopes=- ratelimit=general tx=none deadline=default label=/api/health allow=GET
-POST /api/integrations/ci | kind=endpoint pattern=/api/integrations/ci auth=self scopes=- ratelimit=general tx=none deadline=default label=/api/integrations/ci
-POST /api/v1/integrations/ci | kind=endpoint pattern=/api/integrations/ci auth=self scopes=- ratelimit=general tx=none deadline=default label=/api/integrations/ci
-POST /api/./integrations/ci | kind=endpoint pattern=/api/integrations/ci auth=self scopes=- ratelimit=general tx=none deadline=default label=/api/integrations/ci
-POST /api/integrations/ci/ | kind=endpoint pattern=/api/integrations/ci auth=self scopes=- ratelimit=general tx=none deadline=default label=/api/integrations/ci
+POST /api/integrations/ci | kind=endpoint pattern=/api/integrations/ci auth=self scopes=- ratelimit=analysis tx=none deadline=default label=/api/integrations/ci
+POST /api/v1/integrations/ci | kind=endpoint pattern=/api/integrations/ci auth=self scopes=- ratelimit=analysis tx=none deadline=default label=/api/integrations/ci
+POST /api/./integrations/ci | kind=endpoint pattern=/api/integrations/ci auth=self scopes=- ratelimit=analysis tx=none deadline=default label=/api/integrations/ci
+POST /api/integrations/ci/ | kind=endpoint pattern=/api/integrations/ci auth=self scopes=- ratelimit=analysis tx=none deadline=default label=/api/integrations/ci
 OPTIONS /api/integrations/ci | kind=method-not-allowed pattern=/api/integrations/ci auth=none scopes=- ratelimit=general tx=none deadline=default label=/api/integrations/ci allow=POST
 POST /api/invites/token1/accept | kind=endpoint pattern=/api/invites/{token}/accept auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/invites/{token}/accept
 POST /api/v1/invites/token1/accept | kind=endpoint pattern=/api/invites/{token}/accept auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/invites/{token}/accept
@@ -806,18 +806,41 @@ POST /api/orgs/id1/channels/ | kind=endpoint pattern=/api/orgs/{id}/channels aut
 POST /api/v1/orgs/id1/channels/ | kind=endpoint pattern=/api/orgs/{id}/channels auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels
 POST /api/./orgs/id1/channels/ | kind=endpoint pattern=/api/orgs/{id}/channels auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels
 POST /api/orgs/a%2Fb/channels/ | kind=endpoint pattern=/api/orgs/{id}/channels auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels
+GET /api/orgs/id1/channels/options | kind=endpoint pattern=/api/orgs/{id}/channels/options auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels/options
+GET /api/v1/orgs/id1/channels/options | kind=endpoint pattern=/api/orgs/{id}/channels/options auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels/options
+GET /api/./orgs/id1/channels/options | kind=endpoint pattern=/api/orgs/{id}/channels/options auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels/options
+GET /api/orgs/id1/channels/options/ | kind=endpoint pattern=/api/orgs/{id}/channels/options auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels/options
+GET /api/orgs/a%2Fb/channels/options | kind=endpoint pattern=/api/orgs/{id}/channels/options auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels/options
+HEAD /api/orgs/id1/channels/options | kind=method-not-allowed pattern=/api/orgs/{id}/channels/options auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/channels/options allow=GET,DELETE
+OPTIONS /api/orgs/id1/channels/options | kind=method-not-allowed pattern=/api/orgs/{id}/channels/options auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/channels/options allow=GET,DELETE
 DELETE /api/orgs/id1/channels/channelId1 | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels/{channelId}
 DELETE /api/v1/orgs/id1/channels/channelId1 | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels/{channelId}
 DELETE /api/./orgs/id1/channels/channelId1 | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels/{channelId}
 DELETE /api/orgs/id1/channels/channelId1/ | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels/{channelId}
 DELETE /api/orgs/a%2Fb/channels/channelId1 | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/channels/{channelId}
 OPTIONS /api/orgs/id1/channels/channelId1 | kind=method-not-allowed pattern=/api/orgs/{id}/channels/{channelId} auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/channels/{channelId} allow=DELETE
-POST /api/orgs/id1/channels/channelId1/test | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=write ratelimit=general tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test
-POST /api/v1/orgs/id1/channels/channelId1/test | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=write ratelimit=general tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test
-POST /api/./orgs/id1/channels/channelId1/test | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=write ratelimit=general tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test
-POST /api/orgs/id1/channels/channelId1/test/ | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=write ratelimit=general tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test
-POST /api/orgs/a%2Fb/channels/channelId1/test | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=write ratelimit=general tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test
+POST /api/orgs/id1/channels/channelId1/test | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=write ratelimit=channel_test tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test
+POST /api/v1/orgs/id1/channels/channelId1/test | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=write ratelimit=channel_test tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test
+POST /api/./orgs/id1/channels/channelId1/test | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=write ratelimit=channel_test tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test
+POST /api/orgs/id1/channels/channelId1/test/ | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=write ratelimit=channel_test tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test
+POST /api/orgs/a%2Fb/channels/channelId1/test | kind=endpoint pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=write ratelimit=channel_test tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test
 OPTIONS /api/orgs/id1/channels/channelId1/test | kind=method-not-allowed pattern=/api/orgs/{id}/channels/{channelId}/test auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/channels/{channelId}/test allow=POST
+GET /api/orgs/id1/ci-credentials/ | kind=endpoint pattern=/api/orgs/{id}/ci-credentials auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials
+GET /api/v1/orgs/id1/ci-credentials/ | kind=endpoint pattern=/api/orgs/{id}/ci-credentials auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials
+GET /api/./orgs/id1/ci-credentials/ | kind=endpoint pattern=/api/orgs/{id}/ci-credentials auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials
+GET /api/orgs/a%2Fb/ci-credentials/ | kind=endpoint pattern=/api/orgs/{id}/ci-credentials auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials
+HEAD /api/orgs/id1/ci-credentials/ | kind=method-not-allowed pattern=/api/orgs/{id}/ci-credentials auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/ci-credentials allow=GET,POST
+OPTIONS /api/orgs/id1/ci-credentials/ | kind=method-not-allowed pattern=/api/orgs/{id}/ci-credentials auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/ci-credentials allow=GET,POST
+POST /api/orgs/id1/ci-credentials/ | kind=endpoint pattern=/api/orgs/{id}/ci-credentials auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials
+POST /api/v1/orgs/id1/ci-credentials/ | kind=endpoint pattern=/api/orgs/{id}/ci-credentials auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials
+POST /api/./orgs/id1/ci-credentials/ | kind=endpoint pattern=/api/orgs/{id}/ci-credentials auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials
+POST /api/orgs/a%2Fb/ci-credentials/ | kind=endpoint pattern=/api/orgs/{id}/ci-credentials auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials
+DELETE /api/orgs/id1/ci-credentials/credId1 | kind=endpoint pattern=/api/orgs/{id}/ci-credentials/{credId} auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials/{credId}
+DELETE /api/v1/orgs/id1/ci-credentials/credId1 | kind=endpoint pattern=/api/orgs/{id}/ci-credentials/{credId} auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials/{credId}
+DELETE /api/./orgs/id1/ci-credentials/credId1 | kind=endpoint pattern=/api/orgs/{id}/ci-credentials/{credId} auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials/{credId}
+DELETE /api/orgs/id1/ci-credentials/credId1/ | kind=endpoint pattern=/api/orgs/{id}/ci-credentials/{credId} auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials/{credId}
+DELETE /api/orgs/a%2Fb/ci-credentials/credId1 | kind=endpoint pattern=/api/orgs/{id}/ci-credentials/{credId} auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/ci-credentials/{credId}
+OPTIONS /api/orgs/id1/ci-credentials/credId1 | kind=method-not-allowed pattern=/api/orgs/{id}/ci-credentials/{credId} auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/ci-credentials/{credId} allow=DELETE
 GET /api/orgs/id1/invites/ | kind=endpoint pattern=/api/orgs/{id}/invites auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/invites
 GET /api/v1/orgs/id1/invites/ | kind=endpoint pattern=/api/orgs/{id}/invites auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/invites
 GET /api/./orgs/id1/invites/ | kind=endpoint pattern=/api/orgs/{id}/invites auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/invites
@@ -1060,6 +1083,12 @@ POST /api/v1/providers/azure-foundry/test | kind=endpoint pattern=/api/providers
 POST /api/./providers/azure-foundry/test | kind=endpoint pattern=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/azure-foundry/test
 POST /api/providers/azure-foundry/test/ | kind=endpoint pattern=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/azure-foundry/test
 OPTIONS /api/providers/azure-foundry/test | kind=method-not-allowed pattern=/api/providers/azure-foundry/test auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/providers/azure-foundry/test allow=POST
+GET /api/providers/catalog | kind=endpoint pattern=/api/providers/catalog auth=jwt scopes=read ratelimit=general tx=none deadline=default label=/api/providers/catalog
+GET /api/v1/providers/catalog | kind=endpoint pattern=/api/providers/catalog auth=jwt scopes=read ratelimit=general tx=none deadline=default label=/api/providers/catalog
+GET /api/./providers/catalog | kind=endpoint pattern=/api/providers/catalog auth=jwt scopes=read ratelimit=general tx=none deadline=default label=/api/providers/catalog
+GET /api/providers/catalog/ | kind=endpoint pattern=/api/providers/catalog auth=jwt scopes=read ratelimit=general tx=none deadline=default label=/api/providers/catalog
+HEAD /api/providers/catalog | kind=method-not-allowed pattern=/api/providers/catalog auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/providers/catalog allow=GET
+OPTIONS /api/providers/catalog | kind=method-not-allowed pattern=/api/providers/catalog auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/providers/catalog allow=GET
 POST /api/providers/copilot/poll | kind=endpoint pattern=/api/providers/copilot/poll auth=jwt scopes=write ratelimit=general tx=none deadline=default label=/api/providers/copilot/poll
 POST /api/v1/providers/copilot/poll | kind=endpoint pattern=/api/providers/copilot/poll auth=jwt scopes=write ratelimit=general tx=none deadline=default label=/api/providers/copilot/poll
 POST /api/./providers/copilot/poll | kind=endpoint pattern=/api/providers/copilot/poll auth=jwt scopes=write ratelimit=general tx=none deadline=default label=/api/providers/copilot/poll

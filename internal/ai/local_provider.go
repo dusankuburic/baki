@@ -297,8 +297,8 @@ var localModelsClient = sync.OnceValue(func() *http.Client {
 	return &http.Client{Timeout: 0, Transport: azureTransport(sharedTransportBase()), CheckRedirect: egress.NoRedirects}
 })
 
-func (p *LocalProvider) ID() string   { return localProviderID }
-func (p *LocalProvider) Name() string { return "Local models" }
+func (p *LocalProvider) ID() string   { return localSpec.ID }
+func (p *LocalProvider) Name() string { return localSpec.Name }
 
 // ContextLimit is the configured window (LocalDefaultContextWindow when
 // unset), never the model's advertised maximum: see LocalDefaultContextWindow.
@@ -309,13 +309,13 @@ func (p *LocalProvider) FreeModel() string { return "" }
 // does not rejects the request and the tool loop degrades.
 func (p *LocalProvider) SupportsTools() bool { return true }
 
-// PricePerMillionTokens is zero on purpose: local models cost nothing to
-// run, so the budget meter stays at $0 (Pricing{}).
-func (p *LocalProvider) PricePerMillionTokens() Pricing { return Pricing{} }
+// PricePerMillionTokens is zero on purpose (PricingFree): local models cost
+// nothing to run, so the budget meter stays at $0 (Pricing{}).
+func (p *LocalProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(localSpec) }
 
 // DefaultModel is empty: the document names no model, and the listing's
 // first chat model is the default (chooseDefaultModel).
-func (p *LocalProvider) DefaultModel() string { return "" }
+func (p *LocalProvider) DefaultModel() string { return localSpec.DefaultModel }
 
 func (p *LocalProvider) EstimateTokens(text string) int { return EstimateTokensOpenAI(text) }
 
@@ -403,10 +403,4 @@ func (p *LocalProvider) Embed(ctx context.Context, text []string) ([][]float32, 
 		return nil, p.configErr
 	}
 	return p.embed(ctx, text)
-}
-
-func init() {
-	// Registered here so factory.go keeps a single registry; the desktop entrypoint decides through
-	// ConfigureLocalModels whether the provider is usable at all.
-	RegisterProvider(localProviderID, func(key string) Provider { return NewLocalProvider(key) })
 }

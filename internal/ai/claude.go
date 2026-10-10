@@ -73,16 +73,12 @@ func (c *ClaudeProvider) classifyUnauthorized(status int, body []byte) error {
 
 func (c *ClaudeProvider) SupportsTools() bool { return true }
 
-func (c *ClaudeProvider) ID() string           { return "claude" }
-func (c *ClaudeProvider) Name() string         { return "Claude" }
-func (c *ClaudeProvider) ContextLimit() int    { return 200000 }
-func (c *ClaudeProvider) DefaultModel() string { return "claude-sonnet-4-6" }
-func (c *ClaudeProvider) FreeModel() string    { return "" }
-
-func (c *ClaudeProvider) PricePerMillionTokens() Pricing {
-	// Sonnet 4.6 list pricing (the default model).
-	return Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}
-}
+func (c *ClaudeProvider) ID() string                     { return claudeSpec.ID }
+func (c *ClaudeProvider) Name() string                   { return claudeSpec.Name }
+func (c *ClaudeProvider) ContextLimit() int              { return 200000 }
+func (c *ClaudeProvider) DefaultModel() string           { return claudeSpec.DefaultModel }
+func (c *ClaudeProvider) FreeModel() string              { return "" }
+func (c *ClaudeProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(claudeSpec) }
 
 func (c *ClaudeProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	return nil, fmt.Errorf("embeddings not supported by Claude provider")
@@ -95,7 +91,7 @@ func (c *ClaudeProvider) EstimateTokens(text string) int {
 // Models is the Claude catalogue without the invite-only models (claudeInviteOnly): those stay in the catalogue
 // so a Foundry deployment of one is sized, but are not offered in this picker.
 func (c *ClaudeProvider) Models(_ context.Context) ([]ModelInfo, error) {
-	models := catalogModels("claude")
+	models := catalogModels(claudeSpec.Catalog)
 	out := models[:0]
 	for _, m := range models {
 		if !claudeInviteOnly[m.ID] {

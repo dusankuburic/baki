@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -8,6 +9,7 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	"pad-analyzer/internal/platform/reqtx"
+	"pad-analyzer/internal/platform/secret"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
@@ -15,7 +17,7 @@ type SecurityConfig struct {
 	JWTEnabled     bool
 	LocalUserID    string
 	LocalName      string
-	Token          string // local-mode shared bearer
+	Token          secret.Value // local-mode shared bearer
 	AuthMgr        *auth.Manager
 	Backend        storageif.StorageBackend
 	OrgSvc         *collaboration.OrgService
@@ -40,17 +42,27 @@ type FeatureFlags struct {
 }
 
 func (c *SecurityConfig) CallerID(r *http.Request) string {
-	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
+	return c.CallerIDFromContext(r.Context())
+}
+
+// CallerIDFromContext is CallerID for a typed endpoint, which has the request's context rather than the request.
+func (c *SecurityConfig) CallerIDFromContext(ctx context.Context) string {
+	if claims := auth.ClaimsFromContext(ctx); claims != nil {
 		return claims.UserID
 	}
 	return c.LocalUserID
 }
 
 func (c *SecurityConfig) KeyScope(r *http.Request) string {
+	return c.KeyScopeFromContext(r.Context())
+}
+
+// KeyScopeFromContext is KeyScope for a typed endpoint.
+func (c *SecurityConfig) KeyScopeFromContext(ctx context.Context) string {
 	if !c.JWTEnabled {
 		return ""
 	}
-	return c.CallerID(r)
+	return c.CallerIDFromContext(ctx)
 }
 
 var roleRank = map[auth.Role]int{

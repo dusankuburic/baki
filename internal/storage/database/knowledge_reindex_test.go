@@ -15,8 +15,9 @@ import (
 // shape without a database: knowledge_chunks.id is TEXT, so the id
 // parameter must be cast ::text — a ::uuid cast fails at plan time
 // ("operator does not exist: text = uuid") and no re-index could ever
-// commit. Both variants (with and without pgvector), 2 or 3 params per row,
-// the VALUES alias, and a NULL vector for a width the index does not hold.
+// commit. Both variants (with and without pgvector), 3 or 4 params per row
+// (the identity last), the VALUES alias, and a NULL vector for a width the
+// index does not hold.
 func TestBuildKnowledgeEmbeddingUpdate_NoUUIDCast(t *testing.T) {
 	batch := []interfaces.KnowledgeChunk{
 		{ID: "id-1", Embedding: []float32{1, 2, 3}},
@@ -31,19 +32,22 @@ func TestBuildKnowledgeEmbeddingUpdate_NoUUIDCast(t *testing.T) {
 			if !strings.HasPrefix(stmt, "UPDATE knowledge_chunks AS c SET embedding = v.emb") || !strings.HasSuffix(stmt, "WHERE c.id = v.id") {
 				t.Errorf("unexpected statement shape: %s", stmt)
 			}
-			perRow := 2
+			perRow := 3
 			if pgvector {
-				perRow = 3
-				if !strings.Contains(stmt, "embedding_vec = v.vec") || !strings.Contains(stmt, "AS v(id, emb, vec)") {
+				perRow = 4
+				if !strings.Contains(stmt, "embedding_vec = v.vec") || !strings.Contains(stmt, "AS v(id, emb, vec, ident)") {
 					t.Errorf("pgvector variant must refresh embedding_vec: %s", stmt)
 				}
-				if args[2] != "[1,2,3]" || args[5] != nil {
-					t.Errorf("vector args = %v / %v, want the width-3 literal and NULL for the width-2 row", args[2], args[5])
+				if args[2] != "[1,2,3]" || args[6] != nil {
+					t.Errorf("vector args = %v / %v, want the width-3 literal and NULL for the width-2 row", args[2], args[6])
 				}
 			} else {
-				if strings.Contains(stmt, "embedding_vec") || !strings.Contains(stmt, "AS v(id, emb)") {
+				if strings.Contains(stmt, "embedding_vec") || !strings.Contains(stmt, "AS v(id, emb, ident)") {
 					t.Errorf("non-pgvector variant must not touch embedding_vec: %s", stmt)
 				}
+			}
+			if !strings.Contains(stmt, "embedding_identity = NULLIF(v.ident, '')") {
+				t.Errorf("the update must stamp the identity (NULL for none): %s", stmt)
 			}
 			if len(args) != len(batch)*perRow {
 				t.Fatalf("%d args, want %d", len(args), len(batch)*perRow)

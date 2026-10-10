@@ -9,9 +9,9 @@ package errreport
 
 import (
 	"context"
+	"maps"
 	"sync"
 
-	"pad-analyzer/internal/metrics"
 	"pad-core/logger"
 )
 
@@ -31,6 +31,8 @@ type Attrs = map[string]any
 var (
 	mu     sync.RWMutex
 	active Sink
+	// instanceID names this replica on every forwarded event (SetInstanceID).
+	instanceID string
 )
 
 // Register installs the exception-aggregation sink used by CaptureError and
@@ -51,7 +53,7 @@ func CaptureError(ctx context.Context, location string, err error, attrs Attrs) 
 	if err == nil {
 		return
 	}
-	metrics.RecordError(location)
+	recordError(location)
 	logger.FromContext(ctx).ErrorContext(ctx, "error reported", "location", location, "err", err, "attrs", attrs)
 	forward(func(s Sink) { s.CaptureError(ctx, err, attrs) })
 }
@@ -60,19 +62,53 @@ func CaptureError(ctx context.Context, location string, err error, attrs Attrs) 
 // pad_panics_total{location} counter and logs the stack, then forwards to the
 // registered sink if any. location is a short call-site tag ("http", "scanner").
 func CapturePanic(ctx context.Context, location string, recovered any, stack []byte, attrs Attrs) {
-	metrics.RecordPanic(location)
+	recordPanic(location)
 	logger.FromContext(ctx).ErrorContext(ctx, "panic reported",
 		"location", location, "panic", recovered, "stack", string(stack), "attrs", attrs)
 	forward(func(s Sink) { s.CapturePanic(ctx, recovered, stack, attrs) })
 }
 
+// SetInstanceID names this replica in the attributes of every event forwarded to the sink ("instance_id"), so a
+// sink that groups the events of several replicas tells them apart. The log line needs nothing: the logger's base
+// attributes put the id on every line. "" stops adding it. Intended to be called once at startup.
+func SetInstanceID(id string) {
+	mu.Lock()
+	instanceID = id
+	mu.Unlock()
+}
+
 func forward(do func(Sink)) {
 	mu.RLock()
-	s := active
+	s, id := active, instanceID
 	mu.RUnlock()
 	if s == nil {
 		return
 	}
+	if id != "" {
+		s = withInstance{Sink: s, id: id}
+	}
 	defer func() { _ = recover() }() // a sink must never break the caller's recovery
 	do(s)
+}
+
+// withInstance adds the instance id to the attributes of the events it forwards, in a copy: call sites may share
+// their map. A call site's own instance_id is kept.
+type withInstance struct {
+	Sink
+	id string
+}
+
+func (w withInstance) CaptureError(ctx context.Context, err error, attrs Attrs) {
+	w.Sink.CaptureError(ctx, err, w.attrs(attrs))
+}
+
+func (w withInstance) CapturePanic(ctx context.Context, recovered any, stack []byte, attrs Attrs) {
+	w.Sink.CapturePanic(ctx, recovered, stack, w.attrs(attrs))
+}
+
+func (w withInstance) attrs(attrs Attrs) Attrs {
+	out := make(Attrs, len(attrs)+1)
+	out["instance_id"] = w.id
+	maps.Copy(out, attrs)
+	return out
 }

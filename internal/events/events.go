@@ -141,6 +141,14 @@ type AccountErased struct {
 	KeyScope string
 }
 
+// AccessRevoked: a credential of UserID was revoked before it expired: a session's access token at logout, or an
+// API token deleted. JTI is the id the token blacklist holds it under (auth.PATJTI for an API token), never the
+// token itself.
+type AccessRevoked struct {
+	UserID string
+	JTI    string
+}
+
 func (FlowChanged) EventName() string          { return "flow.changed" }
 func (CredentialChanged) EventName() string    { return "credential.changed" }
 func (OrgMemberChanged) EventName() string     { return "org_member.changed" }
@@ -150,3 +158,4 @@ func (FindingStatusChanged) EventName() string { return "finding_status.changed"
 func (AccountErased) EventName() string        { return "account.erased" }
 func (FindingAssigned) EventName() string      { return "finding.assigned" }
 func (FindingCommented) EventName() string     { return "finding.commented" }
+func (AccessRevoked) EventName() string        { return "access.revoked" }

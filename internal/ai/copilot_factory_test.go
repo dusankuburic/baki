@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -15,7 +16,7 @@ func TestProviderFactory_For_Copilot_WithOAuthToken(t *testing.T) {
 		return "", fmt.Errorf("key %q not found", k)
 	}, auth, nil, nil)
 
-	p, err := f.For("", "copilot")
+	p, err := f.For(context.Background(), "", "copilot")
 	if err != nil {
 		t.Fatalf("For(copilot) with OAuth: %v", err)
 	}
@@ -37,7 +38,7 @@ func TestProviderFactory_For_Copilot_OAuthTakesPriorityOverPAT(t *testing.T) {
 		return "", fmt.Errorf("key %q not found", k)
 	}, auth, nil, nil)
 
-	p, err := f.For("", "copilot")
+	p, err := f.For(context.Background(), "", "copilot")
 	if err != nil {
 		t.Fatalf("For(copilot): %v", err)
 	}
@@ -57,7 +58,7 @@ func TestProviderFactory_For_Copilot_FallbackToPAT(t *testing.T) {
 		return "", fmt.Errorf("key %q not found", k)
 	}, nil, nil, nil) // nil copilotAuth — PAT path doesn't need it
 
-	p, err := f.For("", "copilot")
+	p, err := f.For(context.Background(), "", "copilot")
 	if err != nil {
 		t.Fatalf("For(copilot) with PAT fallback: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestProviderFactory_For_Copilot_NeitherConfigured(t *testing.T) {
 		return "", fmt.Errorf("key %q not found", k)
 	}, nil, nil, nil)
 
-	_, err := f.For("", "copilot")
+	_, err := f.For(context.Background(), "", "copilot")
 	if err == nil {
 		t.Fatal("expected error when neither OAuth token nor PAT is configured")
 	}
@@ -89,7 +90,7 @@ func TestProviderFactory_For_Copilot_EmptyOAuthTokenFallsBackToPAT(t *testing.T)
 		return "", fmt.Errorf("key %q not found", k)
 	}, NewCopilotAuth(), nil, nil)
 
-	p, err := f.For("", "copilot")
+	p, err := f.For(context.Background(), "", "copilot")
 	if err != nil {
 		t.Fatalf("For(copilot) with empty OAuth: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestProviderFactory_For_Copilot_NilCopilotAuthFallsBackToPAT(t *testing.T) 
 		return "", fmt.Errorf("key %q not found", k)
 	}, nil, nil, nil)
 
-	p, err := f.For("", "copilot")
+	p, err := f.For(context.Background(), "", "copilot")
 	if err != nil {
 		t.Fatalf("For(copilot) with nil auth + PAT: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestProviderFactory_For_Copilot_OnlyOAuthNoAuth_Error(t *testing.T) {
 		return "", fmt.Errorf("key %q not found", k)
 	}, nil, nil, nil)
 
-	_, err := f.For("", "copilot")
+	_, err := f.For(context.Background(), "", "copilot")
 	if err == nil {
 		t.Fatal("expected error: OAuth token present but copilotAuth nil, no PAT available")
 	}

@@ -15,6 +15,9 @@ const (
 	ActorToken
 	// ActorSystem: the process itself, running a background job (scanner, retention, migrations).
 	ActorSystem
+	// ActorIntegration: a machine credential that is no user, an organisation's CI credential or the deployment's CI
+	// webhook secret. It holds no role and no scope, so authorization refuses it everything; audit records it.
+	ActorIntegration
 )
 
 func (k ActorKind) String() string {
@@ -25,6 +28,8 @@ func (k ActorKind) String() string {
 		return "token"
 	case ActorSystem:
 		return "system"
+	case ActorIntegration:
+		return "integration"
 	}
 	return "unknown"
 }
@@ -42,6 +47,8 @@ type Actor struct {
 	TokenID string
 	// Job names the background job of an ActorSystem.
 	Job string
+	// OrgID is the organisation an ActorIntegration's credential belongs to; "" for the deployment's secret.
+	OrgID string
 }
 
 // ActorFromClaims returns the actor authenticated claims stand for: an ActorToken for claims built by
@@ -63,9 +70,27 @@ func ActorFromClaims(c *Claims) *Actor {
 	return a
 }
 
+// ActorFromWSTicket returns the actor a WebSocket ticket's claims stand for: the credential the ticket was issued
+// from. That is ActorFromClaims read through the source credential's jti (SrcJTI) instead of the ticket's own, so a
+// ticket issued from a PAT is the ActorToken of that PAT, with its scopes. Nil claims give a nil actor.
+func ActorFromWSTicket(c *Claims) *Actor {
+	if c == nil {
+		return nil
+	}
+	src := *c
+	src.ID = c.SrcJTI
+	return ActorFromClaims(&src)
+}
+
 // SystemActor returns the actor a background job runs as.
 func SystemActor(job string) *Actor {
 	return &Actor{Kind: ActorSystem, Job: job, Role: RoleAdmin}
+}
+
+// IntegrationActor returns the actor of a CI webhook call: the organisation's CI credential credentialID, or with
+// both empty the deployment's webhook secret.
+func IntegrationActor(orgID, credentialID string) *Actor {
+	return &Actor{Kind: ActorIntegration, OrgID: orgID, TokenID: credentialID}
 }
 
 // LocalActor returns the actor of a deployment without accounts (local mode): its single user, who holds the
@@ -98,9 +123,9 @@ func ActorFromContext(ctx context.Context) *Actor {
 func (a *Actor) Scoped() bool { return a != nil && len(a.Scopes) > 0 }
 
 // Allows reports whether the actor's token scopes permit scope. Actors that are not scoped tokens allow every
-// scope; a nil actor allows none.
+// scope; a nil actor and an integration allow none.
 func (a *Actor) Allows(scope string) bool {
-	if a == nil {
+	if a == nil || a.Kind == ActorIntegration {
 		return false
 	}
 	return !a.Scoped() || HasScope(a.Scopes, scope)

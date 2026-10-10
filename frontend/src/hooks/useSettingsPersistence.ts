@@ -2,7 +2,6 @@ import {useEffect} from 'react'
 import {useSettingsStore, onSettingsLoaded} from '@/stores/settingsStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useChatStore} from '@/stores/chatStore'
-import type {ProviderID} from '@/types'
 
 // canLoad: true once the backend will answer a settings read — the user is
 // authenticated (cloud), or the app runs against the local sidecar (desktop,
@@ -31,7 +30,7 @@ export function useSettingsPersistence(canLoad: boolean) {
       if (s.layout?.sidebarCollapsed !== undefined) useUIStore.getState().setSidebarCollapsed(s.layout.sidebarCollapsed)
       if (s.layout?.inspectorCollapsed !== undefined)
         useUIStore.getState().setInspectorCollapsed(s.layout.inspectorCollapsed)
-      if (s.ai?.activeProvider) useChatStore.getState().setProvider(s.ai.activeProvider as ProviderID)
+      if (s.ai?.activeProvider) useChatStore.getState().setProvider(s.ai.activeProvider)
     })
     void loadFromBackend()
     return unsub

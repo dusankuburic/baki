@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -20,6 +19,8 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/platform/drain"
+	"pad-analyzer/internal/platform/secret"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	wshub "pad-analyzer/internal/websocket"
@@ -44,7 +45,7 @@ type Router struct {
 
 	AllowedOrigins []string
 	trustedProxies []string
-	metricsToken   string
+	metricsToken   secret.Value
 	// pprofEnabled gates registration of /debug/pprof/* (PAD_PPROF_ENABLED, default false).
 	// Config validation guarantees metricsToken is non-empty whenever this is true.
 	pprofEnabled bool
@@ -58,6 +59,9 @@ type Router struct {
 
 	usedTicketsMu sync.Mutex
 	usedTickets   map[string]time.Time
+	// draining is the server's draining state, consulted before a WebSocket ticket is redeemed; nil is the
+	// process's (drain.Process), tests set their own.
+	draining *drain.State
 
 	// indexCSPOnce/indexCSPHash cache the sha256 pin of index.html's inline theme-bootstrap script, derived lazily from the file actually served:
 	// a hardcoded hash drifted once and silently blocked the bootstrap on every page load — deriving makes that impossible.
@@ -172,6 +176,11 @@ func (rt *Router) FlowViewers() service.FlowViewers {
 	return rt.hub
 }
 
+// WebSocketHub is the hub itself, for the access-change subscriber that re-checks open sockets (internal/di).
+func (rt *Router) WebSocketHub() *wshub.Hub {
+	return rt.hub
+}
+
 // ShutdownWebSocket gracefully drains all WebSocket clients (CloseGoingAway, conns closed, pumps waited for). Call BEFORE server.Shutdown — http.Server.Shutdown does not close hijacked sockets. Idempotent.
 func (rt *Router) ShutdownWebSocket(ctx context.Context) error {
 	return rt.hub.Shutdown(ctx)
@@ -272,9 +281,9 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 			}
 			r = r.WithContext(auth.WithClaims(r.Context(), claims))
 		} else {
-			// ConstantTimeCompare("","") == 1 — an empty configured token would admit anyone.
-			// Unreachable today (the auth manager backfills a random secret), but fail closed regardless.
-			if rt.security.Token == "" || subtle.ConstantTimeCompare([]byte(tokenStr), []byte(rt.security.Token)) != 1 {
+			// An unset token equals nothing (secret.Equal), so an empty configured token admits no one.
+			// Unreachable today (config.Load mints a secret), but fail closed regardless.
+			if !rt.security.Token.Equal(tokenStr) {
 				render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 				return
 			}
@@ -289,10 +298,16 @@ func (rt *Router) jwtAuth(next http.Handler) http.Handler {
 // verifyAPIToken authenticates a machine token: hash → storage lookup → expiry check → the owner's CURRENT user row (deleted/demoted reflected at once). Returns nil on failure (401).
 // Deliberately NOT cached: a TTL cache would weaken the revocation-immediacy contract (TestAPIToken_RevokedRejected deletes via storage directly, as retention purges do).
 func (rt *Router) verifyAPIToken(ctx context.Context, raw string) *auth.Claims {
-	if rt.security.Backend == nil {
+	return rt.security.verifyAPIToken(ctx, raw)
+}
+
+// verifyAPIToken is the Router's, for the routes that authenticate a token themselves (the CI webhook), so a token
+// is verified the same way wherever it is presented.
+func (c *SecurityConfig) verifyAPIToken(ctx context.Context, raw string) *auth.Claims {
+	if c.Backend == nil {
 		return nil
 	}
-	tok, user := lookupAPITokenOwner(ctx, rt.security.Backend, auth.HashAPIToken(raw))
+	tok, user := lookupAPITokenOwner(ctx, c.Backend, auth.HashAPIToken(raw))
 	if tok == nil || user == nil {
 		return nil
 	}
@@ -331,12 +346,18 @@ func lookupAPITokenOwner(ctx context.Context, tokens storageif.APITokenStore, to
 // --- WebSocket handler ---
 
 // @Summary      WebSocket gateway
-// @Description  Authenticated WebSocket for collaborative presence and live updates; obtain a one-time ticket via /api/ws-ticket.
+// @Description  Authenticated WebSocket for collaborative presence and live updates; obtain a one-time ticket via /api/ws-ticket. While the server is stopping the upgrade is refused with 503 and code SERVER_RESTARTING (Retry-After) before the ticket is redeemed, so the reconnect may present it again.
 // @Tags         realtime
 // @Produce      json
 // @Success      101 {string} string "Switching Protocols"
+// @Failure      503 {object} render.ErrorResponse "The server is restarting (code SERVER_RESTARTING; reconnect after Retry-After)"
 // @Router       /ws [get]
 func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// A stopping server takes no new socket, and refuses before the single-use ticket is spent.
+	if rt.draining.Draining() {
+		drain.Refuse(w)
+		return
+	}
 	ticket := r.URL.Query().Get("ticket")
 	// ConsumeWSTicket atomically verifies + marks the ticket consumed via the shared blacklist (AddIfAbsent), single-use across all replicas;
 	// without a blacklist (local mode) it only verifies the JWT — the local map below handles single-use.
@@ -350,19 +371,20 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
-	recordActor(r, auth.ActorFromClaims(claims))
+	// The socket acts as the credential the ticket was issued from: a PAT's ticket is that token, with its scopes.
+	actor := auth.ActorFromWSTicket(claims)
+	recordActor(r, actor)
 	var isRevoked func(string) bool
 	if rt.security.AuthMgr != nil {
 		isRevoked = rt.security.AuthMgr.IsRevoked
 	}
 	// Pass the SOURCE access token's JTI/expiry (SrcJTI/SrcExp), NOT the ticket's own JTI: the ticket JTI is blacklisted only ~30s at consumption.
 	// The access-token JTI is what logout/revoke blacklists, so the WS re-authz loop can disconnect the live socket.
-	accessJTI := claims.SrcJTI
-	var accessExp time.Time
+	id := wshub.Identity{Actor: actor, DisplayName: claims.Email, AccessJTI: claims.SrcJTI}
 	if claims.SrcExp != nil {
-		accessExp = claims.SrcExp.Time
+		id.AccessExp = claims.SrcExp.Time
 	}
-	wshub.Handler(rt.hub, claims.UserID, claims.Email, rt.AllowedOrigins, rt.flowChecker, accessJTI, accessExp, isRevoked)(w, r)
+	wshub.Handler(rt.hub, id, rt.AllowedOrigins, rt.flowChecker, isRevoked)(w, r)
 }
 
 // --- Ticket store ---

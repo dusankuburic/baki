@@ -101,6 +101,11 @@ services:
       start_period: 10s
       retries: 3
     restart: unless-stopped
+    # SIGTERM starts the app's stop (drain, chat streams, jobs, HTTP, audit
+    # flush, pool close), bounded by its fx.StopTimeout. Docker's default of
+    # 10 s SIGKILLed it halfway. Above StopTimeout, like the ACA grace period
+    # in infra/main.bicep; the steps are ADR 0024's budget table.
+    stop_grace_period: 35s
 
   db:
     # pgvector, not plain postgres: the `vector` extension backs knowledge-base

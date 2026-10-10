@@ -15,8 +15,10 @@ type ToolCallRecord struct {
 	Summary    string `json:"summary,omitempty"`
 }
 
-// FixItemSnapshot is one fix inside a batch approval record, with its own resolved outcome.
+// FixItemSnapshot is one fix inside a batch approval record, with its own resolved outcome. ID (blockId:ruleId)
+// tells two fixes of one rule apart; empty on records stored before it, which match outcomes by RuleID.
 type FixItemSnapshot struct {
+	ID         string `json:"id,omitempty"`
 	RuleID     string `json:"ruleId"`
 	FixType    string `json:"fixType"`
 	BlockLabel string `json:"blockLabel"`
@@ -26,19 +28,23 @@ type FixItemSnapshot struct {
 	Message    string `json:"message,omitempty"`
 }
 
-// FixProposalSnapshot persists an apply_fix approval prompt with its resolved
-// outcome on the assistant message (outliving the stream); Items carries
-// per-fix outcomes for batch approvals (empty for single-fix records).
+// FixProposalSnapshot persists an approval prompt with its resolved outcome on
+// the assistant message (outliving the stream); Items carries per-fix outcomes
+// for batch approvals (empty for single-fix records). Tool and PreviewKind name
+// the tool that asked and how the card previews it ("fix-patch"); empty on
+// records stored before them, which clients read as a fix patch.
 type FixProposalSnapshot struct {
-	ProposalID string            `json:"proposalId"`
-	RuleID     string            `json:"ruleId"`
-	FixType    string            `json:"fixType"`
-	BlockLabel string            `json:"blockLabel"`
-	Line       int               `json:"line"`
-	Summary    string            `json:"summary"`
-	Status     string            `json:"status"`
-	Message    string            `json:"message,omitempty"`
-	Items      []FixItemSnapshot `json:"items,omitempty"`
+	ProposalID  string            `json:"proposalId"`
+	Tool        string            `json:"tool,omitempty"`
+	PreviewKind string            `json:"previewKind,omitempty"`
+	RuleID      string            `json:"ruleId"`
+	FixType     string            `json:"fixType"`
+	BlockLabel  string            `json:"blockLabel"`
+	Line        int               `json:"line"`
+	Summary     string            `json:"summary"`
+	Status      string            `json:"status"`
+	Message     string            `json:"message,omitempty"`
+	Items       []FixItemSnapshot `json:"items,omitempty"`
 }
 
 type ChatMessage struct {
@@ -218,12 +224,84 @@ type ProviderInfo struct {
 	// you haven't added" prompt: the caller's migrated resource can list its
 	// project and the prompt was not dismissed.
 	SuggestDiscovery bool `json:"suggestDiscovery,omitempty"`
+	// The provider spec on the wire (ADR 0025), all optional so an older server's listing still parses: what the
+	// provider can do, the deployment profiles it is offered in, how its credential is entered, where its prices
+	// come from, the generic panel's accent and glyph, and whether the caller can manage the credential through
+	// the catalogue's routes.
+	Caps         []string           `json:"caps,omitempty"`
+	Modes        []string           `json:"modes,omitempty"`
+	Credential   *CredentialSchema  `json:"credential,omitempty"`
+	Endpoints    *ProviderEndpoints `json:"endpoints,omitempty"`
+	Pricing      string             `json:"pricing,omitempty"`
+	Color        string             `json:"color,omitempty"`
+	Icon         string             `json:"icon,omitempty"`
+	Configurable bool               `json:"configurable,omitempty"`
+}
+
+// CredentialSchema says how a provider's credential is entered: a bare key through the generic form
+// ("api_key"), the device flow ("oauth_device"), a document behind the provider's own panel ("document"), or
+// nothing ("none").
+type CredentialSchema struct {
+	Kind string `json:"kind"`
+	// Fields are the generic form's inputs; empty (never null) for a flow that needs none.
+	Fields  []CredentialField `json:"fields"`
+	HelpURL string            `json:"helpUrl,omitempty"`
+}
+
+// CredentialField is one input of the credential form; Type is text, secret, url, select, number or json.
+type CredentialField struct {
+	Name        string             `json:"name"`
+	Label       string             `json:"label"`
+	Type        string             `json:"type"`
+	Required    bool               `json:"required"`
+	Placeholder string             `json:"placeholder,omitempty"`
+	Help        string             `json:"help,omitempty"`
+	Options     []CredentialOption `json:"options,omitempty"`
+}
+
+// CredentialOption is one choice of a select field.
+type CredentialOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// ProviderEndpoints names the routes that manage a provider's credential; an absent route means the client
+// has nothing to call for that step (a document provider is managed by its own panel).
+type ProviderEndpoints struct {
+	Save   string `json:"save,omitempty"`
+	Test   string `json:"test,omitempty"`
+	Start  string `json:"start,omitempty"`
+	Poll   string `json:"poll,omitempty"`
+	Revoke string `json:"revoke,omitempty"`
+	User   string `json:"user,omitempty"`
+}
+
+// ProviderCatalogEntry is one provider of GET /api/providers/catalog: every registered provider of the running
+// profile, configured or not, so a client can offer a provider it has no built-in knowledge of.
+type ProviderCatalogEntry struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	AuthType   string            `json:"authType"`
+	Modes      []string          `json:"modes"`
+	Caps       []string          `json:"caps"`
+	Credential CredentialSchema  `json:"credential"`
+	Endpoints  ProviderEndpoints `json:"endpoints"`
+	// Configured: the caller holds a credential of their own, or their organisation shares one.
+	Configured bool   `json:"configured"`
+	Color      string `json:"color,omitempty"`
+	Icon       string `json:"icon,omitempty"`
+	Pricing    string `json:"pricing"`
+	// Configurable: the credential can be managed through Endpoints (false for a document provider the client
+	// has no panel for: "configured on the server").
+	Configurable bool `json:"configurable,omitempty"`
 }
 
 type ProviderTestResult struct {
 	Ok      bool   `json:"ok"`
 	Latency int    `json:"latencyMs"`
 	Error   string `json:"error,omitempty"`
+	// Code classifies a failure the client branches on (PROVIDER_UNKNOWN); "" for the free-text failures.
+	Code string `json:"code,omitempty"`
 }
 
 type DeviceAuthResponse struct {

@@ -3,8 +3,10 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,12 +79,23 @@ func (rl *RateLimiter) Limit(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := rl.getIP(r)
 		if !rl.store.Allow(r.Context(), rl.key(ip), rl.rate, rl.capacity) {
-			RecordRateLimitExceeded(rl.group)
-			render.Error(w, fmt.Errorf("rate limit exceeded"), http.StatusTooManyRequests)
+			rl.refuse(w)
 			return
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// refuse answers a request over the limit: 429 with Retry-After, the whole seconds one token takes to refill (at
+// least 1), so a client that retries (bakicli report) knows when.
+func (rl *RateLimiter) refuse(w http.ResponseWriter) {
+	RecordRateLimitExceeded(rl.group)
+	secs := 1
+	if rl.rate > 0 {
+		secs = max(1, int(math.Ceil(1/rl.rate)))
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	render.Error(w, fmt.Errorf("rate limit exceeded"), http.StatusTooManyRequests)
 }
 
 // LimitByKey enforces the limit keyed by an arbitrary caller-derived string (e.g. a per-user bucket). A "" from keyFn passes unchecked — callers use that to
@@ -95,8 +108,7 @@ func (rl *RateLimiter) LimitByKey(h http.Handler, keyFn func(*http.Request) stri
 			return
 		}
 		if !rl.store.Allow(r.Context(), key, rl.rate, rl.capacity) {
-			RecordRateLimitExceeded(rl.group)
-			render.Error(w, fmt.Errorf("rate limit exceeded"), http.StatusTooManyRequests)
+			rl.refuse(w)
 			return
 		}
 		h.ServeHTTP(w, r)

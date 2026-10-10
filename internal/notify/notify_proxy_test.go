@@ -99,16 +99,23 @@ func runProxiedDeliveryChecks(t *testing.T) {
 	}
 
 	var notifiers []AlertNotifier
-	for _, kind := range ValidChannelKinds {
-		n, err := BuildChannelNotifier(kind, target, "s3cret", BlockInternalTargets)
+	for _, kind := range KindIDs(ScopeOrg) {
+		values := Values{"url": target}
+		switch kind {
+		case "email":
+			continue // no URL: it sends through the mail runner
+		case "jira":
+			values = Values{"url": target, "email": "ops@example.com", "token": "token", "project": "PAD"}
+		}
+		n, err := Build(context.Background(), kind, ScopeOrg, values, Deps{Policy: BlockInternalTargets})
 		if err != nil {
-			t.Fatalf("BuildChannelNotifier(%s): %v", kind, err)
+			t.Fatalf("Build(%s): %v", kind, err)
 		}
 		notifiers = append(notifiers, n)
 	}
 	d, err := New(Config{
-		WebhookURL: target, TeamsURL: target, SlackURL: target,
-		JiraURL: target, JiraEmail: "ops@example.com", JiraToken: "token", JiraProject: "PAD",
+		Channels: append(chans("webhook", target, "teams", target, "slack", target),
+			ChannelConfig{Kind: "jira", Values: Values{"url": target, "email": "ops@example.com", "token": "token", "project": "PAD"}}),
 		MaxAttempts: 1,
 	})
 	if err != nil {
@@ -128,9 +135,14 @@ func runProxiedDeliveryChecks(t *testing.T) {
 
 	// A literal internal target is judged in the proxy hook, before any dial.
 	// (Validation never lets one be saved; the client must refuse it anyway.)
-	wh, ok := notifiers[0].(*WebhookNotifier)
-	if !ok {
-		t.Fatalf("notifiers[0] is %T, want *WebhookNotifier", notifiers[0])
+	var wh *WebhookNotifier
+	for _, n := range notifiers {
+		if w, ok := n.(*WebhookNotifier); ok && wh == nil {
+			wh = w
+		}
+	}
+	if wh == nil {
+		t.Fatal("no webhook notifier was built")
 	}
 	internal := &WebhookNotifier{URL: "https://169.254.169.254/latest/meta-data", Client: wh.Client, MaxAttempts: 1}
 	if err := internal.Notify(ctx, sampleEvent()); !errors.Is(err, egress.ErrInternalAddress) || strings.Contains(err.Error(), "proxyconnect") {
@@ -145,6 +157,8 @@ func setSingleAttempt(n AlertNotifier) {
 	case *WebhookNotifier:
 		n.MaxAttempts = 1
 	case *TeamsNotifier:
+		n.MaxAttempts = 1
+	case *TeamsWorkflowNotifier:
 		n.MaxAttempts = 1
 	case *SlackNotifier:
 		n.MaxAttempts = 1

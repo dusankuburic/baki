@@ -95,6 +95,30 @@ go test ./core/export/ -run TestExportGolden -update-export-golden
 Both golden tests compare with CR stripped (a CRLF checkout passes) and, in update mode only, delete goldens whose
 input is gone; otherwise a stale golden fails.
 
+## Mail goldens: `internal/mail/testdata/*.golden`
+
+`TestMailGolden` renders every registered email template (ADR 0022) from its fixture and pins the subject, the
+text and HTML bodies, and the whole MIME message (`.eml`, with the date, boundary and Message-ID fixed and the CRLF
+line ends written as LF). The fixtures carry markup, quotes and a forged MIME boundary in the user-controlled
+fields, so an escaping or encoding change shows in the diff. `TestMailGolden_Coverage` fails when a registered
+template has no fixture or golden, or a golden no fixture:
+
+```
+go test ./internal/mail/ -run TestMailGolden -update-mail-golden
+```
+
+## Notification payloads: `internal/notify/testdata/payloads/*.golden`
+
+`TestPayloadGolden` delivers one event of each type (`drift`, `health_regression`, `analysis_complete`, `test`,
+`new_rules`) through every channel kind (webhook, Slack, Teams, Teams Workflows, Jira, email) built from the kind
+registry, and pins what the receiver gets: the request line, the headers (the envelope's, the signatures) and the
+body bytes, with a fixed clock and fixed delivery ids (ADR 0021). The webhook is rendered as an organisation's
+channel, plus one deployment webhook without `orgId`. A change of what receivers get is a reviewed diff:
+
+```
+go test ./internal/notify/ -run TestPayloadGolden -update-notify-golden
+```
+
 ## Declared caches: `internal/di/testdata/caches.golden`
 
 `TestCacheRegistry_Golden` lists every declared cache (ADR 0017): its name, the key parts every key must carry,
@@ -104,6 +128,20 @@ linked into that test binary, so the golden cannot silently miss one:
 
 ```
 go test ./internal/di/ -run TestCacheRegistry_Golden -update-caches
+```
+
+## Background jobs: `internal/lifecycle/testdata/jobs.golden`
+
+`TestJobRegistry_Golden` lists every job declared with `lifecycle.DeclareJob` (ADR 0023): its name, its advisory-lock
+key (with its ASCII spelling), whether the key is a legacy constant or derived from the name, and its schedule. A
+changed legacy key lets two revisions run the job side by side during a rolling deploy, so review a change like a
+route-policy change. `TestJobRegistry_CoversEveryDeclaration` fails when a `DeclareJob` in the source is not linked
+into that test binary (import its package in `singleton_registry_test.go`), and `TestJobKeys_Unique` reads every
+`*LockKey` constant of the source (package `main` included) and checks that the keys of the one int8 key space are
+distinct:
+
+```
+go test ./internal/lifecycle/ -run TestJobRegistry_Golden -update-jobs
 ```
 
 ## Previous release on the new schema: the `previous-release-boot` CI job
@@ -147,11 +185,31 @@ when an exception grows and when it shrinks, so each pinned number can only go d
 unique across both modules. `undeclaredMemos` lists the memos deliberately left off the registry, each with its
 reason, and `TestArch_UndeclaredMemosStillExist` checks that each is still where it says.
 
+`config_test.go` type-checks the module, as `storehandles_test.go` does. `TestArch_ConfigNotMutatedOutsideConfig`
+fails on a write to the configuration outside `internal/config`, with no exceptions: an assignment, `++`/`--`, an
+op-assign, `append`/`copy`/`delete`/`clear`, a pointer-receiver method call or a taken address, on anything reached
+from a `config.Config` or one of its section types (a field at any depth, a slice element, a map entry), or on a
+package-level variable of `internal/config`. `config.Load` fills the configuration in once, and the providers share
+it by pointer.
+
+`providers_test.go` pins where a provider id may be spelled: `TestArch_ProviderIDLiteralsOutsideSpecs` counts
+every string literal equal to a registered id (`ai.Specs()`, so a new `spec_<id>.go` is covered the moment it
+registers) outside the specs, the catalogue and config's copy of the embedding-capable ids, per file, and
+`TestArch_RegisterProviderOnlyInTests` keeps `ai.RegisterProvider` out of production code. A provider is
+described once, in its spec; code that needs to know asks `Caps`, `Keys`, `Modes` or `Listing`.
+
 ## Tenant scoping: `internal/storage/database/rls_scoped_methods_test.go`
 
 `TestRLS_TablesWithoutRowSecurityAreListed` fails on a table that has neither row-level security nor a listed
 reason. It is a catalog query, so it runs in CI as well. The `TestRLS_ScopedMethods_*` tests open a stranger's RLS
 scope and prove that the id-only methods reach none of another tenant's rows. They need an unprivileged role.
+
+## Sealed columns: `internal/storage/database/key_rotation_test.go`
+
+`TestReseal_CoversEverySealedColumn` reads the package's source. It fails when a `sealField` call or a keystore
+statement writing `ciphertext` names a column that the re-seal pass of a key rotation does not walk
+(`fieldSealedColumns`, `keystoreSealedColumns`; ADR 0005). Without the pass, such a column would become unreadable
+once the previous key is removed. The `TestKeyRotation_*` tests (`DATABASE_URL`) cover the rotation itself.
 
 ## DI setters: `internal/di/setters_test.go`
 
@@ -227,7 +285,23 @@ benchstat old.txt new.txt
 The nightly `chain-benchmark` job in `.github/workflows/bench-fuzz.yml` does the same between the previous day
 and HEAD.
 
-## App graph: `TestAppGraph`
+## App graph and boot: `TestAppGraph`, `TestApp_StopOrder`, `TestDesktopBoot_Smoke`
 
-`fx.ValidateApp` checks that every provider and invoke in `appOptions()` (main.go) has its dependencies,
-without running anything. A missing provider used to surface only when the binary booted.
+`fx.ValidateApp` checks that every provider and invoke in `app.Options` (`internal/app`; the root package checks the
+same graph with the build stamps `main` passes) has its dependencies, without running anything. A missing provider
+used to surface only when the binary booted.
+
+`TestApp_StopOrder` (`internal/app`) boots the real graph in a child process of the test binary and records the stop
+hooks as fx runs them (`fxevent`): in the desktop profile, with the per-user directories at a temporary one, and with
+`DATABASE_URL` in the cloud profile on a database of its own. It pins the order of the hooks (by the function that
+registered each; see [di-wiring.md](di-wiring.md#the-application-internalapp)), the desktop handshake (the `CONFIG:`
+line alone on stdout, printed while the graph is built, before any start hook), and that neither boot reaches the OS
+keychain (the child's keyring fails every call, and the keyring store would log it). It boots in a child process
+because the server's stop closes every `lifecycle.Bounded` runner of the process.
+
+`TestDesktopBoot_Smoke` (root package; `-short` skips it) builds the binary and runs it as the Tauri shell does, with
+the per-user directories at a temporary one: the first stdout line is `CONFIG:{"port":…,"tokenPath":…}`, the session
+key is at `tokenPath`, `/healthz` answers 200, and SIGTERM (on Windows a CTRL_BREAK to its process group) stops it with
+exit code 0 within the stop budget, with nothing else on stdout. `desktop.yml` runs it on Windows before the bundle
+build. `TestMainPackageIsMainGoAlone` keeps `main.go` the root package's only non-test file, since the Dockerfile and
+CI build `go build main.go`.

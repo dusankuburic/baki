@@ -316,9 +316,12 @@ describe('AITab chat shortcuts', () => {
       streams: {
         t1: {
           ...s.streams.t1!,
-          fixProposals: [
+          approvals: [
             {
               proposalId: 'p1',
+              tool: 'apply_fix',
+              previewKind: 'fix-patch',
+              source: 'fix',
               status: 'pending',
               items: [],
               ruleId: 'r',
@@ -339,10 +342,36 @@ describe('AITab chat shortcuts', () => {
     // fix, not "stop everything".
     fireEvent.keyDown(composer, {key: 'Escape'})
 
-    await waitFor(() => expect(useChatStore.getState().streams.t1?.fixProposals[0]!.status).toBe('declined'))
+    await waitFor(() => expect(useChatStore.getState().streams.t1?.approvals[0]!.status).toBe('declined'))
     expect(chatApi.respondFixDecision).toHaveBeenCalledWith('pending', 'p1', false, undefined)
     expect(useChatStore.getState().streams.t1).toBeDefined()
     expect(chatApi.cancelStream).not.toHaveBeenCalled()
+  })
+
+  // F9: with cards stacked, Escape means "no" to the one the user is looking
+  // at — the newest — as the card's own Escape and a click on Dismiss do.
+  it('Escape declines the newest pending card when several are stacked', async () => {
+    seedChat(true)
+    const card = (proposalId: string) => ({
+      proposalId,
+      tool: 'apply_fix',
+      previewKind: 'fix-patch',
+      source: 'fix' as const,
+      status: 'pending' as const,
+      items: [],
+      ruleId: 'r',
+      fixType: 'f',
+      blockLabel: 'b',
+      line: 1,
+      summary: 's',
+    })
+    useChatStore.setState(s => ({streams: {t1: {...s.streams.t1!, approvals: [card('p1'), card('p2')]}}}))
+    const composer = await renderTab()
+    composer.focus()
+    fireEvent.keyDown(composer, {key: 'Escape'})
+    await waitFor(() => expect(useChatStore.getState().streams.t1?.approvals[1]!.status).toBe('declined'))
+    expect(useChatStore.getState().streams.t1?.approvals[0]!.status).toBe('pending')
+    expect(chatApi.respondFixDecision).toHaveBeenCalledWith('pending', 'p2', false, undefined)
   })
 
   // Focus mode is toggled from the composer with mod+. and left with Escape;

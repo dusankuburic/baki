@@ -6,6 +6,7 @@ import {
   isKnown,
   type AzureRegistryState,
   type AzureStatus,
+  type CredentialKind,
   type ProviderID,
   type Tolerant,
 } from '@/types'
@@ -191,5 +192,86 @@ describe('tolerant wire enums', () => {
       mockFetch([provider({id: 7})])
       await expect(providersApi.listProviders()).rejects.toBeInstanceOf(ResponseValidationError)
     })
+  })
+})
+
+// GET /api/providers/catalog (Phase 4b): the credential kind, the field types
+// and the modes are wire enums a newer server may grow. An entry the bundle
+// cannot form is kept — the panel renders it as a generic card — never dropped.
+describe('tolerant provider catalogue', () => {
+  const spec = (over: Record<string, unknown> = {}) => ({
+    id: 'claude',
+    name: 'Claude',
+    authType: 'api_key',
+    modes: ['cloud', 'desktop'],
+    caps: ['chat', 'tools'],
+    credential: {kind: 'api_key', fields: [{name: 'key', label: 'API key', type: 'secret', required: true}]},
+    endpoints: {save: '/api/keys/save', test: '/api/providers/test'},
+    configured: false,
+    pricing: 'catalog',
+    ...over,
+  })
+
+  it('parses a catalogue with an unknown credential kind, field type and mode', () => {
+    const catalog = {
+      providers: [
+        spec(),
+        spec({
+          id: 'iris',
+          name: 'Iris',
+          authType: 'workload_identity',
+          modes: ['cloud', 'edge'],
+          caps: ['chat', 'vision'],
+          credential: {
+            kind: 'biometric',
+            fields: [{name: 'retina', label: 'Retina scan', type: 'scan', required: true, extra: 1}],
+            helpUrl: 'https://example.com/iris',
+          },
+          endpoints: {enroll: '/api/providers/iris/enroll'},
+          pricing: 'metered',
+          future: true,
+        }),
+      ],
+      generatedAt: '2026-10-10T00:00:00Z',
+    }
+    const out = s.ProviderCatalogSchema.parse(catalog)
+    expect(out).toEqual(catalog)
+    expect(out.providers.map(p => p.id)).toEqual(['claude', 'iris'])
+    expect(out.providers[1]!.credential.kind).toBe('biometric')
+    expect(out.providers[1]!.credential.fields[0]!.type).toBe('scan')
+    expect(out.providers[1]!.modes).toEqual(['cloud', 'edge'])
+    expectTypeOf(out.providers[0]!.credential.kind).toEqualTypeOf<Tolerant<CredentialKind>>()
+  })
+
+  it('reads a nil fields, modes, caps or endpoints as empty, and still rejects a non-boolean configured', () => {
+    const out = s.ProviderCatalogSchema.parse({
+      providers: [spec({modes: null, caps: null, endpoints: null, credential: {kind: 'none', fields: null}})],
+    })
+    expect(out.providers[0]).toMatchObject({modes: [], caps: [], endpoints: {}, credential: {kind: 'none', fields: []}})
+    expect(s.ProviderCatalogSchema.safeParse({providers: [spec({configured: 'yes'})]}).success).toBe(false)
+    expect(s.ProviderCatalogSchema.safeParse({providers: null}).success).toBe(true)
+  })
+
+  it('the listing carries the same optional fields, tolerant too', () => {
+    const out = s.ProviderListSchema.parse([
+      provider({
+        caps: ['chat', 'embeddings'],
+        modes: ['orbit'],
+        icon: 'cloud',
+        pricing: 'metered',
+        credential: {kind: 'vault', fields: []},
+      }),
+    ])
+    expect(out[0]).toMatchObject({caps: ['chat', 'embeddings'], modes: ['orbit'], icon: 'cloud', pricing: 'metered'})
+    expect(out[0]!.credential?.kind).toBe('vault')
+  })
+
+  it('through the client: an older server without the route is a 404 ApiError, not a parse failure', async () => {
+    mockFetch({error: 'not found'}, 404)
+    await expect(providersApi.getProviderCatalog()).rejects.toMatchObject({status: 404})
+    clearRequestCache()
+    mockFetch({providers: [spec(), spec({id: 'iris', credential: {kind: 'biometric', fields: []}})]})
+    const out = await providersApi.getProviderCatalog()
+    expect(out.map(p => p.id)).toEqual(['claude', 'iris'])
   })
 })

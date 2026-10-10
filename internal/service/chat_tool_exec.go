@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/metrics"
 	"pad-core/logger"
 )
 
@@ -35,7 +34,7 @@ func guardedToolRun(call ai.ToolCall, run func() toolExecResult) (res toolExecRe
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Warn("chat tool panicked", "tool", call.Name, "panic", r)
-			metrics.RecordChatToolResult(metricToolLabel(call.Name), false)
+			recordChatToolResult(metricToolLabel(call.Name), false)
 			res = toolExecResult{
 				id:     call.ID,
 				name:   call.Name,
@@ -81,7 +80,7 @@ func (s *ChatService) execTurnTools(
 
 	allReadOnly := len(calls) > 1
 	for _, tc := range calls {
-		if isFixToolName(tc.Name) {
+		if ai.ToolRequiresApproval(tc.Name) {
 			allReadOnly = false
 			break
 		}
@@ -123,10 +122,4 @@ func (s *ChatService) execTurnTools(
 		}
 	}
 	return results
-}
-
-// isFixToolName mirrors ai-side fix tool names (kept local to avoid growing
-// the ai package's exported surface for one predicate).
-func isFixToolName(name string) bool {
-	return name == "apply_fix" || name == "apply_fixes"
 }

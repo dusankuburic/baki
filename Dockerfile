@@ -70,7 +70,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X pad-analyzer/internal/service.Version=${VERSION} -X pad-analyzer/internal/service.GitCommit=${GIT_COMMIT} -X pad-analyzer/internal/service.BuildDate=${BUILD_DATE}" \
-    -o baki-backend main.go
+    -o baki-backend .
 
 # Stage 3: Final lean image — distroless (no shell/package-manager) for a
 # smaller attack surface. The Go binary is CGO_ENABLED=0 (static), so the

@@ -3,7 +3,7 @@ import {chatApi} from '@/api'
 import {uuid} from '@/lib/uuid'
 import {storableModelLabel} from '@/lib/modelIds'
 import type {ChatState} from './state'
-import {MAX_THREADS, isProviderId} from './types'
+import {MAX_THREADS} from './types'
 import type {ChatThread, HistoryStatus, ThreadPinFields} from './types'
 import {nextHistoryToken} from './history'
 import {persistFlowThreads, readStoredThreads} from './persistence'
@@ -195,7 +195,7 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
     if (pin === null) {
       next = {provider: undefined, model: undefined, modelLabel: undefined}
     } else {
-      if (!isProviderId(pin.provider) || !pin.model) return
+      if (!pin.provider || !pin.model) return
       // Only a name is stored as the label, never an id (storableModelLabel).
       next = {provider: pin.provider, model: pin.model, modelLabel: storableModelLabel(pin.modelLabel, pin.model)}
     }

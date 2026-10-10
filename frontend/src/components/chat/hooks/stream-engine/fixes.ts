@@ -1,16 +1,16 @@
 import {useCallback} from 'react'
 import type {MutableRefObject} from 'react'
 import i18n from '@/i18n'
-import {chatApi, flowApi, analysisApi} from '@/api'
+import {chatApi, flowApi, analysisApi, ApiError} from '@/api'
 import {logger} from '@/lib/logger'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
-import type {ChatEvent, FixProposalPayload} from '@/lib/chatEvent'
+import type {ChatEvent, FixDecisionEventItem, FixProposalPayload} from '@/lib/chatEvent'
 import type {ToolCallRecord} from '@/types'
-import type {FixProposalCard as FixProposalCardState} from '@/stores/chatStore'
+import type {ApprovalCard} from '@/stores/chatStore'
 import {useChatStore} from '@/stores/chatStore'
 import type {ChatStoreState, StreamAcc} from './types'
-import {pendingCard, asCardStatus, asItemStatus} from './helpers'
+import {pendingCard, asCardStatus, asItemStatus, decisionTargets} from './helpers'
 
 // The store actions and the accumulator map the fix/tool paths need. Stable
 // references, so the callbacks below keep their original identities.
@@ -60,8 +60,8 @@ export function useFixEvents({
     [],
   )
 
-  // onFixProposal shows an approval card (single or batch) on the stream's
-  // thread.
+  // onFixProposal shows an approval card (single or batch, a fix or any
+  // other kind) on the stream's thread.
   const onFixProposal = useCallback(
     (proposal: FixProposalPayload, streamId: string) => {
       const acc = streamAccRef.current.get(streamId)
@@ -81,28 +81,32 @@ export function useFixEvents({
       status: string,
       message: string | undefined,
       streamId: string,
-      items?: {ruleId: string; status: string; message?: string}[],
+      items?: FixDecisionEventItem[],
     ) => {
       const acc = streamAccRef.current.get(streamId)
       if (!acc) return
       const cardStatus = asCardStatus(status)
-      // Per-item outcome patches (batch decisions carry items[]). A
-      // single-fix decision carries none — its one item mirrors the card, so
-      // the card status propagates to the item.
-      const itemFromWire = (rid: string, status: string, message?: string) => ({
-        ruleId: rid,
+      const slot = useChatStore.getState().streams[acc.threadId]
+      const card = slot?.approvals.find(c => c.proposalId === proposalId)
+      // Per-item outcome patches (batch decisions carry items[], matched to
+      // the rows by decisionTargets). A single-fix decision carries none —
+      // its one item mirrors the card, so the card status propagates to it.
+      const itemPatch = (index: number, status: string, message?: string) => ({
+        index,
         patch: {status: asItemStatus(status), message},
       })
-      let itemPatches = (items ?? []).map(it => itemFromWire(it.ruleId, it.status, it.message))
+      let itemPatches = card
+        ? decisionTargets(card.items, items ?? []).map(t => itemPatch(t.index, t.item.status, t.item.message))
+        : []
       if (itemPatches.length === 0) {
-        const slot = useChatStore.getState().streams[acc.threadId]
-        const card = slot?.fixProposals.find(c => c.proposalId === proposalId)
         const soleItem = card?.items.length === 1 ? card.items[0] : undefined
         if (card && soleItem && soleItem.status === 'pending') {
           itemPatches = [
-            itemFromWire(
-              soleItem.ruleId,
-              cardStatus === 'declined' || cardStatus === 'timeout' ? 'error' : cardStatus,
+            itemPatch(
+              0,
+              cardStatus === 'declined' || cardStatus === 'timeout' || cardStatus === 'cancelled'
+                ? 'error'
+                : cardStatus,
               message,
             ),
           ]
@@ -114,7 +118,9 @@ export function useFixEvents({
         {status: cardStatus, message},
         itemPatches.length > 0 ? itemPatches : undefined,
       )
-      if (status === 'applied' || status === 'applied-unresolved') {
+      // Only a fix changed the flow; another tool's outcome is the model's
+      // to report.
+      if (card?.source === 'fix' && (status === 'applied' || status === 'applied-unresolved')) {
         refreshAfterFix(acc.threadId)
       }
     },
@@ -122,8 +128,9 @@ export function useFixEvents({
   )
 
   // respondFixProposal delivers the user's Approve/Dismiss for a thread's
-  // pending proposal. Optimistically marks applying/declined so the buttons
-  // lock immediately; the backend's fix_decision event is authoritative.
+  // pending request — to the route of the event that carried it (source).
+  // Optimistically marks applying/declined so the buttons lock immediately;
+  // the backend's decision event is authoritative.
   const respondFixProposal = useCallback(
     (threadId: string, approved: boolean, proposalId?: string, excludedItemIndices?: number[]) => {
       // View-only flows never dispatch an APPLY decision: approval
@@ -134,12 +141,23 @@ export function useFixEvents({
       // Default to the newest pending card (the card the user just clicked);
       // an explicit proposalId targets a specific stacked card.
       const card = proposalId
-        ? slot.fixProposals.find(c => c.proposalId === proposalId)
-        : [...slot.fixProposals].reverse().find(c => c.status === 'pending')
+        ? slot.approvals.find(c => c.proposalId === proposalId)
+        : [...slot.approvals].reverse().find(c => c.status === 'pending')
       if (!card || card.status !== 'pending') return
       patchFixProposal(threadId, card.proposalId, {status: approved ? 'applying' : 'declined'})
-      chatApi.respondFixDecision(slot.streamId, card.proposalId, approved, excludedItemIndices).catch(err => {
-        logger.warn('Fix decision failed', err)
+      const args = [slot.streamId, card.proposalId, approved, excludedItemIndices] as const
+      // An approval_request's own route — unless the server names the event
+      // so but keeps /api/chat/fix-decision as its one decision route (ADR
+      // 0026, Open): its 404 sends the decision to the old route, once.
+      const respond =
+        card.source === 'approval'
+          ? chatApi.respondApprovalDecision(...args).catch((err: unknown) => {
+              if (err instanceof ApiError && err.status === 404) return chatApi.respondFixDecision(...args)
+              throw err
+            })
+          : chatApi.respondFixDecision(...args)
+      respond.catch(err => {
+        logger.warn('Approval decision failed', err)
         patchFixProposal(threadId, card.proposalId, {status: 'error', message: i18n.t('chat:fixCard.decisionFailed')})
       })
     },
@@ -154,8 +172,8 @@ export function useFixEvents({
       const acc = streamAccRef.current.get(streamId)
       if (!acc) return
       const calls: ToolCallRecord[] = []
-      const cards: FixProposalCardState[] = []
-      const byId = new Map<string, FixProposalCardState>()
+      const cards: ApprovalCard[] = []
+      const byId = new Map<string, ApprovalCard>()
       for (const ev of events) {
         if (ev.kind === 'tool-result') {
           calls.push({name: ev.name, label: ev.label, ok: ev.ok, durationMs: ev.durationMs, summary: ev.summary})
@@ -168,12 +186,10 @@ export function useFixEvents({
           if (!card) continue
           card.status = asCardStatus(ev.status)
           card.message = ev.message
-          for (const it of ev.items ?? []) {
-            const target = card.items.find(x => x.ruleId === it.ruleId)
-            if (target) {
-              target.status = asItemStatus(it.status)
-              target.message = it.message
-            }
+          for (const {index, item} of decisionTargets(card.items, ev.items ?? [])) {
+            const target = card.items[index]!
+            target.status = asItemStatus(item.status)
+            target.message = item.message
           }
         }
       }

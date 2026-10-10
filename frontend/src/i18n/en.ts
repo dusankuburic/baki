@@ -1191,12 +1191,46 @@ export const chat = {
       declined: 'Declined — nothing was changed.',
       timeout: 'No response in time — nothing was changed.',
       error: 'Fix failed.',
+      cancelled: 'Cancelled — nothing was changed.',
     },
     itemStatus: {
       applied: 'applied',
       'applied-unresolved': 'applied — still appears',
       error: 'failed',
       'already-resolved': 'already resolved',
+    },
+  },
+  // The approval card of a request this bundle has no preview for (a tool a
+  // newer server added): the tool's name, each item's label and summary, and
+  // a decision in the tool's own terms — nothing about fixes.
+  approvalCard: {
+    aria: '{{tool}}: approval needed',
+    announce: '{{tool}} awaits your approval.',
+    heading: 'Approval needed',
+    scope: 'Requires {{scope}} access',
+    includeItem: 'Include {{name}}',
+    selectHint: 'select the items to approve',
+    approvingSubset: 'approving {{included}} of {{total}}',
+    approve: 'Approve',
+    approveBatch_one: 'Approve {{count}} item',
+    approveBatch_other: 'Approve {{count}} items',
+    itemCount_one: '{{count}} item',
+    itemCount_other: '{{count}} items',
+    dismiss: 'Dismiss',
+    status: {
+      applying: 'Running…',
+      applied: 'Done.',
+      'applied-unresolved': 'Done — review recommended.',
+      declined: 'Dismissed — nothing was changed.',
+      timeout: 'No response in time — nothing was changed.',
+      error: 'Failed.',
+      cancelled: 'Cancelled — nothing was changed.',
+    },
+    itemStatus: {
+      applied: 'done',
+      'applied-unresolved': 'done — review recommended',
+      error: 'failed',
+      'already-resolved': 'already done',
     },
   },
   welcome: {
@@ -1235,6 +1269,8 @@ export const chat = {
     providerContentFilteredTitle: "The provider's content filter blocked this reply",
     providerOutputLimitTitle: 'The reply hit the Max tokens limit',
     providerBalanceTitle: 'The provider account is out of credit',
+    providerUnknownTitle: "This provider isn't available on this server",
+    providerNotAllowedTitle: "This provider isn't allowed here",
     // MODEL_NOT_AVAILABLE: the thread's model was removed (or stopped being
     // shared) after the picker listed it.
     modelNotAvailable: 'This model is no longer available',
@@ -1246,6 +1282,15 @@ export const chat = {
     previewModelNotAvailable: "This chat's model is no longer available — your message wasn't sent.",
     openSettings: 'Open settings',
     stalled: 'The response stalled — the connection to the backend may have been lost.',
+    // SERVER_RESTARTING (a deploy): the status line while the turn waits to
+    // be sent again (the trail appends "…"), and the bubble's text when the
+    // one automatic resend is spent.
+    serverRestarting: 'The server restarted — sending your message again',
+    serverRestarted: 'The server restarted before this answer finished — use Retry to send it again.',
+    // The reconnected server does not know the stream (another instance ran
+    // it): nothing of it can be resumed.
+    interrupted:
+      'The connection to the server was lost and this answer could not be recovered — use Retry to send it again.',
     cannotConnect: 'Could not connect to the event stream — the backend may still be starting. Please try again.',
     previewFailed: "Couldn't load the context preview — your message wasn't sent.",
     saveFailed: "Couldn't save this conversation",

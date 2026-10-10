@@ -1,6 +1,6 @@
 export {default as SettingsModal} from './SettingsModal'
 export {default as ApiKeyInput} from './ApiKeyInput'
-export {default as ProvidersPanel} from './ProvidersPanel'
+export {default as ProvidersPanel} from './providers/ProvidersPanel'
 export {default as AIBehaviorPanel} from './AIBehaviorPanel'
 export {default as AIPromptsPanel} from './AIPromptsPanel'
 export {default as AppearancePanel} from './AppearancePanel'

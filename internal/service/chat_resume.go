@@ -305,12 +305,85 @@ func (s *ChatService) CancelStream(streamID string) {
 	}
 }
 
-func (s *ChatService) CancelAll() {
-	s.activeStreams.Range(func(key, value interface{}) bool {
-		ctl := value.(*streamCtl)
-		ctl.cancelWithReason("response stopped: the server is shutting down")
+// CancelAll ends every running stream as the server stops (ChatErrServerRestarting) without waiting for them.
+// The stop hook calls Shutdown, which also waits; this stays for callers that must not block.
+func (s *ChatService) CancelAll() { s.cancelAll() }
+
+// cancelAll cancels every active stream with ChatErrServerRestarting and returns how many it reached.
+func (s *ChatService) cancelAll() int {
+	n := 0
+	s.activeStreams.Range(func(_, value interface{}) bool {
+		value.(*streamCtl).cancelWithCode(ChatErrServerRestarting, serverRestartingMsg)
+		n++
 		return true
 	})
+	return n
+}
+
+// chatShutdownBudget bounds Shutdown's wait for the workers it ended: a terminal emit, the final resume snapshot
+// and a just-finished answer's persist take milliseconds when nothing is stuck, and the SSE connections, the pool
+// and Redis close only after it.
+const chatShutdownBudget = 2 * time.Second
+
+// Shutdown is the chat half of the server's stop (ADR 0024), called while the SSE connections are still open: it
+// refuses new streams (ErrServerRestarting), cancels every running one with ChatErrServerRestarting, and waits,
+// within ctx and chatShutdownBudget, for each worker to deliver that terminal event, publish its final resume
+// snapshot and finish storing a just-completed answer. A stream whose worker is still running at the deadline
+// gets its terminal state recorded, emitted and mirrored here, so its client hears of it before the connection
+// closes; the error then says how many.
+func (s *ChatService) Shutdown(ctx context.Context) error {
+	s.streamCapMu.Lock()
+	s.closing = true
+	s.streamCapMu.Unlock()
+	active := s.cancelAll()
+
+	budget := chatShutdownBudget
+	if s.shutdownBudget > 0 {
+		budget = s.shutdownBudget
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	idle := make(chan struct{})
+	go func() {
+		s.workers.Wait()
+		close(idle)
+	}()
+	select {
+	case <-idle:
+		if active > 0 {
+			logger.Info("chat streams ended for shutdown", "streams", active)
+		}
+		return nil
+	case <-ctx.Done():
+	}
+	forced := s.forceServerRestarting(ctx)
+	logger.Warn("chat workers still running at shutdown", "streams", active, "forced", forced, "budget", budget)
+	return fmt.Errorf("chat shutdown: workers still running after %v (%d stream(s) ended in their place): %w", budget, forced, ctx.Err())
+}
+
+// forceServerRestarting ends, in their worker's place, the active streams that recorded no terminal state: it
+// records ChatErrServerRestarting, emits it to a begun stream's owner and mirrors it. A stuck worker that finishes
+// later may emit its own terminal event too; the client acts on the first. Returns how many it ended.
+func (s *ChatService) forceServerRestarting(ctx context.Context) int {
+	n := 0
+	s.activeStreams.Range(func(_, value interface{}) bool {
+		ctl := value.(*streamCtl)
+		if !ctl.recordTerminal(ChatErrServerRestarting, serverRestartingMsg) {
+			return true
+		}
+		n++
+		select {
+		case <-ctl.started:
+			s.notifier.EmitTo(ctl.ownerID, "chat:event", map[string]interface{}{
+				"streamId": ctl.streamID, "type": "error", "data": errorEventData(ChatErrServerRestarting, serverRestartingMsg, false)})
+		default: // never begun: BeginStream and ResumeStream report the state
+		}
+		if rs := s.resumeBackplane(); rs.enabled() {
+			rs.Save(context.WithoutCancel(ctx), ctl.streamID, ctl.snapshot(), resumeRetention)
+		}
+		return true
+	})
+	return n
 }
 
 // OwnerOf returns the scope that created the given stream, or "" if unknown: active and recently-finished

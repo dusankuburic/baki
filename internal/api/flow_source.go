@@ -7,7 +7,6 @@ import (
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
@@ -45,7 +44,7 @@ func (h *FlowHandler) handleSuppressInSource(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("patch_suppress")
+	service.RecordFlowOp("patch_suppress")
 	updated, err := h.flowSvc.SuppressFindingInSource(r.Context(), doc, req.BlockID, req.RuleID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
@@ -94,7 +93,7 @@ func (h *FlowHandler) handleRestoreSourceSnapshot(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("snapshot_restore")
+	service.RecordFlowOp("snapshot_restore")
 	updated, err := h.flowSvc.RestoreSourceSnapshot(r.Context(), doc, req.SnapshotID)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
@@ -172,7 +171,7 @@ func (h *FlowHandler) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	metrics.RecordFlowOp("save_source")
+	service.RecordFlowOp("save_source")
 	updated, err := h.flowSvc.SaveSource(r.Context(), doc, req.Source, req.File)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {

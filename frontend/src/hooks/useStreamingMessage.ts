@@ -7,10 +7,12 @@ import {useEffect, useRef, useCallback} from 'react'
 import {chatApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {utf8ByteLength} from '@/lib/utf8'
+import {CHAT_ERROR_CODES, isStreamGone} from '@/lib/chatErrors'
 import {
   parseChatEvent,
   chatEventStreamId,
   parseResumeEvents,
+  FixDecisionEventItem,
   FixProposalPayload,
   ToolResultPayload,
   ChatEvent,
@@ -68,7 +70,7 @@ export interface StreamHandler {
     status: string,
     message: string | undefined,
     streamId: string,
-    items?: {ruleId: string; status: string; message?: string}[],
+    items?: FixDecisionEventItem[],
   ) => void
   // Delta-resume path; when absent, resumeInto falls back to a full onReplace.
   onAppend?: (delta: string, streamId: string) => void
@@ -134,6 +136,10 @@ interface StreamSub {
   countsInvalid: boolean
   stallTimer: ReturnType<typeof setTimeout> | null
   probeMisses: number
+  // The server is known to have had the stream (an event of it arrived, its
+  // create or /begin answered, a resume found it). Until then a resume that
+  // cannot find it says nothing: the create POST may still be in flight.
+  live: boolean
 }
 
 // Subscribes to chat stream events — one independent registration per stream
@@ -169,10 +175,11 @@ export function useStreamingMessage(handler: StreamHandler) {
       opts?: {
         finish?: {tokensOut: number; tokensIn: number; meta?: DoneMeta}
         mode?: 'delta' | 'full'
-        // Called when the stream turns out to be gone (403/404 —
-        // retention expired) and no done-verification `finish` applies; the
-        // reload-reattach path drops its slot and refetches the history.
-        onGone?: () => void
+        // Called when the resume fails (the stream gone — 403/404, retention
+        // expired — or the request itself) and no done-verification `finish`
+        // applies, with the failure: the reload-reattach path drops its slot
+        // and refetches the history; a reconnect reports a lost stream.
+        onGone?: (err: unknown) => void
       },
     ) => {
       const finish = opts?.finish
@@ -182,7 +189,9 @@ export function useStreamingMessage(handler: StreamHandler) {
       chatApi
         .resumeStream(streamId, from)
         .then(res => {
-          if (!subsRef.current.has(streamId)) return
+          const sub = subsRef.current.get(streamId)
+          if (!sub) return
+          sub.live = true
           if (res.text) {
             if (useDelta) {
               // Live chunks arriving between capturing `from` and the response
@@ -222,13 +231,13 @@ export function useStreamingMessage(handler: StreamHandler) {
             armStall(streamId)
           }
         })
-        .catch(() => {
+        .catch((err: unknown) => {
           // Stream gone: a done-verification pass still finishes with what
-          // accumulated; reconnect probes just drop; the reload-reattach
-          // path (no finish) reports the loss so the caller can refetch.
+          // accumulated; the reload-reattach path and a reconnect (no
+          // finish) get the failure and decide.
           if (!subsRef.current.has(streamId)) return
           if (finish) handlerRef.current.onDone(finish.tokensOut, finish.tokensIn, streamId, finish.meta)
-          else opts?.onGone?.()
+          else opts?.onGone?.(err)
         })
     },
     [armStall],
@@ -316,6 +325,24 @@ export function useStreamingMessage(handler: StreamHandler) {
     probeStallRef.current = probeStall
   }, [probeStall])
 
+  // reportLost ends a stream a reconnect could not resume because the server
+  // does not have it — after a restart without Redis the new instance never
+  // knew it. Nothing can recover it, so it errors at once (Retry offered)
+  // instead of after the stall probe's misses. A transient failure, or a
+  // stream the server may not have created yet, stays with the probe.
+  const reportLost = useCallback((streamId: string, err: unknown) => {
+    const sub = subsRef.current.get(streamId)
+    if (!sub?.live || !isStreamGone(err)) return
+    handlerRef.current.onError(i18n.t('chat:errors.interrupted'), streamId, CHAT_ERROR_CODES.interrupted)
+  }, [])
+
+  // confirmStream records that the create POST of a stream registered with
+  // begin=false answered: the server has it from now on.
+  const confirmStream = useCallback((streamId: string) => {
+    const sub = subsRef.current.get(streamId)
+    if (sub) sub.live = true
+  }, [])
+
   // Subscribes the per-stream SSE listener (+ the shared recovery hook) and
   // waits for the connection to be 'open'. begin=true also calls /chat/begin
   // (legacy handshake: unblocks emission, fetches buffered terminal state for
@@ -337,13 +364,20 @@ export function useStreamingMessage(handler: StreamHandler) {
             wasReconnecting = false
             for (const [sid, s] of subsRef.current) {
               s.countsInvalid = true
-              resumeInto(sid, {mode: 'delta'})
+              resumeInto(sid, {mode: 'delta', onGone: err => reportLost(sid, err)})
             }
           }
         })
       }
 
-      const sub: StreamSub = {unsub: () => {}, received: 0, countsInvalid: false, stallTimer: null, probeMisses: 0}
+      const sub: StreamSub = {
+        unsub: () => {},
+        received: 0,
+        countsInvalid: false,
+        stallTimer: null,
+        probeMisses: 0,
+        live: false,
+      }
 
       const unsub = await subscribeToEvents((event: {name: string; data: unknown}) => {
         if (event.name !== 'chat:event') return
@@ -351,6 +385,7 @@ export function useStreamingMessage(handler: StreamHandler) {
         if (chatEventStreamId(event.data) !== streamId) return
         const parsed = parseChatEvent(event.data)
         if (!parsed) return
+        sub.live = true
         // Any non-terminal event proves the stream is alive: reset the stall
         // probe (a chunk counts separately too).
         if (parsed.kind !== 'done' && parsed.kind !== 'error') {
@@ -458,6 +493,7 @@ export function useStreamingMessage(handler: StreamHandler) {
       // A beginStream failure leaves the backend goroutine blocked until its
       // stream-cap timeout with no event — propagate so the caller cleans up.
       const res = await chatApi.beginStream(streamId)
+      sub.live = true
 
       // Fail-fast pre-stream errors emit their terminal event before our
       // subscription exists; /begin returns that buffered state — deliver it.
@@ -474,7 +510,7 @@ export function useStreamingMessage(handler: StreamHandler) {
       }
       return true
     },
-    [resumeInto, armStall, teardownStream],
+    [resumeInto, armStall, teardownStream, reportLost],
   )
 
   useEffect(() => {
@@ -500,5 +536,5 @@ export function useStreamingMessage(handler: StreamHandler) {
 
   // resumeInto is exposed for the engine's reload-reattach path;
   // everything else consumes it through reconnects and probes.
-  return {registerStream, cancel, teardownStream, resumeInto}
+  return {registerStream, confirmStream, cancel, teardownStream, resumeInto}
 }

@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"pad-analyzer/internal/events"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-core/analyzer"
 	"pad-core/cache"
@@ -51,7 +50,7 @@ func (s *FlowService) ReimportFlow(ctx context.Context, doc *models.FlowDocument
 	if err != nil {
 		return nil, fmt.Errorf("source file not accessible: %w", err)
 	}
-	metrics.RecordFlowOp("reimport")
+	RecordFlowOp("reimport")
 	var fresh *models.FlowDocument
 	if info.IsDir() {
 		fresh, err = s.LoadFlowFolder(doc.FilePath)

@@ -1,0 +1,8 @@
+Flow: flow-1
+Event: health_regression
+
+Health fell below the threshold
+
+Health: 88 → 61
+
+Time: 2026-10-10T12:00:00Z

@@ -864,6 +864,7 @@ func TestHeartbeat_AnOlderSelectionIsNotAnnouncedLast(t *testing.T) {
 	selectB2 := Envelope{Type: EventPresenceUpdate, Payload: map[string]any{"selectedBlockId": "b2"}}
 	check := func(t *testing.T, h *Hub, bob *Client) {
 		t.Helper()
+		flushPresence(t, h, "f")
 		if got := updatesFrom(t, bob, "u1"); len(got) == 0 || got[len(got)-1] != "b2" {
 			t.Errorf("Bob's presence.updates for u1 were %q; the last must be b2, u1's newest selection", got)
 		}

@@ -14,7 +14,6 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/collaboration"
 	mailer "pad-analyzer/internal/mail"
-	"pad-analyzer/internal/notify"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -38,37 +37,24 @@ type OrgHandler struct {
 	// authz decides every org route's access (org_access.go).
 	authz *service.AuthzService
 	audit *audit.Recorder
-
-	// notifyPolicy: strict whenever JWTEnabled (multi-user) so a tenant
-	// cannot aim a webhook at the server's own network; desktop allows loopback.
-	notifyPolicy notify.TargetPolicy
-	// channelClient is the one guarded client shared by every channel test
-	// (D-25): per-call clients leaked cloned transports' idle conns.
-	channelClient *http.Client
+	// ci mints, lists and revokes the organisation's CI credentials (org_ci_credentials.go).
+	ci *service.CIService
 }
 
-func channelPolicy(security *SecurityConfig) notify.TargetPolicy {
-	if security != nil && security.JWTEnabled {
-		return notify.BlockInternalTargets
-	}
-	return notify.AllowLoopbackTargets
-}
-
-func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig, email *mailer.Service, orgRules *service.OrgRuleService, providers *service.ProviderService, authz *service.AuthzService, channels *service.ChannelService, users *service.UserDirectory, recorder *audit.Recorder) *OrgHandler {
+func NewOrgHandler(orgSvc *collaboration.OrgService, backend storageif.StorageBackend, knowledge *rag.KnowledgeService, security *SecurityConfig, email *mailer.Service, orgRules *service.OrgRuleService, providers *service.ProviderService, authz *service.AuthzService, channels *service.ChannelService, users *service.UserDirectory, recorder *audit.Recorder, ci *service.CIService) *OrgHandler {
 	return &OrgHandler{
-		orgSvc:        orgSvc,
-		backend:       backend,
-		knowledge:     knowledge,
-		security:      security,
-		email:         email,
-		orgRules:      orgRules,
-		channels:      channels,
-		users:         users,
-		providers:     providers,
-		authz:         authz,
-		audit:         recorder,
-		notifyPolicy:  channelPolicy(security),
-		channelClient: notify.NewChannelClient(channelPolicy(security)),
+		orgSvc:    orgSvc,
+		backend:   backend,
+		knowledge: knowledge,
+		security:  security,
+		email:     email,
+		orgRules:  orgRules,
+		channels:  channels,
+		users:     users,
+		providers: providers,
+		authz:     authz,
+		audit:     recorder,
+		ci:        ci,
 	}
 }
 
@@ -249,6 +235,7 @@ func (h *OrgHandler) Mount(rb *route.Builder) {
 			h.registerMemberRoutes(rb)
 			h.registerRuleRoutes(rb)
 			h.registerChannelRoutes(rb)
+			h.registerCICredentialRoutes(rb)
 			h.registerKnowledgeRoutes(rb)
 			h.registerOrgAzureRoutes(rb)
 		})

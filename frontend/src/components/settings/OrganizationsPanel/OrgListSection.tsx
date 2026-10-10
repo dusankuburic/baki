@@ -7,6 +7,7 @@ import type {AuthUser} from '@/api/auth'
 import type {Organisation, OrgRole} from '@/stores/orgStore'
 import {Badge} from '@/components/shared'
 import OrgChannelsSection from '../OrgChannelsSection'
+import OrgCICredentialsSection from '../OrgCICredentialsSection'
 import OrgCustomRulesSection from '../OrgCustomRulesSection'
 import {orgNameId} from './helpers'
 import OrgAzureSection from './OrgAzureSection'
@@ -207,7 +208,8 @@ export default function OrgListSection({
 
             {isActive && selected?.id === org.id && (
               <div className="p-4 border-t border-border-subtle space-y-4 bg-surface-1/50">
-                <OrgChannelsSection orgId={org.id} isAdmin={canManageMembers} />
+                <OrgChannelsSection orgId={org.id} isAdmin={canManageMembers} members={members} />
+                {canManageMembers && <OrgCICredentialsSection orgId={org.id} members={members} />}
                 <OrgCustomRulesSection orgId={org.id} isAdmin={canManageMembers} />
                 {/* The org's shared Azure AI Foundry resources and models:
                     members read, admins manage; they appear alongside

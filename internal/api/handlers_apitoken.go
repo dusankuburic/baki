@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -54,7 +55,7 @@ func (h *AuthHandler) handleCreateAPIToken(w http.ResponseWriter, r *http.Reques
 	// requires no new permissions.
 	for _, sc := range req.Scopes {
 		if !auth.ValidScope(sc) {
-			render.Error(w, fmt.Errorf("unknown scope %q (valid: read, write, chat, admin)", sc), http.StatusBadRequest)
+			render.Error(w, fmt.Errorf("unknown scope %q (valid: %s)", sc, strings.Join(auth.ValidTokenScopes, ", ")), http.StatusBadRequest)
 			return
 		}
 	}
@@ -143,18 +144,26 @@ func (h *AuthHandler) handleDeleteAPIToken(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := h.apiTokens.Delete(r.Context(), userID, id); err != nil {
+	owned, err := h.apiTokens.Delete(r.Context(), userID, id)
+	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	if !owned {
+		// Unknown, already revoked or another user's: the same idempotent answer, and nothing revoked or audited.
+		render.JSON(w, map[string]string{"status": "ok"})
+		return
+	}
 	// Blacklist the PAT's derived JTI so live WebSocket connections authenticated
-	// via this PAT are disconnected by the WS re-authz loop (2-min ticker). PATs
+	// via this PAT are disconnected by the WS re-authz loop: at once, through the
+	// announcement, on this replica, and at the 2-min ticker on the others. PATs
 	// are not JWTs, so the normal logout path (which blacklists the access JTI)
 	// never fires for them — without this, a deleted PAT's open socket stays live.
 	// 10 min covers ~5 re-authz cycles; no new tickets can be issued afterward
 	// since the PAT row is gone (verifyAPIToken returns nil).
 	if h.security.AuthMgr != nil {
 		h.security.AuthMgr.RevokeJTI(auth.PATJTI(id), patRevokeBlacklistTTL)
+		h.accessRevoked(r, userID, auth.PATJTI(id))
 	}
 	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionTokenRevoke, ResourceType: "api_token", ResourceID: id})
 	render.JSON(w, map[string]string{"status": "ok"})

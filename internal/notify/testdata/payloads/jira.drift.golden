@@ -1,0 +1,9 @@
+POST /rest/api/3/issue
+Authorization: Basic Ym90QGV4YW1wbGUuY29tOmppcmEtdG9rZW4=
+Content-Type: application/json
+User-Agent: baki/test
+X-Baki-Delivery: 00000000-0000-4000-8000-000000000001
+X-Baki-Event: drift
+X-Baki-Timestamp: 1790856001
+
+{"fields":{"description":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Flow: Invoice Bot"}]},{"type":"paragraph","content":[{"type":"text","text":"Event: drift"}]},{"type":"paragraph","content":[{"type":"text","text":"2 new finding(s) since baseline (1 error, 1 warning)."}]},{"type":"paragraph","content":[{"type":"text","text":"New errors: 1"}]},{"type":"paragraph","content":[{"type":"text","text":"New warnings: 1"}]},{"type":"paragraph","content":[{"type":"text","text":"Time: 2026-10-01T12:00:00Z"}]}]},"issuetype":{"name":"Bug"},"project":{"key":"PAD"},"summary":"New findings in Invoice Bot"}}

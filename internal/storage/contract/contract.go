@@ -87,4 +87,8 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend, opts ...Option) {
 	runLifecycleScenarios(ctx, b, runID, run)
 	runRuleSetScenarios(ctx, b, runID, run)
 	runCustomRuleScenarios(ctx, b, runID, run)
+	runCICredentialScenarios(ctx, b, runID, run)
+	runCIDeliveryScenarios(ctx, b, runID, run)
+	runJobRunScenarios(ctx, b, runID, run)
+	runKnowledgeScenarios(ctx, b, runID, run)
 }

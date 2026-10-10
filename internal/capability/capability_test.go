@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/platform/secret"
 )
 
 // TestOf pins the matrix in docs/architecture/modes.md.
@@ -20,7 +21,7 @@ func TestOf(t *testing.T) {
 
 	cloudRedis := config.Default()
 	*cloudRedis = *cloud
-	cloudRedis.Redis.URL = "redis://cache:6379/0"
+	cloudRedis.Redis.URL = secret.New("redis://cache:6379/0")
 
 	cases := []struct {
 		name    string

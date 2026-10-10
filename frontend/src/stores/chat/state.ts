@@ -89,7 +89,7 @@ export interface ChatState {
     threadId: string,
     proposalId: string,
     patch: Partial<FixProposalCard>,
-    itemPatches?: {ruleId: string; patch: Partial<FixProposalItem>}[],
+    itemPatches?: {index: number; patch: Partial<FixProposalItem>}[],
   ) => void
   // replaceStreamTools / replaceStreamFixes wholesale-replace the slot's tool
   // trail / proposal cards from an authoritative journal replay on reconnect —

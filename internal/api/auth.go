@@ -18,8 +18,8 @@ import (
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/capability"
-	mailer "pad-analyzer/internal/mail"
-	"pad-analyzer/internal/metrics"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -34,8 +34,6 @@ type AuthHandler struct {
 	// (cloud mode with PAD_SSO_* set and a Postgres backend).
 	ssoClient SSOClient
 	identity  *service.IdentityService
-	// email sends transactional mail; always non-nil (log-only when SMTP unset).
-	email *mailer.Service
 	// authSvc owns credential verification (bcrypt timing/lockout); see internal/service/auth.go.
 	authSvc *service.AuthService
 	// accounts owns account erasure and the data-subject export.
@@ -43,10 +41,19 @@ type AuthHandler struct {
 	// apiTokens owns the machine API tokens.
 	apiTokens *service.APITokenService
 	audit     *audit.Recorder
+	// bus announces the credentials revoked here (AccessRevoked), so the sockets they opened close at once; nil
+	// announces nothing.
+	bus *eventbus.Bus
 }
 
-func NewAuthHandler(sessions *service.SessionService, backend storageif.StorageBackend, security *SecurityConfig, ssoClient SSOClient, identity *service.IdentityService, email *mailer.Service, authSvc *service.AuthService, accounts *service.AccountLifecycleService, apiTokens *service.APITokenService, recorder *audit.Recorder) *AuthHandler {
-	return &AuthHandler{sessions: sessions, backend: backend, security: security, ssoClient: ssoClient, identity: identity, email: email, authSvc: authSvc, accounts: accounts, apiTokens: apiTokens, audit: recorder}
+func NewAuthHandler(sessions *service.SessionService, backend storageif.StorageBackend, security *SecurityConfig, ssoClient SSOClient, identity *service.IdentityService, authSvc *service.AuthService, accounts *service.AccountLifecycleService, apiTokens *service.APITokenService, recorder *audit.Recorder, bus *eventbus.Bus) *AuthHandler {
+	return &AuthHandler{sessions: sessions, backend: backend, security: security, ssoClient: ssoClient, identity: identity, authSvc: authSvc, accounts: accounts, apiTokens: apiTokens, audit: recorder, bus: bus}
+}
+
+// accessRevoked announces that userID's credential jti was revoked, once the blacklist holds it: the sockets it
+// opened re-check against the blacklist and must find it there.
+func (h *AuthHandler) accessRevoked(r *http.Request, userID, jti string) {
+	h.bus.Publish(r.Context(), events.AccessRevoked{UserID: userID, JTI: jti})
 }
 
 type credentials struct {
@@ -156,7 +163,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 		render.Error(w, fmt.Errorf("account registration is disabled on this instance"), http.StatusForbidden)
 		return
 	}
-	metrics.RecordAuthOp("register")
+	recordAuthOp("register")
 	email, password, remember, emailErr, err := decodeCredentials(r)
 	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
@@ -258,7 +265,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("login not available in local mode"), http.StatusForbidden)
 		return
 	}
-	metrics.RecordAuthOp("login")
+	recordAuthOp("login")
 	// Login ignores emailErr and normalizes only (see decodeCredentials): a malformed email returns 401.
 	email, password, remember, _, err := decodeCredentials(r)
 	if err != nil {
@@ -329,7 +336,7 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/auth/refresh [post]
 func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
-	metrics.RecordAuthOp("refresh")
+	recordAuthOp("refresh")
 	var req struct {
 		RefreshToken string `json:"refreshToken"`
 		// RememberMe reshapes the rotated cookie (persistent vs browser-session)
@@ -521,7 +528,7 @@ func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Req
 // @Success      200 {object} map[string]string "OK"
 // @Router       /api/auth/logout [post]
 func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
-	metrics.RecordAuthOp("logout")
+	recordAuthOp("logout")
 	var req struct {
 		RefreshToken string `json:"refreshToken"`
 	}
@@ -544,6 +551,7 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	if tokenStr := auth.ExtractToken(r); tokenStr != "" {
 		if claims, err := h.security.AuthMgr.VerifyIgnoreExpiry(tokenStr); err == nil && claims.ID != "" {
 			h.security.AuthMgr.Revoke(claims)
+			h.accessRevoked(r, claims.UserID, claims.ID)
 		}
 	}
 

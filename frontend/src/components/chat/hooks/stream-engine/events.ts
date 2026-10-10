@@ -20,11 +20,16 @@ interface EventDeps {
   endStream: ChatStoreState['endStream']
   bumpProviderEpoch: ChatStoreState['bumpProviderEpoch']
   appendMessage: ChatStoreState['appendMessage']
+  // The lifecycle's scheduleAutoResend (wired after it exists): takes over a
+  // stream a server restart ended and returns its thread, or null when the
+  // turn gets the error bubble instead.
+  autoResendRef: MutableRefObject<(streamId: string) => string | null>
 }
 
 // useStreamEvents handles the terminal SSE events of a stream: the done
 // commit (plus the alias-provider listing refetch) and the error bubble
-// (budget, provider or generic).
+// (budget, provider or generic) — or, for a server restart, the automatic
+// resend.
 export function useStreamEvents({
   toastRef,
   takeAcc,
@@ -33,6 +38,7 @@ export function useStreamEvents({
   endStream,
   bumpProviderEpoch,
   appendMessage,
+  autoResendRef,
 }: EventDeps) {
   // Thread/deployment/served-model triples (joined with a NUL) whose
   // served model already triggered a provider-list refetch.
@@ -86,15 +92,27 @@ export function useStreamEvents({
 
   const onError = useCallback(
     (error: string, streamId: string, code?: string, usage?: ErrorUsage) => {
+      const kind = classifyChatFailure(error, code)
+      if (kind === 'serverRestarting') {
+        // Sent again once; whatever the cut-short attempt billed still counts.
+        const resendThread = autoResendRef.current(streamId)
+        if (resendThread) {
+          bumpThreadTokens(resendThread, usage?.tokensIn, usage?.tokensOut)
+          return
+        }
+      }
       const acc = takeAcc(streamId)
       if (!acc) return
       const slot = useChatStore.getState().streams[acc.threadId]
       let errorLine: string
       const providerError = providerErrorInfo(code)
-      if (classifyChatFailure(error, code) === 'budget') {
+      if (kind === 'budget') {
         const detail = budgetDetail(error)
         notifyBudget(detail)
         errorLine = i18n.t('chat:errors.budgetBubble', {detail})
+      } else if (kind === 'serverRestarting') {
+        // The server's copy promises a retry; this one is past it.
+        errorLine = i18n.t('chat:errors.generic', {message: i18n.t('chat:errors.serverRestarted')})
       } else if (providerError) {
         errorLine = providerErrorLine(providerError, error)
         if (providerError.refreshProviders) bumpProviderEpoch()
@@ -131,7 +149,7 @@ export function useStreamEvents({
       bumpThreadTokens(acc.threadId, usage?.tokensIn, usage?.tokensOut)
       endStream(acc.threadId)
     },
-    [appendMessage, bumpProviderEpoch, bumpThreadTokens, endStream, notifyBudget, takeAcc],
+    [appendMessage, autoResendRef, bumpProviderEpoch, bumpThreadTokens, endStream, notifyBudget, takeAcc],
   )
 
   return {notifyBudget, onDone, onError}

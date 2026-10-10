@@ -20,7 +20,7 @@ on:
       - 'frontend/**'
       - 'core/**'
       - 'internal/**'
-      - 'main.go'
+      - '*.go'
       - 'go.mod'
       - 'go.sum'
       - 'package.json'
@@ -68,6 +68,13 @@ jobs:
         run: |
           npm ci
           npm ci --prefix frontend
+
+      # The sidecar's handshake with the shell: the backend, run as the shell runs it with the per-user
+      # directories at a temporary one, prints CONFIG:{port,tokenPath} on stdout, answers /healthz and stops
+      # cleanly on CTRL_BREAK (killed instead when the runner gives it no console, as the shell does). Before the
+      # bundle, so a broken boot fails in minutes instead of after the Rust build.
+      - name: Desktop boot smoke test
+        run: go test -count=1 -v -run '^TestDesktopBoot_Smoke$' .
 
       # Root package.json: build:sidecar (go build → src-tauri/bin/pad-backend-
       # <host-triple>.exe) then `tauri build`, whose beforeBuildCommand builds

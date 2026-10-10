@@ -6,23 +6,31 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/lifecycle"
 )
 
 // PostgresBlacklist implements auth.BlacklistStore on a Postgres table, so
 // revocation is immediately consistent across replicas (in-memory is per-process).
 type PostgresBlacklist struct {
-	db       *sql.DB
-	stop     chan struct{}
-	stopOnce sync.Once
+	db      *sql.DB
+	cleanup *lifecycle.Singleton
 }
 
+// NewPostgresBlacklist returns the store with its cleanup job running; Stop ends it.
 func NewPostgresBlacklist(db *sql.DB) *PostgresBlacklist {
-	bl := &PostgresBlacklist{db: db, stop: make(chan struct{})}
-	go bl.cleanup()
+	bl := &PostgresBlacklist{db: db}
+	bl.cleanup = lifecycle.NewSingleton(lifecycle.Job{
+		Spec:    blacklistCleanupJob,
+		Every:   blacklistCleanupInterval,
+		Timeout: blacklistCleanupTimeout,
+		// A purge failing for an hour (twelve cycles) means the database is unhealthy, not that one cycle blipped.
+		OverdueAfter: time.Hour,
+		Run:          bl.purgeExpired,
+	}, dbLeaser{db}, jobRuns{db})
+	bl.cleanup.Start()
 	return bl
 }
 
@@ -114,76 +122,37 @@ func (bl *PostgresBlacklist) AddIfAbsent(jti string, ttl time.Duration) (bool, e
 	return rows > 0, nil
 }
 
+// Stop ends the cleanup job, cancelling a purge in flight.
 func (bl *PostgresBlacklist) Stop() {
-	bl.stopOnce.Do(func() { close(bl.stop) })
+	bl.cleanup.Stop()
 }
 
 // blacklistCleanupLockKey namespaces the cleanup's advisory lock: every
 // replica derives the SAME key ("bakiblck") and it collides with no other.
 const blacklistCleanupLockKey int64 = 0x62616b69626c636b // "bakiblck"
 
+// blacklistCleanupJob makes the full-table DELETE single-flight across replicas (otherwise N replicas ran N
+// identical purges); a replica that finds the lock held skips the cycle, another owns it.
+var blacklistCleanupJob = lifecycle.DeclareJob(lifecycle.JobDecl{
+	Name:      "token_blacklist_cleanup",
+	LegacyKey: blacklistCleanupLockKey,
+	Schedule:  "every 5 minutes while the server runs with the Postgres token blacklist",
+})
+
+// blacklistCleanupInterval is the cleanup's period.
+const blacklistCleanupInterval = 5 * time.Minute
+
 // blacklistCleanupTimeout bounds one purge cycle: the session-level advisory
 // lock pins its pooled connection while held, and 30 s matches the pooled
 // statement_timeout that reaps the DELETE server-side anyway.
 const blacklistCleanupTimeout = 30 * time.Second
 
-// tryDBAdvisoryLock is TryGlobalLock on a bare *sql.DB with the same
-// session-level discipline: the lock is pinned to one dedicated pooled
-// connection and released explicitly so it never leaks onto the next borrower.
-func tryDBAdvisoryLock(ctx context.Context, db *sql.DB, key int64) (release func(), acquired bool, err error) {
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	var got bool
-	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&got); err != nil {
-		_ = conn.Close()
-		return nil, false, err
-	}
-	if !got {
-		_ = conn.Close()
-		return nil, false, nil
-	}
-	return func() { releaseAdvisoryLock(conn, key) }, true, nil
-}
-
-func (bl *PostgresBlacklist) cleanup() {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Warn("blacklist cleanup goroutine panicked", "err", r)
-		}
-	}()
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-bl.stop:
-			return
-		case <-ticker.C:
-			bl.purgeExpired()
-		}
-	}
-}
-
-// purgeExpired deletes one cleanup cycle's expired rows. The advisory lock
-// makes the full-table DELETE single-flight across replicas (otherwise N
-// replicas ran N identical sweeps); without the lock, skipping silently is
-// correct — another replica owns the cycle. Errors wait for the next tick.
-func (bl *PostgresBlacklist) purgeExpired() {
-	ctx, cancel := context.WithTimeout(context.Background(), blacklistCleanupTimeout)
-	defer cancel()
-	release, acquired, err := tryDBAdvisoryLock(ctx, bl.db, blacklistCleanupLockKey)
-	if err != nil {
-		slog.Warn("blacklist cleanup: advisory lock unavailable", "err", err)
-		return
-	}
-	if !acquired {
-		return // another replica owns this cycle
-	}
-	defer release()
+// purgeExpired deletes one cleanup cycle's expired rows; an error waits for the next cycle.
+func (bl *PostgresBlacklist) purgeExpired(ctx context.Context) error {
 	if _, err := bl.db.ExecContext(ctx, `DELETE FROM token_blacklist WHERE expires_at < NOW()`); err != nil {
-		slog.Warn("blacklist cleanup: delete failed", "err", err)
+		return fmt.Errorf("blacklist cleanup: %w", err)
 	}
+	return nil
 }
 
 var (

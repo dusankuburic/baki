@@ -43,22 +43,19 @@ func openAIMaxTokensParam(baseURL string) string {
 
 func (o *OpenAIProvider) SupportsTools() bool { return true }
 
-func (o *OpenAIProvider) ID() string           { return "openai" }
-func (o *OpenAIProvider) Name() string         { return "OpenAI" }
-func (o *OpenAIProvider) ContextLimit() int    { return 128000 }
-func (o *OpenAIProvider) DefaultModel() string { return "gpt-4o" }
-func (o *OpenAIProvider) FreeModel() string    { return "" }
-
-func (o *OpenAIProvider) PricePerMillionTokens() Pricing {
-	return Pricing{InputCostPerM: 2.5, OutputCostPerM: 10.0}
-}
+func (o *OpenAIProvider) ID() string                     { return openaiSpec.ID }
+func (o *OpenAIProvider) Name() string                   { return openaiSpec.Name }
+func (o *OpenAIProvider) ContextLimit() int              { return 128000 }
+func (o *OpenAIProvider) DefaultModel() string           { return openaiSpec.DefaultModel }
+func (o *OpenAIProvider) FreeModel() string              { return "" }
+func (o *OpenAIProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(openaiSpec) }
 
 func (o *OpenAIProvider) EstimateTokens(text string) int {
 	return EstimateTokensOpenAI(text)
 }
 
 func (o *OpenAIProvider) Models(_ context.Context) ([]ModelInfo, error) {
-	return catalogModels("openai"), nil
+	return catalogModels(openaiSpec.Catalog), nil
 }
 
 func (o *OpenAIProvider) Chat(ctx context.Context, req Request) (*Response, error) {

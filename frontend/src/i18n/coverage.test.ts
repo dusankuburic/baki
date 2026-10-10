@@ -54,6 +54,8 @@ const NO_USER_FACING_COPY = new Set([
   // --- src/components/settings ---
   // Re-export barrel; no rendered copy of its own.
   'src/components/settings/index.ts',
+  // A provider's heading and the switch to its form: the names come from the server.
+  'src/components/settings/providers/ProviderSection.tsx',
   // Section registry: ids, icons, lazy loaders and pure search matching.
   'src/components/settings/sections.ts',
   // Settings-row chrome: renders only the copy its callers pass in.
@@ -189,6 +191,9 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/chat/aitab/useMessageSearch.ts',
   'src/components/chat/aitab/useStreamFooter.tsx',
   'src/components/chat/aitab/useSuggestedPrompts.ts',
+  // The approval previews' contract (props type, status tones): no copy, the
+  // previews translate.
+  'src/components/chat/approval/preview.ts',
   'src/components/dashboard/analytics/SkeletonAnalytics.tsx',
   // Re-exports the recharts-backed Home cards for HomeDashboard's lazy import.
   'src/components/dashboard/home/HomeChartCards.ts',

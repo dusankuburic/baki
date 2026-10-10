@@ -41,10 +41,12 @@ func NewBounded(name string, limit int) *Bounded {
 }
 
 // Group is a set of runners drained together. Production runners join the process-wide group through
-// NewBounded; a test that drains wants a group of its own, so it cannot close another test's runners.
+// NewBounded, and jobs through NewSingleton; a test that drains wants a group of its own, so it cannot close another
+// test's runners.
 type Group struct {
 	mu      sync.Mutex
 	runners []*Bounded
+	jobs    []*Singleton
 }
 
 var defaultGroup = &Group{}
@@ -61,16 +63,30 @@ func (g *Group) NewBounded(name string, limit int) *Bounded {
 	return b
 }
 
-// DrainAll drains every runner created by NewBounded; shutdown calls it once no request can start new work.
+// DrainAll drains every runner created by NewBounded, and stops every job created by NewSingleton that its owner has
+// not stopped; shutdown calls it once no request can start new work.
 func DrainAll(ctx context.Context) error { return defaultGroup.Drain(ctx) }
 
-// Drain waits until no runner of g has a task running, or ctx ends, and only then closes them all: a task may
-// still hand work to another runner (an alert fan-out enqueues its email), and closing that runner first would
-// drop the hand-off. Returns the first runner's error, i.e. ctx.Err() when tasks were still running.
+// Drain stops g's jobs first: a job's run is cancelled rather than waited out (jobs resume on their next run), then
+// waited for while it unwinds, since it may still hand work to a runner. Then it waits until no runner of g has a
+// task running, or ctx ends, and only then closes them all: a task may still hand work to another runner (an alert
+// fan-out enqueues its email), and closing that runner first would drop the hand-off. Returns the first error, i.e.
+// ctx.Err() when runs or tasks were still going.
 func (g *Group) Drain(ctx context.Context) error {
 	g.mu.Lock()
 	runners := append([]*Bounded(nil), g.runners...)
+	jobs := append([]*Singleton(nil), g.jobs...)
 	g.mu.Unlock()
+
+	var first error
+	for _, j := range jobs {
+		j.halt()
+	}
+	for _, j := range jobs {
+		if err := j.wait(ctx); err != nil && first == nil {
+			first = fmt.Errorf("job %s: %w", j.name, err)
+		}
+	}
 
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
@@ -82,13 +98,24 @@ quiesce:
 		case <-tick.C:
 		}
 	}
-	var first error
 	for _, b := range runners {
 		if err := b.Drain(ctx); err != nil && first == nil {
 			first = fmt.Errorf("background %s: %w", b.name, err)
 		}
 	}
 	return first
+}
+
+// removeJob takes a stopped job out of g.
+func (g *Group) removeJob(s *Singleton) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i, j := range g.jobs {
+		if j == s {
+			g.jobs = append(g.jobs[:i], g.jobs[i+1:]...)
+			return
+		}
+	}
 }
 
 func allIdle(runners []*Bounded) bool {
@@ -122,18 +149,46 @@ func (b *Bounded) Go(fn func()) bool {
 	b.wg.Add(1)
 	b.inflight.Add(1)
 	b.mu.Unlock()
+	b.start(fn)
+	return true
+}
 
-	metrics.RecordBackgroundStarted(b.name)
+// GoWait is Go for a caller that can afford to wait, a background sweep: at the cap it blocks until a slot is free
+// instead of dropping fn, so the sweep slows down. It drops fn (logged and counted, false) when ctx ends first or
+// the runner is draining.
+func (b *Bounded) GoWait(ctx context.Context, fn func()) bool {
+	select {
+	case b.sem <- struct{}{}:
+	case <-ctx.Done():
+		b.drop("cancelled")
+		return false
+	}
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		<-b.sem
+		b.drop("closed")
+		return false
+	}
+	b.wg.Add(1)
+	b.inflight.Add(1)
+	b.mu.Unlock()
+	b.start(fn)
+	return true
+}
+
+// start runs fn, which holds a slot, in its own goroutine.
+func (b *Bounded) start(fn func()) {
+	recordBackgroundStarted(b.name)
 	start := time.Now()
 	go func() {
 		defer b.wg.Done()
 		defer func() { <-b.sem }()
 		defer b.inflight.Add(-1)
-		defer func() { metrics.RecordBackgroundFinished(b.name, time.Since(start)) }()
+		defer func() { recordBackgroundFinished(b.name, time.Since(start)) }()
 		defer logger.GuardRecover(b.name)
 		fn()
 	}()
-	return true
 }
 
 // Drain stops Go from starting new tasks and waits until every started task

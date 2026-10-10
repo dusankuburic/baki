@@ -224,6 +224,8 @@ func TestPostgres_Lifecycle_ErasureSweep(t *testing.T) {
 	f.ok("SaveOrgInvite by u", b.SaveOrgInvite(ctx, &interfaces.OrgInvite{ID: "inv-by-" + run, OrgID: orgO, Email: "someone-" + run + "@example.com", Role: auth.RoleMember, InvitedBy: u, TokenHash: "ih2-" + run, ExpiresAt: time.Now().Add(time.Hour)}))
 	f.exec(`INSERT INTO org_provider_keys (org_id, provider, ciphertext, updated_by, secret_set_by) VALUES ($1, 'azure-foundry', 'sealed', $2, $3)`, orgO, u, w)
 	f.exec(`INSERT INTO org_provider_keys (org_id, provider, ciphertext, updated_by, secret_set_by) VALUES ($1, 'azure-foundry/lent', 'sealed', $2, $2)`, orgO, u)
+	// A CI credential the user minted for the organisation they own.
+	f.exec(`INSERT INTO org_ci_credentials (id, org_id, name, secret, created_by) VALUES ($1, $2, 'ci', 'enc:v1:sealed', $3)`, "ci-"+run, orgO, u)
 
 	if before := f.scanForIdentity(u, email); len(tablesOf(before)) < 25 {
 		t.Fatalf("the seed reaches only %d tables (%v); the sweep would prove little", len(tablesOf(before)), tablesOf(before))
@@ -302,6 +304,9 @@ func TestPostgres_Lifecycle_ErasureSweep(t *testing.T) {
 	if got := f.str(`SELECT updated_by || '|' || secret_set_by FROM org_provider_keys WHERE org_id = $1 AND provider = 'azure-foundry'`, orgO); got != "|"+w {
 		t.Errorf("the credential the user edited and w lent = %q, want the editor cleared and the lender kept", got)
 	}
+	if n := f.count(`SELECT count(*) FROM org_ci_credentials WHERE id = $1 AND created_by = ''`, "ci-"+run); n != 1 {
+		t.Error("the CI credential the user minted must stay the organisation's, without its minter")
+	}
 	if got := f.str(`SELECT ip FROM audit_events WHERE id = $1`, "ev-pre-"+run); got != "203.0.113.3" {
 		t.Errorf("the pre-auth row's address = %q, kept as before", got)
 	}
@@ -356,6 +361,7 @@ func TestPostgres_Lifecycle_DeleteOrgSweep(t *testing.T) {
 	f.exec(`INSERT INTO policies (id, org_id, name) VALUES ($1, $2, 'gate')`, "pol-"+run, org)
 	f.exec(`INSERT INTO org_channels (id, org_id, name, kind, url) VALUES ($1, $2, 'hook', 'webhook', 'https://example.com/hook')`, "ch-"+run, org)
 	f.exec(`INSERT INTO org_custom_rules (id, org_id, rule_id, config) VALUES ($1, $2, 'r', '{}')`, "cr-"+run, org)
+	f.exec(`INSERT INTO org_ci_credentials (id, org_id, name, secret, created_by) VALUES ($1, $2, 'ci', 'enc:v1:sealed', $3)`, "ci-"+run, org, admin)
 	f.exec(`INSERT INTO knowledge_documents (id, org_id, filename) VALUES ($1, $2, 'guide.md')`, "kd-"+run, org)
 	f.exec(`INSERT INTO knowledge_chunks (id, doc_id, content, embedding, org_id) VALUES ($1, $2, 'text', '[]', $3)`, "kc-"+run, "kd-"+run, org)
 	// History that keeps the id.

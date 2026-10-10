@@ -9,10 +9,13 @@ import {simulateTauri, simulateWeb} from '@/testing/testHelpers'
 // Foundry registry on mount: answer them as "nothing configured".
 vi.mock('@/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api')>()
+  const {ApiError} = await import('@/api/client')
   return {
     ...actual,
     providersApi: {
       ...actual.providersApi,
+      // An older server: no catalogue, so AI Accounts renders its built-in sections.
+      getProviderCatalog: vi.fn().mockRejectedValue(new ApiError('not found', 404, null)),
       getGitHubUser: vi.fn().mockResolvedValue(null),
       getCopilotUser: vi.fn().mockResolvedValue(null),
       hasApiKey: vi.fn().mockResolvedValue(false),

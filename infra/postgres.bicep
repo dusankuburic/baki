@@ -13,6 +13,12 @@
 // backups plus a pinned retention window so PITR and geo-restore are always
 // available and reproducible rather than a portal-only setting. The recovery
 // procedure, including the separate blob restore it requires, is in README.md.
+//
+// Connections: pass the `maxConnections` output to infra/main.bicep as
+// dbServerMaxConnections, which sizes each replica's pool to fit it. Point the
+// app at port 5432, never at the built-in PgBouncer (pgbouncer.enabled, port
+// 6432, left off here): it pools in transaction mode, which breaks the session
+// advisory locks the app's background jobs hold. docs/architecture/operations.md.
 
 @description('Azure region for the server.')
 param location string = resourceGroup().location
@@ -194,9 +200,17 @@ resource aadAdmin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2023
 //
 // Then pass the resulting DSN to infra/main.bicep as `databaseUrl`.
 
+// The SKU's connection cap, read back from the server rather than tabulated here.
+resource maxConnectionsConfig 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2023-12-01' existing = {
+  parent: server
+  name: 'max_connections'
+}
+
 output fqdn string = server.properties.fullyQualifiedDomainName
 output serverNameOut string = server.name
 output databaseNameOut string = databaseName
 output administratorLogin string = adminUser
 @description('Template DSN for the DEDICATED application role created in the bootstrap step above — substitute the password. Do not connect the app as the administrator.')
 output appConnectionStringTemplate string = 'postgres://baki_app:<app-password>@${server.properties.fullyQualifiedDomainName}:5432/${databaseName}?sslmode=require'
+@description('The server\'s max_connections: pass it to infra/main.bicep as dbServerMaxConnections.')
+output maxConnections int = int(maxConnectionsConfig.properties.value)

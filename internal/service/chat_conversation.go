@@ -274,7 +274,7 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 // Card and item statuses the stored fix records may carry — the client's own
 // vocabulary (chatStore), to which fix_decision statuses are clamped.
 var (
-	fixCardStatuses = map[string]bool{"applying": true, "applied": true, "applied-unresolved": true, "declined": true, "timeout": true, "error": true}
+	fixCardStatuses = map[string]bool{"applying": true, "applied": true, "applied-unresolved": true, "declined": true, "timeout": true, "cancelled": true, "error": true}
 	fixItemStatuses = map[string]bool{"applied": true, "applied-unresolved": true, "error": true, "already-resolved": true}
 )
 
@@ -300,6 +300,7 @@ func journalTurnRecord(events []journalEvent) (calls []models.ToolCallRecord, fi
 			var items []models.FixItemSnapshot
 			for _, raw := range journalItems(ev.Data["items"]) {
 				items = append(items, models.FixItemSnapshot{
+					ID:         journalString(raw["id"]),
 					RuleID:     journalString(raw["ruleId"]),
 					FixType:    journalString(raw["fixType"]),
 					BlockLabel: journalString(raw["blockLabel"]),
@@ -320,14 +321,16 @@ func journalTurnRecord(events []journalEvent) (calls []models.ToolCallRecord, fi
 			}
 			byID[id] = len(fixes)
 			fixes = append(fixes, models.FixProposalSnapshot{
-				ProposalID: id,
-				RuleID:     items[0].RuleID,
-				FixType:    items[0].FixType,
-				BlockLabel: items[0].BlockLabel,
-				Line:       items[0].Line,
-				Summary:    items[0].Summary,
-				Status:     "pending",
-				Items:      items,
+				ProposalID:  id,
+				Tool:        journalString(ev.Data["tool"]),
+				PreviewKind: journalString(ev.Data["previewKind"]),
+				RuleID:      items[0].RuleID,
+				FixType:     items[0].FixType,
+				BlockLabel:  items[0].BlockLabel,
+				Line:        items[0].Line,
+				Summary:     items[0].Summary,
+				Status:      "pending",
+				Items:       items,
 			})
 		case "fix_decision":
 			idx, ok := byID[journalString(ev.Data["proposalId"])]
@@ -343,9 +346,14 @@ func journalTurnRecord(events []journalEvent) (calls []models.ToolCallRecord, fi
 			snap.Message = journalString(ev.Data["message"])
 			decided := journalItems(ev.Data["items"])
 			for _, raw := range decided {
-				rid := journalString(raw["ruleId"])
+				// By id when both sides carry one (two fixes of one rule); by ruleId for records before it.
+				id, rid := journalString(raw["id"]), journalString(raw["ruleId"])
 				for i := range snap.Items {
-					if snap.Items[i].RuleID != rid {
+					if id != "" && snap.Items[i].ID != "" {
+						if snap.Items[i].ID != id {
+							continue
+						}
+					} else if snap.Items[i].RuleID != rid {
 						continue
 					}
 					snap.Items[i].Status = journalString(raw["status"])

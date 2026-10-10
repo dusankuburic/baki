@@ -92,12 +92,30 @@ export const getGovernanceAlertsSchema = (): Promise<Schemas['GovernanceAlertsSc
 export const getUnreadCountSchema = (): Promise<Schemas['UnreadCountSchema']> =>
   loadSchemas().then(s => s.UnreadCountSchema)
 
+export const getOrgCICredentialsSchema = (): Promise<Schemas['OrgCICredentialsSchema']> =>
+  loadSchemas().then(s => s.OrgCICredentialsSchema)
+
+export const getCreatedOrgCICredentialSchema = (): Promise<Schemas['CreatedOrgCICredentialSchema']> =>
+  loadSchemas().then(s => s.CreatedOrgCICredentialSchema)
+
+export const getOrgChannelsSchema = (): Promise<Schemas['OrgChannelsSchema']> =>
+  loadSchemas().then(s => s.OrgChannelsSchema)
+
+export const getChannelOptionsSchema = (): Promise<Schemas['ChannelOptionsSchema']> =>
+  loadSchemas().then(s => s.ChannelOptionsSchema)
+
 // ── Providers ───────────────────────────────────────────────────────────────
 export const getProviderListSchema = (): Promise<Schemas['ProviderListSchema']> =>
   loadSchemas().then(s => s.ProviderListSchema)
 
+export const getProviderCatalogSchema = (): Promise<Schemas['ProviderCatalogSchema']> =>
+  loadSchemas().then(s => s.ProviderCatalogSchema)
+
 export const getGitHubUserSchema = (): Promise<Schemas['GitHubUserOrNullSchema']> =>
   loadSchemas().then(s => s.GitHubUserOrNullSchema)
+
+export const getDeviceAuthUserSchema = (): Promise<Schemas['DeviceAuthUserOrNullSchema']> =>
+  loadSchemas().then(s => s.DeviceAuthUserOrNullSchema)
 
 export const getAzureConnectionsListingSchema = (): Promise<Schemas['AzureConnectionsListingSchema']> =>
   loadSchemas().then(s => s.AzureConnectionsListingSchema)
@@ -119,8 +137,7 @@ export const getSuggestedPromptsSchema = (): Promise<Schemas['SuggestedPromptsSc
 export const getAdminUsersPageSchema = (): Promise<Schemas['AdminUsersPageSchema']> =>
   loadSchemas().then(s => s.AdminUsersPageSchema)
 
-export const getUserStatsSchema = (): Promise<Schemas['UserStatsSchema']> =>
-  loadSchemas().then(s => s.UserStatsSchema)
+export const getUserStatsSchema = (): Promise<Schemas['UserStatsSchema']> => loadSchemas().then(s => s.UserStatsSchema)
 
 export const getAuditEventsSchema = (): Promise<Schemas['AuditEventsSchema']> =>
   loadSchemas().then(s => s.AuditEventsSchema)

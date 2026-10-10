@@ -21,11 +21,31 @@ Capabilities (`capability.Capability`):
 The desktop profile keeps cloud features off by design. Features that need the server store say so through
 the capability, instead of checking for a nil backend inline.
 
+The daily AI budget is one of them in effect, not by a check: without a usage store there is no usage recorder
+(`ProvideAI` leaves it nil) and today's spend reads $0 (`AIBudget` with a nil `DailyUsageReader`), so the cap
+Settings shows is enforced only against the in-flight ledger of running chat streams (ADR 0028). The provider
+policy applies its deployment rule there too; the organisation allowlist needs org settings, which need the
+store.
+
+Two defaults differ by profile. In `cloud`, Postgres requires TLS unless `PAD_DB_REQUIRE_SSL` says otherwise
+(`internal/app`'s `storageConfig` asks the profile), and a stop pauses `PAD_SHUTDOWN_DRAIN_DELAY`, 3 s, before it
+ends the open streams (0 in the others). `config.Load` sets that one from the mode, the fact the `cloud` profile is
+derived from, because `internal/config` cannot import `capability`; `TestDrainDelayDefault_FollowsTheCloudProfile`
+keeps the two in step.
+
 Routes do the same with `route.Needs(capability.ServerStore, ...)`. When the process lacks a capability the
 route needs, the route answers 503 `SERVICE_UNAVAILABLE` before its handler runs, in every `PAD_ROUTE_POLICY`
 mode. That is the same answer as the handlers' own "cloud mode required" checks, which move onto their routes
 route by route. The router takes its capabilities from `capability.Of(cfg)`. Tests give a router other ones with
 `capability.NewSet`, since test routers run on the test fake backend with the default config.
+
+The CI webhook (`POST /api/integrations/ci`, [ADR 0019](../adr/0019-org-ci-credentials.md)) shows the pattern:
+
+| Profile | CI webhook |
+|---|---|
+| `desktop` | 503: the route needs the server store. |
+| `local+db` without accounts | Authenticated by the server's `PAD_CI_WEBHOOK_SECRET` alone; without it, 503. The flow is resolved by id from the store. |
+| With accounts (`cloud`, or `local+db` with auth) | Organisation CI credentials, minted by org admins (`/api/orgs/{id}/ci-credentials`, which need `server-store` and `accounts`). A credential reaches its organisation's flows only. A personal API token with the `ci` scope (`Authorization: Bearer`) reaches the flows its user can read, personal ones included (an organisation's flow only for its members). `PAD_CI_WEBHOOK_SECRET` still works but is deprecated: a boot warning, and every answer to it carries `Deprecation: true` and a `Link` header. |
 
 Running more than one replica is a separate question. The deployment is pinned to one replica
 (`infra/main.bicep`) until the realtime backplane exists (Phase 5b of the proposal), even when `shared-state` is

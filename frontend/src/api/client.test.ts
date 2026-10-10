@@ -79,6 +79,13 @@ describe('api/client', () => {
       expect(init.body).toBe(JSON.stringify({name: 'Test'}))
     })
 
+    it('resolves a 204 No Content as undefined instead of a non-JSON failure', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, {status: 204}))
+      const {request} = await getClient()
+
+      await expect(request('/api/thing/1', {method: 'DELETE', body: {}})).resolves.toBeUndefined()
+    })
+
     it('throws when the server returns a non-OK status', async () => {
       mockFetch({error: 'Not found'}, 404)
       const {request} = await getClient()

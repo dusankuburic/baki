@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/reqinfo"
 	"pad-analyzer/internal/platform/txhook"
 	"pad-core/logger"
@@ -133,7 +132,7 @@ func (b *Bus) Publish(ctx context.Context, e Event) {
 	if b == nil {
 		return
 	}
-	metrics.RecordEventPublished(e.EventName())
+	recordEventPublished(e.EventName())
 	txhook.MarkPublished(ctx)
 
 	b.mu.RLock()
@@ -191,7 +190,7 @@ func (b *Bus) deliverAsync(base context.Context, s *subscriber, e Event) {
 			deliver()
 			return
 		}
-		metrics.RecordEventDelivery(e.EventName(), s.name, "async", 0, "dropped")
+		recordEventDelivery(e.EventName(), s.name, "async", 0, "dropped")
 		logger.Warn("event delivery dropped", "event", e.EventName(), "subscriber", s.name)
 	}
 }
@@ -209,7 +208,7 @@ func run(ctx context.Context, s *subscriber, e Event, tier string) {
 		case tier == "async" && errors.Is(ctx.Err(), context.DeadlineExceeded):
 			failure = "timeout"
 		}
-		metrics.RecordEventDelivery(e.EventName(), s.name, tier, time.Since(start), failure)
+		recordEventDelivery(e.EventName(), s.name, tier, time.Since(start), failure)
 	}()
 	defer logger.Guard("event subscriber "+s.name, &perr)
 	s.fn(ctx, e)

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"pad-analyzer/internal/auth"
 )
 
 // fakeChecker returns a fixed error per flowID, standing in for the
@@ -17,16 +19,16 @@ type fakeChecker struct {
 	errs map[string]error
 }
 
-func (f *fakeChecker) CheckAccess(_ context.Context, flowID, _ string) error {
-	return f.errs[flowID]
+func (f *fakeChecker) CheckAccess(_ context.Context, flowID string, _ *auth.Actor) (FlowOwner, error) {
+	return FlowOwner{}, f.errs[flowID]
 }
 
 // CanEdit grants write rank to everyone this fake lets in: these tests cover
 // the JOIN decision, not the write-rank split (see write_authz_test.go).
-func (f *fakeChecker) CanEdit(_ context.Context, _, _ string) bool { return true }
+func (f *fakeChecker) CanEdit(_ context.Context, _ string, _ *auth.Actor) bool { return true }
 
 func newCheckedServer(hub *Hub, userID string, checker FlowAccessChecker) *httptest.Server {
-	return httptest.NewServer(Handler(hub, userID, "Test User", nil, checker, "", time.Time{}, nil))
+	return httptest.NewServer(Handler(hub, testIdentity(userID, "Test User"), nil, checker, nil))
 }
 
 // dialRaw attempts a WebSocket upgrade and returns the HTTP response status

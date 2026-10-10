@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -15,23 +16,12 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/platform/drain"
 	"pad-analyzer/internal/service"
 	"pad-core/models"
 
 	"github.com/go-chi/chi/v5"
 )
-
-var validProviders = map[string]bool{
-	"openai":        true,
-	"claude":        true,
-	"gemini":        true,
-	"xai":           true,
-	"glm":           true,
-	"github-models": true,
-	"copilot":       true,
-	"azure-foundry": true,
-	"local":         true,
-}
 
 // readinessFailureThreshold is the consecutive failed readiness probes before
 // the handler reports 503, so one slow Ping doesn't flap the pod.
@@ -54,6 +44,9 @@ type SystemHandler struct {
 
 	readyMu       sync.Mutex
 	readyFailures int
+
+	// draining is the server's draining state; nil is the process's (drain.Process), tests set their own.
+	draining *drain.State
 }
 
 // RedisPinger is the subset of the Redis client the readiness probe needs;
@@ -129,27 +122,53 @@ func (h *SystemHandler) handleGetOrgSettings(w http.ResponseWriter, r *http.Requ
 }
 
 // @Summary      Update org settings
-// @Description  handleUpdateOrgSettings overwrites org-wide settings. Writing requires org admin.
+// @Description  handleUpdateOrgSettings overwrites org-wide settings. Writing requires org admin. The organisation's allowed-provider list (ai.allowedProviders, ADR 0028) is replaced only when the body names it — an explicit [] clears it (every provider allowed); a body without the field keeps the stored list. Each listed id must be a registered provider.
 // @Tags         system
 // @Param        id path string true "Org ID"
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "Updated"
+// @Failure      400 {object} render.ErrorResponse "Malformed body, or an id in ai.allowedProviders that no provider spec describes (PROVIDER_UNKNOWN)"
 // @Router       /api/system/settings/org/{id} [post]
 func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "id")
 	if !requireOrgAdmin(w, r, h.security, orgID) {
 		return
 	}
-	var req models.AppSettings
-	if !decodeBody(w, r, &req) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // a settings document, read whole below
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
-	if err := h.sysSvc.UpdateOrgSettings(r.Context(), orgID, req); err != nil {
+	var req models.AppSettings
+	if err := json.Unmarshal(body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
+	// AppSettings cannot tell an absent allowedProviders from an empty one (omitempty); read the field's presence
+	// from the raw body so a partial write keeps the stored list and only an explicit [] clears it.
+	var named struct {
+		AI *struct {
+			AllowedProviders *[]string `json:"allowedProviders"`
+		} `json:"ai"`
+	}
+	_ = json.Unmarshal(body, &named)
+	write := service.OrgSettingsWrite{AllowedProvidersSet: named.AI != nil && named.AI.AllowedProviders != nil}
+	if err := h.sysSvc.UpdateOrgSettings(r.Context(), orgID, req, write); err != nil {
+		if errors.Is(err, service.ErrProviderUnknown) {
+			render.ErrorWithCode(w, err, http.StatusBadRequest, service.ProviderCodeUnknown)
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionSettingsChange, orgID, nil))
+	var meta map[string]string
+	if write.AllowedProvidersSet {
+		// The list is the org's AI policy: the audit row says what it became (empty = every provider).
+		meta = map[string]string{"allowedProviders": strings.Join(req.AI.AllowedProviders, ",")}
+	}
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionSettingsChange, orgID, meta))
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
@@ -220,7 +239,7 @@ const maxFrontendErrorBytes = 64 << 10
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      400 {object} render.ErrorResponse "Malformed body, a provider id no spec describes (PROVIDER_UNKNOWN), or a provider configured through its own routes rather than a bare key (USE_PROVIDER_CONFIG: azure-foundry, local)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/keys/save [post]
 func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request) {
@@ -231,8 +250,8 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	if req.Provider == "" || !validProviders[req.Provider] {
-		render.Error(w, fmt.Errorf("invalid or unsupported provider: %q", req.Provider), http.StatusBadRequest)
+	if !ai.KnownProvider(req.Provider) {
+		render.ErrorWithCode(w, fmt.Errorf("unknown provider: %q", req.Provider), http.StatusBadRequest, service.ProviderCodeUnknown)
 		return
 	}
 	// Azure AI Foundry stores a validated configuration document, not a bare
@@ -261,8 +280,8 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
-// @Success      200 {object} bool "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
+// @Success      200 {object} map[string]bool "{has: bool}"
+// @Failure      400 {object} render.ErrorResponse "Malformed body, or a provider id no spec describes (PROVIDER_UNKNOWN)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/keys/has [post]
 func (h *SystemHandler) handleHasApiKey(w http.ResponseWriter, r *http.Request) {
@@ -270,6 +289,10 @@ func (h *SystemHandler) handleHasApiKey(w http.ResponseWriter, r *http.Request) 
 		Provider string `json:"provider"`
 	}
 	if !decodeBody(w, r, &req) {
+		return
+	}
+	if !ai.KnownProvider(req.Provider) {
+		render.ErrorWithCode(w, fmt.Errorf("unknown provider: %q", req.Provider), http.StatusBadRequest, service.ProviderCodeUnknown)
 		return
 	}
 	has, err := h.sysSvc.HasApiKey(h.security.KeyScope(r), req.Provider)
@@ -287,7 +310,7 @@ func (h *SystemHandler) handleHasApiKey(w http.ResponseWriter, r *http.Request) 
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      400 {object} render.ErrorResponse "Malformed body, or a provider id no spec describes (PROVIDER_UNKNOWN)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/keys/delete [post]
 func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Request) {
@@ -297,8 +320,8 @@ func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Reques
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	if req.Provider == "" || !validProviders[req.Provider] {
-		render.Error(w, fmt.Errorf("invalid or unsupported provider: %q", req.Provider), http.StatusBadRequest)
+	if !ai.KnownProvider(req.Provider) {
+		render.ErrorWithCode(w, fmt.Errorf("unknown provider: %q", req.Provider), http.StatusBadRequest, service.ProviderCodeUnknown)
 		return
 	}
 	if err := h.sysSvc.DeleteApiKey(r.Context(), h.security.KeyScope(r), req.Provider); err != nil {
@@ -337,7 +360,7 @@ func (h *SystemHandler) handleLocalConfig(w http.ResponseWriter, r *http.Request
 	}
 	render.JSON(w, map[string]string{
 		"mode":  "local",
-		"token": h.security.Token,
+		"token": h.security.Token.Reveal(),
 	})
 }
 
@@ -354,14 +377,20 @@ func (h *SystemHandler) handleLiveness(w http.ResponseWriter, r *http.Request) {
 }
 
 // @Summary      Readiness probe
-// @Description  Returns 200 when downstream dependencies (DB) are reachable, 503 otherwise.
+// @Description  Returns 200 when downstream dependencies (DB) are reachable, 503 otherwise. While the server is stopping it answers 503 {"status":"draining"} from the first probe on, whatever its dependencies say.
 // @Tags         system
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
-// @Failure      503 {object} map[string]string "Service Unavailable"
+// @Failure      503 {object} map[string]string "Service Unavailable (status draining while the server stops)"
 // @Router       /readyz [get]
 // @Router       /api/health [get]
 func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	// A stopping server leaves rotation on the first probe, without the smoothing below: it is going away whatever
+	// its dependencies say. Liveness stays 200.
+	if h.draining.Draining() {
+		render.JSONStatus(w, http.StatusServiceUnavailable, map[string]string{"status": "draining"})
+		return
+	}
 	// Readiness gates traffic routing (AKS / ACA). 503 only after N consecutive failures so a
 	// transient latency spike doesn't flap the pod out of rotation; a healthy probe resets it.
 	if h.health.HasStore() {

@@ -14,7 +14,7 @@ import (
 // Without it Stop returned the instant it signalled, so fx would proceed to
 // close the database pool while a governance sweep or an ingest pass was
 // still querying it — a guaranteed failure on every shutdown that looks like
-// a transient one. Well inside the app's 25s fx.StopTimeout, leaving room
+// a transient one. Well inside the app's fx.StopTimeout (ADR 0024's budget table), leaving room
 // for the HTTP and WebSocket drains that follow; a tick that outlasts it is
 // abandoned (the root context is already cancelled).
 const stopDrainBudget = 5 * time.Second

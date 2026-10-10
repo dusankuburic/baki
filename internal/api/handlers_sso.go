@@ -19,7 +19,6 @@ import (
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/sso"
 	"pad-core/logger"
@@ -71,7 +70,7 @@ func (h *AuthHandler) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("SSO is not configured"), http.StatusNotFound)
 		return
 	}
-	metrics.RecordAuthOp("sso_start")
+	recordAuthOp("sso_start")
 	authURL, ok := h.beginSSOFlow(w, r, "")
 	if !ok {
 		return
@@ -141,7 +140,7 @@ func (h *AuthHandler) handleSSOLinkStart(w http.ResponseWriter, r *http.Request)
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
-	metrics.RecordAuthOp("sso_link_start")
+	recordAuthOp("sso_link_start")
 	authURL, ok := h.beginSSOFlow(w, r, userID)
 	if !ok {
 		return
@@ -233,7 +232,7 @@ func (h *AuthHandler) handleSSOCallback(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, fmt.Errorf("SSO is not configured"), http.StatusNotFound)
 		return
 	}
-	metrics.RecordAuthOp("sso_callback")
+	recordAuthOp("sso_callback")
 
 	// Always clear the flow cookie — each cookie is good for one attempt.
 	// #nosec G124 -- HttpOnly+SameSite always set; Secure tracks request TLS.
@@ -317,7 +316,7 @@ func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) 
 		render.Error(w, fmt.Errorf("SSO is not configured"), http.StatusNotFound)
 		return
 	}
-	metrics.RecordAuthOp("sso_exchange")
+	recordAuthOp("sso_exchange")
 
 	var req struct {
 		Ticket string `json:"ticket"`

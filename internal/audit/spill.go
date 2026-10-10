@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"pad-analyzer/internal/metrics"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 )
@@ -69,7 +68,7 @@ func (s *spillStore) Spill(e *storageif.AuditEvent) bool {
 	defer s.mu.Unlock()
 	if info, statErr := os.Stat(s.path); statErr == nil {
 		if info.Size()+int64(len(line)) > s.maxBytes {
-			metrics.RecordAuditSpillDropped()
+			recordAuditSpillDropped()
 			return false
 		}
 	}
@@ -82,8 +81,8 @@ func (s *spillStore) Spill(e *storageif.AuditEvent) bool {
 		return false
 	}
 	s.depth++
-	metrics.SetAuditSpillDepth(s.depth)
-	metrics.RecordAuditSpilled()
+	setAuditSpillDepth(s.depth)
+	recordAuditSpilled()
 	return true
 }
 
@@ -139,7 +138,7 @@ func (s *spillStore) Drain(max int) []*storageif.AuditEvent {
 	if s.depth < 0 {
 		s.depth = 0 // defensive: file was mutated out-of-band
 	}
-	metrics.SetAuditSpillDepth(s.depth)
+	setAuditSpillDepth(s.depth)
 	return out
 }
 
@@ -174,5 +173,5 @@ func (s *spillStore) reSpill(events []*storageif.AuditEvent) {
 		_, _ = f.Write(line)
 	}
 	s.depth += len(events)
-	metrics.SetAuditSpillDepth(s.depth)
+	setAuditSpillDepth(s.depth)
 }
