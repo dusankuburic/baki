@@ -29,7 +29,6 @@ describe('comparing builds', () => {
   it('calls the bundle stale only when both sides name a build and they differ', () => {
     expect(isStaleBundle('v1.4.0-3-gabc', 'v1.4.0-5-gdef')).toBe(true)
     expect(isStaleBundle('v1.4.0', '1.4.0')).toBe(false)
-    // A dev or unstamped build never nags, on either side.
     expect(isStaleBundle('', 'v1.4.0')).toBe(false)
     expect(isStaleBundle('dev', 'v1.4.0')).toBe(false)
     expect(isStaleBundle('v1.4.0', null)).toBe(false)
@@ -82,7 +81,6 @@ describe('offering the reload', () => {
   it('offers it once per server build: a reload that lands on the old bundle again is not asked again', () => {
     noteServerVersion('v1.1.0', 'v1.0.0')
     expect(useBuildVersionStore.getState().offered).toBe(true)
-    // The page reloads (same tab session) and still runs the old bundle.
     __resetBuildVersionForTest()
     noteServerVersion('v1.1.0', 'v1.0.0')
     expect(useBuildVersionStore.getState().offered).toBe(false)
@@ -93,7 +91,6 @@ describe('offering the reload', () => {
     useBuildVersionStore.getState().dismiss()
     noteServerVersion('v1.2.0', 'v1.0.0')
     expect(useBuildVersionStore.getState()).toMatchObject({offered: true, serverVersion: '1.2.0'})
-    // Reloaded onto the 1.2.0 bundle; then 1.3.0 ships while the tab stays open.
     __resetBuildVersionForTest()
     noteServerVersion('v1.2.0', 'v1.2.0')
     expect(useBuildVersionStore.getState().offered).toBe(false)

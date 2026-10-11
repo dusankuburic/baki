@@ -1,8 +1,3 @@
-// Inspector namespace — the block inspector's tabs and panels: details
-// (properties, metadata, per-block findings), metrics (health score, stat
-// cards, complexity charts, data-flow insights), variable lineage, sharing
-// and version history. English values must match the pre-i18n strings
-// EXACTLY where a test asserts on them.
 export const enInspector = {
   tabs: {
     sectionsAria: 'Inspector sections',
@@ -154,6 +149,7 @@ export const enInspector = {
     emptyNoFlow: 'Open a flow to manage sharing.',
     inviteHeading: 'Invite Collaborator',
     emailPlaceholder: 'User email address...',
+    permissionAria: 'Permission',
     viewerOption: 'Viewer (Read Only)',
     editorOption: 'Editor (Read/Write)',
     adminOption: 'Admin (Full Control)',

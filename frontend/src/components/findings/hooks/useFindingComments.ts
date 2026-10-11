@@ -4,6 +4,8 @@ import {analysisApi} from '@/api'
 import {useToast} from '@/components/shared'
 import {findingKey} from '@/stores/analysisStore'
 import type {Finding, FlowDocument, FindingComment} from '@/types'
+import {getErrorMessage} from '@/lib/getErrorMessage'
+import {logger} from '@/lib/logger'
 
 export function useFindingComments(finding: Finding, doc: FlowDocument | null) {
   const {t} = useTranslation('findings')
@@ -16,10 +18,6 @@ export function useFindingComments(finding: Finding, doc: FlowDocument | null) {
   const handleComments = useCallback(async () => {
     if (showComments) {
       setShowComments(false)
-      // Drop the cached list so the next open refetches. The panel deletes
-      // comments itself (author or flow-admin moderation) and teammates keep
-      // adding them; a list cached from the first open would resurrect the
-      // deleted ones and hide the new ones.
       setComments(null)
       return
     }
@@ -30,7 +28,8 @@ export function useFindingComments(finding: Finding, doc: FlowDocument | null) {
         const key = findingKey(finding)
         const result = await analysisApi.listComments(doc?.id ?? '', key)
         setComments(result || [])
-      } catch {
+      } catch (err) {
+        logger.warn('Failed to load finding comments', err)
         setComments([])
       } finally {
         setCommentLoading(false)
@@ -47,15 +46,8 @@ export function useFindingComments(finding: Finding, doc: FlowDocument | null) {
       const comment = await analysisApi.addComment(doc.id, key, body)
       setComments(prev => [...(prev ?? []), comment])
     } catch (err) {
-      // Put back what was typed. The composer is cleared optimistically before
-      // the await, and there is no draft store behind it, so a 500/403/timeout
-      // otherwise destroys the text outright — for a triager that can be a
-      // multi-sentence risk-acceptance justification with nowhere to recover it
-      // from. Only restore when the composer is still empty: if the user
-      // started typing again while the request was in flight, their newer text
-      // wins.
       setCommentBody(current => (current.trim() === '' ? body : current))
-      toast.error(t('toasts.commentFailed'), {description: String(err)})
+      toast.error(t('toasts.commentFailed'), {description: getErrorMessage(err)})
     }
   }, [commentBody, doc, finding, toast, t])
 

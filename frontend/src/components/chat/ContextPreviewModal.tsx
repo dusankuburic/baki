@@ -11,9 +11,6 @@ interface Props {
   onConfirm: () => void
 }
 
-// Built on the shared <Modal> so it gets the dialog contract the hand-rolled
-// overlay never had: role/aria-modal, a focus trap, focus restoration to the
-// composer, Escape, backdrop dismissal and the refcounted body-scroll lock.
 export default function ContextPreviewModal({preview, onClose, onConfirm}: Props) {
   const {t} = useTranslation('chat')
   const [expandSystem, setExpandSystem] = useState(false)
@@ -21,9 +18,6 @@ export default function ContextPreviewModal({preview, onClose, onConfirm}: Props
 
   const ratio = preview.contextLimit > 0 ? preview.estimatedTokens / preview.contextLimit : 0
   const usage = (ratio * 100).toFixed(1)
-  // Over the window the backend rejects the turn outright ("conversation is
-  // too long for this model's context window"), so say so here rather than
-  // showing a bare number and letting the send fail.
   const overLimit = ratio > 1
   const nearLimit = !overLimit && ratio >= 0.9
 

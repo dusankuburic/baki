@@ -47,8 +47,6 @@ export const createStreamSlice: StateCreator<ChatState, [], [], StreamSlice> = (
       },
     })),
 
-  // addToolCall appends one finished tool execution to the thread's stream
-  // slot (the live view of the per-message tool trail).
   addToolCall: (threadId, record) =>
     set(state => {
       const slot = state.streams[threadId]
@@ -67,15 +65,11 @@ export const createStreamSlice: StateCreator<ChatState, [], [], StreamSlice> = (
     set(state => {
       const slot = state.streams[threadId]
       if (!slot) return state
-      // A journal replay rebuilds the cards; keep each known card's arrival
-      // time so its countdown doesn't restart.
       const seen = new Map(slot.approvals.map(c => [c.proposalId, c.receivedAt]))
       const approvals = cards.map(c => ({...c, receivedAt: c.receivedAt ?? seen.get(c.proposalId) ?? Date.now()}))
       return {streams: {...state.streams, [threadId]: {...slot, approvals}}}
     }),
 
-  // The turn is over: its slot goes, and with it the thread's in-flight
-  // record (persisted) — only the record of THIS stream, never a newer one.
   endStream: threadId => {
     const slot = get().streams[threadId]
     if (!slot) return
@@ -104,9 +98,6 @@ export const createStreamSlice: StateCreator<ChatState, [], [], StreamSlice> = (
     return msg
   },
 
-  // setFixProposal appends a card unless one with the same proposalId already
-  // exists (replay idempotence) — sequential proposals stack, earlier
-  // outcomes are kept.
   setFixProposal: (threadId, card) =>
     set(state => {
       const slot = state.streams[threadId]
@@ -116,10 +107,6 @@ export const createStreamSlice: StateCreator<ChatState, [], [], StreamSlice> = (
       return {streams: {...state.streams, [threadId]: {...slot, approvals: [...slot.approvals, stamped]}}}
     }),
 
-  // patchFixProposal merges a status/message update into the matching card
-  // (a no-op when the card is gone — the stream may have ended) and applies
-  // per-item patches (batch decisions) by row position: the engine has
-  // matched the outcomes to the rows already, and two rows may share an id.
   patchFixProposal: (threadId, proposalId, patch, itemPatches) =>
     set(state => {
       const slot = state.streams[threadId]

@@ -18,8 +18,6 @@ export default function AppearancePanel() {
       <div>
         <label className="text-sm font-medium text-text-primary block mb-4">{t('appearance.colorTheme')}</label>
 
-        {/* System (follows OS): a full-width row card, not a lone grid cell
-            stretched across the column. */}
         <div className="mb-6">
           <ThemeCard
             theme={SYSTEM_THEME}
@@ -52,9 +50,6 @@ export default function AppearancePanel() {
         </ThemeSection>
       </div>
 
-      {/* Density, chat text size and accessibility share one row once the
-          column is wide enough (all three at the full 896px), stacking as it
-          narrows. Sized by the column, not the viewport. */}
       <div className="grid gap-8 grid-cols-[repeat(auto-fit,minmax(16rem,1fr))]">
         <div>
           <label className="text-sm font-medium text-text-primary block mb-3">{t('appearance.densityLabel')}</label>
@@ -134,7 +129,6 @@ function ThemeSection({label, count, children}: {label: string; count: number; c
         <h3 className="text-2xs font-bold uppercase tracking-widest text-text-tertiary">{label}</h3>
         <span className="text-2xs text-text-disabled">{count}</span>
       </div>
-      {/* As many 200px cards per row as the column fits (four at 896px). */}
       <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]">{children}</div>
     </div>
   )
@@ -149,7 +143,6 @@ function ThemeCard({
   theme: {id: ThemeMode; label: string; description: string}
   isSelected: boolean
   onClick: () => void
-  // 'row' lays the preview beside the text for a full-width entry.
   layout?: 'card' | 'row'
 }) {
   const row = layout === 'row'
@@ -159,8 +152,6 @@ function ThemeCard({
       onClick={onClick}
       aria-pressed={isSelected}
       className={clsx(
-        // Only the hover background eases: the selection (border, ring and
-        // check) moves at once, as one unit.
         'group relative flex text-left rounded-xl border-2 transition-[background-color] duration-fast overflow-hidden bg-surface-1',
         row ? 'w-full flex-row items-stretch' : 'flex-col',
         isSelected
@@ -168,7 +159,6 @@ function ThemeCard({
           : 'border-border-default hover:border-border-strong hover:bg-surface-2',
       )}
     >
-      {/* Mock UI Preview */}
       <div
         data-theme={theme.id}
         className={clsx(
@@ -176,19 +166,16 @@ function ThemeCard({
           row ? 'h-16 w-32 shrink-0 border-r' : 'h-24 w-full border-b',
         )}
       >
-        {/* Mock Header */}
         <div className="h-4 w-full bg-surface-1 border-b border-border-subtle flex items-center px-1.5 gap-1">
           <div className="w-1.5 h-1.5 rounded-full bg-brand-500 opacity-60" />
           <div className="w-8 h-1 rounded-full bg-text-tertiary opacity-20" />
         </div>
         <div className="flex h-full">
-          {/* Mock Sidebar */}
           <div className="w-6 h-full border-r border-border-subtle bg-surface-1 p-1 space-y-1">
             <div className="w-full h-1 rounded-full bg-text-secondary opacity-10" />
             <div className="w-2/3 h-1 rounded-full bg-text-secondary opacity-10" />
             <div className="w-full h-1 rounded-full bg-text-secondary opacity-10" />
           </div>
-          {/* Mock Content */}
           <div className="flex-1 p-2 space-y-2">
             <div className="space-y-1">
               <div className="w-3/4 h-1.5 rounded-sm bg-block-action opacity-30" />

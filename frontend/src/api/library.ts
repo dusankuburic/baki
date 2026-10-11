@@ -22,15 +22,12 @@ export interface LibraryFlow {
   canEdit: boolean
   canDelete: boolean
   canShare: boolean
-  // Present only on single-flow GET (not the list endpoint).
   healthScore?: number
   errorCount?: number
   warningCount?: number
-  /** Org tags (backend-normalized). */
   tags?: string[]
 }
 
-// Portfolio: the org-wide governance fleet view (GET /api/library/portfolio).
 export interface PortfolioEntry {
   flowId: string
   flowName: string
@@ -44,23 +41,18 @@ export interface PortfolioEntry {
   analyzedAt?: string
 }
 
-/** Portfolio entry order; the rollup totals always cover every ranked flow. */
 export type PortfolioSort = 'risk' | 'health' | 'errors' | 'name' | 'analyzed'
 
 export interface PortfolioQuery {
   orgId?: string
   sort?: PortfolioSort
-  /** Maximum entries returned; omitted means every ranked flow (server cap 1000). */
   limit?: number
 }
 
 export interface Portfolio {
   entries: PortfolioEntry[]
-  /** Every accessible flow under the requested scope. */
   totalFlows: number
-  /** How many of them were ranked; the rollups below cover exactly these. */
   rankedFlows: number
-  /** True when the fleet exceeds the server's ranking cap, so the rollups describe a subset. */
   truncated: boolean
   analyzedFlows: number
   avgHealth: number
@@ -77,7 +69,6 @@ export interface LibraryFilter {
   scope?: LibraryScope
   sort?: LibrarySort
   query?: string
-  /** ANY-of tag match (backend-normalized tags). */
   tags?: string[]
   limit?: number
   offset?: number
@@ -123,7 +114,6 @@ export const libraryApi = {
     })
   },
 
-  // Org-wide governance portfolio, ranked worst-health-first unless sort says otherwise.
   portfolio: (q: PortfolioQuery = {}, signal?: AbortSignal): Promise<Portfolio> => {
     const params = new URLSearchParams()
     if (q.orgId) params.set('orgId', q.orgId)
@@ -133,11 +123,6 @@ export const libraryApi = {
     return request(`/api/library/portfolio${qs ? '?' + qs : ''}`, {method: 'GET', signal})
   },
 
-  // Never deduped or micro-cached: both are read right after a collaborator's
-  // save (useFlowChangeSync) and must reflect it — the 5 s cache served the
-  // PREVIOUS version/document, so the edit stayed invisible and the next save
-  // 409'd. The content is also the largest body the client fetches (tens of
-  // MB for big flows), which the cache would clone on every write and hit.
   get: async (id: string, signal?: AbortSignal): Promise<LibraryFlow> =>
     requestValidated(`/api/library/${id}`, await getLibraryFlowSchema(), {method: 'GET', noDedup: true, signal}),
 

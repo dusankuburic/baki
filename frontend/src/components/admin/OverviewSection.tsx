@@ -9,9 +9,6 @@ import {useAdminStore} from '@/stores/adminStore'
 import type {AdminQueryResult} from './hooks/useAdminQuery'
 import {AdminSection} from './AdminSection'
 
-// The overview tiles: the whole user table counted by role and state (from
-// the stats endpoint, so paging the list never changes them) and the last
-// health check. A tile that names a role opens the user list filtered to it.
 export function OverviewSection({
   stats,
   onShowUsers,

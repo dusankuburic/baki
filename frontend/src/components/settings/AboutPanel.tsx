@@ -3,8 +3,6 @@ import {useSystemStore} from '@/stores/systemStore'
 
 export default function AboutPanel() {
   const {t} = useTranslation('settings')
-  // Loaded once at boot (App → systemStore.loadInfo); the sidebar's version
-  // caption reads the same record, so the two can never disagree.
   const info = useSystemStore(s => s.info)
 
   return (

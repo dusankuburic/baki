@@ -6,34 +6,43 @@ import {authApi, API_TOKEN_SCOPES, type ApiToken, type ApiTokenScope, type Creat
 import {writeClipboard} from '@/lib/clipboard'
 import {Button, Input, Spinner, useToast, useConfirm} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
+import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
+import {TOKEN_MAX_EXPIRY_DAYS} from '@/lib/constraints'
 
-// Least-privilege default for a CI/automation token: it can read reports and
-// save flows / triage, but cannot spend AI budget (chat) or touch admin
-// routes. Unchecking everything mints an unscoped token (full access).
 const DEFAULT_SCOPES: ApiTokenScope[] = ['read', 'write']
 
-/**
- * Cloud-only Settings panel for machine API tokens (personal access tokens):
- * create them for CI/automation, see existing ones, and revoke. The raw secret
- * is shown exactly once, right after creation. Gated by `!isTauri()` upstream in
- * SettingsModal.
- */
+type TokenField = 'name' | 'expiry'
+const TOKEN_FIELDS = ['name', 'expiry'] as const satisfies readonly TokenField[]
+
 export default function ApiTokensPanel() {
   const {t} = useTranslation('settings')
   const [name, setName] = useState('')
   const [expiresDays, setExpiresDays] = useState('')
   const [scopes, setScopes] = useState<ApiTokenScope[]>(DEFAULT_SCOPES)
-  const [expiryError, setExpiryError] = useState<string | null>(null)
 
   const toggleScope = (scope: ApiTokenScope) =>
     setScopes(prev => (prev.includes(scope) ? prev.filter(s => s !== scope) : [...prev, scope]))
+
+  const v = useFormValidation<TokenField>({
+    fields: TOKEN_FIELDS,
+    validate: () => {
+      const errors: FieldErrors<TokenField> = {}
+      if (!name.trim()) errors.name = t('errors.required', {ns: 'common'})
+      if (expiresDays.trim() !== '') {
+        const days = Number(expiresDays)
+        if (!Number.isInteger(days) || days <= 0 || days > TOKEN_MAX_EXPIRY_DAYS)
+          errors.expiry = t('tokens.expiryInvalid', {max: TOKEN_MAX_EXPIRY_DAYS})
+      }
+      return errors
+    },
+  })
 
   const scopeLabel = (tok: ApiToken) =>
     tok.scopes && tok.scopes.length > 0
       ? tok.scopes.map(s => t(`tokens.scope.${s}`)).join(', ')
       : t('tokens.fullAccess')
   const [creating, setCreating] = useState(false)
-  const [created, setCreated] = useState<CreatedApiToken | null>(null) // one-time secret reveal
+  const [created, setCreated] = useState<CreatedApiToken | null>(null)
   const [copied, setCopied] = useState(false)
 
   const toast = useToast()
@@ -48,27 +57,21 @@ export default function ApiTokensPanel() {
   const tokens = data ?? []
 
   const handleCreate = async () => {
-    const n = name.trim()
-    if (!n) return
-    // Explicit expiry validation (U4.3): a non-numeric or negative value
-    // used to be silently coerced into "never expires".
-    if (expiresDays.trim() !== '') {
-      const days = Number(expiresDays)
-      if (!Number.isInteger(days) || days <= 0) {
-        setExpiryError('Expiry must be a whole number of days (or empty for no expiry).')
-        return
-      }
-    }
-    setExpiryError(null)
+    if (v.submitValidate()) return
     setCreating(true)
     try {
       const days = parseInt(expiresDays, 10)
-      const tok = await authApi.createApiToken(n, Number.isFinite(days) && days > 0 ? days : undefined, scopes)
+      const tok = await authApi.createApiToken(
+        name.trim(),
+        Number.isFinite(days) && days > 0 ? days : undefined,
+        scopes,
+      )
       setCreated(tok)
       setCopied(false)
       setName('')
       setExpiresDays('')
       setScopes(DEFAULT_SCOPES)
+      v.reset()
       load()
     } catch (e) {
       toast.error(t('tokens.createFailed', {message: getErrorMessage(e)}))
@@ -113,7 +116,6 @@ export default function ApiTokensPanel() {
         {t('tokens.subtitleSuffix')}
       </p>
 
-      {/* One-time secret reveal */}
       {created && (
         <div className="p-4 border border-semantic-warning/40 bg-semantic-warning/5 rounded-xl space-y-3 animate-fade-in">
           <div className="flex items-start gap-2">
@@ -132,7 +134,6 @@ export default function ApiTokensPanel() {
         </div>
       )}
 
-      {/* Create form */}
       <div className="p-4 border border-border-default rounded-xl bg-surface-1 space-y-3">
         <h3 className="text-sm font-bold text-text-primary">{t('tokens.createTitle')}</h3>
         <div className="flex flex-col sm:flex-row gap-2">
@@ -145,30 +146,24 @@ export default function ApiTokensPanel() {
             onKeyDown={e => {
               if (e.key === 'Enter') void handleCreate()
             }}
+            {...v.fieldProps('name')}
           />
           <Input
             className="sm:w-40"
             type="number"
             min={0}
+            max={TOKEN_MAX_EXPIRY_DAYS}
             placeholder={t('tokens.expiresPlaceholder')}
             aria-label={t('tokens.expiresAria')}
             value={expiresDays}
-            onChange={e => {
-              setExpiresDays(e.target.value)
-              if (expiryError) setExpiryError(null)
-            }}
-            aria-invalid={!!expiryError}
+            onChange={e => setExpiresDays(e.target.value)}
+            {...v.fieldProps('expiry')}
           />
           <Button variant="primary" onClick={handleCreate} loading={creating} disabled={!name.trim()}>
             <Plus size={16} />
             {t('tokens.create')}
           </Button>
         </div>
-        {expiryError && (
-          <p className="mt-1 text-2xs text-semantic-error" role="alert">
-            {expiryError}
-          </p>
-        )}
         <fieldset className="space-y-1.5">
           <legend className="text-xs font-medium text-text-secondary">{t('tokens.scopesLabel')}</legend>
           <div className="flex flex-wrap gap-x-4 gap-y-1.5">
@@ -195,7 +190,6 @@ export default function ApiTokensPanel() {
         </fieldset>
       </div>
 
-      {/* Existing tokens */}
       {loading ? (
         <div className="p-8 flex justify-center">
           <Spinner />

@@ -72,7 +72,6 @@ describe('UserProfile', () => {
 
     const groups = screen.getAllByRole('heading', {level: 2}).map(h => h.textContent)
     expect(groups).toEqual(['Account', 'Security', 'Data & privacy'])
-    // Everyday edits first, the irreversible action last.
     const cards = screen.getAllByRole('heading', {level: 3}).map(h => h.textContent)
     expect(cards[0]).toBe('Profile')
     expect(cards[cards.length - 1]).toBe('Danger zone')

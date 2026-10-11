@@ -10,11 +10,6 @@ interface CostRow extends HBarRow {
   tokensOut: number
 }
 
-// AI usage in two figures with their own windows: tokens per day over the
-// last two weeks (in/out stacked, categorical slots 1 and 2) and the cost per
-// provider over the last month (single hue). Local mode has no usage store.
-// Azure AI Foundry usage is not priced by baki, so it has no cost bar: the
-// bar's value label and tooltip would read a misleading $0.00.
 export function AiUsageCard({
   tokens,
   cost,

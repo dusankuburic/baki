@@ -6,6 +6,7 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore, findingsByBlockOf} from '@/stores/analysisStore'
 import {useUIStore} from '@/stores/uiStore'
 import {categoryBadgeClass} from '@/lib/findingsColors'
+import {severityTone} from '@/lib/severityTone'
 import {stageFindingFix} from '@/lib/fixWithAI'
 import type {Finding, Severity} from '@/types'
 
@@ -13,12 +14,6 @@ const severityIcon: Record<Severity, typeof AlertTriangle> = {
   error: AlertCircle,
   warning: AlertTriangle,
   info: Info,
-}
-
-const severityColor: Record<Severity, string> = {
-  error: 'text-red-400',
-  warning: 'text-amber-400',
-  info: 'text-blue-400',
 }
 
 const severityRank: Record<Severity, number> = {error: 0, warning: 1, info: 2}
@@ -30,8 +25,6 @@ function BlockFindings() {
   const {t} = useTranslation('inspector')
   const docId = useFlowStore(s => s.document?.id ?? null)
   const blockId = useFlowStore(s => s.selectedBlockId)
-  // The per-block index is built on demand and cached per report object, so
-  // this selector is stable until the report (or the block) changes.
   const indexedFindings = useAnalysisStore(s =>
     docId && blockId ? (findingsByBlockOf(s.reports.get(docId)).get(blockId) ?? EMPTY) : EMPTY,
   )
@@ -69,7 +62,7 @@ function BlockFindings() {
               <div className="flex items-start gap-2">
                 <Icon
                   size={12}
-                  className={clsx('mt-0.5 shrink-0', severityColor[f.severity] ?? 'text-text-tertiary')}
+                  className={clsx('mt-0.5 shrink-0', severityTone(f.severity).text)}
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">

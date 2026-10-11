@@ -10,20 +10,11 @@ interface SecretFieldProps {
   value: string
   onChange: (value: string) => void
   onBlur?: () => void
-  /** "Leave blank to keep the stored secret" — only when the save would really keep it. */
   placeholder?: string
   hint?: string
   error?: string
 }
 
-// A secret (API key, client secret): a password field with a Show/Hide
-// toggle. Promoted from the Azure AI Foundry settings form for the generic
-// credential form (settings/providers); its copy stays in the settings
-// namespace. No autofill ("new-password" — password managers ignore "off" on a
-// password field and would fill the user's saved site password), and no
-// spellcheck, autocapitalise or autocorrect: once shown as plain text, a
-// browser's spellcheck service could otherwise receive it. The toggle is a
-// pressed-state button whose name says which secret it reveals.
 export default function SecretField({id, label, value, onChange, onBlur, placeholder, hint, error}: SecretFieldProps) {
   const {t} = useTranslation('settings')
   const [shown, setShown] = useState(false)

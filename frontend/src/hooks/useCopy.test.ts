@@ -16,7 +16,6 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-// Flush the microtask queue (promise resolution) without advancing fake timers.
 async function flushMicrotasks() {
   await act(async () => {
     await Promise.resolve()
@@ -70,7 +69,6 @@ describe('useCopy', () => {
     act(() => {
       vi.advanceTimersByTime(600)
     })
-    // Original 1000ms timer (started at t=0) would've fired by t=1000 were it not reset at t=600.
     expect(result.current.copied).toBe(true)
 
     act(() => {

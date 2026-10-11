@@ -7,15 +7,13 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useToast} from '@/components/shared'
 import type {Block} from '@/types'
 import {refreshAfterBlockEdit} from '@/lib/blockEdit'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
 interface Props {
   block: Block
   onClose: () => void
 }
 
-// editableProperties filters the block's properties to the editable surface:
-// parser-derived `_`-prefixed keys (e.g. _output, _var, _retry*) are
-// structural, not user-written text.
 function editableProperties(block: Block): {key: string; value: string}[] {
   return Object.entries(block.properties ?? {})
     .filter(([k]) => !k.startsWith('_'))
@@ -23,10 +21,6 @@ function editableProperties(block: Block): {key: string; value: string}[] {
     .map(([key, value]) => ({key, value}))
 }
 
-// BlockPropertiesModal is the structured property editor (R3-2): one input
-// per editable property (parsed values, unquoted), a live diff on save —
-// only CHANGED keys are sent as targeted server-side replaces, so untouched
-// properties keep their original text, order, and quoting.
 export default function BlockPropertiesModal({block, onClose}: Props) {
   const {t} = useTranslation('flow')
   const toast = useToast()
@@ -41,7 +35,6 @@ export default function BlockPropertiesModal({block, onClose}: Props) {
   const changes = useMemo(() => {
     const out: Record<string, string> = {}
     for (const p of editable) {
-      // values is seeded from editable above, so every p.key is present.
       const v = values[p.key]
       if (v !== undefined && v !== p.value) out[p.key] = v
     }
@@ -55,13 +48,11 @@ export default function BlockPropertiesModal({block, onClose}: Props) {
     if (!dirty || saving) return
     const doc = useFlowStore.getState().document
     if (!doc) return
-    // Pre-state capture BEFORE the write (F1.6 — race-safe undo targeting).
     let undoId: string | undefined
     try {
       const snaps = await flowApi.listSnapshots(doc.id)
       undoId = snaps?.snapshots?.[snaps.snapshots.length - 1]?.id
     } catch {
-      /* undo is best-effort */
     }
     setSaving(true)
     try {
@@ -77,7 +68,7 @@ export default function BlockPropertiesModal({block, onClose}: Props) {
                   const r = await flowApi.restoreSnapshot(doc.id, undoId)
                   if (r?.document) refresh(r.document)
                 } catch (e) {
-                  toast.error(t('props.undoFailed'), {description: String(e)})
+                  toast.error(t('props.undoFailed'), {description: getErrorMessage(e)})
                 }
               })()
             },
@@ -88,7 +79,7 @@ export default function BlockPropertiesModal({block, onClose}: Props) {
       }
       onClose()
     } catch (e) {
-      toast.error(t('props.updateFailed'), {description: String(e)})
+      toast.error(t('props.updateFailed'), {description: getErrorMessage(e)})
     } finally {
       setSaving(false)
     }

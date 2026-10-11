@@ -4,9 +4,6 @@ import {ChartCard, HBarChart, type HBarRow} from '@/components/charts'
 import {DetailsAction} from './DetailsAction'
 import type {DashboardFindingsAgg} from '@/types'
 
-// Open findings per category as single-hue horizontal bars, largest first.
-// The severity split per category only exists on the Analytics page (it is
-// derived from the rule catalog there), so Home shows the plain count.
 export function FindingsByCategoryCard({
   findings,
   onDetails,

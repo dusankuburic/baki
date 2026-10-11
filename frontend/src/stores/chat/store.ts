@@ -8,9 +8,6 @@ import {createThreadSlice} from './threads'
 import {createSettingsSlice} from './settings'
 import {purgeLegacyThreadKeys} from './persistence'
 
-// The single chat store instance: the state slices composed into one
-// create() call (zustand stores are singletons — see ./state.ts for the
-// state shape and the per-slice modules for the actions).
 export const useChatStore = create<ChatState>()((...a) => ({
   threads: [],
   activeThreadId: null,
@@ -33,7 +30,6 @@ export const useChatStore = create<ChatState>()((...a) => ({
   ...createSettingsSlice(...a),
 }))
 
-// Reset on logout (see storeRegistry).
 registerStoreReset(() => {
   useChatStore.setState({
     threads: [],
@@ -46,13 +42,9 @@ registerStoreReset(() => {
     modelPickerRequest: 0,
     modelRefusals: {},
     drafts: {},
-    // Queued (unsent) follow-ups are session state — they must not survive
-    // logout (F1.7).
     queuedByThread: {},
     historyStatus: {},
     lastActiveByFlow: {},
   })
-  // Unscoped legacy thread lists must not outlive the session on a shared
-  // browser (per-user v2 lists stay — they only load for their owner).
   purgeLegacyThreadKeys()
 })

@@ -3,45 +3,23 @@ import {type ReactElement} from 'react'
 import {vi} from 'vitest'
 import type {UnknownEnumValue} from '@/types'
 
-/**
- * Render a component with no extra providers.
- * Use this for components that have no external dependencies.
- */
 export function renderComponent(ui: ReactElement, options?: RenderOptions) {
   return render(ui, options)
 }
-
-// ---------------------------------------------------------------------------
-// Platform helpers
-// ---------------------------------------------------------------------------
 
 interface TauriWindow extends Window {
   __TAURI__?: Record<string, unknown>
 }
 
-/**
- * Simulate running inside Tauri desktop by injecting __TAURI__ on window.
- * Returns a cleanup function that removes it.
- */
 export function simulateTauri(): () => void {
   ;(window as TauriWindow).__TAURI__ = {}
   return () => delete (window as TauriWindow).__TAURI__
 }
 
-/**
- * Simulate running in a plain web browser (the default).
- */
 export function simulateWeb(): void {
   delete (window as TauriWindow).__TAURI__
 }
 
-// ---------------------------------------------------------------------------
-// Fetch mock helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Replace global fetch with a vitest mock that resolves with the given payload.
- */
 export function mockFetch<T>(payload: T, status = 200) {
   const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response(JSON.stringify(payload), {
@@ -52,18 +30,10 @@ export function mockFetch<T>(payload: T, status = 200) {
   return spy
 }
 
-/**
- * Replace global fetch with a mock that rejects.
- */
 export function mockFetchError(message = 'Network error') {
   return vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error(message))
 }
 
-// ---------------------------------------------------------------------------
-// Wire enums
-// ---------------------------------------------------------------------------
-
-/** A wire enum value a newer server added, typed as the tolerant parse types it (types/tolerant.ts). */
 export function unknownValue(raw: string): UnknownEnumValue {
   return raw as UnknownEnumValue
 }

@@ -1,17 +1,3 @@
-// English source resources — the single source of truth for UI strings.
-// Structured by namespace (common / shell / findings / auth) so components
-// import only what they need and later locales can be added per-namespace.
-//
-// KEY CONVENTIONS:
-//   - Keys mirror the component concept, not the English words
-//     (findings.search.placeholder, not findings.searchFindings).
-//   - English values must match the pre-i18n strings EXACTLY where a test
-//     or e2e asserts on them; those tests keep passing untranslated.
-//   - Plurals use i18next's `_one`/`_other` suffixes with a {{count}}
-//     interpolation variable.
-//   - Do NOT mix string leaves and nested objects at the same level: the
-//     i18next TS type-flattener silently drops the nested object's keys
-//     (see severity → badge restructure). Keep each level homogeneous.
 
 export const common = {
   cancel: 'Cancel',
@@ -20,6 +6,15 @@ export const common = {
   retry: 'Retry',
   loading: 'Loading…',
   error: 'Something went wrong',
+  errors: {
+    required: 'Required',
+    invalidEmail: 'Enter a valid email address',
+    emailTooLong: 'Email addresses must be at most {{max}} characters',
+    invalidUrl: 'Enter a valid http(s) URL',
+    urlTooLong: 'URLs must be at most {{max}} characters',
+    notWholeNumber: 'Enter a whole number',
+    atMost: 'Must be {{max}} or less',
+  },
   confirm: 'Confirm',
   delete: 'Delete',
   tryAgain: 'Try again',
@@ -27,7 +22,6 @@ export const common = {
   dismiss: 'Dismiss',
   notifications: 'Notifications',
   contextMenu: 'Context menu',
-  // Error boundaries, when a lazy chunk of the app failed to download.
   chunkError: {
     title: "This part of the app didn't load",
     body: 'Part of the app could not be downloaded, usually after a brief network drop or a new deployment. Reloading the page fixes it.',
@@ -41,7 +35,6 @@ export const common = {
     expired: 'You were offline past the 60s sync window. Recent positions are kept; stale ones were discarded.',
     overflow: 'The pending-change buffer was full; oldest entries were discarded to keep the latest state.',
   },
-  // The pagination footer shared by server-paged tables (shared/Pager).
   pager: {
     label: 'Pagination',
     previous: 'Previous page',
@@ -69,10 +62,6 @@ export const common = {
     health: 'Health:',
     empty: 'No findings detected.',
   },
-  // Model registry labels shared by Settings (AI Accounts) and the chat model
-  // picker, defined once here; other namespaces read them with
-  // {ns: 'common'}. Keys: lib/modelPurpose (purposeLabelKey) and
-  // types/providers AzureModelKind.
   models: {
     purpose: {
       general: 'General',
@@ -88,7 +77,6 @@ export const common = {
       claude: 'Claude',
       agent: 'Agent',
       embedding: 'Embedding',
-      // A kind a newer server added, which this version of the app does not know.
       other: 'Other',
     },
   },
@@ -136,6 +124,13 @@ export const shell = {
     comparisonFailed: 'Comparison failed: {{message}}',
     reimported: 'Flow re-imported and re-analyzed',
     reimportFailed: 'Re-import failed: {{message}}',
+    openFileFailed: 'Failed to open file',
+    openFolderFailed: 'Failed to open folder',
+    loadFileFailed: 'Failed to load file',
+    analyzeFailed: 'Analysis failed',
+    loadSampleFailed: 'Could not load the sample flow',
+    fileTooLarge: 'File too large',
+    fileTooLargeDetail: '{{size}}MB exceeds the {{max}}MB limit',
   },
   titleBar: {
     toggleSidebar: 'Toggle sidebar',
@@ -150,7 +145,6 @@ export const shell = {
   inspector: {
     panelAria: 'Inspector panel',
   },
-  // The server was updated while this tab stayed open (ReloadBanner).
   newVersion: {
     message: 'A new version of the app is available.',
     reload: 'Reload',
@@ -278,7 +272,6 @@ export const shell = {
     dismissAlert: 'Dismiss alert',
     clear: 'Clear',
     empty: 'No governance alerts',
-    // A "new rules" notice: rules newer than the flows' baselines report findings.
     newRules: {
       chip: 'rules',
       open: 'Open the analysis rules',
@@ -306,8 +299,6 @@ export const shell = {
     closeOthers: 'Close Others',
     closeAll: 'Close All',
     exportHelpToggle: 'How do I export a flow from Power Automate Desktop?',
-    // <Trans> keys: the tags below are mapped to real elements at the call site,
-    // so a translator can move the emphasis without touching JSX.
     exportStep1: 'Open your flow in the <strong>Power Automate Desktop</strong> designer.',
     exportStep2: 'Select the actions you want (or the whole flow via the canvas).',
     exportStep3:
@@ -340,8 +331,6 @@ export const shell = {
     saved: 'Flow saved to library',
     saveFailed: 'Failed to save to library',
   },
-  // The main-pane toolbar's title for each system view. `sessionDashboard`
-  // is the Analytics view on a backend with session analytics (local mode).
   titles: {
     home: 'Welcome',
     dashboard: 'Analytics',
@@ -371,7 +360,6 @@ export const findings = {
     warning: 'Warning',
     info: 'Info',
   },
-  // Compact badge variants (space-constrained chips keep the pre-i18n look)
   badge: {
     error: 'Error',
     warning: 'Warn',
@@ -399,6 +387,7 @@ export const findings = {
     triageFilterAria: 'Filter by triage status',
     assignedToMe: 'Show only findings assigned to me',
     savedViewsAria: 'Saved filter views',
+    deleteViewAria: 'Delete view "{{name}}"',
     saveCurrentFilters: 'Save current filters…',
     sortAria: 'Change findings sort order',
     sortTitle: 'Sort: {{label}}',
@@ -470,15 +459,12 @@ export const findings = {
     inProgressPercentAria: 'Analysis in progress, {{percent}}%',
   },
   triage: {
-    // Keys match the TriageStatus union so a status maps straight to its label
-    // (the badge previously rendered the raw enum with underscores swapped).
     status: {
       open: 'Open',
       acknowledged: 'Acknowledged',
       in_progress: 'In Progress',
       resolved: 'Resolved',
       suppressed: 'Suppressed',
-      // A status a newer server added, which this version of the app does not know.
       other: 'Other status',
     },
     actions: {
@@ -539,6 +525,17 @@ export const findings = {
     undo: 'Undo',
     commentFailed: 'Failed to add comment',
     commentDeleteFailed: 'Failed to delete comment',
+    analysisFailed: 'Analysis failed',
+    diffFailed: 'Diff failed',
+    deduplicateFailed: 'Deduplicate failed',
+    csvExportFailed: 'CSV export failed',
+    htmlExportFailed: 'HTML export failed',
+    junitExportFailed: 'JUnit export failed',
+    sarifExportFailed: 'SARIF export failed',
+    restoreFailed: 'Restore failed',
+    shareLinkCopied: 'Share link copied to clipboard',
+    shareLinkFailed: 'Failed to create share link',
+    bulkFixFailed: 'Bulk fix failed',
     fixApplied: 'Fix applied',
     fixAppliedReanalyzed: 'Flow file updated and re-analyzed.',
     fixAppliedNeedsAnalyze: 'Flow file updated. Click Analyze to refresh findings.',
@@ -547,9 +544,6 @@ export const findings = {
     suppressInFileFailed: 'Could not write the suppression',
     baselineSetFailed: 'Could not set the baseline',
     baselineClearFailed: 'Could not clear the baseline',
-  },
-  chat: {
-    scrollToBottom: 'Scroll to bottom',
   },
 }
 
@@ -583,6 +577,8 @@ export const auth = {
     backToSignIn: 'Back to sign in',
     noticePasswordChanged: 'Password updated. Sign in again with your new password.',
     noticeAccountDeleted: 'Your account has been deleted.',
+    orDivider: 'or',
+    continueWith: 'Continue with {{provider}}',
   },
   verify: {
     pending: 'Verifying your email…',
@@ -673,7 +669,6 @@ export const auth = {
     avatarUrl: 'Avatar URL',
     avatarPlaceholder: 'https://…',
     avatarHint: 'A public http(s) image link. Leave empty to show your initials.',
-    avatarInvalid: 'Enter a valid http(s) URL.',
     displayName: 'Display name',
     displayNamePlaceholder: 'Enter a display name',
     email: 'Email',
@@ -768,9 +763,6 @@ export const auth = {
   },
 }
 
-// AI chat surface: the assistant panel, its composer, thread bar, tool trail and
-// approval cards. Kept as its own namespace because it is the single largest
-// block of copy in the app and is only ever mounted inside the lazy AITab chunk.
 export const chat = {
   empty: {
     apiKeyBody: 'Configure an AI provider in Settings to start.',
@@ -788,7 +780,6 @@ export const chat = {
   history: {
     loading: 'Loading conversation…',
     loadFailed: "Couldn't load earlier messages",
-    loadFailedBody: "They're still stored — retry to show them.",
     retry: 'Retry',
   },
   a11y: {
@@ -802,7 +793,6 @@ export const chat = {
     streamingSoFar: '{{formatted}} tokens so far',
     streamingAria: 'Generating answer — {{count}} output tokens so far',
     total: '{{formatted}} tokens',
-    // The estimate misses turns whose price is unknown: a lower bound.
     costAtLeast: '≥ {{cost}}',
     costAtLeastTitle: 'At least this much: some replies came from a model whose price is unknown.',
   },
@@ -840,9 +830,6 @@ export const chat = {
       analysis: 'Analysis',
       refactor: 'Refactor',
     },
-    // Keyed by template id. `labels` is the chip text; `prompts` is the text
-    // actually sent to the model — both are user-visible (the prompt is the
-    // chip's tooltip) and both belong to the locale.
     labels: {
       't-explain-block': 'Explain block in detail',
       't-explain-flow': 'Explain entire flow',
@@ -882,17 +869,13 @@ export const chat = {
     close: 'Close thread',
     confirmCloseTitle: 'Close this thread?',
     confirmClose: "You won't be able to reopen “{{name}}” or its messages.",
-    // A thread tab's tooltip: its title and the model it uses.
     tabTooltip: '{{title}} — {{model}}',
     modelPurpose: '{{model}} · {{purpose}}',
   },
   toolbar: {
     newChat: 'New chat',
-    newChatTitle: 'Start a new conversation in a new thread',
     compact: 'Compact',
-    compactTitle: 'Keep only the last 3 exchanges to reduce token usage',
     clear: 'Clear',
-    clearTitle: 'Delete all messages in this thread',
     confirmClear: 'Delete all messages?',
     confirmClearTitle: 'Clear this thread',
     confirmCompact: 'Keep last 3 exchanges?',
@@ -901,9 +884,6 @@ export const chat = {
     searchClose: 'Close message search',
     toolsOn: 'Tools on',
     toolsOff: 'Tools off',
-    // Shown (disabled) for Foundry agents, whose portal definition owns
-    // the tool list — the on/off toggle would be inert. The reason is read
-    // with it (the item stays reachable by keyboard).
     toolsAgent: 'Tools: defined by the agent',
     toolsAgentReason: 'An agent runs the tools set up in its Azure AI Foundry definition',
     help: 'Keyboard shortcuts & commands',
@@ -921,8 +901,6 @@ export const chat = {
     next: 'Next match',
     placeholder: 'Search messages...',
     noMatches: 'No matches',
-    matches_one: '{{count}} message',
-    matches_other: '{{count}} messages',
     closeTitle: 'Close search (Escape)',
     close: 'Close search',
   },
@@ -939,7 +917,6 @@ export const chat = {
     overLimit:
       'This is larger than the model\u2019s context window — the request will be rejected. Narrow the scope, deselect source files, or compact the thread first.',
     noContext: '(no context)',
-    close: 'Close',
     systemPrompt: 'System Prompt',
     flowContext: 'Flow Context',
     yourMessage: 'Your Message',
@@ -948,8 +925,6 @@ export const chat = {
   },
   help: {
     title: 'Chat commands & shortcuts',
-    dialogAria: 'Chat help',
-    close: 'Close help',
     commands: 'Commands',
     shortcuts: 'Shortcuts',
     toolsHeading: 'AI tools & fixes',
@@ -988,7 +963,6 @@ export const chat = {
   },
   compose: {
     title: 'Compose Prompt',
-    close: 'Close',
     placeholder: 'Describe what you want in detail. Tag files with @ and run commands with /.',
     excludeContext: 'Exclude current file context',
     preview: 'Preview',
@@ -997,17 +971,10 @@ export const chat = {
   provider: {
     noNativeTools: 'no native tools',
     exportConversation: 'Export conversation',
-    slowToolProtocol: 'This provider runs tools through a slower text-marker protocol',
-    using: 'Using',
-    // Badge on a provider whose credentials come from the active organisation.
     shared: 'shared',
-    sharedTitle: "Using your organisation's shared credentials",
   },
-  // The chat header's model picker (ModelPicker): each thread keeps its own
-  // model; the trigger names it, the popup lists the models by purpose.
   picker: {
     dialog: 'Choose a model for this chat',
-    // The trigger's accessible name.
     triggerName: 'Model for this chat: {{model}}, {{provider}}',
     triggerNamePurpose: 'Model for this chat: {{model}}, {{purpose}}, {{provider}}',
     triggerNameShared: 'Model for this chat: {{model}}, {{provider}}, shared by {{org}}',
@@ -1021,7 +988,6 @@ export const chat = {
     search: 'Search models',
     searchPlaceholder: 'Search models…',
     list: 'Models',
-    // The group of models without a purpose (a catalogue provider's).
     plainGroup: 'Models',
     contextWindow: '{{window}} context window',
     price: '${{input}} / ${{output}} per 1M tokens',
@@ -1030,12 +996,9 @@ export const chat = {
     emptyProvider: '{{provider}} lists no models.',
     addModels: 'Add models…',
     manage: 'Manage models…',
-    // Legacy Entra + project resources used to list every deployment and
-    // agent; now only added models show.
     reviewPrompt: "Your project has models you haven't added",
     review: 'Review',
   },
-  // Badges on a model in the picker and the header.
   modelBadge: {
     default: 'Default',
     defaultSr: 'Default for new chats',
@@ -1043,7 +1006,6 @@ export const chat = {
     sharedSr: 'Shared by {{org}}',
     sharedCredentialsSr: "Using your organisation's shared credentials",
   },
-  // Why a listed model cannot be used right now (keyed by its status).
   modelStatus: {
     needs_credentials: "Its resource's credentials need to be entered again",
     unreadable: "Its resource's stored credentials can't be read — enter them again",
@@ -1051,7 +1013,6 @@ export const chat = {
     unsupported: 'Agents need Microsoft Entra ID and a project endpoint',
     unknown: "Can't be used right now",
   },
-  // ModelUnavailableNotice: the thread's model cannot be used.
   modelNotice: {
     removed: '“{{wanted}}” is no longer available. This chat now uses “{{fallback}}”.',
     removedNone: '“{{wanted}}” is no longer available, and no other model can be used here.',
@@ -1060,7 +1021,6 @@ export const chat = {
     unsupported: "“{{wanted}}” can't run on its resource: agents need Microsoft Entra ID and a project endpoint.",
     provider: "“{{wanted}}” is unavailable here: {{provider}} isn't set up for this flow.",
     unavailable: '“{{wanted}}” is unavailable right now.',
-    // The second sentence of an unavailable notice with a stand-in.
     meanwhile: 'This chat uses “{{fallback}}” until then.',
     refused: "“{{wanted}}” isn't available any more. Choose another model to send your message.",
     legacyDefault:
@@ -1132,8 +1092,6 @@ export const chat = {
     insertCommandHint: 'Run a command (/)',
     hintSend: 'send',
     hintNewline: 'new line',
-    // Shown in place of sending when the thread's Azure AI Foundry scope has
-    // nothing to chat with.
     noAzureModels:
       "No Azure AI Foundry models yet. Add the deployments you want to chat with, and they'll appear here.",
     addModels: 'Add models…',
@@ -1147,7 +1105,6 @@ export const chat = {
     roleAssistant: 'AI',
     goTo: 'Go to {{name}}',
     thinking: 'Thinking...',
-    // Elapsed thinking time next to the label ("12s", "1m 05s").
     elapsedSeconds: '{{count}}s',
     elapsedMinutes: '{{minutes}}m {{seconds}}s',
     stopped: 'Stopped',
@@ -1155,10 +1112,7 @@ export const chat = {
     copied: 'Copied',
     retry: 'Retry',
     regenerate: 'Regenerate',
-    // Tooltip on the served-model tag: the model that actually answered.
     servedBy: 'Answered by {{model}}',
-    // An Azure AI Foundry model ("m/<id>") that nothing lists any more and
-    // whose name the message did not keep.
     removedModel: 'removed model',
   },
   fixCard: {
@@ -1200,9 +1154,6 @@ export const chat = {
       'already-resolved': 'already resolved',
     },
   },
-  // The approval card of a request this bundle has no preview for (a tool a
-  // newer server added): the tool's name, each item's label and summary, and
-  // a decision in the tool's own terms — nothing about fixes.
   approvalCard: {
     aria: '{{tool}}: approval needed',
     announce: '{{tool}} awaits your approval.',
@@ -1241,7 +1192,6 @@ export const chat = {
     'azure-foundry': 'Azure AI Foundry is ready — ask about your flow, request analysis, or explore findings.',
     local: 'Your local model is ready — ask about your flow, request analysis, or explore findings.',
     fallback: 'AI assistant is ready — ask about your flow, request analysis, or explore findings.',
-    // Above the line: the model this thread uses, and what it is for.
     model: 'This chat uses {{model}}',
     modelPurpose: 'This chat uses {{model}} · {{purpose}}',
   },
@@ -1251,8 +1201,6 @@ export const chat = {
     busyBody: '{{count}} chats are already generating — wait for one to finish or stop it, then try again.',
     noStream: '*Error: No response stream was created. Please check your connection and try again.*',
     sendFailed: 'Failed to send message',
-    // Offered next to (or instead of) openSettings when the failure
-    // came from the organisation's shared credential.
     openOrgSettings: 'Open organisation settings',
     budgetTitle: "You've reached today's AI budget{{detail}}",
     budgetBody:
@@ -1260,7 +1208,6 @@ export const chat = {
     budgetBubble:
       '🛑 **Daily AI budget reached{{detail}}.** It resets at midnight UTC. Contact an admin to adjust the limit.',
     generic: '*Error: {{message}}*',
-    // Provider failures: a localized title, then the server's detail.
     providerBubble: '**{{title}}** — {{message}}',
     providerAuthTitle: 'The provider rejected the credentials',
     providerPermissionTitle: 'The credentials lack access to this model',
@@ -1271,24 +1218,15 @@ export const chat = {
     providerBalanceTitle: 'The provider account is out of credit',
     providerUnknownTitle: "This provider isn't available on this server",
     providerNotAllowedTitle: "This provider isn't allowed here",
-    // MODEL_NOT_AVAILABLE: the thread's model was removed (or stopped being
-    // shared) after the picker listed it.
     modelNotAvailable: 'This model is no longer available',
-    // The toast when a send is refused for it, right away (the notice waits
-    // for the model list to refresh).
     modelNotAvailableSend: 'Your message is back in the composer. Choose another model to send it.',
     modelNotAvailableResend: 'Nothing was sent, and the last answer is kept. Choose another model, then try again.',
     chooseModel: 'Choose another model',
     previewModelNotAvailable: "This chat's model is no longer available — your message wasn't sent.",
     openSettings: 'Open settings',
     stalled: 'The response stalled — the connection to the backend may have been lost.',
-    // SERVER_RESTARTING (a deploy): the status line while the turn waits to
-    // be sent again (the trail appends "…"), and the bubble's text when the
-    // one automatic resend is spent.
     serverRestarting: 'The server restarted — sending your message again',
     serverRestarted: 'The server restarted before this answer finished — use Retry to send it again.',
-    // The reconnected server does not know the stream (another instance ran
-    // it): nothing of it can be resumed.
     interrupted:
       'The connection to the server was lost and this answer could not be recovered — use Retry to send it again.',
     cannotConnect: 'Could not connect to the event stream — the backend may still be starting. Please try again.',
@@ -1314,6 +1252,4 @@ export const chat = {
   },
 }
 
-// Aggregate consumed by i18n/index.ts. Declared last so it can reference every
-// namespace above it.
 export const en = {common, shell, findings, auth, chat}

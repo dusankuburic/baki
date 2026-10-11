@@ -3,17 +3,11 @@ import {CheckCircle2, XCircle} from 'lucide-react'
 import clsx from 'clsx'
 import {formatCount} from '@/lib/format'
 
-/** A draft test's progress and outcome, as a modal's footer shows it. */
 export type TestState =
   {phase: 'idle'} | {phase: 'running'} | {phase: 'passed'; latencyMs?: number} | {phase: 'failed'; error?: string}
 
 export const IDLE_TEST: TestState = {phase: 'idle'}
 
-// The outcome under a Test button. Both live regions stay mounted: an outcome
-// is inserted into a region that already exists, which is what gets it read
-// out. A pass goes to the polite status region; a failure — "Test failed"
-// and the server's reason together — is one alert, and the status region is
-// emptied so the pass that may have preceded it is not re-read.
 export default function TestStatus({state, className}: {state: TestState; className?: string}) {
   const {t} = useTranslation('settings')
   const latency =

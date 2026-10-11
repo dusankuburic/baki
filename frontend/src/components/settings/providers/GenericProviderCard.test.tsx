@@ -1,7 +1,6 @@
 import {describe, it, expect} from 'vitest'
 import {helpHref} from './GenericProviderCard'
 
-// F5: the help link is the only anchor built from a server string.
 describe('helpHref', () => {
   it('offers http(s) targets and nothing else', () => {
     expect(helpHref('https://docs.example.com/mistral')).toBe('https://docs.example.com/mistral')

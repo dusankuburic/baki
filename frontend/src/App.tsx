@@ -5,9 +5,6 @@ import SyncDropNotifier from './components/shared/SyncDropNotifier'
 import OfflineIndicator from './components/shared/OfflineIndicator'
 import ShortcutsHelpDialog from './components/search/ShortcutsHelpDialog'
 
-// Search overlays load on first open — they're modal-only surfaces, so paying
-// the chunk fetch at open time (a user gesture) keeps them out of the eager
-// bundle. Same pattern as SettingsModal below.
 const CommandPalette = lazy(() => import('./components/search/CommandPalette'))
 const GlobalSearchOverlay = lazy(() => import('./components/search/GlobalSearchOverlay'))
 
@@ -43,8 +40,6 @@ import PaneDivider from './components/layout/PaneDivider'
 import WelcomeModal from './components/onboarding/WelcomeModal'
 import BackendCrashBanner from './components/layout/BackendCrashBanner'
 import ReloadBanner from './components/layout/ReloadBanner'
-// By path, not through the components/chat barrel (which would pull
-// react-markdown into the entry chunk).
 import ChatStreamProvider from './components/chat/ChatStreamProvider'
 import {flowApi} from '@/api'
 import {isTauri} from '@/platform/guards'
@@ -70,33 +65,18 @@ function AppInner() {
   const {t} = useTranslation('shell')
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const setDocument = useFlowStore(s => s.setDocument)
-  // Subscribe to the document ID only: the shell's effects (recents refetch,
-  // presence connect) key on identity, and subscribing to the whole document
-  // object re-rendered the ENTIRE unmemoized shell on every remote-collab
-  // save, apply-fix, and reparse — a new object each time. The document
-  // itself is consumed inside CommandPaletteContainer (and the panes that
-  // actually render it).
   const documentId = useFlowStore(s => s.document?.id ?? null)
   const settingsSection = useUIStore(s => s.settingsSection)
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
   const requestSearchFocus = useSearchStore(s => s.requestFocus)
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
 
-  // Responsive: below md (768px) the 3-pane shell collapses — sidebar and
-  // inspector become overlay drawers; main pane takes full width.
   const isDesktop = useIsDesktop()
-  // Back on the desktop layout the panes render inline, so drop any open
-  // drawer rather than have it reappear the next time the window narrows.
   useEffect(() => {
     if (isDesktop) closeMobileDrawer()
-    // Focus mode is a desktop overlay; a stale flag would otherwise render
-    // "focused" inside the transformed mobile drawer.
     else setChatFocus(false)
   }, [isDesktop, closeMobileDrawer, setChatFocus])
 
-  // Onboarding: show the welcome tour only on first run (firstRunCompleted
-  // is false in the default settings) — and only once settings have loaded
-  // from the backend so we don't flash it to returning users.
   const firstRunCompleted = useSettingsStore(s => s.settings.general.firstRunCompleted)
   const settingsLoaded = useSettingsStore(s => s.isLoaded)
   const [welcomeDismissed, setWelcomeDismissed] = useState(false)
@@ -123,17 +103,10 @@ function AppInner() {
     return () => usePresenceStore.getState().disconnect()
   }, [documentId])
 
-  // Desktop: the auth gate is skipped in Tauri, so isAuthenticated never
-  // becomes true there and settings were never LOADED (only saved) — theme,
-  // density, provider and layout reset on every restart and the welcome tour
-  // never showed (it waits for settingsLoaded). The local backend needs no
-  // login, so load unconditionally on desktop.
   useSettingsPersistence(isAuthenticated || isTauri())
   useGlobalErrorHandler()
   useFlowChangeSync()
 
-  // Governance-alerts bell: poll the unread count while authenticated, stop on
-  // logout (the store reset also stops polling as a safety net).
   useEffect(() => {
     if (!isAuthenticated) {
       stopGovernancePolling()
@@ -151,11 +124,6 @@ function AppInner() {
   const showShortcuts = useCallback(() => setShortcutsHelpOpen(true), [])
   useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts: showShortcuts})
 
-  // Destructured rather than kept as a `pane` object: react-hooks/refs taints
-  // EVERY property access on an object that holds a ref, so `sidebarWidth`
-  // (a number) and `handleSidebarDrag` (a useCallback) were both reported
-  // as "cannot access ref value during render". Individual bindings let the rule
-  // see what each value actually is.
   const {
     sidebarRef,
     inspectorRef,
@@ -177,8 +145,6 @@ function AppInner() {
 
   return (
     <>
-      {/* Skip-to-content link: first focusable element, lets keyboard / SR users
-        jump straight to the flow view past the sidebar/inspector chrome. */}
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-100 focus:px-3 focus:py-1.5 focus:rounded focus:bg-brand-600 focus:text-brand-foreground focus:text-sm focus:shadow-lg"
@@ -194,7 +160,6 @@ function AppInner() {
         <TitleBar />
         <ReloadBanner />
         <div className="flex flex-1 overflow-hidden print:overflow-visible">
-          {/* Desktop sidebar (inline pane) */}
           {isDesktop && !sidebarCollapsed && (
             <>
               <div
@@ -230,7 +195,6 @@ function AppInner() {
               <MainPane />
             </ErrorBoundary>
           </div>
-          {/* Desktop inspector (inline pane) */}
           {isDesktop && !inspectorCollapsed && (
             <>
               <PaneDivider
@@ -257,10 +221,6 @@ function AppInner() {
             </>
           )}
         </div>
-        {/* Mobile drawers (overlay). Driven by mobileDrawer, not the persisted
-            pane flags: those default to "shown", so both drawers used to open
-            over the app on every load at phone width, and the inspector's
-            backdrop swallowed the taps meant for the shell. */}
         {!isDesktop && mobileDrawer === 'sidebar' && (
           <MobileDrawer side="left" label="Sidebar" onClose={closeMobileDrawer}>
             <ErrorBoundary fallbackMessage="Sidebar error">
@@ -323,7 +283,6 @@ function AppInner() {
       <ErrorBoundary>
         <WelcomeModal isOpen={showWelcome} onClose={() => setWelcomeDismissed(true)} />
       </ErrorBoundary>
-      {/* Desktop only: the sidecar lifecycle has no web equivalent. */}
       {isTauri() && (
         <ErrorBoundary>
           <BackendCrashBanner />
@@ -333,14 +292,6 @@ function AppInner() {
   )
 }
 
-/**
- * CommandPaletteContainer owns the shell's document-object subscription.
- * AppInner deliberately subscribes only to `document?.id` (its effects key on
- * identity); the full document — replaced on every collaborator save,
- * apply-fix, and reparse — is read HERE, inside a component whose render is
- * just the palette (nothing when closed). Previously that subscription lived
- * in AppInner and re-rendered the whole unmemoized shell per document swap.
- */
 function CommandPaletteContainer({
   isOpen,
   onClose,
@@ -368,9 +319,6 @@ function CommandPaletteContainer({
   const user = useAuthStore(s => s.user)
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
 
-  // Desktop auto-reimport (R1-3): when the flow's file changes on disk (the
-  // user edited in Power Automate Desktop), reload + re-analyze without the
-  // manual Reimport click. No-op for cloud docs and web builds.
   useFileWatcher(document)
 
   useEffect(() => {
@@ -410,9 +358,6 @@ export default function App() {
     <ErrorBoundary>
       <ToastProvider>
         <ConfirmProvider>
-          {/* Chat streams live for the whole session, above every pane that
-              can unmount the chat panel (inspector collapse, mobile drawer,
-              pop-out): hiding the chat no longer cancels a reply. */}
           <ChatStreamProvider>
             <AppInner />
           </ChatStreamProvider>

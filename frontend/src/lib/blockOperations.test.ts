@@ -56,9 +56,6 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('useBlockOperations.moveBlock', () => {
-  // Alt+Up/Down fires one moveBlock per keypress. Three presses before the
-  // first response used to mean three concurrent requests, three applied
-  // documents, three re-analyses.
   it('three moves before the first resolves: one request in flight, the LAST document applied, one re-analysis', async () => {
     const d1 = deferred<{document: FlowDocument}>()
     const d2 = deferred<{document: FlowDocument}>()

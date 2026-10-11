@@ -28,8 +28,6 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const paletteRef = useRef<HTMLDivElement>(null)
-  // Tab focus trap + focus restoration to the trigger on close. Esc is left to
-  // useListNavigation's onClose (closeOnEsc:false here avoids a double-close).
   useDialogFocus({isOpen, onClose, closeOnEsc: false, containerRef: paletteRef})
 
   const grouped = useMemo(() => {
@@ -50,8 +48,6 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
     for (const cmds of Object.values(grouped)) {
       items.push(...cmds)
     }
-    // Precompute the flat index per command id so the render below is pure
-    // (a render-time counter would depend on Object.values iteration order).
     const idxById = new Map<string, number>()
     items.forEach((c, i) => idxById.set(c.id, i))
     return {flatItems: items, indexById: idxById}
@@ -66,15 +62,18 @@ export default function CommandPalette({isOpen, onClose, commands = []}: Command
     onClose,
   })
 
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(isOpen)
+  if (prevOpen !== isOpen) {
+    setPrevOpen(isOpen)
     if (isOpen) {
-      // Resets overlay state on open; the panel is not remounted per open.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setQuery('')
       setActiveIndex(0)
-      requestAnimationFrame(() => inputRef.current?.focus())
     }
-  }, [isOpen, setActiveIndex])
+  }
+
+  useEffect(() => {
+    if (isOpen) requestAnimationFrame(() => inputRef.current?.focus())
+  }, [isOpen])
 
   useEffect(() => {
     setActiveIndex(0)

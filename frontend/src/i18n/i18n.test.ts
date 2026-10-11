@@ -3,14 +3,11 @@ import i18next, {setLanguage, LANGUAGE_KEY} from '@/i18n'
 
 describe('i18n scaffold', () => {
   afterEach(() => {
-    // Reset to English + clear persistence so other tests see the default.
     localStorage.removeItem(LANGUAGE_KEY)
     void i18next.changeLanguage('en')
   })
 
   it('initializes synchronously with bundled English resources', () => {
-    // No Suspense needed anywhere: resources are bundled, so init resolved
-    // by the time this module-level instance is imported.
     expect(i18next.isInitialized).toBe(true)
     expect(i18next.t('findings:search.placeholder')).toBe('Search findings...')
   })
@@ -26,7 +23,7 @@ describe('i18n scaffold', () => {
   })
 
   it('setLanguage persists the choice and updates the active language', () => {
-    setLanguage('en') // only en is supported today; the write path is what matters
+    setLanguage('en')
     expect(localStorage.getItem(LANGUAGE_KEY)).toBe('en')
     expect(i18next.language).toBe('en')
   })
@@ -37,8 +34,6 @@ describe('i18n scaffold', () => {
   })
 
   it('falls back to the key path (not a blank) for missing keys', () => {
-    // returnEmptyString: false — a gap in a future locale renders the key
-    // (namespace prefix stripped), visibly wrong instead of silently blank.
     expect(i18next.t('findings:nonexistent.key' as never)).toBe('nonexistent.key')
   })
 })

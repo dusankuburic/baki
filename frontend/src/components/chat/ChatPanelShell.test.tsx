@@ -4,12 +4,7 @@ import {useEffect} from 'react'
 import ChatPanelShell, {useChatPanel} from './ChatPanelShell'
 import {useUIStore} from '@/stores/uiStore'
 
-// jsdom has no matchMedia; focus mode is desktop-only.
 vi.mock('@/hooks/useMediaQuery', () => ({useIsDesktop: () => true, useMediaQuery: () => true}))
-
-// Entering or leaving focus mode must not remount the panel: it owns scroll
-// position, search, the composer draft — and its unmount used to cancel every
-// reply in flight.
 
 let mounts = 0
 let unmounts = 0
@@ -98,8 +93,6 @@ describe('ChatPanelShell', () => {
     const composer = screen.getByLabelText('composer')
     expect(document.activeElement).toBe(composer)
 
-    // The panel is the same tree docked: the user's place in it is kept,
-    // rather than jumping back to whatever opened the overlay.
     act(() => useUIStore.getState().setChatFocus(false))
     expect(document.activeElement).toBe(composer)
   })

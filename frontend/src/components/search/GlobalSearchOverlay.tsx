@@ -18,8 +18,6 @@ type GlobalSearchOverlayProps = {
 
 type Scope = 'this-flow' | 'all-flows'
 
-// Block-type filter chips; labels resolve through i18n inside the component
-// (the order mirrors the BlockType union as shown in the UI).
 const FILTER_TYPES: {type: BlockType; labelKey: keyof typeof TYPE_LABEL_KEYS}[] = [
   {type: 'ACTION', labelKey: 'action'},
   {type: 'CONDITION', labelKey: 'condition'},
@@ -61,9 +59,6 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
 
   const handleSelect = useCallback(
     async (result: SearchResult) => {
-      // Cross-flow: load the result's flow before selecting the block. The
-      // all-flows search stamps each hit with its source flowId; when it differs
-      // from the open document we fetch + open it so the block selection lands.
       if (scope === 'all-flows' && result.flowId && result.flowId !== document?.id) {
         try {
           const doc = await libraryApi.getContent(result.flowId)
@@ -89,7 +84,6 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
 
   useEffect(() => {
     if (isOpen) {
-      // Resets overlay state on open; the panel is not remounted per open.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setQuery('')
       setResults([])
@@ -111,7 +105,6 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
         setResults([])
         return
       }
-      // "This flow" needs an open document; "all flows" searches the library.
       if (scope === 'this-flow' && !document) {
         setResults([])
         return
@@ -146,9 +139,7 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
     onSearch: q => handleSearch(q, activeTypes),
   })
 
-  // Re-run search when type filters change
   useEffect(() => {
-    // Re-runs the query against the backend when the type filters change.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (query) void handleSearch(query, activeTypes)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -172,7 +163,6 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
         aria-modal="true"
         aria-label={t('overlay.dialogAria')}
       >
-        {/* Search input row */}
         <div className="flex items-center px-4 border-b border-border-subtle bg-surface-2">
           <Search className="text-text-tertiary mr-3 shrink-0" size={18} />
           <input
@@ -205,7 +195,6 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
           </button>
         </div>
 
-        {/* Scope toggle + type filter chips */}
         <div className="flex items-center gap-1.5 px-4 py-2 border-b border-border-subtle bg-surface-1 flex-wrap">
           <div className="flex items-center rounded-lg border border-border-default overflow-hidden shrink-0">
             {(['this-flow', 'all-flows'] as Scope[]).map(s => (
@@ -213,8 +202,6 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                 key={s}
                 onClick={() => {
                   setScope(s)
-                  // Re-run the search against the new scope immediately so the
-                  // toggle feels responsive (don't wait for the next keystroke).
                   if (query) void handleSearch(query, activeTypes)
                 }}
                 className={clsx(
@@ -258,21 +245,14 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
           )}
         </div>
 
-        {/* Results list */}
         <div ref={listRef} className="flex-1 overflow-y-auto custom-scrollbar p-1">
           {results.length > 0 ? (
             <div className="space-y-0.5" role="listbox" id={LISTBOX_ID} aria-label={t('overlay.resultsAria')}>
               {results.map((res, idx) => {
                 const subflow = document?.subflows.find(s => s.id === res.subflowId)
                 const prev = idx > 0 ? results[idx - 1] : undefined
-                // In all-flows mode, render a flow-name header when the source
-                // flow changes. SearchLibrary returns hits grouped consecutively
-                // by flow, so a flowId change marks a group boundary.
                 const showFlowHeader = scope === 'all-flows' && res.flowId && res.flowId !== prev?.flowId
                 return (
-                  // role="presentation": this wrapper only exists to pair a
-                  // flow-name header with its row. Leaving it as a generic div
-                  // between the listbox and its options breaks ARIA ownership.
                   <div key={`${res.flowId ?? ''}-${res.blockId}-${idx}`} role="presentation">
                     {showFlowHeader && (
                       <div className="flex items-center gap-1.5 px-4 pt-3 pb-1 text-2xs font-bold uppercase tracking-wider text-brand-400">
@@ -326,7 +306,6 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
           )}
         </div>
 
-        {/* Footer */}
         <div className="px-4 py-2 bg-surface-2 border-t border-border-subtle flex items-center justify-between text-2xs text-text-tertiary uppercase tracking-widest font-semibold">
           <span>
             {results.length >= 50

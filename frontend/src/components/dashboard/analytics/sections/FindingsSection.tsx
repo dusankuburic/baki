@@ -25,8 +25,6 @@ interface CategoryRow extends HBarRow {
   info: number
 }
 
-// Where the open findings are: by rule (single hue, click to filter), by
-// category stacked by severity, the confidence mix and the fixable share.
 export function FindingsSection({data, refetching}: {data: DashboardAnalyticsData; refetching: boolean}) {
   const {t} = useTranslation('dashboard')
   const theme = useChartTheme()
@@ -85,8 +83,6 @@ export function FindingsSection({data, refetching}: {data: DashboardAnalyticsDat
     label: t(`confidence.${k}`),
     count: data.findings.byConfidence[k] ?? 0,
     share: confidenceTotal > 0 ? (data.findings.byConfidence[k] ?? 0) / confidenceTotal : 0,
-    // i ranges over the 3-entry CONFIDENCE tuple, so 3 - i is always 1..3 —
-    // inside seq's 4 slots; muted is an unreachable fallback.
     color: theme.seq[3 - i] ?? theme.muted,
   }))
   const fix = data.findings.fixability

@@ -5,8 +5,6 @@ import {ConfirmProvider} from '@/components/shared'
 import {useUIStore} from '@/stores/uiStore'
 import {simulateTauri, simulateWeb} from '@/testing/testHelpers'
 
-// AI Accounts (the deep-link case) loads its keys, sign-ins and the Azure AI
-// Foundry registry on mount: answer them as "nothing configured".
 vi.mock('@/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api')>()
   const {ApiError} = await import('@/api/client')
@@ -14,7 +12,6 @@ vi.mock('@/api', async importOriginal => {
     ...actual,
     providersApi: {
       ...actual.providersApi,
-      // An older server: no catalogue, so AI Accounts renders its built-in sections.
       getProviderCatalog: vi.fn().mockRejectedValue(new ApiError('not found', 404, null)),
       getGitHubUser: vi.fn().mockResolvedValue(null),
       getCopilotUser: vi.fn().mockResolvedValue(null),
@@ -31,7 +28,6 @@ vi.mock('@/api', async importOriginal => {
   }
 })
 
-// Modal focuses inside a rAF; let that frame run before asserting on focus.
 async function flushFrame() {
   await act(async () => {
     await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
@@ -41,9 +37,6 @@ async function flushFrame() {
 const noop = () => {}
 const tab = (name: string) => screen.getByRole('tab', {name})
 
-// Only sections whose panels need no API or providers are visited here
-// (General, Appearance, Shortcuts, Privacy, About); each test waits for the
-// lazy panel so the load never lands outside act().
 beforeEach(() => {
   simulateWeb()
   useUIStore.setState({settingsOpen: true, settingsSection: null, lastSettingsSection: null})
@@ -130,18 +123,14 @@ describe('SettingsModal', () => {
     expect(screen.queryAllByRole('tab')).toHaveLength(0)
     expect(screen.getByText('No settings match "zzz"')).toBeInTheDocument()
 
-    // One Escape clears the query (and must not reach the dialog)…
     fireEvent.keyDown(search, {key: 'Escape'})
     expect(onClose).not.toHaveBeenCalled()
     expect(search).toHaveValue('')
     expect(screen.getAllByRole('tab').length).toBeGreaterThan(1)
 
-    // …the next one closes.
     fireEvent.keyDown(search, {key: 'Escape'})
     expect(onClose).toHaveBeenCalledTimes(1)
   })
-  // "Manage in Organizations" and the chat picker's "Manage models…" call
-  // openSettings() while Settings may already be open: the dialog follows.
   it('follows a deep link that arrives while it is open, even to a section asked for before', async () => {
     render(<SettingsModal isOpen onClose={noop} />)
     await screen.findByText('Updates')
@@ -149,7 +138,6 @@ describe('SettingsModal', () => {
     act(() => useUIStore.getState().openSettings('privacy'))
     expect(tab('Privacy')).toHaveAttribute('aria-selected', 'true')
     expect(await screen.findByText('API Keys')).toBeInTheDocument()
-    // Followed, then consumed.
     expect(useUIStore.getState().settingsSection).toBeNull()
 
     fireEvent.click(tab('Shortcuts'))
@@ -168,7 +156,6 @@ describe('SettingsModal', () => {
       expect(useUIStore.getState().settingsSection).toBeNull()
       await screen.findByText('API Keys')
 
-      // Organizations do not exist in the desktop app.
       act(() => useUIStore.getState().openSettings('orgs'))
       expect(tab('Privacy')).toHaveAttribute('aria-selected', 'true')
       expect(useUIStore.getState().settingsSection).toBeNull()
@@ -177,7 +164,6 @@ describe('SettingsModal', () => {
     }
   })
 
-  // "Manage models…" in the chat picker: Settings may already be open.
   it('follows a deep link into AI Accounts and focuses its anchor once the panel has loaded', async () => {
     render(
       <ConfirmProvider>
@@ -187,31 +173,22 @@ describe('SettingsModal', () => {
     await screen.findByText('Updates')
     act(() => useUIStore.getState().openSettings('accounts', 'provider-azure-foundry'))
     expect(tab('AI Accounts')).toHaveAttribute('aria-selected', 'true')
-    // The AI Accounts chunk may load cold here, which takes over the default
-    // second under a full parallel run.
     const heading = await screen.findByRole('heading', {level: 3, name: 'Azure AI Foundry'}, {timeout: 5000})
     await waitFor(() => expect(heading).toHaveFocus())
     expect(useUIStore.getState().settingsAnchor).toBeNull()
     await screen.findByText('Connect an Azure AI Foundry resource')
   })
 
-  // U3: on a second visit the AI Accounts chunk is loaded and the registry
-  // cached, so the panel focuses the anchored heading while the dialog
-  // mounts. The dialog's deferred initial focus then moved it on to the
-  // selected tab, and the dialog took the heading — gone once it closed —
-  // for the element to give focus back to.
   it('lands a deep link that opens it on its heading when the panel is ready at once, and gives focus back on close', async () => {
     const first = render(
       <ConfirmProvider>
         <SettingsModal isOpen onClose={noop} initialSection="accounts" />
       </ConfirmProvider>,
     )
-    // A cold AI Accounts chunk (see above).
     await screen.findByText('Connect an Azure AI Foundry resource', undefined, {timeout: 5000})
     await flushFrame()
     first.unmount()
 
-    // The chat picker's "Manage models…", Settings closed.
     const trigger = document.createElement('button')
     trigger.textContent = 'Model for this chat'
     document.body.appendChild(trigger)
@@ -240,7 +217,6 @@ describe('SettingsModal', () => {
   it('drops an unspent anchor when the user picks a section by hand', async () => {
     render(<SettingsModal isOpen onClose={noop} />)
     await screen.findByText('Updates')
-    // Shortcuts has no heading of that name to spend it on.
     act(() => useUIStore.getState().openSettings('shortcuts', 'provider-azure-foundry'))
     await screen.findByPlaceholderText('Filter shortcuts…')
     expect(useUIStore.getState().settingsAnchor).toBe('provider-azure-foundry')
@@ -262,8 +238,6 @@ describe('SettingsModal', () => {
   it('finds the AI Accounts and Organizations sections when searching for the Azure AI Foundry provider', async () => {
     render(<SettingsModal isOpen onClose={noop} />)
     fireEvent.change(screen.getByRole('textbox', {name: 'Search settings'}), {target: {value: 'foundry'}})
-    // Personal credentials live under AI Accounts; an organisation's shared
-    // Azure AI Foundry resource is managed under Organizations.
     expect(screen.getAllByRole('tab')).toHaveLength(2)
     expect(tab('AI Accounts')).toBeInTheDocument()
     expect(tab('Organizations')).toBeInTheDocument()

@@ -4,21 +4,12 @@ import {createAdapter} from '@/platform/adapters'
 import {getPlatformCapabilities} from '@/platform/guards'
 import {useFlowStore} from '@/stores/flowStore'
 
-// Rendering + base64-encoding a large flow's PDF/Markdown report can take
-// longer than the default request timeout.
 const EXPORT_TIMEOUT_MS = 90_000
 
-// currentFlowId resolves the active flow for export calls that don't pass an
-// explicit id (menu items, shortcuts). Empty string = local mode's current
-// doc, which the backend resolves server-side.
 function currentFlowId(): string {
   return useFlowStore.getState().document?.id ?? ''
 }
 
-// exportReport is the shared body of the PDF/Markdown/HTML exports: optional
-// native save dialog (desktop), POST {flowId, path} to the export endpoint,
-// browser anchor download when no dialog is available (web/cloud). Returns
-// the chosen path ("" when downloaded via the browser).
 async function exportReport(
   kind: {endpoint: string; mime: string; label: string; ext: string},
   flowId = currentFlowId(),
@@ -59,10 +50,6 @@ export const exportApi = {
   exportHTML: (flowId?: string): Promise<string> =>
     exportReport({endpoint: '/api/export/html', mime: 'text/html', label: 'HTML', ext: 'html'}, flowId),
 
-  // saveTextExport is the desktop branch for exports rendered in the browser
-  // (findings CSV, SARIF, JUnit): the same native save dialog exportReport
-  // uses, then the local backend writes the text to the chosen path — the
-  // webview cannot write files itself. Returns the path, "" when cancelled.
   saveTextExport: async (content: string, kind: {label: string; ext: string}): Promise<string> => {
     const path = await createAdapter().fileSave({filters: [{name: kind.label, extensions: [kind.ext]}]})
     if (!path) return ''

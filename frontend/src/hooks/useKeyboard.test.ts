@@ -22,7 +22,7 @@ describe('useKeyboard', () => {
     const onCopyName = vi.fn()
     renderHook(() => useKeyboard({scope: 'global', handlers: {'edit.copy.name': onCopyName}}))
 
-    dispatchKey({key: 'c', ctrlKey: true}) // edit.copy.name is scope:'main'
+    dispatchKey({key: 'c', ctrlKey: true})
     expect(onCopyName).not.toHaveBeenCalled()
   })
 

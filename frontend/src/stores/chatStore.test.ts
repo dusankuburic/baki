@@ -8,7 +8,6 @@ function makeMessage(id: string, role: 'user' | 'assistant', content = 'hello'):
 }
 
 beforeEach(() => {
-  // Reset store to initial state before each test
   useChatStore.setState({
     threads: [],
     activeThreadId: null,
@@ -18,8 +17,6 @@ beforeEach(() => {
     drafts: {},
   })
 })
-
-// ---- thread CRUD ----
 
 describe('createThread', () => {
   it('creates a thread and sets it as active', () => {
@@ -98,8 +95,6 @@ describe('updateThread', () => {
   })
 })
 
-// ---- messages ----
-
 describe('appendMessage', () => {
   it('adds message to thread conversation', () => {
     const id = useChatStore.getState().createThread('flow1')
@@ -150,8 +145,6 @@ describe('clearThreadMessages', () => {
   })
 })
 
-// ---- compactThread ----
-
 describe('compactThread', () => {
   it('keeps only the last N*2 messages', () => {
     const id = useChatStore.getState().createThread('flow1')
@@ -185,8 +178,6 @@ describe('compactThread', () => {
   })
 })
 
-// ---- streaming (per-thread) ----
-
 describe('streaming', () => {
   it('startStream reserves a per-thread slot with thinking defaults', () => {
     useChatStore.getState().startStream('t1', 'stream1', 'msg1')
@@ -214,7 +205,7 @@ describe('streaming', () => {
     expect(after.toolCalls).toHaveLength(2)
     expect(after.toolCalls[0]).toMatchObject({name: 'search_flow', ok: true, durationMs: 5})
     expect(after.toolCalls[1]).toMatchObject({name: 'no_such', ok: false})
-    expect(before.toolCalls).toHaveLength(0) // prior array untouched (immutable append)
+    expect(before.toolCalls).toHaveLength(0)
   })
 
   it('addToolCall is a no-op for a thread with no slot', () => {
@@ -251,7 +242,7 @@ describe('streaming', () => {
     expect(slot.isThinking).toBe(false)
     expect(slot.tokens).toBe(42)
     expect(slot.toolStatus).toBe('Searching flow')
-    expect(slot.streamId).toBe('stream1') // unchanged
+    expect(slot.streamId).toBe('stream1')
   })
 
   it('updateStream patches text AND meta in one atomic update', () => {
@@ -261,7 +252,7 @@ describe('streaming', () => {
     expect(slot.text).toBe('Hello')
     expect(slot.isThinking).toBe(false)
     expect(slot.tokens).toBe(3)
-    expect(slot.streamId).toBe('stream1') // untouched fields preserved
+    expect(slot.streamId).toBe('stream1')
   })
 
   it('updateStream is a no-op for a thread with no slot', () => {
@@ -288,8 +279,6 @@ describe('streaming', () => {
   })
 })
 
-// ---- concurrency cap ----
-
 describe('concurrency cap', () => {
   it('activeStreamCount reflects the number of streaming threads', () => {
     expect(useChatStore.getState().activeStreamCount()).toBe(0)
@@ -306,18 +295,15 @@ describe('concurrency cap', () => {
     }
     expect(useChatStore.getState().activeStreamCount()).toBe(MAX_CONCURRENT_STREAMS)
     expect(useChatStore.getState().canStartStream()).toBe(false)
-    // Freeing one slot re-enables starts.
     useChatStore.getState().endStream('t0')
     expect(useChatStore.getState().canStartStream()).toBe(true)
   })
 })
 
-// ---- closeThread drops in-flight stream ----
-
 describe('closeThread stream cleanup', () => {
   it('closing a streaming thread drops its slot', () => {
     useChatStore.getState().startStream('t1', 's1', 'm1')
-    useChatStore.getState().closeThread('t1') // closeThread tolerates a non-created id
+    useChatStore.getState().closeThread('t1')
     expect(useChatStore.getState().streams['t1']).toBeUndefined()
   })
 
@@ -329,8 +315,6 @@ describe('closeThread stream cleanup', () => {
     expect(useChatStore.getState().streams['t2']).toBeDefined()
   })
 })
-
-// ---- multi-flow management ----
 
 describe('getFlowThreads / clearFlowThreads', () => {
   it('getFlowThreads returns threads for the given flow', () => {
@@ -359,8 +343,6 @@ describe('getFlowThreads / clearFlowThreads', () => {
   })
 })
 
-// ---- drafts ----
-
 describe('setDraft', () => {
   it('stores and updates a per-thread draft', () => {
     useChatStore.getState().setDraft('t1', 'hello')
@@ -388,11 +370,6 @@ describe('setDraft', () => {
     expect(id in useChatStore.getState().drafts).toBe(false)
   })
 
-  // Regression: closeThread cleared conversations, streams and drafts but NOT
-  // queuedByThread, so a queued follow-up outlived the thread it belonged to for
-  // the rest of the session. clearFlowThreads clears all four and its comment
-  // claims it is "mirroring closeThread" — which was precisely what closeThread
-  // did not do.
   it('closeThread drops the queued follow-up', () => {
     const id = useChatStore.getState().createThread('flow1')
     useChatStore.getState().queueMessage(id, {text: 'follow-up', files: []})
@@ -421,22 +398,17 @@ describe('queued follow-up messages (U1.6)', () => {
     st.queueMessage('t1', {text: 'hello', files: [], excludeContext: true})
     expect(useChatStore.getState().queuedByThread['t1']?.text).toBe('hello')
 
-    // take returns the message AND removes it (single-shot).
     const got = useChatStore.getState().takeQueuedMessage('t1')
     expect(got?.text).toBe('hello')
     expect(useChatStore.getState().takeQueuedMessage('t1')).toBeUndefined()
 
-    // clear on an empty thread is a no-op.
     expect(() => useChatStore.getState().clearQueuedMessage('t1')).not.toThrow()
 
-    // re-queue replaces (one per thread).
     st.queueMessage('t1', {text: 'first', files: []})
     st.queueMessage('t1', {text: 'second', files: []})
     expect(useChatStore.getState().takeQueuedMessage('t1')?.text).toBe('second')
   })
 })
-
-// ---- thread persistence (conversation keys must survive a reload) ----
 
 describe('thread persistence', () => {
   const stored: Record<string, string> = {}
@@ -453,7 +425,6 @@ describe('thread persistence', () => {
       return Object.keys(stored).length
     },
   }
-  // In the web app thread lists are stored per signed-in user.
   let userId: string | null = 'user-1'
   const KEY = (flowId: string, uid = 'user-1') => `baki:chatThreads:v2:${uid}:${flowId}`
 
@@ -473,7 +444,6 @@ describe('thread persistence', () => {
     useChatStore.getState().updateThread(b, {title: 'second', contextBlockId: 'blk-1', useTools: true})
     useChatStore.getState().createThread('other-flow')
 
-    // Simulate a reload: the in-memory store is empty, localStorage is not.
     useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map()})
 
     const ids = useChatStore.getState().hydrateThreads('flow1')
@@ -486,9 +456,7 @@ describe('thread persistence', () => {
       contextBlockId: 'blk-1',
       useTools: true,
     })
-    // Other flows are untouched by a per-flow hydrate.
     expect(state.threads.some(t => t.flowId === 'other-flow')).toBe(false)
-    // Conversations are NOT pre-populated: the restore effect loads them by key.
     expect(state.conversations.has(a)).toBe(false)
   })
 
@@ -517,9 +485,6 @@ describe('thread persistence', () => {
     expect(stored[KEY('flow1')]).toBeUndefined()
   })
 
-  // Shared browser: the next account to open the same flow must not get the
-  // previous account's thread ids — the server lets any flow viewer read a
-  // conversation by key, and the titles are the start of each first prompt.
   it("keeps each user's threads apart", () => {
     useChatStore.getState().createThread('flow1')
     useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map()})
@@ -539,7 +504,6 @@ describe('thread persistence', () => {
     stored['baki:chatThreads:v1:flow1'] = JSON.stringify([
       {id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', flowId: 'flow1'},
     ])
-    // v1 lists record no owner, so they cannot be handed to whoever signs in.
     expect(useChatStore.getState().hydrateThreads('flow1')).toEqual([])
     expect(stored['baki:chatThreads:v1:flow1']).toBeUndefined()
   })
@@ -614,9 +578,6 @@ describe('threadForFlow', () => {
   })
 })
 
-// The thread that replaces a closed active thread must come from the SAME
-// flow: falling back to any remaining thread showed another flow's
-// conversation under the open one.
 describe('closing the active thread picks a replacement from its own flow', () => {
   it('falls back to the newest remaining thread of that flow', () => {
     useChatStore.getState().createThread('X')
@@ -659,8 +620,6 @@ describe('finishHistoryLoad merge order', () => {
         makeMessage('u2', 'user'),
         makeMessage('a2', 'assistant'),
       ])
-    // Not [u1, u2, a2, err1]: the old error bubble must not become the
-    // "last reply" a Retry acts on.
     expect(
       useChatStore
         .getState()
@@ -708,8 +667,6 @@ describe('clearThreadMessages / setThreadMessages', () => {
     expect(useChatStore.getState().conversations.has(id)).toBe(false)
   })
 })
-
-// ---- per-thread model memory ----
 
 describe('thread model pins', () => {
   const stored: Record<string, string> = {}
@@ -759,7 +716,6 @@ describe('thread model pins', () => {
       model: 'm/docs000000',
       modelLabel: 'Docs writer',
     })
-    // Each thread keeps its own: the other one is still unpinned.
     expect(threadModelOf(threads.find(t => t.id === b)!)).toBeNull()
   })
 
@@ -781,7 +737,6 @@ describe('thread model pins', () => {
     useChatStore.getState().hydrateThreads('flow1')
     const pins = useChatStore.getState().threads.map(threadModelOf)
     expect(pins.slice(0, 4)).toEqual([null, null, null, null])
-    // A bad label alone is dropped; the pin stays.
     expect(pins[4]).toEqual({provider: 'claude', model: 'claude-opus-4-1'})
   })
 
@@ -799,7 +754,6 @@ describe('thread model pins', () => {
     expect(threadModelOf(useChatStore.getState().threads[0]!)).toBeNull()
   })
 
-  // C6: a label that is only an id would beat the listing's name for good.
   it('never stores an id as a pin’s label, and drops one stored before', () => {
     const id = useChatStore.getState().createThread('flow1')
     const st = useChatStore.getState()
@@ -827,8 +781,6 @@ describe('thread model pins', () => {
     expect(threadModelOf(restored)).toEqual({provider: 'azure-foundry', model: 'm/docs000000'})
   })
 
-  // C11: the turn in flight, as it was sent, survives a reload — so the
-  // re-attached stream is labelled with the model it went to.
   it('keeps a thread’s in-flight turn across a reload, validated', () => {
     const a = useChatStore.getState().createThread('flow1')
     const turn = {
@@ -843,8 +795,6 @@ describe('thread model pins', () => {
     useChatStore.getState().hydrateThreads('flow1')
     expect(useChatStore.getState().threads.find(t => t.id === a)?.inFlight).toEqual(turn)
 
-    // Anything off drops the record (the stream is then re-attached with no
-    // label, never a guessed one); a bad message id or label alone is dropped.
     const base = {flowId: 'flow3', title: 't', createdAt: '2026-09-30T00:00:00Z'}
     stored[KEY('flow3')] = JSON.stringify([
       {...base, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', inFlight: {...turn, streamId: 'not-a-uuid'}},
@@ -876,14 +826,12 @@ describe('thread model pins', () => {
     const turn = {streamId: 'stream-1', provider: 'claude' as const, model: 'claude-opus-4-1'}
     useChatStore.getState().startStream(a, 'stream-2', 'msg-2')
     useChatStore.getState().updateThread(a, {inFlight: turn})
-    // A stream that is not the recorded one ends: the record stays.
     useChatStore.getState().endStream(a)
     expect(useChatStore.getState().threads.find(t => t.id === a)?.inFlight).toEqual(turn)
 
     useChatStore.getState().startStream(a, 'stream-1', 'msg-1')
     useChatStore.getState().endStream(a)
     expect(useChatStore.getState().threads.find(t => t.id === a)?.inFlight).toBeUndefined()
-    // …and the stored list says so.
     const storedThread = (JSON.parse(stored[KEY('flow1')]!) as {id: string}[]).find(t => t.id === a)
     expect(storedThread).toBeDefined()
     expect(storedThread).not.toHaveProperty('inFlight')

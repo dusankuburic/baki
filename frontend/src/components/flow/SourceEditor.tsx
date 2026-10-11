@@ -9,27 +9,16 @@ import {useToast, useConfirm, Spinner} from '@/components/shared'
 import {countLines, lineCountAfterEdit, visibleLineRange} from '@/lib/textLines'
 import type {AnalysisReport} from '@/types'
 import AddActionForm, {insertBeforeLastRegionEnd} from './AddActionForm'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
 interface SourceEditorProps {
   onClose: () => void
 }
 
-// Lines rendered beyond the viewport on either side, so a scroll step never
-// shows a blank gutter before the next render.
 const GUTTER_BUFFER_LINES = 20
-// `leading-5` (textarea and gutter alike) until the textarea has been measured.
 const FALLBACK_LINE_HEIGHT_PX = 20
-// Viewport height until the textarea has been laid out (and in jsdom).
 const FALLBACK_VIEWPORT_PX = 800
 
-/**
- * Line-number gutter rendering only the lines inside the textarea's viewport
- * (plus a buffer either side), with spacers keeping the scroll geometry equal
- * to the textarea's. One <div> per line meant 30k nodes for real PAD exports,
- * and a single added line re-rendered all of them (369 ms). The textarea owns
- * scrolling; the gutter mirrors its scrollTop and re-renders only when the
- * viewport crosses a line boundary.
- */
 const LineGutter = memo(function LineGutter({
   lineCount,
   textareaRef,
@@ -50,9 +39,6 @@ const LineGutter = memo(function LineGutter({
       setScrollLine(Math.floor(el.scrollTop / lineHeight))
     }
     el.addEventListener('scroll', onScroll, {passive: true})
-    // ResizeObserver notifies once on observe, which is when the textarea is
-    // first measured; until then (and where it is unavailable) the fallbacks
-    // render a generous window.
     let observer: ResizeObserver | null = null
     if (typeof ResizeObserver !== 'undefined') {
       observer = new ResizeObserver(() => {
@@ -92,8 +78,6 @@ const LineGutter = memo(function LineGutter({
       ref={gutterRef}
       data-testid="line-gutter"
       className="shrink-0 overflow-hidden py-2 pr-2 pl-3 text-right text-text-tertiary select-none bg-surface-2 border-r border-border-subtle"
-      // Sized for the widest number so the width does not jump while scrolling
-      // (only the visible numbers are in the DOM).
       style={{minWidth: `max(3rem, calc(${String(lineCount).length}ch + 1.5rem))`}}
     >
       <div aria-hidden style={{height: first * lineHeight}} />
@@ -103,14 +87,6 @@ const LineGutter = memo(function LineGutter({
   )
 })
 
-// SourceEditor is a lightweight in-app PAD source editor: a monospace textarea
-// with synced line numbers, "Save & Re-parse" (round-trips through the backend
-// which re-parses + persists), and "Revert". No external editor dependency —
-// the textarea + line-number gutter is sufficient for PAD text, which has no
-// standard syntax-highlighting grammar.
-// memberFileName returns the bare filename the editor targets for a desktop
-// FOLDER flow: the file selected in the sidebar, else Main.txt (the server
-// default). Single-file and cloud flows have no member to pick.
 function memberFileName(document: {isFolder?: boolean; filePath: string} | null, selectedFilePath: string | null) {
   if (!document?.isFolder || !document.filePath) return undefined
   const selected = selectedFilePath?.split(/[/\\]/).pop()
@@ -120,9 +96,6 @@ function memberFileName(document: {isFolder?: boolean; filePath: string} | null,
 export default function SourceEditor({onClose}: SourceEditorProps) {
   const document = useFlowStore(s => s.document)
   const selectedFilePath = useFlowStore(s => s.selectedFilePath)
-  // Folder flows: read and write the SELECTED member file. The editor used to
-  // load Main.txt unconditionally and label nothing, so editing "Subflow.txt"
-  // (selected in the sidebar) overwrote Main.
   const requestedFile = memberFileName(document, selectedFilePath)
   const setReport = useAnalysisStore(s => s.setReport)
   const toast = useToast()
@@ -130,9 +103,6 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const {t} = useTranslation('shell')
   const {t: tf} = useTranslation('flow')
 
-  // The buffer carries its line count: each edit adjusts it by scanning only
-  // the changed region (lineCountAfterEdit) instead of re-splitting the
-  // whole source per keystroke.
   const [buffer, setBuffer] = useState<{text: string; lines: number}>({text: '', lines: 1})
   const source = buffer.text
   const lineCount = buffer.lines
@@ -144,10 +114,6 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     })
   }, [])
   const [original, setOriginal] = useState('')
-  // memberFile is the folder member whose source is IN the buffer. It follows
-  // the sidebar selection only while the buffer is clean: switching on a
-  // selection change with unsaved edits would refetch and overwrite them. The
-  // header shows memberFile, so the user sees which file a Save will write.
   const [memberFile, setMemberFile] = useState(requestedFile)
   if (memberFile !== requestedFile && source === original) {
     setMemberFile(requestedFile)
@@ -156,21 +122,13 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
   const readOnly = useFlowStore(s => s.readOnly)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  // loadError is what stops a FAILED load from presenting as an EMPTY flow.
-  // Without it the catch below only toasted, leaving source and original at
-  // '' while loading cleared — so the editor rendered a fully interactive
-  // blank textarea. One keystroke made it dirty (original was ''), which armed
-  // Save, which sent that single character as the entire PAD source. A
-  // transient 500 on load therefore destroyed the flow.
   const [loadError, setLoadError] = useState<string | null>(null)
   const [reloadNonce, setReloadNonce] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Load the raw source on mount.
   useEffect(() => {
     if (!document) return
     let cancelled = false
-    // Enters the loading state for an async source fetch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void setLoading(true)
     void setLoadError(null)
@@ -183,8 +141,8 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
       })
       .catch(err => {
         if (!cancelled) {
-          setLoadError(String(err))
-          toast.error(tf('source.loadFailed'), {description: String(err)})
+          setLoadError(getErrorMessage(err))
+          toast.error(tf('source.loadFailed'), {description: getErrorMessage(err)})
         }
       })
       .finally(() => {
@@ -193,51 +151,32 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     return () => {
       cancelled = true
     }
-    // Keyed on document IDENTITY (and the selected member file) only.
-    // `document` is replaced on every save/reparse, and re-running this would
-    // re-fetch and overwrite the user's unsaved edits; `toast` is only used on
-    // the failure path.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [document?.id, memberFile, reloadNonce])
 
   const dirty = source !== original
-  // The toolbar's view switcher can close the editor too; it reads this flag
-  // to confirm before discarding edits (see MainPaneToolbar).
   const setSourceDirty = useUIStore(s => s.setSourceEditorDirty)
   useEffect(() => {
     setSourceDirty(dirty)
     return () => setSourceDirty(false)
   }, [dirty, setSourceDirty])
-  // Cloud folder flows (no on-disk path) store no per-file source: the server
-  // refuses to save the combined text because it would collapse the folder
-  // structure, so Save used to arm on the first keystroke and always fail.
-  // Desktop folder flows save the selected member file and stay enabled.
   const cloudFolder = !!document?.isFolder && !document.filePath
 
   const handleSave = useCallback(async () => {
-    // readOnly guards the mod+S shortcut too — the button was already
-    // disabled, the keyboard path wasn't.
-    // loadError: the buffer does not hold this flow's source, it holds
-    // whatever was typed into an empty box. Saving it would overwrite the real
-    // flow with that.
     if (!document || !dirty || saving || loadError || cloudFolder || useFlowStore.getState().readOnly) return
     setSaving(true)
     try {
       const updated = await flowApi.saveSource(document.id, source, memberFile)
-      // Same-flow refresh: preserve subflow/chat/selection.
       useFlowStore.getState().applyRemoteDocumentUpdate(updated)
       setOriginal(source)
-      // Best-effort re-analysis so findings reflect the edited source —
-      // targeted at the SAVED flow, not whatever is active when it lands.
       try {
         const r = await analysisApi.analyzeFlowById(updated.id)
         if (r) setReport(updated.id, r as AnalysisReport)
       } catch {
-        /* re-analysis is best-effort */
       }
       toast.success(tf('source.saved'), {description: tf('source.savedBody')})
     } catch (err) {
-      toast.error(tf('source.saveFailed'), {description: String(err)})
+      toast.error(tf('source.saveFailed'), {description: getErrorMessage(err)})
     } finally {
       setSaving(false)
     }
@@ -248,10 +187,6 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     textareaRef.current?.focus()
   }, [original, setSource])
 
-  // handleInsertAction appends a composed action line to the end of the LAST
-  // subflow region (the structured-editing slice): users who don't know PAD's
-  // text format still build flows; power users see the raw line in the
-  // editor before saving.
   const handleInsertAction = useCallback(
     (line: string) => {
       setSource(prev => insertBeforeLastRegionEnd(prev, line))
@@ -261,7 +196,6 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     [setSource],
   )
 
-  // Guard: confirm before discarding unsaved edits when switching to Block view.
   const handleClose = useCallback(async () => {
     if (dirty) {
       const ok = await confirm({
@@ -275,7 +209,6 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
     onClose()
   }, [dirty, confirm, onClose, t])
 
-  // Ctrl+S / Cmd+S keyboard shortcut for save.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -318,7 +251,6 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
 
   return (
     <div className="flex flex-col h-full bg-surface-1">
-      {/* Toolbar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border-subtle bg-surface-2">
         <div className="flex items-center gap-2 text-xs text-text-tertiary">
           <Code2 size={14} />
@@ -369,7 +301,6 @@ export default function SourceEditor({onClose}: SourceEditorProps) {
 
       {addingAction && <AddActionForm onInsert={handleInsertAction} onClose={() => setAddingAction(false)} />}
 
-      {/* Editor: line-number gutter + textarea (the gutter follows the textarea's scroll) */}
       <div className="flex flex-1 overflow-hidden font-mono text-xs">
         <LineGutter lineCount={lineCount} textareaRef={textareaRef} />
         <textarea

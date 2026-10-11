@@ -1,8 +1,7 @@
 import {getErrorMessage} from '@/lib/getErrorMessage'
-import {useRef, useEffect, useState} from 'react'
+import {useRef, useEffect, useState, useCallback} from 'react'
 import {useTranslation} from 'react-i18next'
 import cytoscape from 'cytoscape'
-// @ts-expect-error cytoscape-dagre has no types
 import dagre from 'cytoscape-dagre'
 import {Loader2, AlertTriangle, RefreshCw} from 'lucide-react'
 import {analysisApi} from '@/api'
@@ -12,8 +11,6 @@ import type {DependencyAnalysis} from '@/types'
 
 cytoscape.use(dagre)
 
-// The theme-derived stylesheet, read from the CSS variables on <html> at the
-// time of the call.
 function buildStyle(): cytoscape.StylesheetJson {
   const cs = getComputedStyle(document.documentElement)
   const cssVar = (v: string) => cs.getPropertyValue(v).trim()
@@ -65,18 +62,8 @@ function buildStyle(): cytoscape.StylesheetJson {
   ]
 }
 
-// RelatedRulesResponse is the dependencies payload plus the provenance fields
-// the backend now sends. Kept local: the shared DependencyAnalysis type is
-// unchanged, and the fields are optional so an older backend still renders.
 type RelatedRulesResponse = DependencyAnalysis & {editorial?: boolean; description?: string}
 
-// RuleDependencyView renders the analyzer's "related rules" map
-// (GET /api/analysis/dependencies): a hand-maintained, editorial list of rule
-// pairs whose findings are worth reviewing together, drawn as a graph. Rules
-// run independently, so this is NOT an execution-order dependency graph — the
-// payload says so (`editorial: true` + `description`), and so does the header.
-// A cycle in the map is a map-authoring error, not an analyzer fault. Static:
-// not flow-specific.
 export default function RuleDependencyView() {
   const {t} = useTranslation('analyzer')
   const containerRef = useRef<HTMLDivElement>(null)
@@ -88,12 +75,9 @@ export default function RuleDependencyView() {
   const resolvedTheme = useUIStore(s => s.resolvedTheme)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
 
-  // renderGraph paints a fetched map into the current cytoscape instance.
-  const renderGraph = (dep: DependencyAnalysis) => {
+  const renderGraph = useCallback((dep: DependencyAnalysis) => {
     const cy = cyRef.current
     if (!cy) return
-    // Nodes: every rule in the topo order (so isolated rules appear too),
-    // plus any rule referenced by an edge not in the order (defensive).
     const nodeIds = new Set<string>(dep.topoOrder ?? [])
     for (const d of dep.dependencies ?? []) {
       nodeIds.add(d.fromRuleId)
@@ -124,12 +108,9 @@ export default function RuleDependencyView() {
       animationDuration: 400,
     } as cytoscape.LayoutOptions).run()
     cy.fit(undefined, 40)
-  }
+  }, [])
 
-  // load fetches the related-rules map and renders it into the cytoscape
-  // instance. Declared before the instance-creation effect so that effect can
-  // call it for the initial paint without tripping no-use-before-define.
-  const load = async () => {
+  const load = useCallback(async () => {
     const inst = cyRef.current
     setLoading(true)
     setError(null)
@@ -145,10 +126,8 @@ export default function RuleDependencyView() {
     } finally {
       if (cyRef.current === inst) setLoading(false)
     }
-  }
+  }, [renderGraph])
 
-  // Build the cytoscape instance once per mount; the initial fetch runs once
-  // the instance is ready. Theme changes restyle it in place (below).
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -162,7 +141,6 @@ export default function RuleDependencyView() {
     instance.on('tap', 'node', (evt: cytoscape.EventObject) => {
       setSelected(evt.target.id())
     })
-    // Clicking empty canvas deselects.
     instance.on('tap', (evt: cytoscape.EventObject) => {
       if (evt.target === instance) setSelected(null)
     })
@@ -173,14 +151,8 @@ export default function RuleDependencyView() {
       instance.destroy()
       cyRef.current = null
     }
-    // `load` is a plain function redeclared each render; listing it would tear
-    // down and rebuild the cytoscape instance every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [load])
 
-  // The stylesheet is derived from the theme's CSS vars: a theme change
-  // restyles the instance in place (same nodes, same layout) instead of
-  // rebuilding it, which re-ran the layout animation.
   const styledFor = useRef(resolvedTheme)
   useEffect(() => {
     if (styledFor.current === resolvedTheme) return
@@ -196,7 +168,6 @@ export default function RuleDependencyView() {
     <div className="relative w-full h-full bg-surface-1">
       <div ref={containerRef} className="absolute inset-0" />
 
-      {/* Header overlay */}
       <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none">
         <div className="flex items-center gap-2 pointer-events-auto">
           <button
@@ -224,7 +195,6 @@ export default function RuleDependencyView() {
         </button>
       </div>
 
-      {/* Provenance: this is an editorial map, not an analyzer-derived graph. */}
       <p className="absolute top-11 left-3 right-3 text-2xs text-text-tertiary pointer-events-none">
         {data?.description || t('dependencies.editorialNote')}
       </p>
@@ -241,7 +211,6 @@ export default function RuleDependencyView() {
         </div>
       )}
 
-      {/* Cycle warning */}
       {hasCycles && !loading && (
         <div className="absolute top-16 left-3 right-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400 pointer-events-none">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
@@ -257,7 +226,6 @@ export default function RuleDependencyView() {
         </div>
       )}
 
-      {/* Side panel: selected node's relationships */}
       {selected && data && (
         <div className="absolute bottom-3 left-3 w-72 max-w-[80%] p-3 rounded-lg bg-surface-2/90 border border-border-subtle backdrop-blur-sm text-xs">
           <div className="flex items-center justify-between mb-2">
@@ -289,7 +257,6 @@ export default function RuleDependencyView() {
         </div>
       )}
 
-      {/* Legend */}
       <div className="absolute bottom-3 right-3 flex flex-col gap-1 text-2xs text-text-tertiary bg-surface-2/80 border border-border-subtle rounded-lg px-2.5 py-2 backdrop-blur-sm pointer-events-none">
         <div className="flex items-center gap-1.5">
           <span className="w-3 h-3 rounded-sm border-2 border-red-500" /> {t('dependencies.legendInCycle')}
@@ -302,8 +269,6 @@ export default function RuleDependencyView() {
   )
 }
 
-// shortReason trims a relation's reason for the edge label (full text is in the
-// side panel when a connected node is tapped).
 function shortReason(r: string): string {
   if (!r) return ''
   return r.length > 24 ? r.slice(0, 23) + '…' : r

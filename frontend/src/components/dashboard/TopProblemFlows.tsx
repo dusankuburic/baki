@@ -4,8 +4,6 @@ import {formatCount} from '@/lib/format'
 import {scoreColor} from '@/lib/scoring'
 import type {DashboardStats} from '@/types'
 
-// TopProblemFlows renders the worst-health flows from the aggregate stats.
-// Extracted from AnalyticsDashboard; pure/presentational.
 export function TopProblemFlows({flows}: {flows: NonNullable<DashboardStats['topProblemFlows']>}) {
   if (!flows || flows.length === 0) return null
   return (

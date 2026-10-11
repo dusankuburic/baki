@@ -2,15 +2,6 @@ import {test, expect, Page, Route} from '@playwright/test'
 import {setupAuthenticatedPage, mockDashboardHome} from './helpers'
 import {WIDTHS} from './chartChecks'
 
-/**
- * Admin Dashboard E2E. The user table asks the server for ten rows a page
- * and the audit log for fifteen (plus one to learn whether a next page
- * exists), every filter restarts from the first page, a role change is
- * confirmed once and sent as PUT, the section nav lands focus on the
- * section, and — the layout being keyed to the main pane's width — nothing
- * overflows sideways at any width.
- */
-
 type Recorded = {path: string; params: URLSearchParams; method: string; body: unknown}
 
 const USERS = Array.from({length: 17}, (_, i) => {
@@ -37,7 +28,6 @@ const ACTIONS = [
   'org_channel_save',
 ]
 
-// 40 events: every fifth one a failed sign-in whose subject is the tester.
 const EVENTS = Array.from({length: 40}, (_, i) => {
   const failure = i % 5 === 0
   return {
@@ -131,8 +121,6 @@ function last(calls: Recorded[], path: string): Recorded {
   return hit
 }
 
-// The shell never moves: the document has no scroll offset and no hidden
-// scroll range (see analytics.spec.ts).
 async function shellStill(page: Page) {
   const doc = await page.evaluate(() => ({
     top: document.documentElement.scrollTop,
@@ -174,7 +162,6 @@ test.describe('Admin Dashboard', () => {
     await openAdmin(page)
 
     await page.getByRole('textbox', {name: 'Search by email or name'}).fill('ali')
-    // user5 is on the first page too: wait for the filtered page before reading the request.
     await expect(page.getByRole('navigation', {name: 'Users pagination'})).toContainText('Showing 1–1 of 1')
     await expect(page.getByText('user5@example.com')).toBeVisible()
     expect(last(calls, '/api/admin/users/list').params.get('q')).toBe('ali')
@@ -189,8 +176,6 @@ test.describe('Admin Dashboard', () => {
     await page.getByRole('button', {name: 'All, 17 users'}).click()
     await expect(page.getByText('bob@example.com')).toBeVisible()
 
-    // The account without a valid role is shown as unassigned, with a
-    // placeholder in its select rather than the first option.
     await page.getByRole('navigation', {name: 'Users pagination'}).getByRole('button', {name: 'Next page'}).click()
     const unassigned = page.getByLabel('Change role for user17@example.com')
     await expect(unassigned).toHaveValue('')
@@ -232,7 +217,6 @@ test.describe('Admin Dashboard', () => {
     expect(filtered.params.get('offset')).toBe('0')
     await expect(nav).toContainText('Showing 1–8')
 
-    // A row's details reveal its metadata.
     await page.getByRole('button', {name: 'Show details'}).first().click()
     await expect(page.getByText('invalid_password')).toBeVisible()
   })
@@ -250,13 +234,11 @@ test.describe('Admin Dashboard', () => {
     await expect(heading).toBeInViewport()
     await shellStill(page)
 
-    // A user row's "View activity" filters the log by that user and lands there.
     await nav.getByRole('button', {name: 'Users'}).click()
     await expect(page.getByRole('heading', {level: 2, name: 'Users'})).toBeInViewport()
     await page.getByRole('button', {name: 'View activity'}).first().click()
     await expect(page.getByRole('textbox', {name: 'Filter by user ID'})).toHaveValue('user-1')
     await expect(heading).toBeInViewport()
-    // The subject of a failed sign-in counts as that user's activity too.
     await expect(page.getByRole('cell', {name: 'Failed sign-in'}).first()).toBeVisible()
     await shellStill(page)
   })

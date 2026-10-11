@@ -1,4 +1,4 @@
-import {getErrorCode} from '@/lib/getErrorMessage'
+import {getErrorCode, getErrorMessage} from '@/lib/getErrorMessage'
 import {useState, useMemo, useRef, useEffect} from 'react'
 import {useOrgStore} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
@@ -18,17 +18,9 @@ interface KnowledgeDoc {
   createdAt: string
   chunkCount?: number
   vectorIndexed?: number
-  // Chunks embedded under another embedding model than the viewer's: the
-  // same width, so counted as searchable, but never found by their searches
-  // (ADR 0027). Absent when none.
   embeddingStranded?: number
 }
 
-// POST /api/orgs/{id}/knowledge/reindex. `truncated`: the request exhausted
-// its chunk budget (10 000) with documents still waiting; the admin runs it
-// again to continue. `nextCursor` (resumable servers): each request commits
-// one page and names where the next starts — the client posts again with
-// `{force, cursor: nextCursor}` until it is absent. Opaque to the client.
 interface ReindexResult {
   chunks: number
   docs: number
@@ -40,21 +32,10 @@ function isAbortError(e: unknown): boolean {
   return (e instanceof DOMException || e instanceof Error) && e.name === 'AbortError'
 }
 
-// isReindexCursor narrows an error envelope's details.nextCursor: an
-// object (the server sends {docId, id}), absent on errors that committed
-// nothing.
 function isReindexCursor(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object'
 }
 
-// Upload and re-index failures whose server message is the thing to show:
-// the embedding provider's own verdict (rate limit, missing role, bad key,
-// rejected input) and the corpus lock (another upload or re-index is in
-// flight). EMBEDDING_PROVIDER_UNAVAILABLE (503) gets fixed copy instead —
-// its message is transport detail.
-// Upload and re-index embed whole documents in one request: the server gives
-// them a 5-minute deadline (vs. the 30-second default elsewhere), so the
-// client waits out that deadline plus a margin rather than aborting first.
 const KNOWLEDGE_BULK_TIMEOUT_MS = 5 * 60_000 + 30_000
 
 const VERBATIM_ERROR_CODES = new Set([
@@ -63,16 +44,9 @@ const VERBATIM_ERROR_CODES = new Set([
   'EMBEDDING_PERMISSION_DENIED',
   'EMBEDDING_AUTH_FAILED',
   'EMBEDDING_PROVIDER_REJECTED',
-  // The organisation's daily AI budget is spent (429); the message carries
-  // the figures.
   'BUDGET_EXCEEDED',
-  // The document chunks to more passages than one upload may index
-  // (the server message carries the figures).
   'KNOWLEDGE_DOCUMENT_TOO_LARGE',
-  // The org's shared Azure credential names no embedding deployment
-  // (the server message tells the org admin what to add).
   'EMBEDDING_ORG_NOT_CONFIGURED',
-  // The budget could not be checked (503); the server message says why.
   'BUDGET_UNAVAILABLE',
 ])
 
@@ -84,8 +58,6 @@ export default function KnowledgeBasePanel() {
   const activeOrg = useMemo(() => organisations.find(o => o.id === activeOrgId), [organisations, activeOrgId])
   const canManage = useMemo(() => {
     if (!activeOrg || !currentUser) return false
-    // Admin only: upload/delete/re-index are admin-gated server-side
-    // (requireAdmin); showing members those controls just produced 403s.
     const membership = activeOrg.members.find(m => m.userId === currentUser.id)
     return membership?.role === 'admin'
   }, [activeOrg, currentUser])
@@ -93,28 +65,14 @@ export default function KnowledgeBasePanel() {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  // Mirrors the backend's maxKnowledgeUploadBytes (1 MiB decoded content) —
-  // the old parser.maxFileSizeMB label (50 MB default) let files pass the
-  // client check and then 413 at the server.
   const MAX_UPLOAD_BYTES = 1024 * 1024
   const [reindexing, setReindexing] = useState(false)
-  // Chunks re-indexed so far by a multi-request (cursor) re-index; null
-  // before the first page lands.
   const [reindexProgress, setReindexProgress] = useState<number | null>(null)
-  // Stops a running re-index: aborts the in-flight page, and with it the
-  // loop. Pages already answered stay committed server-side.
   const reindexAbortRef = useRef<AbortController | null>(null)
-  // Where a stopped or failed run can continue from: the resume
-  // cursor of the last committed page — or the one the server's error
-  // details carried — plus the force the run settled on. Null while no
-  // run is resumable.
   const [resumable, setResumable] = useState<{cursor: Record<string, unknown>; force: boolean} | null>(null)
   useEffect(() => () => reindexAbortRef.current?.abort(), [])
   const {confirm} = useConfirm()
   const {success: toastSuccess, error: toastError, info: toastInfo} = useToast()
-  // A confirmed change of the Azure AI Foundry knowledge-base model (AI
-  // Accounts, the organisation's or a personal one): the corpus refuses
-  // uploads until it is re-indexed, so the panel asks for that.
   const modelChanged = useAzureFoundryStore(
     s =>
       !!activeOrgId &&
@@ -143,13 +101,10 @@ export default function KnowledgeBasePanel() {
   const docs = data ?? []
   const loadError = fetchError ? t('knowledge.loadFailed') : null
 
-  // providerVerdict maps an upload/re-index failure to the text to show, or
-  // null when it is not one of the embedding-provider outcomes both share.
   const providerVerdict = (e: unknown): string | null => {
     if (!(e instanceof ApiError) || !e.code) return null
     if (VERBATIM_ERROR_CODES.has(e.code)) return e.message
     if (e.code === 'EMBEDDING_PROVIDER_UNAVAILABLE') return t('knowledge.embeddingUnavailable')
-    // 504: the request hit the server's deadline before any page committed.
     if (e.code === 'KNOWLEDGE_TIMEOUT') return t('knowledge.timeout')
     return null
   }
@@ -175,26 +130,16 @@ export default function KnowledgeBasePanel() {
       toastSuccess(t('knowledge.uploaded'))
       loadDocs()
     } catch (e) {
-      // The most common failure is a missing/unconfigured embedding-provider
-      // key (only OpenAI/Gemini/GLM/GitHub Models/Azure AI Foundry support
-      // embeddings; a Claude-only setup can't index). Surface that root cause
-      // with clear guidance instead of a generic "Upload failed". Classify by
-      // the envelope's machine-readable code first (stable across message
-      // rewording), with the message regex as a fallback for older backends.
       const verdict = providerVerdict(e)
       const embeddingMissing = getErrorCode(e) === 'EMBEDDING_NOT_CONFIGURED' || /embedding provider/i.test(String(e))
       if (verdict) {
-        // Before the message regex: a provider verdict's message mentions
-        // the embedding provider too, and it is not a missing key.
         setUploadError(verdict)
       } else if (embeddingMissing) {
         setUploadError(t('knowledge.embeddingMissingUpload'))
       } else if (e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED') {
-        // 409: the uploader's embedding model is not the corpus's — mixing
-        // them would make the document unfindable for everyone else.
         setUploadError(t('knowledge.modelChangedUpload'))
       } else {
-        setUploadError(t('knowledge.uploadFailedDetail', {message: String(e)}))
+        setUploadError(t('knowledge.uploadFailedDetail', {message: getErrorMessage(e)}))
         toastError(t('knowledge.uploadFailed'))
       }
     } finally {
@@ -243,29 +188,18 @@ export default function KnowledgeBasePanel() {
       })
     setReindexing(true)
     setReindexProgress(null)
-    // Totals across the pages of a resumable re-index. A document can span
-    // pages, so only the chunk total is summed; the document count is shown
-    // for a single-request run only.
     let chunks = 0
     let pages = 0
-    // What a Stop or a failed page would resume from, and the force the
-    // run settled on (a resume must not re-ask the model question).
     let force = resume?.force ?? false
     let lastCursor: Record<string, unknown> | undefined = resume?.cursor
     try {
       let res: ReindexResult
       if (lastCursor) {
-        // A resumed run already settled the model switch: straight to the
-        // cursor, with the force the run used.
         res = await reindex(force, lastCursor)
       } else {
         try {
           res = await reindex(false)
         } catch (e) {
-          // 409: the corpus was indexed with a different embedding model than
-          // the admin's. Re-indexing anyway strands every member on that model,
-          // so it takes a second, explicit confirmation before resending with
-          // force.
           if (getErrorCode(e) !== 'EMBEDDING_MODEL_CHANGED') throw e
           force = await confirm({
             title: t('knowledge.reindexModelChangedTitle'),
@@ -279,8 +213,6 @@ export default function KnowledgeBasePanel() {
       }
       chunks += res?.chunks ?? 0
       pages++
-      // Resumable server: each answer committed its page; keep going from
-      // where it stopped until no cursor comes back.
       lastCursor = res?.nextCursor ?? undefined
       while (lastCursor) {
         setReindexProgress(chunks)
@@ -290,7 +222,6 @@ export default function KnowledgeBasePanel() {
         lastCursor = res?.nextCursor ?? undefined
       }
       if (res?.truncated) {
-        // Not a success: documents are still waiting on the next run.
         toastError(t('knowledge.reindexTruncated', {chunks}))
       } else if (chunks === 0) {
         clearModelChanged()
@@ -306,10 +237,6 @@ export default function KnowledgeBasePanel() {
       loadDocs()
     } catch (e) {
       if (isAbortError(e)) {
-        // Stopped by the admin (or the panel closed): the pages that were
-        // answered stay re-indexed and resumable — no restart from the top.
-        // Stopped before the first page answered, there is no cursor to
-        // resume from: the toast says to run Re-index again instead.
         toastInfo(
           lastCursor
             ? t('knowledge.reindexStopped', {count: chunks})
@@ -320,20 +247,11 @@ export default function KnowledgeBasePanel() {
         return
       }
       logger.warn(e)
-      // A later page refused because the admin's embedding model is not the one
-      // that converted the earlier pages (the model changed mid-run): the run
-      // has to start over, so say that instead of a bare failure. A resumed
-      // run's first page is a later page too — its earlier pages were
-      // committed by the run it resumes.
       const midRunModelChange = (pages > 0 || !!resume) && getErrorCode(e) === 'EMBEDDING_MODEL_CHANGED'
       const verdict = midRunModelChange ? t('knowledge.reindexModelChangedMidRun') : providerVerdict(e)
       const embeddingMissing = getErrorCode(e) === 'EMBEDDING_NOT_CONFIGURED' || /embedding provider/i.test(String(e))
       toastError(verdict ?? (embeddingMissing ? t('knowledge.embeddingMissingReindex') : t('knowledge.reindexFailed')))
-      // Earlier pages of a resumable run were committed before the failure.
       if (pages > 0) loadDocs()
-      // A failed page keeps its progress when a cursor is known: the error
-      // envelope carries one (details.nextCursor), else the last committed
-      // page's cursor. A mid-run model change must start over instead.
       if (!midRunModelChange) {
         const failedAt =
           e instanceof ApiError && isReindexCursor(e.details?.nextCursor) ? e.details.nextCursor : lastCursor

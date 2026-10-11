@@ -1,8 +1,3 @@
-// GET /api/providers/catalog payloads for tests: one entry per registered
-// provider, configured or not, in the server's display order. Shared by the
-// unit tests and the Playwright spec, so both render the same sections. Kept
-// free of app imports so the e2e runner can load it; the shapes mirror
-// types/providers.ts ProviderSpec without naming it.
 
 export interface CatalogFieldFixture {
   name: string
@@ -36,7 +31,6 @@ export const API_KEY_FIELD: CatalogFieldFixture = {
   placeholder: 'sk-…',
 }
 
-/** An api_key provider with the one secret field; override what the case needs. */
 export function providerSpec(over: Partial<CatalogSpecFixture> & {id: string}): CatalogSpecFixture {
   return {
     name: over.id,
@@ -51,7 +45,6 @@ export function providerSpec(over: Partial<CatalogSpecFixture> & {id: string}): 
   }
 }
 
-/** A device-flow provider with the four OAuth routes under /api/providers/<id>/. */
 export function deviceFlowSpec(id: string, over: Partial<CatalogSpecFixture> = {}): CatalogSpecFixture {
   return providerSpec({
     id,
@@ -68,11 +61,6 @@ export function deviceFlowSpec(id: string, over: Partial<CatalogSpecFixture> = {
   })
 }
 
-/**
- * The catalogue the Playwright spec and the panel tests share: a known
- * api_key provider, a provider this bundle does not know (configured, with a
- * help link), and one whose field type the bundle does not know.
- */
 export function mockProviderCatalog(): {providers: CatalogSpecFixture[]} {
   return {
     providers: [

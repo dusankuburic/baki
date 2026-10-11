@@ -11,10 +11,6 @@ vi.mock('@/platform/adapters', () => ({
   }),
 }))
 
-// C2, end to end through the real client: POST /api/keys/has answers
-// {has: boolean}. Read as a bare boolean the envelope is truthy, and every
-// api_key provider showed "API key configured" with Remove — a delete for a
-// key that is not there.
 describe('CredentialForm against the /api/keys/has wire shape', () => {
   afterEach(() => {
     vi.restoreAllMocks()

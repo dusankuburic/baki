@@ -170,9 +170,6 @@ describe('stop()', () => {
     syncManager.enqueue({type: 'block.update'})
     syncManager.stop()
 
-    // Reopening the SAME flow must reload the queue stop() persisted —
-    // previously the stale flowId made start() skip loadFromStorage(),
-    // orphaning the persisted ops.
     syncManager.start('flow-stop-2')
 
     expect(syncManager.getQueue()).toHaveLength(1)
@@ -182,19 +179,15 @@ describe('stop()', () => {
 
 describe('reset()', () => {
   it('clears the in-memory queue AND every persisted per-flow queue', () => {
-    // The active flow persists its own queue...
     syncManager.start('flow-a')
     syncManager.enqueue({type: 'block.update'})
     expect(syncManager.getQueue()).toHaveLength(1)
     expect(localStorage.getItem('baki-sync-queue-flow-a')).not.toBeNull()
-    // ...and an earlier flow left an orphaned persisted queue behind.
     localStorage.setItem('baki-sync-queue-flow-b', JSON.stringify({queue: [], counter: 0}))
 
     syncManager.reset()
 
     expect(syncManager.getQueue()).toHaveLength(0)
-    // Both keys are gone — reset must not leave the previous user's ops behind
-    // on a shared device, including flows other than the active one.
     expect(localStorage.getItem('baki-sync-queue-flow-a')).toBeNull()
     expect(localStorage.getItem('baki-sync-queue-flow-b')).toBeNull()
   })
@@ -211,21 +204,19 @@ describe('reset()', () => {
   })
 })
 
-// ---- A4: drop notification (TTL expiry + overflow are surfaced, not silent) ----
 describe('drop notification', () => {
   it('fires onDroppedOps(expired) when stale ops are dropped on load', () => {
     const flowId = 'flow-drop-expire'
-    // Subscribe BEFORE loading so the load-time TTL drop is observed.
     const drops: Array<{count: number; reason: string}> = []
     const unsub = syncManager.onDroppedOps((count, reason) => drops.push({count, reason}))
 
     const fresh = {id: 'op-fresh', env: {type: 'block.update'}, queuedAt: Date.now()}
     const stale = {id: 'op-stale', env: {type: 'presence.update'}, queuedAt: Date.now() - 120_000}
     localStorage.setItem(`baki-sync-queue-${flowId}`, JSON.stringify({queue: [fresh, stale], counter: 2}))
-    syncManager.start(flowId) // load drops 'stale', fires notifyDropped('expired', 1)
+    syncManager.start(flowId)
 
     expect(drops).toContainEqual({count: 1, reason: 'expired'})
-    expect(syncManager.getQueue()).toHaveLength(1) // only fresh remains
+    expect(syncManager.getQueue()).toHaveLength(1)
     unsub()
   })
 
@@ -235,12 +226,10 @@ describe('drop notification', () => {
     const drops: Array<{count: number; reason: string}> = []
     const unsub = syncManager.onDroppedOps((count, reason) => drops.push({count, reason}))
 
-    // Enqueue well past MAX_QUEUE_SIZE; the overflow handler must fire.
     mockStatus.value = 'disconnected'
     for (let i = 0; i < 205; i++) syncManager.enqueue({type: 'block.update'})
 
     expect(drops.some(d => d.reason === 'overflow' && d.count >= 1)).toBe(true)
-    // Queue is capped at MAX_QUEUE_SIZE (200).
     expect(syncManager.getQueue().length).toBeLessThanOrEqual(200)
     unsub()
   })
@@ -252,7 +241,6 @@ describe('drop notification', () => {
     const unsub = syncManager.onDroppedOps(count => calls.push(count))
     unsub()
 
-    // Force an overflow; the unsubscribed handler must not fire.
     mockStatus.value = 'disconnected'
     for (let i = 0; i < 205; i++) syncManager.enqueue({type: 'block.update'})
     expect(calls).toHaveLength(0)

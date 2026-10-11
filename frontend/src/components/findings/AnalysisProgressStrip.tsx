@@ -1,14 +1,6 @@
 import {useTranslation} from 'react-i18next'
 import {Spinner} from '@/components/shared'
 
-// AnalysisProgressStrip is the NON-BLOCKING re-analysis indicator (U1.1): the
-// stale findings list stays mounted (scroll position, filters, and expanded
-// groups survive) and this slim strip runs above it while a new analysis is
-// in flight. Contrast with AnalysisRunner, which owns the PRE-report states
-// (no report yet → CTA; initial analysis → full-pane spinner).
-//
-// total === 0 means no progress events have arrived yet (or the run doesn't
-// emit them) — that's INDETERMINATE, not "0%".
 export function analysisPercent(progress: {current: number; total: number}): number | null {
   return progress.total > 0 ? Math.min(100, Math.round((progress.current / progress.total) * 100)) : null
 }

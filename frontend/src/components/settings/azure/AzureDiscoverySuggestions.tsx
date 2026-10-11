@@ -14,35 +14,21 @@ import {modelKindLabelKey} from '@/lib/modelPurpose'
 import type {AzureConnection, AzureDiscoveryItem, AzureScope} from '@/types'
 import {discoveryItemKey, focusKey, unaddedCounts, unaddedItems} from './registryView'
 
-/** A quick add's outcome: done, or why not (shown on the item's row). */
 export type QuickAddResult = {ok: true} | {ok: false; error: string}
 
 interface AzureDiscoverySuggestionsProps {
   scope: AzureScope
   connection: AzureConnection
-  /** Open from the start: a resource without models, or one just added. */
   defaultExpanded: boolean
-  /** Adding is refused (the model limit): the add buttons are off and this says why. */
   addBlockedReason?: string
-  /** Adds one item with the defaults (display name = name, purpose General). */
   onQuickAdd: (item: AzureDiscoveryItem) => Promise<QuickAddResult>
-  /** Adds every item not in the registry yet, one after the other. */
   onAddAll: (items: AzureDiscoveryItem[]) => Promise<Record<string, string>>
-  /** "Add with details…": the Model modal, pre-filled. */
   onAddWithDetails: (item: AzureDiscoveryItem) => void
-  /** Stops suggesting (the resource's "Found in your project" prompt). */
   onDismiss: () => void
 }
 
 type RowState = {phase: 'adding'} | {phase: 'failed'; error: string}
 
-// What discovery found on a resource with Entra ID (or the Azure CLI) and a
-// project endpoint — deployments and agents the registry does not hold yet.
-// Rows read "name · kind · model · window"; [Add] quick-adds with the
-// defaults, "Add with details…" opens the pre-filled Model modal, [Add all]
-// adds every row. An added row flips to "Added" (the store marks the
-// discovery), and a quick add that fails says why on its own row. A failed
-// discovery shows the reason with Retry: adding by name still works.
 export default function AzureDiscoverySuggestions({
   scope,
   connection,
@@ -63,8 +49,6 @@ export default function AzureDiscoverySuggestions({
   const [rows, setRows] = useState<Record<string, RowState>>({})
   const [addingAll, setAddingAll] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
-  // Where focus goes once the control that had it is gone (an added row's
-  // Add, a finished Add all): a data-focus key inside this block.
   const [pendingFocus, setPendingFocus] = useState<string | null>(null)
 
   const uid = useId()
@@ -73,14 +57,9 @@ export default function AzureDiscoverySuggestions({
 
   const run = (force: boolean) => {
     discover(scope, connection.id, {force}).catch(() => {
-      // The failure is in the store's discovery state, shown below.
     })
   }
 
-  // A resource without models, one whose project the server suggests
-  // reviewing, and one just added look right away; otherwise discovery runs
-  // when the list is first shown. Cached for 5 minutes by the store.
-  // (`scope` is the panel's memoised object, stable per scope.)
   const auto = connection.modelCount === 0 || connection.suggestDiscovery || defaultExpanded
   useEffect(() => {
     if (auto) discover(scope, connection.id).catch(() => {})
@@ -103,7 +82,6 @@ export default function AzureDiscoverySuggestions({
   const unadded = unaddedItems(data)
   const counts = unaddedCounts(data)
   const canAdd = !addBlockedReason
-  // The toggle reads "Review" while the server suggests looking.
   const review = connection.suggestDiscovery && unadded.length > 0
 
   const toggle = () => {
@@ -127,8 +105,6 @@ export default function AzureDiscoverySuggestions({
     })
   })()
 
-  // After an item is added its Add goes away: focus moves to the next item
-  // still to add, else to the Show/Hide toggle.
   const focusAfterAdd = (key: string): string => {
     const order = unadded.map(discoveryItemKey)
     const at = order.indexOf(key)
@@ -136,9 +112,6 @@ export default function AzureDiscoverySuggestions({
     return next ? focusKey.discoveryAdd(connection.id, next) : focusKey.discoveryToggle(connection.id)
   }
 
-  // The host announces the outcome (a refusal as an alert). A refused item
-  // keeps its Add — busy while the request ran, so focus may have dropped
-  // off it — and focus goes back there, where the row's reason describes it.
   const quickAdd = async (item: AzureDiscoveryItem) => {
     const key = discoveryItemKey(item)
     setRows(prev => ({...prev, [key]: {phase: 'adding'}}))
@@ -170,7 +143,6 @@ export default function AzureDiscoverySuggestions({
           {loading && <Loader2 size={12} aria-hidden="true" className="mr-1 inline animate-spin" />}
           {summary}
         </p>
-        {/* Each resource card has these: their names say whose they are. */}
         {canAdd && unadded.length > 0 && (
           <Button
             size="sm"
@@ -255,7 +227,6 @@ export default function AzureDiscoverySuggestions({
                   const key = discoveryItemKey(item)
                   const row = rows[key]
                   const kind = t(modelKindLabelKey(item.kind), {ns: 'common'})
-                  // By position: a name may hold spaces, which an id list can't.
                   const errorId = `${uid}-item-${index}-error`
                   return (
                     <li key={key} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">

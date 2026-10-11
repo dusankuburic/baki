@@ -74,12 +74,10 @@ describe('LiveToolTrail', () => {
 
     expect(screen.getByTestId('live-tool-trail')).toBeInTheDocument()
     expect(screen.getByText('Searching flow…')).toBeInTheDocument()
-    // Only the LAST 3 finished calls render (read_doc dropped).
     expect(screen.queryByText('Reading document')).not.toBeInTheDocument()
     expect(screen.getByText('Listing findings')).toBeInTheDocument()
     expect(screen.getByText('Searching flow')).toBeInTheDocument()
     expect(screen.getByText('Reading block')).toBeInTheDocument()
-    // Duration rendering + fail dot semantics.
     expect(screen.getByRole('img', {name: 'failed'})).toBeInTheDocument()
     expect(screen.getAllByRole('img', {name: 'succeeded'})).toHaveLength(2)
   })
@@ -139,7 +137,6 @@ describe('LiveToolTrail expand (V1.3)', () => {
     act(() => {
       vi.advanceTimersByTime(500)
     })
-    // 5 total, 3 shown → 2 hidden.
     const expand = screen.getByTestId('tool-trail-expand')
     expect(expand).toHaveTextContent('2 earlier')
     act(() => {
@@ -147,7 +144,6 @@ describe('LiveToolTrail expand (V1.3)', () => {
       vi.advanceTimersByTime(500)
     })
     expect(screen.getByTestId('tool-trail-collapse')).toBeInTheDocument()
-    // Expanded shows the earliest call too.
     expect(screen.getByText(/tool1/)).toBeInTheDocument()
     expect(screen.queryByTestId('tool-trail-expand')).toBeNull()
   })

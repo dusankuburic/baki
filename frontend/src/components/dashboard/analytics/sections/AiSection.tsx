@@ -19,15 +19,6 @@ interface ProviderRow extends HBarRow {
   tokensOut: number
 }
 
-// The picker's labels, not the internal routing ids: `agent:<x>` renders
-// as "Agent · <x>" and `claude:<x>` as "<x> · Claude" (no other
-// provider mints colon-prefixed model ids). "· served" is appended only
-// when the model that answered differs from what was asked for (an Azure
-// AI Foundry deployment alias, model router or agent) — compared against
-// the RAW id, not the mapped label. Rows are grouped by the served model,
-// so the same deployment can appear once per model it was routed to. The
-// CSV export uses this same label (the display IS the export); the raw id
-// stays recoverable from the model picker.
 export function modelLabel(t: TFunction<'dashboard'>, r: Pick<ModelUsage, 'model' | 'servedModel'>): string {
   const raw = r.model
   const id = raw.startsWith('agent:')
@@ -38,11 +29,6 @@ export function modelLabel(t: TFunction<'dashboard'>, r: Pick<ModelUsage, 'model
   return r.servedModel && r.servedModel !== raw ? `${id} · ${r.servedModel}` : id
 }
 
-// Azure AI Foundry usage is not priced by baki (the cost lives in the Azure
-// portal): its cost cells show an em dash, named "Not priced by baki" for
-// assistive tech, instead of a misleading $0.00, and its bar is left out of
-// the cost chart (the bar's value label and tooltip would read $0.00). The
-// CSV export keeps the raw number.
 const isUnpriced = (provider: string) => provider === 'azure-foundry'
 
 function ProviderCost({provider, cost}: {provider: string; cost: number}) {
@@ -57,8 +43,6 @@ function ProviderCost({provider, cost}: {provider: string; cost: number}) {
   )
 }
 
-// Model calls, tokens and spend for the account and/or the scoped orgs. Usage
-// is never tied to flows, and the section says so.
 export function AiSection({data, refetching}: {data: DashboardAnalyticsData; refetching: boolean}) {
   const {t} = useTranslation('dashboard')
   const theme = useChartTheme()

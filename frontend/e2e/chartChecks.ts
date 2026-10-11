@@ -1,9 +1,5 @@
 import type {Page} from '@playwright/test'
 
-// Geometry checks shared by the dashboard specs: the page scroller and every
-// card must contain their content sideways, and every axis tick must sit
-// inside its chart's svg (a tick that starts left of the svg is the clipped
-// "100" → "0" bug the old cards had).
 export function chartLayoutMetrics(page: Page, scrollerSelector: string) {
   return page.evaluate(sel => {
     const scroller = document.querySelector<HTMLElement>(sel)

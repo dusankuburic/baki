@@ -25,11 +25,6 @@ interface SectionDef {
   findings: Finding[]
 }
 
-// Flattened render rows — the row model FindingsList uses, so all three
-// sections go through ONE virtualizer: a header per section and, while it is
-// open, one row per finding (or a single "none" row). Mounting a FindingCard
-// per finding made the diff of a large flow unusable: 3,000 new findings took
-// ~6 s to mount, and every one of them stayed mounted.
 type Row =
   | {kind: 'header'; section: SectionDef; open: boolean; sectionEnd: boolean}
   | {kind: 'empty'; section: SectionDef}
@@ -41,12 +36,8 @@ function rowKey(row: Row): string {
   return `${row.section.key}-${row.finding.id}`
 }
 
-// AnalysisDiffView shows the findings-level delta between the previous and
-// current analysis run: what's new, what got fixed, what persists.
 export default function AnalysisDiffView({diff, blockLookup, onBack, onFixWithAI}: Props) {
   const {t} = useTranslation('findings')
-  // Persisted findings are the bulk of a re-run and rarely what the user came
-  // for, so that section starts collapsed.
   const [closed, setClosed] = useState<Set<SectionKey>>(() => new Set(['persisted']))
 
   const sections = useMemo<SectionDef[]>(

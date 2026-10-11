@@ -52,8 +52,6 @@ describe('parseChatEvent', () => {
   it('omits served-model fields that are absent, empty or of the wrong type', () => {
     const plain = parseChatEvent({streamId: 's1', type: 'done', data: {tokensOut: 1, tokensIn: 1}})
     expect(plain).toEqual({kind: 'done', tokensOut: 1, tokensIn: 1, chunks: undefined})
-    // toEqual ignores undefined-valued keys: check the keys are really absent
-    // (the commit copies only defined fields onto the message).
     expect(Object.keys(plain!)).toEqual(['kind', 'tokensOut', 'tokensIn', 'chunks'])
 
     const junk = parseChatEvent({
@@ -116,8 +114,6 @@ describe('parseChatEvent', () => {
         },
       ],
     })
-    // Batch: items[] pass through with per-item defaults; missing optional
-    // fields degrade per item.
     expect(
       parseChatEvent({
         streamId: 's1',
@@ -163,7 +159,6 @@ describe('parseChatEvent', () => {
         {ruleId: 'r2', status: 'error', message: 'boom'},
       ],
     })
-    // Items missing ruleId/status drop; no items → undefined.
     expect(
       parseChatEvent({
         streamId: 's1',
@@ -220,8 +215,6 @@ describe('parseChatEvent', () => {
         message: undefined,
         items: undefined,
       },
-      // Chunks parse (a well-formed event) though the backend journal never
-      // records them — the replay consumer ignores non-agentic kinds.
       {kind: 'chunk', content: 'not replayable'},
     ])
     expect(parseResumeEvents(undefined)).toEqual([])
@@ -257,8 +250,6 @@ describe('parseChatEvent', () => {
       durationMs: 12,
       summary: '3 matches',
     })
-    // Missing fields degrade: label falls back to name, ok is only ever true
-    // when the wire said so, duration defaults 0, summary ''.
     expect(parseChatEvent({streamId: 's1', type: 'tool_result', data: {name: 'read_doc'}})).toEqual({
       kind: 'tool-result',
       name: 'read_doc',
@@ -271,7 +262,6 @@ describe('parseChatEvent', () => {
   })
 
   it('drops malformed payloads instead of casting them into the store', () => {
-    // A proxy error page / different event's shape / truncated JSON.
     expect(parseChatEvent(null)).toBeNull()
     expect(parseChatEvent('<html>err</html>')).toBeNull()
     expect(parseChatEvent([])).toBeNull()
@@ -279,7 +269,6 @@ describe('parseChatEvent', () => {
     expect(parseChatEvent({streamId: '', type: 'chunk'})).toBeNull()
     expect(parseChatEvent({streamId: 's1', type: 'surprise'})).toBeNull()
     expect(parseChatEvent({streamId: 's1'})).toBeNull()
-    // Non-finite numbers must not leak into token accounting.
     expect(parseChatEvent({streamId: 's1', type: 'done', data: {tokensOut: 'lots'}})).toEqual({
       kind: 'done',
       tokensOut: 0,
@@ -319,8 +308,6 @@ describe('parseChatEvent failure codes and keepalives', () => {
     expect(parseChatEvent({streamId: 's1', type: 'heartbeat', data: {}})).toEqual({kind: 'heartbeat'})
   })
 
-  // A BILLED failure carries its usage — the exact fields a done
-  // carries (minus chunks), so the meter can count it.
   it('carries the usage of a billed error event', () => {
     expect(
       parseChatEvent({
@@ -355,7 +342,6 @@ describe('parseChatEvent failure codes and keepalives', () => {
     expect(parsed).toEqual({kind: 'error', message: 'x', code: 'PROVIDER_AUTH'})
   })
 
-  // The shared-credential flag rides the error event.
   it('keeps the shared flag of a shared-credential error event', () => {
     expect(
       parseChatEvent({
@@ -371,10 +357,6 @@ describe('parseChatEvent failure codes and keepalives', () => {
   })
 })
 
-// Phase 4b: a request carries the tool, its preview kind, the scope it needs
-// and always items[]; an older server sends none of them. The same payload
-// may later arrive as approval_request / approval_decision, whose decision
-// goes to another route (source).
 describe('parseChatEvent approvals', () => {
   it('reads tool, previewKind, requiredScope and items[] off a fix_proposal', () => {
     expect(
@@ -424,9 +406,6 @@ describe('parseChatEvent approvals', () => {
   })
 
   it('parses approval_request/approval_decision; a fix_proposal maps to previewKind fix-patch', () => {
-    // A kind this bundle does not know, with generic items: label and
-    // summary are kept; the fix fields are read from meta when a fix travels
-    // this way and stay empty otherwise.
     expect(
       parseChatEvent({
         streamId: 's1',
@@ -459,18 +438,14 @@ describe('parseChatEvent approvals', () => {
         {id: 'r1', label: 'Call API', ruleId: 'r1', fixType: 'f', blockLabel: 'Call API', line: 3, summary: 'wrap'},
       ],
     })
-    // A fix_proposal without a kind is a fix card.
     expect(parseChatEvent({streamId: 's1', type: 'fix_proposal', data: {proposalId: 'p1', ruleId: 'r'}})).toMatchObject(
       {source: 'fix', previewKind: 'fix-patch'},
     )
-    // So is an approval_request without one: the default is the kind, not
-    // the source.
     expect(
       parseChatEvent({streamId: 's1', type: 'approval_request', data: {proposalId: 'a2', items: [{id: 'x'}]}}),
     ).toMatchObject({source: 'approval', previewKind: 'fix-patch', items: [{id: 'x', label: '', ruleId: ''}]})
     expect(parseChatEvent({streamId: 's1', type: 'approval_request', data: {}})).toBeNull()
 
-    // approval_decision items are keyed by id (a fix item's ruleId).
     expect(
       parseChatEvent({
         streamId: 's1',
@@ -499,11 +474,6 @@ describe('parseChatEvent approvals', () => {
     expect(parseChatEvent({streamId: 's1', type: 'approval_decision', data: {proposalId: 'a1'}})).toBeNull()
   })
 
-  // F1: a batch that fixes the same rule on two blocks. The server stamps
-  // each item with its own id (blockId:ruleId) on the request and on the
-  // decision; an older server sends ruleId alone, and a decision item then
-  // carries no id at all (the engine matches it by position), never one
-  // invented from the rule.
   it('keys decision items by the id the server sent, and invents none from the rule', () => {
     const request = parseChatEvent({
       streamId: 's1',

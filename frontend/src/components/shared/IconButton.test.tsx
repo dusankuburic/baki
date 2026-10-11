@@ -11,8 +11,6 @@ describe('IconButton', () => {
     expect(button.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
   })
 
-  // Dropdown clones aria-haspopup/aria-expanded/aria-controls onto its
-  // trigger; an IconButton trigger used to swallow them.
   it('passes aria-* and data-* attributes through to the <button>', () => {
     render(
       <IconButton

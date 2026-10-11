@@ -32,9 +32,6 @@ vi.mock('@/api', () => ({
   },
 }))
 
-// react-virtuoso renders nothing in jsdom (zero-height scroller), so stub it with
-// a passthrough that renders every row. The tests assert on findings content, not
-// on windowing behaviour.
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({
     data = [],
@@ -148,13 +145,9 @@ describe('re-analysis keeps the list mounted (U1.1)', () => {
   it('shows the stale findings list with a progress strip while analyzing, not the full spinner', async () => {
     useAnalysisStore.setState({isAnalyzing: true, progress: {current: 3, total: 10, ruleName: 'dead-code'}})
     await renderTab()
-    // Stale report content still mounted...
     expect(await screen.findByText('Dead code')).toBeInTheDocument()
-    // ...with the non-blocking strip above it. (ToastProvider also owns a
-    // role="status" live region, so scope by the strip's aria-label.)
     const strip = screen.getByLabelText('Analysis in progress, 30%')
     expect(strip).toHaveTextContent('dead-code')
-    // The full-pane spinner is NOT the view.
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 
@@ -175,7 +168,7 @@ describe('re-analysis keeps the list mounted (U1.1)', () => {
 
   it('does not start a second analysis while one is in flight', async () => {
     useAnalysisStore.setState({isAnalyzing: false})
-    analyzeFlow.mockResolvedValue(new Promise(() => {})) // never settles
+    analyzeFlow.mockResolvedValue(new Promise(() => {}))
     await renderTab()
     const reanalyze = await screen.findByRole('button', {name: /re-?analy/i})
     fireEvent.click(reanalyze)
@@ -192,13 +185,11 @@ describe('snapshot restore (U1.4)', () => {
     restoreSnapshot.mockResolvedValue({document: restored})
     await renderTab()
 
-    // Open the undo popover (the Undo2 icon button) and click the row.
     const undoBtn = await screen.findByRole('button', {name: /undo a fix/i})
     fireEvent.click(undoBtn)
     const row = await screen.findByText('before fix')
     fireEvent.click(row)
     await waitFor(() => expect(restoreSnapshot).toHaveBeenCalledWith('flow-1', 'snap-1'))
-    // Doc swapped + re-analysis fired (the stale-list refresh contract).
     await waitFor(() => expect(analyzeFlow).toHaveBeenCalled())
     expect(useFlowStore.getState().document?.name).toBe('Restored')
   })
@@ -260,9 +251,6 @@ describe('FindingsTab', () => {
     await waitFor(() => expect(screen.queryByText(/Grouped/)).not.toBeInTheDocument())
   })
 
-  // A triage status a newer server added arrives unvalidated, as sent: the
-  // finding stays in view (it filters as open) under a neutral chip, and its
-  // menu offers no reassignment, which would have to repeat that status.
   it('keeps a finding of a triage status this app does not know in view, under a neutral chip', async () => {
     const {analysisApi} = await import('@/api')
     vi.mocked(analysisApi.listFindingStatuses).mockResolvedValueOnce([
@@ -272,7 +260,6 @@ describe('FindingsTab', () => {
     expect(await screen.findByText('Other status')).toBeInTheDocument()
     expect(screen.getByText('Unhandled error')).toBeInTheDocument()
     expect(screen.queryByText(/triage\.status\./)).toBeNull()
-    // Narrowing the status filter to "open" still shows it: it filters as open.
     useAnalysisStore.setState({statusFilter: new Set(['open'])})
     await waitFor(() => expect(screen.getByText('Unhandled error')).toBeInTheDocument())
   })
@@ -293,22 +280,15 @@ describe('FindingsTab', () => {
     })
   })
 
-  // The search input is debounced: typing updates the field immediately but
-  // the (expensive) store-driven filter only runs after the debounce elapses.
   describe('search debounce', () => {
     it('does not filter before the debounce elapses', async () => {
       await renderTab()
       await waitFor(() => expect(screen.getByText('Unhandled error')).toBeInTheDocument())
 
-      // Fake timers AFTER mount so waitFor's polling isn't frozen; only the
-      // debounce setTimeout should be under fake control.
       vi.useFakeTimers()
       const input = screen.getByPlaceholderText('Search findings...')
       fireEvent.change(input, {target: {value: 'zzz-no-match'}})
-      // Input shows the typed value immediately...
       expect(input).toHaveValue('zzz-no-match')
-      // ...but the store (which drives the filter) hasn't been written yet,
-      // so the non-matching list is still rendered.
       expect(useAnalysisStore.getState().findingSearch).toBe('')
       expect(screen.getByText('Unhandled error')).toBeInTheDocument()
 
@@ -323,15 +303,11 @@ describe('FindingsTab', () => {
 
       fireEvent.change(screen.getByPlaceholderText('Search findings...'), {target: {value: 'unhandled'}})
       await waitFor(() => expect(useAnalysisStore.getState().findingSearch).toBe('unhandled'), {timeout: 1000})
-      // Still matches; the non-matching finding is filtered out.
       await waitFor(() => expect(screen.queryByText('Dead code')).not.toBeInTheDocument())
     })
   })
 })
 
-// B2: the category filter used to keep only five known categories, so
-// Portability (hardcoded-filepath/-ip/-url), Syntax (parse-error) and any
-// custom rule's category never showed. It now hides only what the user hid.
 describe('categories and preview findings', () => {
   const finding = (id: string, title: string, over: Partial<Finding> = {}): Finding => ({
     id,
@@ -392,9 +368,7 @@ describe('categories and preview findings', () => {
 
     fireEvent.click(screen.getByTitle('Saved filter views'))
     fireEvent.click(await screen.findByText('Old view'))
-    // It showed Security, Reliability and Logic out of its five: Style and Performance go...
     await waitFor(() => expect(screen.queryByText('Dead code')).not.toBeInTheDocument())
-    // ...and the categories it could not list stay.
     for (const title of ['Hardcoded path', 'Parse error', 'Org naming rule', 'No category']) {
       expect(screen.getByText(title)).toBeInTheDocument()
     }
@@ -404,7 +378,6 @@ describe('categories and preview findings', () => {
     withFindings([
       finding('pv', 'Preview finding', {category: 'Style', stage: 'preview'}),
       finding('st', 'Stable finding', {category: 'Style'}),
-      // A stage a newer server added reads as stable.
       finding('nx', 'Future-stage finding', {category: 'Style', stage: unknownValue('beta')}),
     ])
     await renderTab()

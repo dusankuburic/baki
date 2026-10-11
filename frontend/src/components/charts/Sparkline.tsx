@@ -1,9 +1,6 @@
 import {useId} from 'react'
 import {useChartTheme} from './useChartTheme'
 
-// A 12-point trend under a stat tile: the history in the de-emphasis hue, the
-// current period marked in the accent with a surface ring. Decorative — the
-// tile's value and delta carry the information.
 export function Sparkline({values, height = 28, className}: {values: number[]; height?: number; className?: string}) {
   const t = useChartTheme()
   const id = useId()

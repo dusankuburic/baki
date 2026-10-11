@@ -18,14 +18,8 @@ interface TokenRendererProps {
 
 type VarInfo = {decl: VariableDecl | null; usageCount: number}
 
-// Consumed by all VariableToken instances via context.
 const VariableIndexContext = React.createContext<Map<string, VarInfo>>(new Map())
 
-// Module-level memo: ONE index build per document identity, shared by every
-// mounted TokenRenderer. The virtualized canvas keeps ~20-40 BlockCards
-// alive; a per-card index would be an O(cards × blocks) walk per document
-// change. A WeakMap keys on the document object so a
-// replaced document never serves a stale index and dead docs are GC-able.
 const variableIndexCache = new WeakMap<FlowDocument, Map<string, VarInfo>>()
 
 function variableIndexFor(doc: FlowDocument | null): Map<string, VarInfo> {
@@ -41,7 +35,6 @@ function variableIndexFor(doc: FlowDocument | null): Map<string, VarInfo> {
 function buildVariableIndex(doc: FlowDocument): Map<string, VarInfo> {
   const index = new Map<string, VarInfo>()
   if (!doc) return index
-  // Collect declarations
   for (const sf of doc.subflows) {
     if (sf.variables) {
       for (const v of sf.variables) {
@@ -49,7 +42,6 @@ function buildVariableIndex(doc: FlowDocument): Map<string, VarInfo> {
       }
     }
   }
-  // Count usages in a single tree walk (O(blocks), not O(vars × blocks))
   const countInBlocks = (blocks: Block[]) => {
     for (const b of blocks) {
       if (b.variables) {

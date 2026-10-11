@@ -1,8 +1,3 @@
-// Client-side mirror of validatePasswordStrength in
-// internal/api/handlers_auth.go, so the change-password form can show the
-// rules while the user types instead of relaying the server's 400 as a toast.
-// Lengths are UTF-8 BYTES like the server's len(pw) — bcrypt ignores
-// everything past 72 bytes, so that cap is what actually protects the account.
 import {utf8ByteLength} from './utf8'
 
 export const PASSWORD_MIN_LENGTH = 12
@@ -22,9 +17,6 @@ export interface PasswordCheck {
   valid: boolean
 }
 
-// The server switches on unicode.IsLower / IsUpper / IsDigit and counts every
-// other rune (punctuation, spaces, uncased scripts) as a symbol; the Unicode
-// property escapes below are the same categories (Ll, Lu, Nd).
 function classOf(ch: string): PasswordClass {
   if (/\p{Ll}/u.test(ch)) return 'lowercase'
   if (/\p{Lu}/u.test(ch)) return 'uppercase'

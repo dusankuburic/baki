@@ -13,9 +13,6 @@ interface Props {
   onCreate: () => void
   onClose: (threadId: string) => void
   onRename: (threadId: string, title: string) => void
-  // Per thread id: the model it uses, with its purpose ("Docs writer ·
-  // Documentation") — each thread keeps its own model, so the tab's tooltip
-  // says which.
   modelLabels?: Record<string, string>
 }
 
@@ -30,15 +27,9 @@ export default function ChatThreadBar({
 }: Props) {
   const {t} = useTranslation('chat')
   const scrollRef = useRef<HTMLDivElement>(null)
-  // Streaming thread ids — a Set so the `.has()` lookup in the render loop is
-  // O(1) and the selector only emits a new reference when the set of streaming
-  // threads actually changes (keys join into a stable string key).
   const streamingKey = useChatStore(s => Object.keys(s.streams).sort().join('|'))
   const streamingIds = useMemo(() => new Set(streamingKey ? streamingKey.split('|') : []), [streamingKey])
 
-  // Keep the ACTIVE tab visible. Jumping to the far right on every count
-  // change scrolled the active tab out of view whenever a thread was created
-  // (or closed) while an earlier tab was selected.
   useEffect(() => {
     const el = scrollRef.current?.querySelector<HTMLElement>('[data-active-tab="true"]')
     el?.scrollIntoView({block: 'nearest', inline: 'nearest'})
@@ -48,9 +39,6 @@ export default function ChatThreadBar({
     return null
   }
 
-  // Left/Right arrow keys move between tabs (roving focus), matching the
-  // WAI-ARIA tabs pattern. Only the active tab is in the tab order (tabIndex 0);
-  // the rest are -1 and reached via arrows.
   const handleTabKeyDown = (e: React.KeyboardEvent, index: number) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
     e.preventDefault()
@@ -58,8 +46,6 @@ export default function ChatThreadBar({
     const nextIndex = (index + delta + threads.length) % threads.length
     const nextTab = threads[nextIndex]
     if (nextTab) onSelect(nextTab.id)
-    // Roving focus: move focus WITH the selection, or it stays on the tab
-    // that just became tabIndex -1 and the next arrow press goes nowhere.
     requestAnimationFrame(() => {
       scrollRef.current?.querySelectorAll<HTMLElement>('[role="tab"]')[nextIndex]?.focus()
     })
@@ -69,8 +55,6 @@ export default function ChatThreadBar({
     <div className="chat-bar flex items-center gap-0 border-b border-border-subtle">
       <div
         ref={scrollRef}
-        // Overflow was completely invisible under no-scrollbar; the mask fades
-        // the edge so there is an affordance that more tabs exist.
         className="flex-1 flex items-center overflow-x-auto no-scrollbar mask-[linear-gradient(to_right,transparent_0,black_8px,black_calc(100%-12px),transparent_100%)]"
         role="tablist"
         aria-label={t('threads.barAria')}
@@ -175,8 +159,6 @@ function ThreadTab({
           title={t('threads.generating')}
         />
       )}
-      {/* Agentic badges: which conversations ran tools / landed approved
-          fixes. aria-labels carry the meaning; the glyphs are decorative. */}
       {thread.appliedFixes ? (
         <CircleCheck
           size={10}
@@ -198,8 +180,6 @@ function ThreadTab({
             if (isImeKeydown(e)) return
             if (e.key === 'Enter') commitEdit()
             if (e.key === 'Escape') {
-              // Claimed here so the chat's own Escape (stop the reply, leave
-              // focus mode) doesn't also fire.
               e.preventDefault()
               setEditing(false)
             }

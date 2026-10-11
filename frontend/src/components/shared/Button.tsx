@@ -7,9 +7,6 @@ type ButtonProps = {
   size?: 'sm' | 'md' | 'lg'
   loading?: boolean
   disabled?: boolean
-  // Icons go through `icon`, never as children: preflight makes every <svg>
-  // display:block, so an icon inside the label span lands on its own line
-  // above the text.
   icon?: LucideIcon
   iconPosition?: 'left' | 'right'
   fullWidth?: boolean
@@ -24,9 +21,6 @@ const variantClasses: Record<string, string> = {
   danger: 'bg-semantic-error/15 hover:bg-semantic-error/25 text-semantic-error border border-semantic-error/30',
 }
 
-// A disabled primary button is greyed out rather than a half-transparent
-// brand fill: at 50% opacity a tinted brand (Dracula's pink, Rose Pine's rose)
-// reads as a muddy but still-clickable button.
 const disabledPrimaryClasses = 'bg-surface-3 text-text-disabled shadow-none'
 
 const sizeClasses: Record<string, string> = {
@@ -46,8 +40,6 @@ export default function Button({
   children,
   onClick,
   className,
-  // A <button> without a type is a SUBMIT button: dropped into a form it
-  // submitted the form on every click. Submit buttons say so explicitly.
   type = 'button',
   ...rest
 }: ButtonProps) {

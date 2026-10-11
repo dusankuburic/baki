@@ -7,9 +7,6 @@ import {useOrgStore} from '@/stores/orgStore'
 import {useUIStore} from '@/stores/uiStore'
 import HomeDashboard from './HomeDashboard'
 
-// The charts chunk never arrives: the recharts-backed cards load through
-// `./home/HomeChartCards`, and this factory keeps that import pending for the
-// whole file. Everything that is NOT a chart must paint regardless.
 vi.mock('./home/HomeChartCards', () => new Promise<never>(() => {}))
 
 const getHome = vi.fn()
@@ -64,11 +61,8 @@ describe('HomeDashboard with the charts chunk still loading', () => {
   it('paints the header, KPI row and recent flows (local mode), with a skeleton per chart card', async () => {
     renderHome()
     expect(await screen.findByText(/Tester/)).toBeInTheDocument()
-    // Chart-free content is on screen...
     expect(screen.getByText('Recent flows')).toBeInTheDocument()
     expect(screen.getByText('Billing flow')).toBeInTheDocument()
-    // ...the chart cards are not, and each holds its slot with a skeleton:
-    // findings by category, top rules, health distribution, flow complexity.
     expect(screen.queryByText('Top rules')).toBeNull()
     expect(screen.queryByText('Health distribution')).toBeNull()
     expect(screen.queryByText('Flow complexity')).toBeNull()
@@ -92,7 +86,6 @@ describe('HomeDashboard with the charts chunk still loading', () => {
     expect(screen.getByText('Recent activity')).toBeInTheDocument()
     expect(screen.getByText('Security posture')).toBeInTheDocument()
     expect(screen.getByText('Open analytics')).toBeInTheDocument()
-    // Health trend, findings by category, top rules, triage, AI usage.
     expect(screen.queryByText('Health trend')).toBeNull()
     expect(screen.queryByText('AI usage')).toBeNull()
     expect(screen.queryByText('Triage')).toBeNull()

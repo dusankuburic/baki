@@ -2,14 +2,9 @@ import {describe, it, expect, beforeEach} from 'vitest'
 import {render, screen, act} from '@testing-library/react'
 import Modal from './Modal'
 
-// STABLE callbacks: passing a fresh vi.fn() per render changes handleKeyDown's
-// identity, which re-runs the surviving modal's effect and re-applies the lock —
-// masking the very bug under test.
 const noopOuter = () => {}
 const noopInner = () => {}
 
-// Modal focuses its first focusable element inside a rAF; the tests below must
-// let that frame run or focus never actually leaves the trigger.
 async function flushFrame() {
   await act(async () => {
     await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
@@ -30,10 +25,6 @@ describe('Modal scroll lock', () => {
     expect(document.body.style.overflow).toBe('hidden')
   })
 
-  // Regression: the cleanup unconditionally reset body overflow, so tearing down
-  // an INNER modal unlocked scrolling behind the outer one that was still open.
-  // The lock has to be refcounted, not a boolean owned by whichever instance
-  // unmounted last.
   it('keeps the lock when a nested modal closes over a still-open parent', () => {
     const {rerender} = render(
       <>
@@ -77,10 +68,6 @@ describe('Modal scroll lock', () => {
 })
 
 describe('Modal focus restoration', () => {
-  // Regression: focus restore lived only in the isOpen true→false branch, but
-  // the prevailing call pattern is `{open && <Modal isOpen … />}` (see
-  // App.tsx's SettingsModal), where the modal UNMOUNTS while isOpen is still
-  // true — so that branch never ran and focus was dropped on <body>. WCAG 2.4.3.
   it('restores focus to the trigger when the modal unmounts while still open', async () => {
     const trigger = document.createElement('button')
     trigger.textContent = 'Open'
@@ -93,7 +80,6 @@ describe('Modal focus restoration', () => {
       </Modal>,
     )
     await flushFrame()
-    // Precondition: focus genuinely moved into the dialog.
     expect(document.activeElement).not.toBe(trigger)
 
     unmount()
@@ -169,7 +155,6 @@ describe('Modal size and frame variants', () => {
     for (const cls of ['max-sm:h-full', 'max-sm:max-w-none', 'max-sm:rounded-none', 'max-sm:flex-col']) {
       expect(dialog).toHaveClass(cls)
     }
-    // The body drops its 70vh cap and takes the height between header and footer.
     expect(screen.getByText('body').parentElement).toHaveClass('max-sm:max-h-none', 'max-sm:flex-1')
 
     rerender(
@@ -214,8 +199,6 @@ describe('Modal naming', () => {
     expect(screen.getByRole('dialog', {name: 'Settings'})).toHaveAccessibleDescription('Everything in one place.')
   })
 
-  // A <button> without a type submits the form around it — here, a form a
-  // caller wraps the whole dialog content in.
   it('renders the Close button as a plain button', () => {
     render(
       <Modal isOpen onClose={noopOuter} title="Edit">

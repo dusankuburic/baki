@@ -17,9 +17,6 @@ beforeEach(() => {
   useSystemStore.setState({info: null, isLoaded: false})
 })
 
-// The panel used to promise that keys never leave the OS keychain on every
-// backend, while a server backend receives them over /api/keys/save. The copy
-// has to describe where the keys actually go.
 describe('PrivacyPanel', () => {
   it('describes the OS keychain on a local backend', () => {
     useSystemStore.setState({info: info(true), isLoaded: true})

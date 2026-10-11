@@ -2,7 +2,6 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {collaborationService} from './CollaborationService'
 import type {Envelope, ConnectionStatus, PresenceSyncPayload} from './CollaborationService'
 
-// Minimal WebSocket mock
 class MockWebSocket {
   static OPEN = 1
   static CLOSING = 2
@@ -30,7 +29,6 @@ class MockWebSocket {
     setTimeout(() => this.onclose?.(), 0)
   }
 
-  // Test helper: push a message from the server
   receive(env: Envelope) {
     this.onmessage?.({data: JSON.stringify(env)})
   }
@@ -38,15 +36,10 @@ class MockWebSocket {
 
 let mockWs: MockWebSocket | null = null
 
-// A ticket provider stand-in. The socket is opened only after this resolves, so
-// tests await a macrotask before inspecting the created WebSocket.
 const ticketProvider = () => Promise.resolve('ticket-123')
 
-// Wait long enough for the awaited ticket fetch + the mock's async onopen.
 const flush = () => new Promise(r => setTimeout(r, 10))
 
-// Deterministically wait until the socket reports connected (the ticket fetch
-// and onopen are both async, so a fixed delay can flake under load).
 async function waitConnected() {
   for (let i = 0; i < 100 && collaborationService.getStatus() !== 'connected'; i++) {
     await new Promise(r => setTimeout(r, 2))
@@ -59,7 +52,6 @@ beforeEach(() => {
     mockWs = instance
   }
   vi.stubGlobal('WebSocket', MockWebSocket)
-  // Reset the service between tests by disconnecting
   collaborationService.disconnect()
 })
 
@@ -85,7 +77,6 @@ describe('CollaborationService', () => {
     collaborationService.connect('my-flow', 'http://localhost:9000', ticketProvider)
     await waitConnected()
     expect(mockWs?.url).toBe('ws://localhost:9000/ws?flowId=my-flow&ticket=ticket-123')
-    // The long-lived access token must never appear in the URL.
     expect(mockWs?.url).not.toContain('token=')
   })
 
@@ -127,9 +118,6 @@ describe('CollaborationService', () => {
     expect(received[0]!.type).toBe('presence.join')
   })
 
-  // presence.sync (the server's snapshot of the room, sent only to a joining
-  // connection) is part of the protocol mirror; the service passes it through
-  // untouched for presenceStore to replace its users map with.
   it('delivers a presence.sync snapshot to subscribers as-is', async () => {
     const received: Envelope[] = []
     collaborationService.subscribe(e => received.push(e))
@@ -153,9 +141,6 @@ describe('CollaborationService', () => {
     expect(JSON.parse(mockWs!.sent[0]!).type).toBe('ping')
   })
 
-  // Regression (per-handler isolation): a throwing event handler must not
-  // abort delivery to handlers registered after it, and must not be
-  // misclassified as a malformed frame.
   it('isolates a throwing event handler — later subscribers still receive the envelope', async () => {
     const received: Envelope[] = []
     const throwing = vi.fn(() => {
@@ -178,10 +163,6 @@ describe('CollaborationService', () => {
     }
   })
 
-  // Regression (per-handler isolation): a throwing status handler must not
-  // propagate into setStatus's caller — concretely, it must not kill the
-  // reconnect schedule or the watchdog startup that run right after a
-  // setStatus call.
   it('isolates a throwing status handler — connect() still completes', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
@@ -197,7 +178,6 @@ describe('CollaborationService', () => {
   })
 
   it('send() is a no-op when not connected', () => {
-    // Don't connect — service is in disconnected state
     collaborationService.send({type: 'ping'})
     expect(mockWs).toBeNull()
   })
@@ -222,7 +202,6 @@ describe('CollaborationService', () => {
     await flush()
 
     const wsCountBefore = mockWs ? 1 : 0
-    // No new WebSocket should be created
     await new Promise(r => setTimeout(r, 50))
     expect(mockWs ? 1 : 0).toBe(wsCountBefore)
   })
@@ -255,13 +234,11 @@ describe('CollaborationService', () => {
     collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
     await waitConnected()
 
-    // Should not throw
     mockWs!.onmessage?.({data: 'not-json'})
     expect(collaborationService.getStatus()).toBe('connected')
   })
 
   describe('liveness watchdog', () => {
-    // Must mirror the private constants in CollaborationService.ts.
     const WS_PING_INTERVAL_MS = 20_000
     const WS_INACTIVITY_TIMEOUT_MS = 45_000
 
@@ -275,14 +252,12 @@ describe('CollaborationService', () => {
 
     it('sends an app-level ping every ping interval', async () => {
       collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
-      // Flush the awaited ticket fetch + the mock's deferred onopen.
       await vi.advanceTimersByTimeAsync(10)
       mockWs!.sent = []
 
       await vi.advanceTimersByTimeAsync(WS_PING_INTERVAL_MS)
       expect(mockWs!.sent.some(s => JSON.parse(s).type === 'ping')).toBe(true)
 
-      // A second interval elapses → a second ping.
       await vi.advanceTimersByTimeAsync(WS_PING_INTERVAL_MS)
       expect(mockWs!.sent.filter(s => JSON.parse(s).type === 'ping')).toHaveLength(2)
     })
@@ -292,9 +267,7 @@ describe('CollaborationService', () => {
       await vi.advanceTimersByTimeAsync(10)
       expect(collaborationService.getStatus()).toBe('connected')
 
-      // No inbound frames arrive — advance past the inactivity window.
       await vi.advanceTimersByTimeAsync(WS_INACTIVITY_TIMEOUT_MS)
-      // close() defers onclose; flush it so the reconnect path runs.
       await vi.advanceTimersByTimeAsync(10)
       expect(collaborationService.getStatus()).not.toBe('connected')
     })
@@ -303,12 +276,9 @@ describe('CollaborationService', () => {
       collaborationService.connect('flow-1', 'http://localhost:8080', ticketProvider)
       await vi.advanceTimersByTimeAsync(10)
 
-      // Move most of the way to the deadline, then receive a pong (the reply
-      // to our ping) which must reset the watchdog.
       await vi.advanceTimersByTimeAsync(WS_INACTIVITY_TIMEOUT_MS - 5_000)
       mockWs!.receive({type: 'pong', flowId: 'flow-1', ts: new Date().toISOString()})
       await vi.advanceTimersByTimeAsync(WS_INACTIVITY_TIMEOUT_MS - 5_000)
-      // Still connected — the pong pushed the deadline out.
       expect(collaborationService.getStatus()).toBe('connected')
     })
 
@@ -319,7 +289,6 @@ describe('CollaborationService', () => {
 
       collaborationService.disconnect()
       await vi.advanceTimersByTimeAsync(WS_PING_INTERVAL_MS * 2)
-      // No pings should fire after teardown.
       expect(mockWs!.sent.some(s => JSON.parse(s).type === 'ping')).toBe(false)
     })
   })

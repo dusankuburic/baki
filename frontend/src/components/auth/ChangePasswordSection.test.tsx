@@ -48,7 +48,7 @@ describe('ChangePasswordSection', () => {
     fill('old-password', 'abc', 'abc')
     expect(metRules()).toBe(0)
     fill('old-password', 'correct-horse-battery', 'correct-horse-battery')
-    expect(metRules()).toBe(1) // long enough, but only two character classes
+    expect(metRules()).toBe(1)
     expect(submit).toBeDisabled()
 
     fill('old-password', 'Correct-horse-1', 'Correct-horse-1')
@@ -93,7 +93,6 @@ describe('ChangePasswordSection', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Update password'}))
     await waitFor(() => expect(authApi.changePassword).toHaveBeenCalledWith('old-password', 'Correct-horse-1'))
     await waitFor(() => expect(logout).toHaveBeenCalledTimes(1))
-    // The explanation survives the sign-out: LoginForm reads it on mount.
     expect(sessionStorage.getItem('auth_notice')).toBe('password-changed')
   })
 

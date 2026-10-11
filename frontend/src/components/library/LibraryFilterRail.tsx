@@ -7,9 +7,6 @@ import type {Organisation} from '@/stores/orgStore'
 
 interface LibraryFilterRailProps {
   orgs: Organisation[]
-  // Tags seen on library flows this session. The list endpoint returns each
-  // flow's tags, but there is no tag catalogue endpoint, so the chips are the
-  // tags the user has actually encountered.
   tags: string[]
 }
 
@@ -30,8 +27,6 @@ export default function LibraryFilterRail({orgs, tags}: LibraryFilterRailProps) 
   const selectedTags = useLibraryBrowseStore(s => s.selectedTags)
   const toggleTag = useLibraryBrowseStore(s => s.toggleTag)
   const clearTags = useLibraryBrowseStore(s => s.clearTags)
-  // A selected tag stays offered even if no loaded flow carries it any more,
-  // so it can always be switched off again.
   const tagChips = [...new Set([...tags, ...selectedTags])].sort()
 
   const isAllOrgs = selectedOrgIds === null
@@ -104,7 +99,6 @@ export default function LibraryFilterRail({orgs, tags}: LibraryFilterRailProps) 
         {tagChips.length === 0 ? (
           <p className="px-2 py-1.5 text-2xs text-text-tertiary italic">{t('rail.noTaggedFlows')}</p>
         ) : (
-          // ANY-of: a flow matches when it carries at least one selected tag.
           <ul className="flex flex-wrap gap-1 px-2" aria-label={t('rail.filterByTagAria')}>
             {tagChips.map(tag => {
               const active = selectedTags.has(tag)

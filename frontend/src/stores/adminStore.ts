@@ -2,10 +2,6 @@ import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import type {RoleFilter, SystemHealth} from '@/api/admin'
 
-// List state for the Admin Dashboard: which page of users and of the audit
-// log is open, with which filters. Pure presentation — nothing is fetched
-// here (the admin hooks read this and fetch) and nothing is persisted, so a
-// filter survives switching views within a session and is dropped on logout.
 export const USERS_PAGE_SIZE = 10
 export const USERS_PAGE_SIZES = [10, 25, 50]
 export const AUDIT_PAGE_SIZE = 15
@@ -28,17 +24,11 @@ export interface AuditListState {
 interface AdminState {
   users: UsersListState
   audit: AuditListState
-  /** Bumped by the header Refresh: every admin hook refetches. */
   nonce: number
-  /** Bumped after a role change: the user list and the stats refetch. */
   usersNonce: number
-  /** A section another part of the page asked to scroll to once rendered. */
   pendingSection: string | null
-  /** Admin requests in flight, for the page's progress bar. */
   pending: number
-  /** When an admin request last delivered data (ms since epoch). */
   lastUpdated: number | null
-  /** The last health check, shared by the overview tile and Operations. */
   health: SystemHealth | null
 
   setUsersQuery: (q: string) => void
@@ -51,7 +41,6 @@ interface AdminState {
   setAuditPage: (page: number) => void
   setAuditPageSize: (size: number) => void
   clearAuditFilters: () => void
-  /** Filters the audit log by a user and asks the page to scroll there. */
   focusUserActivity: (userId: string) => void
   consumeSection: () => string | null
   refresh: () => void
@@ -80,7 +69,6 @@ const DEFAULTS = {
 export const useAdminStore = create<AdminState>()((set, get) => ({
   ...DEFAULTS,
 
-  // Any filter or page-size change restarts from the first page.
   setUsersQuery: q => set(s => ({users: {...s.users, q, page: 0}})),
   setUsersRole: role => set(s => ({users: {...s.users, role, page: 0}})),
   setUsersPage: page => set(s => ({users: {...s.users, page: Math.max(0, page)}})),
@@ -106,5 +94,4 @@ export const useAdminStore = create<AdminState>()((set, get) => ({
   reset: () => set(DEFAULTS),
 }))
 
-// Reset on logout (see storeRegistry).
 registerStoreReset(() => useAdminStore.getState().reset())

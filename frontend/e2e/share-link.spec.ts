@@ -1,11 +1,5 @@
 import {test, expect} from '@playwright/test'
 
-/**
- * Share-link happy path (the smoke spec only covers the negative cases).
- * Mocks /api/shared with a valid token and asserts the unauthenticated
- * report viewer renders the flow name and findings.
- */
-
 const sharedPayload = {
   flowId: 'flow-shared',
   flowName: 'Invoices Pipeline',
@@ -72,9 +66,7 @@ test.describe('Shared report viewer (happy path)', () => {
   test('renders the shared report for a valid token without login', async ({page}) => {
     await page.goto('/shared?token=valid-token-123')
 
-    // Flow name header
     await expect(page.locator('text=Invoices Pipeline').first()).toBeVisible({timeout: 10_000})
-    // Findings render with severity styling
     await expect(page.locator('text=Hardcoded credential').first()).toBeVisible()
     await expect(page.locator('text=Unused variable').first()).toBeVisible()
   })
@@ -87,7 +79,6 @@ test.describe('Shared report viewer (happy path)', () => {
   test('the shared view renders outside the app shell (no sidebar navigation)', async ({page}) => {
     await page.goto('/shared?token=valid-token-123')
     await expect(page.locator('text=Invoices Pipeline').first()).toBeVisible({timeout: 10_000})
-    // The unauthenticated viewer must not expose the authenticated nav.
     await expect(page.getByRole('button', {name: 'Analytics'})).toHaveCount(0)
   })
 })

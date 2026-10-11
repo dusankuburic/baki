@@ -10,8 +10,6 @@ const files: RecentFile[] = [
   {path: '/b.txt', name: 'b.txt', size: 200, lastOpen: '2024-01-03T00:00:00Z'},
 ]
 
-// A tiny host so the menu has a real anchorRef (a DOM element) to position
-// against, matching how FileHeader wires it up.
 function Host(props: Partial<React.ComponentProps<typeof RecentFilesMenu>>) {
   const anchorRef = useRef<HTMLDivElement>(null)
   return (
@@ -45,7 +43,6 @@ describe('RecentFilesMenu', () => {
         <Host />
       </div>,
     )
-    // The menu's listbox should NOT be a descendant of the clipping container.
     const clippingContainer = container.firstChild as HTMLElement
     const menu = screen.getByRole('listbox')
     expect(clippingContainer.contains(menu)).toBe(false)
@@ -56,7 +53,6 @@ describe('RecentFilesMenu', () => {
     const onSelect = vi.fn()
     render(<Host onSelect={onSelect} />)
     const menu = screen.getByRole('listbox')
-    // Order is folders-then-files: Folder One(0), a.txt(1), b.txt(2).
     fireEvent.keyDown(menu, {key: 'ArrowDown'})
     fireEvent.keyDown(menu, {key: 'ArrowDown'})
     fireEvent.keyDown(menu, {key: 'Enter'})

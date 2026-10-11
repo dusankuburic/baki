@@ -62,12 +62,9 @@ beforeEach(() => {
   mockOnStatusChange.mockReturnValue(() => {})
 })
 
-// ---- connectToFlow ----
-
 describe('connectToFlow', () => {
   it('connects the collaboration service with backend config', async () => {
     await usePresenceStore.getState().connectToFlow('flow-123')
-    // The ticket provider (not the long-lived token) is handed to the service.
     expect(mockConnect).toHaveBeenCalledWith('flow-123', 'http://localhost:9999', getWsTicket)
   })
 
@@ -92,8 +89,6 @@ describe('connectToFlow', () => {
     expect(usePresenceStore.getState().flowId).toBe('flow-2')
   })
 })
-
-// ---- disconnect ----
 
 describe('disconnect', () => {
   it('disconnects the collaboration service', () => {
@@ -121,8 +116,6 @@ describe('disconnect', () => {
   })
 })
 
-// ---- updateSelectedBlock ----
-
 describe('updateSelectedBlock', () => {
   it('enqueues a presence.update op with the block id', () => {
     usePresenceStore.getState().updateSelectedBlock('block-42')
@@ -132,8 +125,6 @@ describe('updateSelectedBlock', () => {
     })
   })
 })
-
-// ---- envelope handling ----
 
 describe('envelope handling', () => {
   let handleEnvelope: (env: Envelope) => void
@@ -202,9 +193,6 @@ describe('envelope handling', () => {
     expect(usePresenceStore.getState().users['u1']?.selectedBlockId).toBe('block-5')
   })
 
-  // Regression: presence.update from a user with no entry was dropped, so a
-  // peer missed at join (or swept while idle) never reappeared. The server's
-  // presence heartbeat relies on an update creating the entry.
   it('creates the entry on presence.update from an unknown user', () => {
     handleEnvelope({
       type: 'presence.update',
@@ -231,9 +219,6 @@ describe('envelope handling', () => {
     expect(usePresenceStore.getState().users['u9']?.displayName).toBe('u9')
   })
 
-  // Regression: the raw payload was merged into the entry ({...existing,
-  // ...p}), so a peer could rename itself, swap its avatar or re-key its
-  // entry as another user in everyone else's presence list.
   it('takes only selectedBlockId from a presence.update payload', () => {
     usePresenceStore.setState({
       users: {u1: {userId: 'u1', displayName: 'Alice', avatarUrl: 'https://cdn.example/alice.png'}},
@@ -260,9 +245,6 @@ describe('envelope handling', () => {
     expect(users['admin']).toBeUndefined()
   })
 
-  // The payload is the user's whole current selection — the server sends ''
-  // for none; an older server omitted the key — so either clears it. The old
-  // merge kept the previous block, leaving a stale "viewing block" ring behind.
   it('clears selectedBlockId when a presence.update carries none', () => {
     for (const payload of [
       {userId: 'u1', displayName: 'Alice', selectedBlockId: ''},
@@ -303,10 +285,6 @@ describe('envelope handling', () => {
     expect(mockNotify).toHaveBeenCalledTimes(1)
   })
 
-  // Regression: when a user already in the room opened a second tab, the
-  // server's presence.join for it (userId and displayName only) replaced the
-  // whole entry, so every peer lost that user's selection ring — and avatar —
-  // until the next heartbeat, up to a ping period (54 s) later.
   it('merges a presence.join for a user already listed', () => {
     handleEnvelope({
       type: 'presence.sync',
@@ -337,7 +315,6 @@ describe('envelope handling', () => {
       selectedBlockId: 'block-3',
     })
 
-    // What the payload does carry still wins.
     handleEnvelope({
       type: 'presence.join',
       flowId: 'flow-1',
@@ -376,11 +353,6 @@ describe('envelope handling', () => {
     unsubscribe()
   })
 
-  // Regression: a newly joined client never learned who was already in the
-  // room — only peers who joined after it. presence.sync is the server's
-  // snapshot, sent to the joiner only; it is authoritative, so it replaces
-  // the map (dropping ghosts), and these users were here first, so no
-  // "collaborator joined" notification fires for them.
   it('replaces the users map on presence.sync without notifying', () => {
     usePresenceStore.setState({users: {ghost: {userId: 'ghost', displayName: 'Left while we were away'}}})
     handleEnvelope({
@@ -402,11 +374,6 @@ describe('envelope handling', () => {
     expect(mockNotify).not.toHaveBeenCalled()
   })
 
-  // Regression: the server announces a user's selection to that user's other
-  // connections too, so with a second tab open its heartbeat carried the
-  // block just selected in this tab back here. The local user's entry took
-  // it, and the user's own avatar sat on their selection as a teammate's —
-  // on the block row, as the graph's teammate border, as the ring.
   it('never shows a selection on the local user entry', () => {
     const ts = new Date().toISOString()
     handleEnvelope({
@@ -441,7 +408,6 @@ describe('envelope handling', () => {
     expect(usePresenceStore.getState().users['me']?.selectedBlockId).toBeUndefined()
     expect(usePresenceStore.getState().users).toBe(before)
 
-    // A collaborator's selection still lands.
     handleEnvelope({
       type: 'presence.update',
       flowId: 'flow-1',
@@ -487,11 +453,8 @@ describe('envelope handling', () => {
   })
 })
 
-// ---- presence sweep timer (lifecycle-managed, no module-level leak) ----
-
 describe('presence sweep timer', () => {
   beforeEach(() => {
-    // Clear any sweep a prior test left running, then switch to fake timers.
     usePresenceStore.getState().disconnect()
     vi.useFakeTimers()
   })
@@ -502,10 +465,9 @@ describe('presence sweep timer', () => {
 
   it('sweeps stale users while connected', async () => {
     await usePresenceStore.getState().connectToFlow('flow-1')
-    // A user with no lastSeen is treated as stale immediately.
     usePresenceStore.setState({users: {u1: {userId: 'u1', displayName: 'Alice'}}})
 
-    vi.advanceTimersByTime(60_000) // one sweep tick
+    vi.advanceTimersByTime(60_000)
     expect(usePresenceStore.getState().users['u1']).toBeUndefined()
   })
 
@@ -516,7 +478,6 @@ describe('presence sweep timer', () => {
     usePresenceStore.getState().disconnect()
     expect(clearSpy).toHaveBeenCalled()
 
-    // With the timer stopped, a later stale user is NOT swept.
     usePresenceStore.setState({users: {u1: {userId: 'u1', displayName: 'Alice'}}, flowId: 'flow-1'})
     vi.advanceTimersByTime(120_000)
     expect(usePresenceStore.getState().users['u1']).toBeDefined()
@@ -526,20 +487,12 @@ describe('presence sweep timer', () => {
     const setSpy = vi.spyOn(globalThis, 'setInterval')
     await usePresenceStore.getState().connectToFlow('flow-1')
     await usePresenceStore.getState().connectToFlow('flow-2')
-    // startPresenceSweep is guarded, so only one interval is ever created.
     const sweepStarts = setSpy.mock.calls.filter(([, ms]) => ms === 60_000)
     expect(sweepStarts.length).toBe(1)
   })
 })
 
-// ---- presence heartbeat vs. the sweep ----
-//
-// Regression: an idle collaborator (no selection changes) sent nothing, so the
-// 120 s sweep dropped them and, with updates from unknown users ignored, they
-// never came back. The server now re-broadcasts each live connection's
-// presence.update every ping period as a heartbeat.
 describe('presence heartbeat vs. the sweep', () => {
-  // Must mirror pingPeriod in internal/websocket/client.go.
   const HEARTBEAT_MS = 54_000
   let handleEnvelope: (env: Envelope) => void
 
@@ -560,8 +513,6 @@ describe('presence heartbeat vs. the sweep', () => {
       return () => {}
     })
     await usePresenceStore.getState().connectToFlow('flow-1')
-    // Known only through the join snapshot, like any user already in the room
-    // when we connected.
     handleEnvelope({
       type: 'presence.sync',
       flowId: 'flow-1',
@@ -575,7 +526,6 @@ describe('presence heartbeat vs. the sweep', () => {
   })
 
   it('keeps an idle user present across five minutes of heartbeats', () => {
-    // Heartbeats at 54, 108, 162, 216 and 270 s; sweeps every 60 s to 300 s.
     for (let i = 0; i < 5; i++) {
       vi.advanceTimersByTime(HEARTBEAT_MS)
       heartbeat('u1')
@@ -585,9 +535,9 @@ describe('presence heartbeat vs. the sweep', () => {
   })
 
   it('sweeps a user with no heartbeat after the stale window plus one sweep interval', () => {
-    vi.advanceTimersByTime(120_000) // sweep at exactly the 120 s window: kept
+    vi.advanceTimersByTime(120_000)
     expect(usePresenceStore.getState().users['u1']).toBeDefined()
-    vi.advanceTimersByTime(60_000) // next sweep at 180 s: stale
+    vi.advanceTimersByTime(60_000)
     expect(usePresenceStore.getState().users['u1']).toBeUndefined()
   })
 
@@ -599,10 +549,6 @@ describe('presence heartbeat vs. the sweep', () => {
     expect(usePresenceStore.getState().users['u1']).toMatchObject({userId: 'u1', displayName: 'Alice'})
   })
 
-  // Regression: every heartbeat replaced the users map (its lastSeen field
-  // changed), so each one — one per peer connection per ping period —
-  // re-rendered every visible block row and walked every graph node although
-  // nothing on screen had changed.
   it('leaves the users map untouched on heartbeats that change nothing', () => {
     const before = usePresenceStore.getState().users
     const listener = vi.fn()
@@ -612,7 +558,6 @@ describe('presence heartbeat vs. the sweep', () => {
     expect(usePresenceStore.getState().users).toBe(before)
     expect(listener).not.toHaveBeenCalled()
 
-    // A real change still lands.
     handleEnvelope({
       type: 'presence.update',
       flowId: 'flow-1',
@@ -625,8 +570,6 @@ describe('presence heartbeat vs. the sweep', () => {
     unsubscribe()
   })
 
-  // A merged presence.join (a listed user's second tab) changes nothing on
-  // screen, but it is still word from that user and must count as seen.
   it('counts a presence.join for a listed user as seen', () => {
     vi.advanceTimersByTime(100_000)
     handleEnvelope({
@@ -636,14 +579,10 @@ describe('presence heartbeat vs. the sweep', () => {
       ts: new Date().toISOString(),
       payload: {userId: 'u1', displayName: 'Alice'},
     })
-    vi.advanceTimersByTime(80_000) // sweeps at 120 s and 180 s: seen 80 s ago
+    vi.advanceTimersByTime(80_000)
     expect(usePresenceStore.getState().users['u1']).toMatchObject({userId: 'u1', displayName: 'Alice'})
   })
 
-  // Regression: the server never sends a connection its own heartbeat, so the
-  // local user's entry was never refreshed and the sweep dropped it two to
-  // three minutes after joining — with the whole indicator, status dot
-  // included, for a user alone in the flow.
   it('never sweeps the local user, whom no heartbeat refreshes', () => {
     handleEnvelope({
       type: 'presence.sync',
@@ -664,12 +603,6 @@ describe('presence heartbeat vs. the sweep', () => {
   })
 })
 
-// ---- join notifications across reconnects ----
-
-// Regression: the server answers every (re)connect with the connection's own
-// presence.join before its presence.sync. After a socket error the map is
-// already empty, so that join read as a new arrival and a reconnect in a
-// hidden tab told the user "Me joined the flow".
 describe('join notifications across reconnects', () => {
   let handleEnvelope: (env: Envelope) => void
   let setStatus: (s: ConnectionStatus) => void
@@ -707,8 +640,6 @@ describe('join notifications across reconnects', () => {
     handleEnvelope(sync({userId: 'me', displayName: 'Me'}))
     expect(mockNotify).not.toHaveBeenCalled()
 
-    // After an error the map is cleared; the new socket's own join again
-    // arrives first and must stay quiet.
     setStatus('error')
     setStatus('connecting')
     setStatus('connected')
@@ -727,7 +658,6 @@ describe('join notifications across reconnects', () => {
     expect(mockNotify).toHaveBeenCalledTimes(1)
     expect(mockNotify).toHaveBeenCalledWith({title: 'Collaborator joined', body: 'Alice joined the flow.'})
 
-    // And again once a reconnect has synced.
     setStatus('connecting')
     setStatus('connected')
     handleEnvelope(join('me', 'Me'))
@@ -736,8 +666,6 @@ describe('join notifications across reconnects', () => {
     expect(mockNotify).toHaveBeenCalledTimes(2)
   })
 })
-
-// ---- status propagation ----
 
 describe('status propagation', () => {
   it('reflects status changes from the collaboration service', async () => {

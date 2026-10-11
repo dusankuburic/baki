@@ -11,15 +11,11 @@ interface LibraryGridProps {
   selectedId: string | null
   onSelect: (flow: LibraryFlow) => void
   onOpen: (flow: LibraryFlow) => void
-  // Per-card loading (U4.5): the flow currently being fetched for opening.
   openingId?: string | null
 }
 
 function LibraryGridImpl({items, selectedId, onSelect, onOpen, openingId}: LibraryGridProps) {
   return (
-    // Column count follows the pane's width (.library-grid), not viewport
-    // breakpoints: with the sidebar and inspector open the main pane is far
-    // narrower than the window, and four forced columns gave 105px cards.
     <div className="library-grid">
       {items.map(flow => (
         <SelectableCard
@@ -59,9 +55,6 @@ function SelectableCard({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onKeyDown={e => {
-        // Keyboard parity with the list (U4.5): Enter opens when already
-        // selected, selects otherwise — Enter-on-focused-card used to be a
-        // dead end below xl where the detail panel's Open button is hidden.
         if (e.key === 'Enter' && selected) {
           e.preventDefault()
           onKeyboardOpen()

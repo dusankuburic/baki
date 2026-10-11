@@ -14,8 +14,6 @@ describe('FormField', () => {
     expect(screen.getByLabelText('Endpoint')).toHaveAttribute('id', 'endpoint')
   })
 
-  // Promoted from the Azure AI Foundry form's private Field: the same markup,
-  // so re-pointing that form at it changes nothing on screen.
   it('renders the markup of the Field it replaces when given only id, label and children', () => {
     const {container} = render(
       <FormField id="name" label="Name">

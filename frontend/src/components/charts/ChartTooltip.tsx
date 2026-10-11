@@ -2,11 +2,6 @@ import type {ReactNode} from 'react'
 import type {ChartTheme} from './chartTypes'
 import {formatDateLong} from '@/lib/format'
 
-// The one tooltip every chart uses, as a Recharts `content` element:
-// <Tooltip content={<ChartTooltip theme={t} />} />. Recharts injects active /
-// payload / label. Values lead (strong, tabular), the series name follows, and
-// a short line-key in the series colour carries identity — never coloured text.
-
 export interface TooltipEntry {
   name?: string | number
   value?: number | string | ReadonlyArray<number | string>
@@ -22,11 +17,8 @@ export interface ChartTooltipProps {
   payload?: ReadonlyArray<TooltipEntry>
   label?: string | number
   theme: ChartTheme
-  /** Header text; a YYYY-MM-DD label is written out as a long date by default. */
   labelFormatter?: (label: string | number, payload: ReadonlyArray<TooltipEntry>) => ReactNode
-  /** One series value. */
   valueFormatter?: (value: number, name: string, entry: TooltipEntry) => string
-  /** Skip series with no value at this point (gaps). */
   hideEmpty?: boolean
 }
 

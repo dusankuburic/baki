@@ -69,7 +69,6 @@ describe('ModelUnavailableNotice', () => {
     expect(sentence({kind: 'refused', wanted, fallback: null})).toBe(
       "“Docs writer” isn't available any more. Choose another model to send your message.",
     )
-    // A status a newer server added: the generic sentence, never a raw key.
     const unknown = sentence({kind: 'unavailable', wanted, fallback: null, cause: unknownValue('suspended')})
     expect(unknown).toContain('Docs writer')
     expect(unknown).not.toMatch(/modelNotice|suspended/)
@@ -90,8 +89,6 @@ describe('ModelUnavailableNotice', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 
-  // The chat panel's always-mounted status region announces it; the row
-  // itself would re-announce on every re-render if it were live.
   it('is not a live region', () => {
     const {container} = renderNotice({kind: 'removed', wanted: DOCS, fallback: GPT})
     expect(container.querySelector('[role="status"], [role="alert"], [aria-live]')).toBeNull()

@@ -1,15 +1,17 @@
-import {lazy, Suspense} from 'react'
-import {Spinner} from '@/components/shared'
+import {lazy, Suspense, type ReactNode} from 'react'
+import {Spinner, ErrorBoundary} from '@/components/shared'
 import {UserProfile} from '@/components/auth/UserProfile'
 import {MainPaneToolbar} from '@/components/flow'
 import {useSystemStore} from '@/stores/systemStore'
 
-// GraphView pulls in cytoscape (~100KB+); keep it out of the entry chunk like
-// its lazy siblings below.
-// HomeDashboard pulls in recharts (~100KB+); lazy-load keeps it out of the entry chunk.
-// LibraryWorkspace pulls in the multi-pane browse experience and its helpers;
-// lazy keeps it out of the entry chunk and only loads when the user opens it.
-// AdminDashboard is admin-only; lazy keeps it out of every non-admin's bundle.
+function ViewBoundary({children}: {children: ReactNode}) {
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={<Spinner />}>{children}</Suspense>
+    </ErrorBoundary>
+  )
+}
+
 const AnalyticsDashboard = lazy(() => import('@/components/dashboard/AnalyticsDashboard'))
 const CloudAnalyticsPage = lazy(() => import('@/components/dashboard/analytics/CloudAnalyticsPage'))
 const HomeDashboard = lazy(() => import('@/components/dashboard/HomeDashboard'))
@@ -20,17 +22,7 @@ const RuleDependencyView = lazy(() => import('@/components/analyzer/RuleDependen
 const RuleReference = lazy(() => import('@/components/analyzer/RuleReference'))
 const AdminDashboard = lazy(() => import('@/components/admin/AdminDashboard').then(m => ({default: m.AdminDashboard})))
 
-// SystemViewRouter renders the top-level views that are NOT the flow editor:
-// profile, admin, analytics/home dashboards, the library browser, and the
-// portfolio. Extracted from MainPane so MainPane is a thin router and these
-// full-pane views are isolated (each owns its own toolbar + scroll container).
-//
-// Returns null for flow-editor views ('block', 'graph', 'map', 'local-map',
-// 'diff', '' …) so the caller knows to render the editor groups instead.
 export function SystemViewRouter({view}: {view: string}) {
-  // The Analytics tab: on a backend that keeps session analytics (local mode)
-  // it is the session dashboard; in cloud mode it is the filterable
-  // analytics page. Until the capabilities arrive nothing is guessed.
   const sessionAnalytics = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
   const capabilitiesLoaded = useSystemStore(s => s.isLoaded)
 
@@ -49,9 +41,9 @@ export function SystemViewRouter({view}: {view: string}) {
         <div className="flex flex-col h-full bg-surface-1">
           <MainPaneToolbar />
           <div className="flex-1 overflow-hidden">
-            <Suspense fallback={<Spinner />}>
+            <ViewBoundary>
               <AdminDashboard />
-            </Suspense>
+            </ViewBoundary>
           </div>
         </div>
       )
@@ -65,15 +57,15 @@ export function SystemViewRouter({view}: {view: string}) {
             </div>
           ) : sessionAnalytics ? (
             <div className="flex-1 overflow-y-auto p-4">
-              <Suspense fallback={<Spinner />}>
+              <ViewBoundary>
                 <AnalyticsDashboard />
-              </Suspense>
+              </ViewBoundary>
             </div>
           ) : (
             <div className="flex-1 overflow-hidden">
-              <Suspense fallback={<Spinner />}>
+              <ViewBoundary>
                 <CloudAnalyticsPage />
-              </Suspense>
+              </ViewBoundary>
             </div>
           )}
         </div>
@@ -83,9 +75,9 @@ export function SystemViewRouter({view}: {view: string}) {
         <div className="flex flex-col h-full bg-surface-1">
           <MainPaneToolbar />
           <div className="flex-1 overflow-hidden">
-            <Suspense fallback={<Spinner />}>
+            <ViewBoundary>
               <HomeDashboard />
-            </Suspense>
+            </ViewBoundary>
           </div>
         </div>
       )
@@ -94,9 +86,9 @@ export function SystemViewRouter({view}: {view: string}) {
         <div className="flex flex-col h-full bg-surface-1">
           <MainPaneToolbar />
           <div className="flex-1 overflow-hidden">
-            <Suspense fallback={<Spinner />}>
+            <ViewBoundary>
               <LibraryWorkspace />
-            </Suspense>
+            </ViewBoundary>
           </div>
         </div>
       )
@@ -105,9 +97,9 @@ export function SystemViewRouter({view}: {view: string}) {
         <div className="flex flex-col h-full bg-surface-1">
           <MainPaneToolbar />
           <div className="flex-1 overflow-hidden">
-            <Suspense fallback={<Spinner />}>
+            <ViewBoundary>
               <PortfolioView />
-            </Suspense>
+            </ViewBoundary>
           </div>
         </div>
       )
@@ -116,9 +108,9 @@ export function SystemViewRouter({view}: {view: string}) {
         <div className="flex flex-col h-full bg-surface-1">
           <MainPaneToolbar />
           <div className="flex-1 overflow-auto">
-            <Suspense fallback={<Spinner />}>
+            <ViewBoundary>
               <FlowComparisonView />
-            </Suspense>
+            </ViewBoundary>
           </div>
         </div>
       )
@@ -127,9 +119,9 @@ export function SystemViewRouter({view}: {view: string}) {
         <div className="flex flex-col h-full bg-surface-1">
           <MainPaneToolbar />
           <div className="flex-1 overflow-hidden">
-            <Suspense fallback={<Spinner />}>
+            <ViewBoundary>
               <RuleDependencyView />
-            </Suspense>
+            </ViewBoundary>
           </div>
         </div>
       )
@@ -138,9 +130,9 @@ export function SystemViewRouter({view}: {view: string}) {
         <div className="flex flex-col h-full bg-surface-1">
           <MainPaneToolbar />
           <div className="flex-1 overflow-y-auto">
-            <Suspense fallback={<Spinner />}>
+            <ViewBoundary>
               <RuleReference />
-            </Suspense>
+            </ViewBoundary>
           </div>
         </div>
       )
@@ -149,8 +141,4 @@ export function SystemViewRouter({view}: {view: string}) {
   }
 }
 
-// isSystemView reports whether `view` is handled by SystemViewRouter (i.e. not
-// a flow-editor view). MainPane uses this to decide between SystemViewRouter
-// and the FlowEditorPane. The implementation lives in uiStore (SYSTEM_VIEWS)
-// so that view-switching logic and routing agree on what a "system view" is.
 export {isSystemView} from '@/stores/uiStore'

@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react'
+import {useEffect, useRef, useState} from 'react'
 import {Mail, Lock, LogIn, UserPlus, KeyRound, Send} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
@@ -7,15 +7,26 @@ import {authApi, type SSOInfo} from '@/api/auth'
 import {systemApi} from '@/api/system'
 import {ApiError, getBackendConfig} from '@/api/client'
 import {useTranslation} from 'react-i18next'
+import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
+import {emailErrorKey, type CommonFieldErrorKey} from '@/lib/validators'
+import {EMAIL_MAX_LENGTH} from '@/lib/constraints'
+import {checkPassword, PASSWORD_MAX_LENGTH} from '@/lib/password'
+import {PasswordRuleList} from './PasswordRuleList'
 import {clearPostLogoutNotice, readPostLogoutNotice} from './authNotice'
 
 interface LoginFormProps {
   onSuccess?: () => void
 }
 
-// readSSOHash pulls ssoTicket / ssoError out of the URL fragment placed there
-// by the OIDC callback redirect, and strips it from the address bar so the
-// single-use ticket never lingers in history.
+type LoginField = 'email' | 'password' | 'confirmPassword'
+const LOGIN_FIELDS = ['email', 'password', 'confirmPassword'] as const satisfies readonly LoginField[]
+
+const FIELD_ELEMENT_ID: Record<LoginField, string> = {
+  email: 'email',
+  password: 'password',
+  confirmPassword: 'confirm-password',
+}
+
 function readSSOHash(): {ticket?: string; error?: string} {
   const hash = window.location.hash.replace(/^#/, '')
   if (!hash.includes('ssoTicket=') && !hash.includes('ssoError=')) return {}
@@ -36,30 +47,20 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [remember, setRemember] = useState(false)
   const [sso, setSso] = useState<SSOInfo | null>(null)
-  // A closed deployment rejects registration server-side; offering the toggle
-  // there only leads to an error after the form is filled in. Until the flag
-  // arrives (or if it cannot be read) the toggle stays, and the server remains
-  // the enforcement point either way.
   const [signUpDisabled, setSignUpDisabled] = useState(false)
   const [ssoError, setSsoError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
-  // Forgot-password sub-flow: a small email-only form reachable from the login
-  // view. `forgotSent` shows a deliberately generic confirmation (the API never
-  // reveals whether the address exists).
   const [forgot, setForgot] = useState(false)
   const [forgotSent, setForgotSent] = useState(false)
   const [forgotLoading, setForgotLoading] = useState(false)
-  // Post-registration state: the account exists but has no session until the
-  // emailed verification link is followed. `needsVerification` is the same
-  // situation reached from the sign-in side (403 email_not_verified). Both
-  // offer a resend; `resendState` is deliberately generic (anti-enumeration).
   const [registeredEmail, setRegisteredEmail] = useState<string | null>(null)
   const [needsVerification, setNeedsVerification] = useState(false)
   const [resendState, setResendState] = useState<'idle' | 'sending' | 'sent'>('idle')
-  // Why the user is back here after a deliberate sign-out (password change,
-  // account deletion): read once, shown until they act, cleared on mount so a
-  // reload does not repeat it.
   const [notice] = useState(readPostLogoutNotice)
+  const onSuccessRef = useRef(onSuccess)
+  useEffect(() => {
+    onSuccessRef.current = onSuccess
+  })
   useEffect(() => {
     clearPostLogoutNotice()
   }, [])
@@ -70,9 +71,27 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
   const error = useAuthStore(s => s.error)
   const clearError = useAuthStore(s => s.clearError)
 
+  const check = checkPassword(password)
+  const emailInvalid = (key: CommonFieldErrorKey): string => t(key, {ns: 'common', max: EMAIL_MAX_LENGTH})
+  const v = useFormValidation<LoginField>({
+    fields: LOGIN_FIELDS,
+    validate: () => {
+      const errors: FieldErrors<LoginField> = {}
+      const emailKey = emailErrorKey(email)
+      if (emailKey) errors.email = emailInvalid(emailKey)
+      if (check.tooLong) errors.password = t('password.tooLong', {count: PASSWORD_MAX_LENGTH})
+      if (isRegister && confirmPassword && password !== confirmPassword)
+        errors.confirmPassword = t('login.passwordsDoNotMatch')
+      return errors
+    },
+  })
+  const canSubmit =
+    email.trim() !== '' &&
+    password !== '' &&
+    (!isRegister ||
+      (confirmPassword !== '' && check.valid && emailErrorKey(email) === null))
+
   useEffect(() => {
-    // Cancellation guard: these promises can resolve after unmount (route
-    // change, test teardown) — a setState then hits a dead component.
     let cancelled = false
     authApi
       .ssoInfo()
@@ -90,29 +109,24 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
           setIsRegister(false)
         }
       } catch {
-        // Unreadable flags leave the toggle visible; registration still fails
-        // closed on the server.
       }
     })()
 
     const {ticket, error: hashError} = readSSOHash()
-    // One-shot parse of the URL fragment on mount: an external input, not derived state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (hashError) setSsoError(hashError)
     if (ticket) {
       loginWithSSOTicket(ticket)
         .then(() => {
-          if (!cancelled) onSuccess?.()
+          if (!cancelled) onSuccessRef.current?.()
         })
         .catch(() => {
-          // error message lands in the store's `error` field
         })
     }
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [loginWithSSOTicket])
 
   async function handleSSOStart() {
     clearError()
@@ -124,13 +138,16 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
   async function handleForgotSubmit(e: React.FormEvent) {
     e.preventDefault()
     setFormError(null)
+    const emailKey = emailErrorKey(email)
+    if (emailKey) {
+      setFormError(emailInvalid(emailKey))
+      return
+    }
     setForgotLoading(true)
     try {
       await authApi.forgotPassword(email)
       setForgotSent(true)
     } catch {
-      // Even on error we show the generic confirmation so the endpoint can't be
-      // used to probe for accounts.
       setForgotSent(true)
     } finally {
       setForgotLoading(false)
@@ -153,8 +170,6 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
     try {
       await authApi.resendVerification(email)
     } catch {
-      // Same generic confirmation either way so the endpoint can't be used to
-      // probe for accounts.
     } finally {
       setResendState('sent')
     }
@@ -166,8 +181,9 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
     setFormError(null)
     setNeedsVerification(false)
 
-    if (isRegister && password !== confirmPassword) {
-      setFormError(t('login.passwordsDoNotMatch'))
+    const invalid = v.submitValidate()
+    if (invalid) {
+      document.getElementById(FIELD_ELEMENT_ID[invalid])?.focus()
       return
     }
 
@@ -183,8 +199,6 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
       }
       onSuccess?.()
     } catch (err) {
-      // The message lands in the store's `error`; the code tells us whether a
-      // resend would help.
       if (err instanceof ApiError && err.code === 'email_not_verified') setNeedsVerification(true)
     }
   }
@@ -229,10 +243,11 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
   if (forgot) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-surface-1">
-        <form
-          onSubmit={handleForgotSubmit}
-          className="w-full max-w-sm p-8 bg-surface-2 rounded-xl border border-border-default shadow-lg flex flex-col gap-5"
-        >
+      <form
+        onSubmit={handleForgotSubmit}
+        noValidate
+        className="w-full max-w-sm p-8 bg-surface-2 rounded-xl border border-border-default shadow-lg flex flex-col gap-5"
+      >
           <div className="flex flex-col gap-1 mb-2">
             <h1 className="text-xl font-semibold text-text-primary">{t('login.resetTitle')}</h1>
             <p className="text-sm text-text-tertiary">{forgotSent ? t('login.resetSent') : t('login.resetPrompt')}</p>
@@ -240,17 +255,22 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
 
           {!forgotSent && (
             <>
-              <Input
-                id="forgot-email"
-                type="email"
-                placeholder={t('login.email')}
-                icon={Mail}
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                required
-                autoComplete="email"
-                autoFocus
-              />
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="forgot-email" className="text-xs font-medium text-text-secondary">
+                  {t('login.email')}
+                </label>
+                <Input
+                  id="forgot-email"
+                  type="email"
+                  placeholder={t('login.email')}
+                  icon={Mail}
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                  autoFocus
+                />
+              </div>
               <Button
                 type="submit"
                 variant="primary"
@@ -278,6 +298,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
     <div className="flex items-center justify-center min-h-screen bg-surface-1">
       <form
         onSubmit={handleSubmit}
+        noValidate
         className="w-full max-w-sm p-8 bg-surface-2 rounded-xl border border-border-default shadow-lg flex flex-col gap-5"
       >
         <div className="flex flex-col gap-1 mb-2">
@@ -326,40 +347,61 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
           </div>
         )}
 
-        <Input
-          id="email"
-          type="email"
-          placeholder={t('login.email')}
-          icon={Mail}
-          value={email}
-          onChange={e => setEmail(e.target.value)}
-          required
-          autoComplete="email"
-          autoFocus
-        />
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="email" className="text-xs font-medium text-text-secondary">
+            {t('login.email')}
+          </label>
+          <Input
+            id="email"
+            type="email"
+            placeholder={t('login.email')}
+            icon={Mail}
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            required
+            autoComplete="email"
+            autoFocus
+            {...v.fieldProps('email')}
+          />
+        </div>
 
-        <Input
-          id="password"
-          type="password"
-          placeholder={t('login.password')}
-          icon={Lock}
-          value={password}
-          onChange={e => setPassword(e.target.value)}
-          required
-          autoComplete={isRegister ? 'new-password' : 'current-password'}
-        />
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="password" className="text-xs font-medium text-text-secondary">
+            {t('login.password')}
+          </label>
+          <Input
+            id="password"
+            type="password"
+            placeholder={t('login.password')}
+            icon={Lock}
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+            autoComplete={isRegister ? 'new-password' : 'current-password'}
+            error={v.errorFor('password')}
+            aria-describedby={v.errorFor('password') ? undefined : isRegister ? 'login-password-rules' : undefined}
+            onBlur={() => v.touch('password')}
+          />
+          {isRegister && <PasswordRuleList id="login-password-rules" check={check} />}
+        </div>
 
         {isRegister && (
-          <Input
-            id="confirm-password"
-            type="password"
-            placeholder={t('login.confirmPassword')}
-            icon={Lock}
-            value={confirmPassword}
-            onChange={e => setConfirmPassword(e.target.value)}
-            required
-            autoComplete="new-password"
-          />
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="confirm-password" className="text-xs font-medium text-text-secondary">
+              {t('login.confirmPassword')}
+            </label>
+            <Input
+              id="confirm-password"
+              type="password"
+              placeholder={t('login.confirmPassword')}
+              icon={Lock}
+              value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)}
+              required
+              autoComplete="new-password"
+              {...v.fieldProps('confirmPassword')}
+            />
+          </div>
         )}
 
         <label className="flex items-center gap-2 text-sm text-text-secondary select-none cursor-pointer">
@@ -392,7 +434,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
           fullWidth
           loading={isLoading}
           icon={isRegister ? UserPlus : LogIn}
-          disabled={isLoading || !email || !password || (isRegister && !confirmPassword)}
+          disabled={isLoading || !canSubmit}
         >
           {isRegister ? t('login.submitRegister') : t('login.submitSignIn')}
         </Button>
@@ -401,7 +443,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
           <>
             <div className="flex items-center gap-3 text-xs text-text-tertiary">
               <div className="flex-1 h-px bg-border-default" />
-              or
+              {t('login.orDivider')}
               <div className="flex-1 h-px bg-border-default" />
             </div>
             <Button
@@ -412,7 +454,7 @@ export default function LoginForm({onSuccess}: LoginFormProps) {
               disabled={isLoading}
               onClick={handleSSOStart}
             >
-              Continue with {sso.provider || 'SSO'}
+              {t('login.continueWith', {provider: sso.provider || 'SSO'})}
             </Button>
           </>
         )}

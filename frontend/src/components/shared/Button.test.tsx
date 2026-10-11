@@ -6,10 +6,6 @@ import IconButton from './IconButton'
 import Checkbox from './Checkbox'
 
 describe('Button', () => {
-  // Preflight makes every <svg> display:block, so an icon passed as a CHILD
-  // lands on its own line above the label (the Compose dialog's Preview and
-  // Send buttons showed the icon stacked over the text). The `icon` prop
-  // renders it as a flex sibling of the label span instead.
   it('renders the icon as a sibling of the label, not inside it', () => {
     render(<Button icon={Eye}>Preview</Button>)
     const button = screen.getByRole('button', {name: 'Preview'})
@@ -42,9 +38,6 @@ describe('Button', () => {
   })
 })
 
-// A <button> without a type is a SUBMIT button. The shared buttons default to
-// type="button", so dropping one into a form no longer submits it; a submit
-// button says so (every form in the app already does).
 describe('button types', () => {
   function renderInForm(children: React.ReactNode) {
     const submit = vi.fn((e: React.FormEvent) => e.preventDefault())

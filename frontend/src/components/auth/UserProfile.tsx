@@ -26,10 +26,6 @@ function formatMemberSince(iso: string | undefined): string | null {
   return d.toLocaleDateString(undefined, {year: 'numeric', month: 'long'})
 }
 
-// The page is three groups — who you are, how you sign in, what is stored
-// about you — in the order a visitor needs them: the everyday edit first,
-// the irreversible action last. The nav jumps between the groups; the
-// ids are the anchors it observes (see useActiveSection).
 const GROUPS = [
   {id: 'profile-account', label: 'account', body: 'accountBody'},
   {id: 'profile-security', label: 'security', body: 'securityBody'},
@@ -37,11 +33,6 @@ const GROUPS = [
 ] as const
 const GROUP_IDS = GROUPS.map(g => g.id)
 
-// LocalModeCard fills the profile pane for the desktop
-// app: Tauri skips the auth gate entirely (ProtectedRoute.tsx), so `user` is
-// always null there — there's no account to display or edit. This explains
-// why and points at the local equivalents (Settings) instead of showing an
-// empty pane with just a toolbar.
 function LocalModeCard() {
   const {t} = useTranslation('auth')
   const toggleSettings = useUIStore(s => s.toggleSettings)

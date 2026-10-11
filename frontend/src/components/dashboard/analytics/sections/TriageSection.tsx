@@ -11,9 +11,6 @@ interface Row extends HBarRow {
   share: number
 }
 
-// How the team is working through findings: the status distribution on the
-// ordinal ramp (suppressed de-emphasised), resolutions per day, and the
-// three numbers that say whether the backlog is moving.
 export function TriageSection({data, refetching}: {data: DashboardAnalyticsData; refetching: boolean}) {
   const {t} = useTranslation('dashboard')
   const theme = useChartTheme()

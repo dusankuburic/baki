@@ -3,10 +3,6 @@ import {type LucideIcon} from 'lucide-react'
 import clsx from 'clsx'
 import Tooltip from './Tooltip'
 
-// Every other <button> attribute passes through to the element — aria-*
-// (Dropdown clones aria-haspopup/aria-expanded/aria-controls onto its
-// trigger), data-*, id — and the ref lands on the <button>, so a caller can
-// move focus back to it.
 type IconButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'onClick'> & {
   icon: LucideIcon
   variant?: 'ghost' | 'solid' | 'outline-solid'
@@ -44,7 +40,6 @@ const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconB
     disabled = false,
     onClick,
     className,
-    // Not a submit button unless the caller says so (see Button).
     type = 'button',
     ...rest
   },

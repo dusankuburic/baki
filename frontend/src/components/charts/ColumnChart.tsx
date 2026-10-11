@@ -15,8 +15,6 @@ import {
   dataKeyOf,
 } from './axes'
 
-// One value per day as columns in a single hue: counts of things that
-// happened (runs, resolutions, events, calls, spend).
 export function ColumnChart<Row extends {date: string}>({
   data,
   dataKey,
@@ -30,7 +28,6 @@ export function ColumnChart<Row extends {date: string}>({
   dataKey: keyof Row & string
   name: string
   valueFormatter?: (n: number) => string
-  /** Fractional axis ticks (currency). */
   allowDecimals?: boolean
   color?: string
   height?: number

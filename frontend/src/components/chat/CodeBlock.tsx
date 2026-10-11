@@ -9,19 +9,9 @@ import {useUIStore} from '@/stores/uiStore'
 interface Props {
   language?: string
   value: string
-  // `plain` skips Prism entirely and renders the raw text. Used for a code
-  // fence that is still streaming: tokenizing a growing block on every
-  // animation frame is the single most expensive thing the chat can do, and
-  // the block is re-rendered highlighted the moment the fence closes.
   plain?: boolean
 }
 
-// Pick the Prism theme by reading the active theme's `color-scheme` so we
-// never need to maintain a light-theme allowlist — any theme that declares
-// `color-scheme: light` automatically gets the light code theme.
-//
-// Cached per resolved theme at module scope: getComputedStyle forces a style
-// recalc, and an answer with a dozen code blocks used to pay for one each.
 let themeCacheKey: string | null = null
 let themeCacheValue = themes.vsDark
 function prismThemeFor(resolvedTheme: string) {
@@ -42,20 +32,9 @@ const PRE_STYLE: React.CSSProperties = {
   fontFamily: 'var(--font-mono)',
 }
 
-// Long lines wrap by default, so nothing in the conversation scrolls
-// sideways (in a 300-560px panel a scrolling block hid most of every line).
-// The header toggle switches one block to horizontal scrolling for the
-// cases where the exact column layout matters. Copy always takes the
-// original text, wrapped or not.
 const PRE_WRAP = 'whitespace-pre-wrap break-normal wrap-anywhere'
 const PRE_SCROLL = 'whitespace-pre overflow-x-auto custom-scrollbar'
 
-// prism-react-renderer names token classes after the grammar's token types
-// ("token table", "token block", …). Some of those are also Tailwind
-// utilities — `table` is `display: table`, `block` is `display: block` — so a
-// markdown table inside a code fence rendered one cell per line. The colours
-// come from the theme's inline styles, so the classes are free to move out
-// of Tailwind's namespace.
 function tokenClassName(types: string[]): string {
   return types.map(type => `tok-${type}`).join(' ')
 }
@@ -67,8 +46,6 @@ function CodeBlock({language, value, plain}: Props) {
   const {copied, copy} = useCopy()
   const [wrap, setWrap] = useState(true)
   const resolvedTheme = useUIStore(s => s.resolvedTheme)
-  // resolvedTheme is the TRIGGER to re-read `color-scheme` off the DOM; the
-  // lookup body intentionally reads computed style, not the theme value.
   const prismTheme = useMemo(() => prismThemeFor(resolvedTheme), [resolvedTheme])
 
   const handleCopy = useCallback(() => {
@@ -149,6 +126,4 @@ function CodeBlock({language, value, plain}: Props) {
   )
 }
 
-// Prism tokenizes the whole block on every render. Memoizing on the code text
-// keeps a settled block off the streaming re-render path entirely.
 export default memo(CodeBlock)

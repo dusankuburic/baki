@@ -2,31 +2,20 @@ import {useCallback, useId, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {AlertTriangle, Check, Copy, KeyRound, Plus, Trash2} from 'lucide-react'
 import clsx from 'clsx'
-import {
-  CI_CREDENTIAL_MAX_EXPIRY_DAYS,
-  CI_CREDENTIAL_MAX_NAME,
-  ciCredentialsApi,
-  type CreatedOrgCICredential,
-  type OrgCICredential,
-} from '@/api/governance'
+import {ciCredentialsApi, type CreatedOrgCICredential, type OrgCICredential} from '@/api/governance'
 import {ApiError, getBackendConfig} from '@/api/client'
 import type {OrgMember} from '@/stores/orgStore'
 import {Badge, Button, FormField, Input, Modal, useConfirm, useToast} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
+import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
+import {CI_CREDENTIAL_MAX_EXPIRY_DAYS, CI_CREDENTIAL_MAX_NAME} from '@/lib/constraints'
 import {writeClipboard} from '@/lib/clipboard'
 import {getErrorMessage} from '@/lib/getErrorMessage'
 import {logger} from '@/lib/logger'
 import {absoluteTime, relativeTimeText} from '@/lib/time'
 
-// OrgCICredentialsSection manages the credentials an org's pipelines sign
-// their `bakicli report` webhook calls with (R8): one per pipeline, so one can
-// be rotated (create, switch, revoke) without breaking the others. Org admins
-// only: the list answers 403 to members, so the section is mounted for admins.
-
 const isExpired = (iso?: string | null): boolean => !!iso && new Date(iso).getTime() <= Date.now()
 
-// The origin bakicli posts to: the API this app talks to (VITE_API_URL, or the
-// page's own origin), not necessarily where the page was served from.
 async function apiOrigin(): Promise<string> {
   try {
     return (await getBackendConfig()).apiUrl.replace(/\/+$/, '')
@@ -47,7 +36,6 @@ export default function OrgCICredentialsSection({orgId, members}: {orgId: string
   )
   const credentials = data ?? []
 
-  // A current member reads under today's name; someone who left, under the name the server recorded.
   const creatorName = (cred: OrgCICredential) => {
     const member = members.find(m => m.userId === cred.createdBy)
     if (member) return member.user?.displayName || member.user?.email || member.userId
@@ -70,8 +58,6 @@ export default function OrgCICredentialsSection({orgId, members}: {orgId: string
       } catch (e) {
         toast.error(t('ciCredentials.revokeFailed'), {description: getErrorMessage(e)})
       }
-      // Either way: the list shows what the server holds now (another admin
-      // may have revoked it first).
       refetch()
     },
     [confirm, orgId, refetch, t, toast],
@@ -176,9 +162,6 @@ function CredentialRow({
   )
 }
 
-// The create dialog: a name and an optional expiry, then the credential, once,
-// with a ready `bakicli report` command. A click on the backdrop does nothing:
-// it must not throw away a half-typed form or the only view of the secret.
 function CreateDialog({orgId, onCreated, onClose}: {orgId: string; onCreated: () => void; onClose: () => void}) {
   const {t} = useTranslation('settings')
   const toast = useToast()
@@ -187,9 +170,22 @@ function CreateDialog({orgId, onCreated, onClose}: {orgId: string; onCreated: ()
   const expiryId = useId()
   const [name, setName] = useState('')
   const [expiry, setExpiry] = useState('')
-  const [expiryError, setExpiryError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState<{credential: CreatedOrgCICredential; endpoint: string} | null>(null)
+
+  const v = useFormValidation<'name' | 'expiry'>({
+    fields: ['name', 'expiry'],
+    validate: () => {
+      const errors: FieldErrors<'name' | 'expiry'> = {}
+      if (!name.trim()) errors.name = t('errors.required', {ns: 'common'})
+      if (expiry.trim() !== '') {
+        const days = Number(expiry)
+        if (!Number.isInteger(days) || days < 1 || days > CI_CREDENTIAL_MAX_EXPIRY_DAYS)
+          errors.expiry = t('ciCredentials.expiryInvalid', {max: CI_CREDENTIAL_MAX_EXPIRY_DAYS})
+      }
+      return errors
+    },
+  })
 
   const close = () => {
     if (!busy) onClose()
@@ -199,15 +195,9 @@ function CreateDialog({orgId, onCreated, onClose}: {orgId: string; onCreated: ()
     e.preventDefault()
     const trimmed = name.trim()
     if (!trimmed || busy) return
+    if (v.submitValidate()) return
     let expiresInDays: number | undefined
-    if (expiry.trim() !== '') {
-      const days = Number(expiry)
-      if (!Number.isInteger(days) || days < 1 || days > CI_CREDENTIAL_MAX_EXPIRY_DAYS) {
-        setExpiryError(t('ciCredentials.expiryInvalid', {max: CI_CREDENTIAL_MAX_EXPIRY_DAYS}))
-        return
-      }
-      expiresInDays = days
-    }
+    if (expiry.trim() !== '') expiresInDays = Number(expiry)
     setBusy(true)
     try {
       const credential = await ciCredentialsApi.create(orgId, {
@@ -218,7 +208,6 @@ function CreateDialog({orgId, onCreated, onClose}: {orgId: string; onCreated: ()
       onCreated()
     } catch (err) {
       logger.warn(err)
-      // The server masks 5xx messages, so the encryption case is told by its code.
       if (err instanceof ApiError && (err.code === 'CI_CREDENTIAL_LIMIT' || err.status === 409)) {
         toast.error(t('ciCredentials.limitReached'), {description: t('ciCredentials.limitReachedHint')})
       } else if (err instanceof ApiError && err.code === 'CI_CREDENTIALS_UNAVAILABLE') {
@@ -312,13 +301,11 @@ function CreateDialog({orgId, onCreated, onClose}: {orgId: string; onCreated: ()
             max={CI_CREDENTIAL_MAX_EXPIRY_DAYS}
             step={1}
             value={expiry}
-            onChange={e => {
-              setExpiry(e.target.value)
-              if (expiryError) setExpiryError(null)
-            }}
+            onChange={e => setExpiry(e.target.value)}
             placeholder={t('ciCredentials.expiryPlaceholder')}
-            error={expiryError ?? undefined}
-            hint={expiryError ? undefined : t('ciCredentials.expiryHint', {max: CI_CREDENTIAL_MAX_EXPIRY_DAYS})}
+            error={v.errorFor('expiry')}
+            hint={v.errorFor('expiry') ? undefined : t('ciCredentials.expiryHint', {max: CI_CREDENTIAL_MAX_EXPIRY_DAYS})}
+            onBlur={() => v.touch('expiry')}
           />
         </FormField>
       </form>

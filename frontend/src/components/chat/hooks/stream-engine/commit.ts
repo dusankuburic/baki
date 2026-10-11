@@ -12,27 +12,15 @@ import type {DoneMeta} from '@/lib/chatEvent'
 import type {ChatStoreState, StreamAcc, ToastApi} from './types'
 import {messageModel, applyDoneMeta} from './helpers'
 
-// The store actions and the toast ref the commit path needs. Stable
-// references, so the callbacks below keep their original identities.
 interface CommitDeps {
   toastRef: MutableRefObject<ToastApi | null>
   appendMessage: ChatStoreState['appendMessage']
   updateThread: ChatStoreState['updateThread']
 }
 
-// useCommit turns a finished stream into a permanent assistant message: the
-// full-replace save, the thread token badges and the commit itself (tool
-// trail, fix-proposal outcomes, served model and billed rates pinned on).
 export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
-  // Threads whose last save failed (one toast per thread until a save lands).
   const saveFailedRef = useRef(new Set<string>())
 
-  // persistThread full-replace saves a thread (transient error bubbles
-  // filtered out) — but only once its server history has loaded: saving a
-  // thread whose history never arrived would overwrite the stored
-  // conversation with just the turns on screen. The server persists each turn
-  // itself, so skipping is safe. History off: nothing is stored, and the
-  // request builder sends the thread's messages with each turn instead.
   const persistThread = useCallback(
     (threadId: string, flowId: string) => {
       if (!conversationHistoryEnabled()) return
@@ -57,11 +45,6 @@ export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
     [toastRef, saveFailedRef],
   )
 
-  // bumpThreadTokens adds a finished turn's usage to the thread's badge
-  // totals. Shared by the done commit and the error path, so a BILLED
-  // failure — PROVIDER_OUTPUT_LIMIT after a 16k reasoning budget —
-  // reaches the meter too. Reads the thread fresh: two streams on one
-  // thread committing close together must not drop each other's tokens.
   const bumpThreadTokens = useCallback(
     (threadId: string, tokensIn?: number, tokensOut?: number) => {
       if (tokensIn == null && tokensOut == null) return
@@ -75,14 +58,6 @@ export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
     [updateThread],
   )
 
-  // commitAssistantMessage appends the streamed text as a permanent assistant
-  // message and persists the thread. Saves under the thread's own flowId —
-  // never the open document's: a done event can land after the user switched
-  // documents. The stream slot's tool trail and fix-proposal outcome (if any)
-  // are pinned onto the message here — the slot dies with endStream, the
-  // message is what survives the reload. So are the served model and billed
-  // rates the done event reported (opts.meta). `save: false` leaves the
-  // server's stored copy alone (a re-attached turn the server stores itself).
   const commitAssistantMessage = useCallback(
     (
       acc: Pick<StreamAcc, 'threadId' | 'provider' | 'model' | 'modelLabel'>,
@@ -105,8 +80,6 @@ export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
         role: 'assistant',
         content,
         timestamp: new Date().toISOString(),
-        // The model and the name it went by when this turn was sent: history
-        // and exports keep naming a model that is later renamed or removed.
         ...messageModel(acc),
         tokensIn: opts.tokensIn,
         tokensOut: opts.tokensOut,
@@ -116,17 +89,10 @@ export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
       if (slot && slot.toolCalls.length > 0) {
         msg.toolCalls = slot.toolCalls.map(tc => ({...tc}))
       }
-      // EVERY fix card of the stream is pinned (sequential fixes stack), each
-      // with its per-item outcomes (batches), in the shape the message has
-      // always persisted. A request of another kind (a later server's
-      // approval_request) lives only on the slot: the server keeps its own
-      // record, and the message has no persisted shape for it yet.
       const fixCards = slot ? slot.approvals.filter(card => card.source === 'fix') : []
       if (fixCards.length > 0) {
         msg.fixProposals = fixCards.map(card => ({
           proposalId: card.proposalId,
-          // As the server stamps its own record; a kind other than fix-patch
-          // is what lets the message render the card the way it was shown.
           ...(card.tool ? {tool: card.tool} : {}),
           ...(card.previewKind ? {previewKind: card.previewKind} : {}),
           ruleId: card.ruleId ?? '',
@@ -148,8 +114,6 @@ export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
         }))
       }
       appendMessage(threadId, msg)
-      // Thread-tab badges: this conversation was agentic — flag it once
-      // tools ran or a fix landed; updateThread is idempotent per flag.
       if ((msg.toolCalls?.length ?? 0) > 0 || (slot?.approvals.length ?? 0) > 0) {
         updateThread(threadId, {
           usedTools: true,

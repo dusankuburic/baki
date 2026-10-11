@@ -7,8 +7,6 @@ import type {DashboardAnalyticsData} from '@/types'
 import {actionIcon, actionLabel} from '../../home/activity'
 import {ChartSection} from '../ChartSection'
 
-// Who did what in this scope: events per day, the mix of actions, and the
-// latest events with their actor.
 export function ActivitySection({data, refetching}: {data: DashboardAnalyticsData; refetching: boolean}) {
   const {t} = useTranslation('dashboard')
   const labels = t('actions', {returnObjects: true}) as Record<string, string>

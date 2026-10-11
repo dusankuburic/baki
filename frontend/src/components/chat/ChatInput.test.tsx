@@ -5,7 +5,6 @@ import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {ToastProvider} from '@/components/shared/Toast'
 
-// Stub sub-components so we test ChatInput's logic, not their rendering.
 vi.mock('./FileAutocomplete', () => ({default: () => null}))
 vi.mock('./SlashCommandAutocomplete', () => ({
   default: () => null,
@@ -93,7 +92,6 @@ describe('ChatInput', () => {
     })
 
     expect(onSend).toHaveBeenCalledWith('new message', [], false)
-    // Input is cleared
     expect(textarea.value).toBe('')
   })
 
@@ -105,9 +103,7 @@ describe('ChatInput', () => {
     render(<ChatInput onSend={vi.fn()} />)
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
-    // Staged prompt overrides the draft
     expect(textarea.value).toBe('Explain this finding')
-    // Staged prompt is consumed
     expect(useChatStore.getState().stagedPrompt).toBeNull()
   })
 
@@ -140,7 +136,6 @@ describe('ChatInput', () => {
     })
     render(<ChatInput onSend={vi.fn()} />)
 
-    // The send button should reflect disabled state (it uses a Stop icon when streaming)
     const sendBtn = screen.getByRole('button', {name: /stop|cancel/i})
     expect(sendBtn).toBeInTheDocument()
   })
@@ -164,29 +159,23 @@ describe('ChatInput', () => {
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
     expect(textarea.value).toBe('')
 
-    // ArrowUp recalls the most recent user message
     await act(async () => {
       fireEvent.keyDown(textarea, {key: 'ArrowUp'})
     })
     expect(textarea.value).toBe('second question')
 
-    // Set cursor to start so the next ArrowUp fires (the handler requires
-    // either empty input or cursor at position 0).
     textarea.setSelectionRange(0, 0)
 
-    // ArrowUp again recalls the previous one
     await act(async () => {
       fireEvent.keyDown(textarea, {key: 'ArrowUp'})
     })
     expect(textarea.value).toBe('first question')
 
-    // ArrowDown goes forward
     await act(async () => {
       fireEvent.keyDown(textarea, {key: 'ArrowDown'})
     })
     expect(textarea.value).toBe('second question')
 
-    // ArrowDown again clears
     await act(async () => {
       fireEvent.keyDown(textarea, {key: 'ArrowDown'})
     })
@@ -202,7 +191,6 @@ describe('ChatInput', () => {
 
     const before = textarea.value
     fireEvent.keyDown(textarea, {key: 'ArrowUp'})
-    // Input should not change (ArrowUp only recalls when empty)
     expect(textarea.value).toBe(before)
   })
 
@@ -212,11 +200,9 @@ describe('ChatInput', () => {
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(textarea, {target: {value: 'half-typed message'}})
 
-    // Switch active thread
     useChatStore.setState({activeThreadId: 'threadB', drafts: {}})
     rerender(<ChatInput onSend={vi.fn()} />)
 
-    // The old thread's draft should have been saved
     expect(useChatStore.getState().drafts.threadA).toBe('half-typed message')
   })
 })
@@ -243,7 +229,6 @@ describe('ChatInput queue-while-streaming (U1.6)', () => {
     fireEvent.keyDown(ta, {key: 'Enter'})
     expect(onQueue).toHaveBeenCalledWith('follow up question', [], false)
     expect(onSend).not.toHaveBeenCalled()
-    // The composer cleared — the message lives in the queue now.
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
   })
 
@@ -287,7 +272,6 @@ describe('ChatInput mod+enter', () => {
     const ev = new KeyboardEvent('keydown', {key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true})
     other.dispatchEvent(ev)
     expect(onSend).not.toHaveBeenCalled()
-    // Not claimed either: another field's own Ctrl+Enter keeps its default.
     expect(ev.defaultPrevented).toBe(false)
     other.remove()
   })
@@ -306,7 +290,6 @@ describe("ChatInput keeps the user's text", () => {
   })
 
   it('does not clear the composer when Enter hits the concurrency cap', async () => {
-    // Three OTHER threads are generating: this thread is idle but at the cap.
     useChatStore.setState({streams: {x: slot('s1'), y: slot('s2'), z: slot('s3')}})
     const onSend = vi.fn()
     render(
@@ -319,11 +302,8 @@ describe("ChatInput keeps the user's text", () => {
     await userEvent.type(textarea, 'keep me')
     fireEvent.keyDown(textarea, {key: 'Enter'})
 
-    // The send would be refused — the message must still be here…
     expect(onSend).not.toHaveBeenCalled()
     expect(textarea.value).toBe('keep me')
-    // …and the user told why: the disabled Send button's tooltip is out of
-    // reach of an Enter press.
     expect(await screen.findByText('Chats are busy')).toBeInTheDocument()
   })
 
@@ -346,7 +326,6 @@ describe("ChatInput keeps the user's text", () => {
     })
     rerender(<ChatInput onSend={vi.fn()} />)
 
-    // The draft, not the recalled message, is what the thread keeps.
     expect(useChatStore.getState().drafts.threadA).toBe('half-written draft')
   })
 
@@ -374,7 +353,6 @@ describe("ChatInput keeps the user's text", () => {
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
     await userEvent.type(textarea, 'nihon')
-    // Enter confirms the IME candidate; it must not send the half-composed text.
     fireEvent.keyDown(textarea, {key: 'Enter', isComposing: true})
 
     expect(onSend).not.toHaveBeenCalled()
@@ -386,8 +364,6 @@ describe("ChatInput keeps the user's text", () => {
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
     await userEvent.type(textarea, 'nihon')
-    // Safari / WKWebView: compositionend has fired, isComposing is already
-    // false, and the candidate-confirming Enter carries the 229 keyCode.
     fireEvent.keyDown(textarea, {key: 'Enter', keyCode: 229, isComposing: false})
 
     expect(onSend).not.toHaveBeenCalled()
@@ -403,17 +379,14 @@ describe("ChatInput keeps the user's text", () => {
     fireEvent.click(screen.getByRole('button', {name: /preview context/i}))
 
     expect(onPreview).toHaveBeenCalledWith('check the context first', [], false, expect.any(Function))
-    // Preview open (or cancelled): the draft stays.
     expect(textarea.value).toBe('check the context first')
 
-    // Confirmed and sent: now it clears.
     const onConfirmed = onPreview.mock.calls[0]![3] as () => void
     act(() => onConfirmed())
     expect(textarea.value).toBe('')
   })
 })
 
-// A frame for the caret restore that insertTrigger schedules.
 async function flushFrame() {
   await act(async () => {
     await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
@@ -468,9 +441,6 @@ describe('ChatInput toolbar', () => {
   })
 })
 
-// Azure AI Foundry with nothing to chat with (no model added, or every
-// resource needs its credentials again): the composer says so instead of
-// sending a request with no model.
 describe('ChatInput guidance', () => {
   it('shows the guidance with its action, and blocks sending — not typing', async () => {
     const onSend = vi.fn()

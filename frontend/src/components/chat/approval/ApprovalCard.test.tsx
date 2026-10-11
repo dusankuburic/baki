@@ -62,8 +62,6 @@ function batchCard(overrides: Partial<CardState> = {}): CardState {
   }
 }
 
-// A request of a kind this bundle does not know (a tool a newer server
-// added): only the generic fields are there.
 function genericCard(overrides: Partial<CardState> = {}): CardState {
   return {
     proposalId: 'a1',
@@ -105,7 +103,6 @@ describe('ApprovalCard (fix-patch)', () => {
     expect(screen.getByText('wrap lines 3-3')).toBeInTheDocument()
   })
 
-  // An older server sends no previewKind: the card is a fix card.
   it('renders a card without a preview kind as fix-patch', () => {
     render(<ApprovalCard approval={pendingCard({previewKind: ''})} onRespond={vi.fn()} />)
     expect(screen.getByText('Proposed fix — approval needed')).toBeInTheDocument()
@@ -131,8 +128,6 @@ describe('ApprovalCard (fix-patch)', () => {
       vi.advanceTimersByTime(20_000)
     })
     unmount()
-    // Thread switch-back / pop-out remounts the card; the server's window did
-    // not restart, so neither may the countdown.
     render(<ApprovalCard approval={pendingCard({receivedAt})} onRespond={vi.fn()} />)
     expect(screen.getByText(/40s to decide/)).toBeInTheDocument()
   })
@@ -175,8 +170,6 @@ describe('ApprovalCard (fix-patch)', () => {
     expect(screen.getByTestId('fix-proposal-status')).toHaveTextContent('No response in time')
   })
 
-  // The stream ended before a decision (the server is restarting): the card
-  // says so with the server's words, rather than reading as a failed fix.
   it('shows a cancelled card with the server message and no buttons', () => {
     render(
       <ApprovalCard
@@ -254,7 +247,6 @@ describe('batch per-item opt-out (U4.1)', () => {
     const batch = batchCard()
     render(<ApprovalCard approval={batch} onRespond={onRespond} />)
 
-    // Deselect the second item (index 1).
     fireEvent.click(screen.getByTestId('include-item-1'))
     fireEvent.click(screen.getByRole('button', {name: /approve & apply 1/i}))
     expect(onRespond).toHaveBeenCalledWith(true, batch.proposalId, [1])
@@ -273,9 +265,6 @@ describe('batch per-item opt-out (U4.1)', () => {
   })
 })
 
-// A preview kind this bundle does not know still gets a decision: the tool's
-// name, each item's label and summary as text, Approve/Dismiss and the
-// countdown — never a silent 60 s timeout.
 describe('ApprovalCard (unknown preview kind)', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -294,7 +283,6 @@ describe('ApprovalCard (unknown preview kind)', () => {
     expect(screen.getByText('Rename to %CustomerRecord%')).toBeInTheDocument()
     expect(screen.getByText(/requires write access/i)).toBeInTheDocument()
     expect(screen.getByText(/60s to decide/)).toBeInTheDocument()
-    // Nothing of the fix vocabulary leaks in.
     expect(screen.queryByText(/rule/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Proposed fix/)).not.toBeInTheDocument()
 
@@ -344,8 +332,6 @@ describe('ApprovalCard (unknown preview kind)', () => {
     expect(onRespond).toHaveBeenCalledWith(false, 'a1')
   })
 
-  // F2: the kind is a server string used as a key; a prototype member's name
-  // must not resolve to Object.prototype (and render a function as a child).
   it('a previewKind naming a prototype key renders the generic preview', () => {
     render(<ApprovalCard approval={genericCard({previewKind: 'constructor'})} onRespond={vi.fn()} />)
     const card = screen.getByRole('alertdialog', {name: 'rename_variable: approval needed'})
@@ -354,8 +340,6 @@ describe('ApprovalCard (unknown preview kind)', () => {
     expect(screen.getByRole('button', {name: 'Approve'})).toBeInTheDocument()
   })
 
-  // F3: the summary is the server's text, unbounded in length; the fix
-  // preview scrolls past a height, and so must this one.
   it('bounds the summary height like the fix preview', () => {
     render(<ApprovalCard approval={genericCard()} onRespond={vi.fn()} />)
     expect(screen.getByText('Rename to %CustomerRecord%')).toHaveClass('max-h-40', 'overflow-auto')

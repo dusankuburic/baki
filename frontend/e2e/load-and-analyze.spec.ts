@@ -30,12 +30,10 @@ test.describe('Load flow and analyze', () => {
       buffer: Buffer.from(SAMPLE_FLOW_CONTENT),
     })
 
-    // The flow name should appear somewhere in the UI after loading
     await expect(page.locator('text=Customer Data Sync').first()).toBeVisible({timeout: 10000})
   })
 
   test('run analysis shows findings in inspector', async ({page}) => {
-    // Load a flow first via the sidebar file picker
     const openBtn = page.locator('button:has-text("Open file")').first()
 
     const [fileChooser] = await Promise.all([
@@ -49,19 +47,16 @@ test.describe('Load flow and analyze', () => {
     })
     await expect(page.locator('text=Customer Data Sync').first()).toBeVisible({timeout: 10000})
 
-    // Switch to the Findings tab in the inspector
     const findingsTab = page.locator('button[title="Findings"]')
     if (await findingsTab.count() > 0) {
       await findingsTab.first().click()
     }
 
-    // Click "Run Analysis" if it's visible (no report yet)
     const runBtn = page.locator('button:has-text("Run Analysis")')
     if (await runBtn.count() > 0) {
       await runBtn.click()
     }
 
-    // Findings should appear — check for one of the seeded finding titles
     await expect(page.locator('text=Hardcoded credential').first()).toBeVisible({timeout: 10000})
   })
 })

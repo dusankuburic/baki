@@ -3,8 +3,6 @@ import {render, screen, within} from '@testing-library/react'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {AiUsageCard} from './AiUsageCard'
 
-// A fixed-size chart (jsdom measures nothing), so the bars, their value
-// labels and the axis ticks actually render.
 vi.mock('recharts', async importOriginal => {
   const actual = await importOriginal<typeof import('recharts')>()
   const {cloneElement} = await import('react')
@@ -18,14 +16,11 @@ vi.mock('recharts', async importOriginal => {
 const tokens = [{date: '2026-09-28', tokensIn: 1200, tokensOut: 300}]
 
 beforeEach(() => {
-  // Unanimated, so the bar value labels render at once.
   useSettingsStore.setState(s => ({
     settings: {...s.settings, appearance: {...s.settings.appearance, reduceMotion: true}},
   }))
 })
 
-// Azure AI Foundry usage is not priced by baki: the home card's cost chart
-// draws no bar for it (the bar's value label would read a misleading $0.00).
 describe('AiUsageCard cost by provider', () => {
   it('leaves Azure AI Foundry out of the cost chart', () => {
     render(
@@ -38,7 +33,6 @@ describe('AiUsageCard cost by provider', () => {
         isCloud
       />,
     )
-    // The cost figure, not the tokens chart next to it.
     const figure = screen.getByText('Cost by provider · last 30 days').parentElement!
     const texts = (selector: string) => Array.from(figure.querySelectorAll(selector), n => n.textContent)
     expect(texts('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value')).toEqual(['openai'])

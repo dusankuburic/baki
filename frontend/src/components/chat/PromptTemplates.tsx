@@ -20,11 +20,6 @@ export interface PromptTemplate {
   category: 'analysis' | 'debug' | 'refactor' | 'explain'
 }
 
-// Ids + category only. Labels and prompts resolve through
-// chat:templates.labels.<id> / chat:templates.prompts.<id>, so adding a locale
-// does not mean forking this table.
-// requiresBlock: the template talks about "this block", so it is only offered
-// while a block is in scope — sent without one, the model had nothing to explain.
 const builtInTemplates: {id: TemplateId; category: PromptTemplate['category']; requiresBlock?: boolean}[] = [
   {id: 't-explain-block', category: 'explain', requiresBlock: true},
   {id: 't-explain-flow', category: 'explain'},
@@ -41,11 +36,6 @@ interface Props {
   hasBlock: boolean
   flowName?: string
   blockName?: string
-  /**
-   * Why nothing can be sent right now (the composer's guidance). The
-   * templates stay reachable, marked unavailable, with this as their
-   * description.
-   */
   disabledReason?: string
 }
 

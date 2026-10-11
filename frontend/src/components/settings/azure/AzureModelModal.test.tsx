@@ -244,13 +244,11 @@ describe('AzureModelModal: the form', () => {
     })
   })
 
-  // Optional (b): the server collapses whitespace runs before it counts.
   it('counts the description as the server stores it', () => {
     renderModal()
     fireEvent.change(screen.getByRole('textbox', {name: 'Description (optional)'}), {
       target: {value: '  Writes   docs\n\nfast  '},
     })
-    // "Writes docs fast"
     expect(screen.getByText('16/200')).toBeInTheDocument()
   })
 })
@@ -290,7 +288,6 @@ describe('AzureModelModal: validation and focus', () => {
     submit()
     expect(deployment()).toHaveFocus()
     expect(deployment()).toHaveAccessibleDescription('This resource already has a model with this name')
-    // An embedding of the same name is another name space.
     fireEvent.click(screen.getByRole('radio', {name: 'Embedding'}))
     submit()
     await waitFor(() => expect(api.createAzureModel).toHaveBeenCalledTimes(1))
@@ -346,8 +343,6 @@ describe('AzureModelModal: editing', () => {
     expect(api.updateAzureModel).not.toHaveBeenCalled()
   })
 
-  // U2: PUT /models/{id} is a compare-and-swap on updatedAt. Without it an
-  // edit silently overwrote whatever another admin (or tab) saved meanwhile.
   it('saves against the version it loaded: a conflict offers Reload, which moves it to the new version', async () => {
     const shared = {...docs, shared: true, orgId: 'org-1', updatedAt: '2026-09-30T10:00:00.123456Z'}
     const ORG: AzureScope = {kind: 'org', orgId: 'org-1'}
@@ -373,7 +368,6 @@ describe('AzureModelModal: editing', () => {
     const message = await screen.findByText(/Someone else changed this model since you opened it/)
     expect(message.closest('[role="alert"]')).not.toBeNull()
 
-    // Reload shows their version and saves against it from now on.
     api.listAzureConnections.mockResolvedValueOnce({
       connections: [conn('default', {shared: true})],
       registryState: 'ok',
@@ -394,8 +388,6 @@ describe('AzureModelModal: editing', () => {
     })
   })
 
-  // Optional (a): the server refuses KIND_REQUIRES_PROJECT only for a change
-  // of kind or resource; the client used to block any edit of such an agent.
   it('edits an agent whose resource can no longer run agents, in place', async () => {
     const helper = model('helper0000', {
       kind: 'agent',
@@ -404,7 +396,6 @@ describe('AzureModelModal: editing', () => {
       status: 'unsupported',
     })
     const {onSaved} = renderModal({entry: helper, connections: [conn('default', {supportsAgents: false})]})
-    // The hint stays; the kind is not flagged for an agent that stays where it is.
     expect(screen.getByRole('radiogroup', {name: 'Kind'})).toHaveAccessibleDescription(
       'Agents need a resource with Microsoft Entra ID and a project endpoint.',
     )
@@ -439,8 +430,6 @@ describe('AzureModelModal: server errors', () => {
     await waitFor(() => expect(within(dialog).getAllByRole('alert')[0]).toHaveTextContent('limit 50'))
   })
 
-  // U4: CONNECTION_NOT_FOUND belongs to the Resource field — which, with a
-  // single resource, is plain text: the message used to vanish.
   it('says a vanished resource in the form alert when the Resource is plain text, on its select otherwise', async () => {
     const one = renderModal({initial: {...emptyModelForm('default'), deployment: 'gpt-4.1', displayName: 'gpt-4.1'}})
     await flushFrame()
@@ -550,7 +539,6 @@ describe('AzureModelModal: the draft test and discovery', () => {
   it('tests the draft {resource, kind, name} and reports the outcome in the right region', async () => {
     renderModal()
     fireEvent.click(screen.getByRole('button', {name: 'Test model'}))
-    // Nothing to test without a name.
     expect(api.testAzure).not.toHaveBeenCalled()
     expect(deployment()).toHaveFocus()
 
@@ -584,7 +572,6 @@ describe('AzureModelModal: the draft test and discovery', () => {
       limits: {connections: 10, models: 50},
       knowledgeEmbeddingEnabled: false,
     })
-    // The registry holds gpt-4.1 already: discovery marks it added.
     api.listAzureModels.mockResolvedValueOnce({models: [model('gpt4100000', {deployment: 'gpt-4.1'})]})
     await useAzureFoundryStore.getState().load(USER)
     api.discoverAzureConnection.mockResolvedValueOnce({
@@ -607,7 +594,6 @@ describe('AzureModelModal: the draft test and discovery', () => {
     fireEvent.click(within(chips).getByRole('button', {name: 'Use o4-mini'}))
     expect(deployment()).toHaveValue('o4-mini')
     expect(displayName()).toHaveValue('o4-mini')
-    // Agents are offered for an agent.
     fireEvent.click(screen.getByRole('radio', {name: 'Agent'}))
     expect(
       within(screen.getByRole('group', {name: 'Found in your project'})).getByRole('button', {name: 'Use Helper'}),

@@ -1,7 +1,5 @@
 import {describe, it, expect, vi, afterEach} from 'vitest'
 
-// The API client hands every response's build version to lib/buildVersion,
-// whatever the status — the reload banner's only input.
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
     getBackendConfig: vi.fn().mockResolvedValue({apiUrl: 'http://localhost:9999', token: 'mock-token', port: 9999}),

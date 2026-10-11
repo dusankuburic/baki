@@ -12,11 +12,6 @@ import type {FlowDocument} from '@/types'
 import type {GovernanceAlert} from '@/api/governance'
 import {logger} from '@/lib/logger'
 
-// Notifications bell + dropdown panel for the in-app governance alerts inbox.
-// Cloud-only (the scanner is cloud-only); hidden in desktop/Tauri mode. The
-// unread badge polls on a slow interval; opening the panel loads the list and
-// implicitly clears the badge (ack semantics).
-
 function timeAgo(iso: string): string {
   const then = new Date(iso).getTime()
   if (Number.isNaN(then)) return ''
@@ -28,7 +23,6 @@ function timeAgo(iso: string): string {
 }
 
 export default function AlertsBell() {
-  // Desktop mode has no scanner → no alerts; hide the bell entirely.
   if (isTauri()) return null
   return <AlertsBellInner />
 }
@@ -41,7 +35,6 @@ function AlertsBellInner() {
   const closePanel = useGovernanceStore(s => s.closePanel)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Outside-click + Esc to close.
   useEffect(() => {
     if (!panelOpen) return
     const onPointer = (e: MouseEvent) => {
@@ -94,8 +87,6 @@ function AlertsPanel() {
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const openSettings = useUIStore(s => s.openSettings)
 
-  // Dismissed rows only reach the list while the toggle is on, so Clear is
-  // offered exactly when there is something on screen for it to remove.
   const hasDismissed = showDismissed && alerts.some(a => a.dismissedAt)
 
   const openFlow = async (flowId: string) => {
@@ -110,7 +101,6 @@ function AlertsPanel() {
     }
   }
 
-  // A new_rules notice is about rules, not one flow: it opens the rule settings.
   const openRules = () => {
     closePanel()
     openSettings('analysis')
@@ -172,15 +162,12 @@ function AlertsPanel() {
   )
 }
 
-// How many rule ids a notice row shows before "+N more".
 const NOTICE_RULES_SHOWN = 4
 
 function AlertRow({alert, onDismiss, onOpen}: {alert: GovernanceAlert; onDismiss: () => void; onOpen: () => void}) {
   const {t} = useTranslation('shell')
   const isRegression = alert.type === 'health_regression'
   const isNotice = alert.type === 'new_rules'
-  // Personal alert types get a friendlier chip than the raw severity: an
-  // assignment is an action item, not an error state.
   const chip = isNotice
     ? t('alerts.newRules.chip')
     : isRegression
@@ -240,8 +227,6 @@ function AlertRow({alert, onDismiss, onOpen}: {alert: GovernanceAlert; onDismiss
   )
 }
 
-// The rules of a new_rules notice and where they report findings. The ids are
-// data (rule ids), not copy.
 function NoticeRules({alert}: {alert: GovernanceAlert}) {
   const {t} = useTranslation('shell')
   const ids = alert.ruleIds ?? []
@@ -265,7 +250,6 @@ function NoticeRules({alert}: {alert: GovernanceAlert}) {
   )
 }
 
-// Where a notice's flows are: in place of an alert's flow name.
 function NoticeScope({scope}: {scope: GovernanceAlert['scope']}) {
   const {t} = useTranslation('shell')
   switch (scope) {

@@ -85,10 +85,6 @@ describe('MetricsTab', () => {
     expect(screen.getByText('Total Blocks')).toBeTruthy()
   })
 
-  // Regression test for the removed non-null assertion
-  // (metrics.circularDependencies!.join(...)): the circular-dependencies
-  // banner must render correctly from a properly-narrowed check, and must not
-  // render at all when there are none.
   it('shows the circular dependencies banner only when present', () => {
     useFlowStore.setState({document: doc})
     useAnalysisStore.setState({

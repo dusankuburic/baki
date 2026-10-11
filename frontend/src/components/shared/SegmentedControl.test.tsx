@@ -13,7 +13,6 @@ const KINDS: SegmentedOption<Kind>[] = [
   {value: 'embedding', label: 'Embedding'},
 ]
 
-// A controlled group, the way every consumer uses it.
 function Harness({
   onChange = () => {},
   options = KINDS,
@@ -56,8 +55,6 @@ describe('SegmentedControl', () => {
     for (const name of ['Chat', 'Agent', 'Embedding']) expect(radio(name)).toHaveAttribute('tabindex', '-1')
   })
 
-  // A <button> without a type is a submit button: picking an option inside a
-  // form used to submit it.
   it('does not submit the form it sits in', () => {
     const submit = vi.fn((e: React.FormEvent) => e.preventDefault())
     render(
@@ -121,9 +118,6 @@ describe('SegmentedControl', () => {
     expect(onChange).toHaveBeenCalledTimes(2)
   })
 
-  // With manual activation the focused option is not the selected one; the
-  // tab stop has to follow focus, or Shift+Tab would land on the selected
-  // option instead of leaving the group.
   it('manual activation: the focused option holds the tab stop until focus leaves the group', async () => {
     const user = userEvent.setup()
     render(
@@ -161,9 +155,6 @@ describe('SegmentedControl', () => {
     expect(radio('Claude')).toHaveAttribute('aria-checked', 'true')
   })
 
-  // The Model modal disables Agent when the resource cannot run agents; a
-  // model that already is an agent keeps showing it, and the group stays
-  // reachable from the keyboard.
   it('keeps the tab stop on a selected option that is disabled, and steps off it', () => {
     const options = KINDS.map(o => (o.value === 'agent' ? {...o, disabled: true} : o))
     render(<Harness options={options} initial="agent" />)

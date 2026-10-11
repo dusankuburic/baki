@@ -54,11 +54,9 @@ describe('ChatThreadBar streaming indicator', () => {
       />,
     )
 
-    // The busy thread shows the "Generating…" indicator dot.
     const busyTab = screen.getByText('Busy thread').closest('[class*="group"]')!
     expect(within(busyTab as HTMLElement).getByTitle('Generating…')).toBeInTheDocument()
 
-    // The idle thread does not.
     const idleTab = screen.getByText('Idle thread').closest('[class*="group"]')!
     expect(within(idleTab as HTMLElement).queryByTitle('Generating…')).not.toBeInTheDocument()
   })
@@ -112,7 +110,6 @@ describe('ChatThreadBar accessibility', () => {
     expect(tabs).toHaveLength(2)
     expect(tabs[0]).toHaveAttribute('aria-selected', 'false')
     expect(tabs[1]).toHaveAttribute('aria-selected', 'true')
-    // Only the active tab is in the tab order.
     expect(tabs[1]).toHaveAttribute('tabIndex', '0')
     expect(tabs[0]).toHaveAttribute('tabIndex', '-1')
   })
@@ -168,7 +165,6 @@ describe('ChatThreadBar agentic badges', () => {
   })
 })
 
-// Each thread keeps its own model: the tab's tooltip says which.
 describe('ChatThreadBar model tooltip', () => {
   it("names the thread's model (and its purpose) next to the title", () => {
     render(
@@ -183,9 +179,7 @@ describe('ChatThreadBar model tooltip', () => {
       />,
     )
     expect(screen.getByTitle('Docs pass — Docs writer · Documentation')).toHaveTextContent('Docs pass')
-    // No label known: the title alone.
     expect(screen.getByTitle('New chat')).toBeInTheDocument()
-    // The tab's name stays its title (the tooltip is a description).
     expect(screen.getByRole('tab', {name: /Docs pass/})).toBeInTheDocument()
   })
 })

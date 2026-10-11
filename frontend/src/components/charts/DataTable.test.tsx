@@ -41,7 +41,6 @@ describe('DataTable', () => {
     const lines = content.split('\n')
     expect(lines[0]).toBe('Rule,Findings')
     expect(lines[1]).toBe('missing-timeout,12')
-    // The leading "=" is neutralised so a spreadsheet never runs it.
     expect(lines[2]).not.toMatch(/^=/)
     expect(lines[2]).toContain('cmd|calc')
   })

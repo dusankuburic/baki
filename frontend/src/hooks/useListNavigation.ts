@@ -14,14 +14,6 @@ interface UseListNavResult {
   handleKeyDown: (e: {key: string; preventDefault: () => void}) => void
 }
 
-/**
- * Arrow-key list navigation hook. Manages the active index and exposes a
- * keydown handler that supports ArrowUp/Down (with clamp or wrap),
- * Enter (and optionally Tab) to select, and Escape to close.
- *
- * Works with both React.KeyboardEvent and native KeyboardEvent since it
- * only reads `.key` and calls `.preventDefault()`.
- */
 export function useListNavigation({
   count,
   onSelect,

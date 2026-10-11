@@ -12,7 +12,6 @@ export default function PropertiesTable({properties}: PropertiesTableProps) {
   if (entries.length === 0) return null
 
   const formatValue = (val: string) => {
-    // Detect and format PAD strings for the inspector
     if (val.startsWith("$'''") && val.endsWith("'''")) {
       return {
         text: `"${val.slice(4, -3)}"`,

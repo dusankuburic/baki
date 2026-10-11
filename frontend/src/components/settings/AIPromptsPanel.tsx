@@ -1,4 +1,4 @@
-import {useState} from 'react'
+import {useId, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {X, Plus, GripVertical} from 'lucide-react'
@@ -10,14 +10,9 @@ export default function AIPromptsPanel() {
   const {t} = useTranslation('settings')
   const aiSettings = useSettingsStore(s => s.settings.ai)
   const updateAI = useSettingsStore(s => s.updateAI)
-  // Defensive: a prompts object (or any of its arrays) can be null/undefined if
-  // settings were persisted before this feature existed; coalesce so the lists
-  // below never map over a null and crash the panel.
   const p = aiSettings.prompts ?? EMPTY_PROMPTS
 
   return (
-    // Two lists side by side once the column is wide enough (896px); one
-    // below that. Sized by the column, not the viewport.
     <div className="grid gap-6 grid-cols-[repeat(auto-fill,minmax(24rem,1fr))]">
       <PromptList
         title={t('prompts.flowTitle')}
@@ -57,16 +52,11 @@ export default function AIPromptsPanel() {
 function reorder(arr: string[], from: number, to: number): string[] {
   const next = [...arr]
   const [item] = next.splice(from, 1)
-  // Callers range-check `from` (the drop handler); an out-of-range index is
-  // a no-op rather than an undefined entry saved as null.
   if (item === undefined) return arr
   next.splice(to, 0, item)
   return next
 }
 
-// Drag payload type for prompt reordering. The payload names its list: a bare
-// index let a row dropped onto ANOTHER list reorder the wrong item there, and
-// an out-of-range index inserted `undefined` (saved as null).
 const PROMPT_DRAG_TYPE = 'application/x-baki-prompt'
 
 function PromptList({
@@ -85,13 +75,7 @@ function PromptList({
   const {t} = useTranslation('settings')
   const [newItemText, setNewItemText] = useState('')
   const [dropIndex, setDropIndex] = useState<number | null>(null)
-  // Row index whose drag is "armed" by pressing the grip handle. Rows must not
-  // be permanently draggable: a draggable row containing a text input breaks
-  // mouse text-selection inside it (the browser starts an element drag
-  // instead — WebKitGTK, the Tauri Linux webview, does so after ~1px).
   const [dragArmed, setDragArmed] = useState<number | null>(null)
-  // Tolerate a null/undefined list (legacy settings) so add/remove/edit and the
-  // render below never spread or map over a non-array.
   const list = items ?? []
 
   const handleAdd = (e: React.FormEvent) => {
@@ -112,7 +96,6 @@ function PromptList({
     copy[index] = val
     onChange(copy)
   }
-
   return (
     <div className="bg-surface-2 rounded-lg border border-border-default overflow-hidden">
       <div className="px-4 py-3 border-b border-border-default bg-surface-1">
@@ -147,9 +130,6 @@ function PromptList({
               const from = payload?.from
               if (payload?.list !== listKey || typeof from !== 'number' || !Number.isInteger(from)) return
               if (from < 0 || from >= list.length || from === i) return
-              // The indicator is the target row's TOP border, so the item
-              // lands before that row; removing it first shifts a lower
-              // target up by one.
               onChange(reorder(list, from, from < i ? i - 1 : i))
             }}
             onDragEnd={() => {
@@ -166,16 +146,12 @@ function PromptList({
               onMouseDown={() => setDragArmed(i)}
               className="w-4 h-4 text-text-tertiary cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100"
             />
-            <input
-              type="text"
-              className="flex-1 bg-transparent border border-transparent hover:border-border-default focus:border-brand-500 focus:bg-surface-1 rounded px-2 py-1 text-sm text-text-primary outline-hidden transition-colors"
-              value={item}
-              onChange={e => handleEdit(i, e.target.value)}
-            />
+            <PromptRowInput index={i} title={title} value={item} onCommit={handleEdit} />
             <button
               onClick={() => handleRemove(i)}
               className="p-1.5 text-text-tertiary hover:text-red-400 hover:bg-red-400/10 rounded opacity-0 group-hover:opacity-100 transition-all duration-fast"
               title={t('prompts.remove')}
+              aria-label={t('prompts.remove')}
             >
               <X className="w-4 h-4" />
             </button>
@@ -201,6 +177,54 @@ function PromptList({
           </button>
         </form>
       </div>
+    </div>
+  )
+}
+
+function PromptRowInput({
+  index,
+  title,
+  value,
+  onCommit,
+}: {
+  index: number
+  title: string
+  value: string
+  onCommit: (index: number, val: string) => void
+}) {
+  const {t} = useTranslation('settings')
+  const errorId = useId()
+  const [draft, setDraft] = useState(value)
+  const [lastValue, setLastValue] = useState(value)
+  if (value !== lastValue) {
+    setLastValue(value)
+    setDraft(value)
+  }
+  const blank = draft.trim() === ''
+  return (
+    <div className="flex-1 min-w-0 flex flex-col">
+      <input
+        type="text"
+        className={clsx(
+          'w-full bg-transparent border rounded px-2 py-1 text-sm text-text-primary outline-hidden transition-colors',
+          blank
+            ? 'border-semantic-error'
+            : 'border-transparent hover:border-border-default focus:border-brand-500 focus:bg-surface-1',
+        )}
+        aria-label={t('prompts.editAria', {index: index + 1, title})}
+        aria-invalid={blank || undefined}
+        aria-describedby={blank ? errorId : undefined}
+        value={draft}
+        onChange={e => {
+          setDraft(e.target.value)
+          if (e.target.value.trim()) onCommit(index, e.target.value)
+        }}
+      />
+      {blank && (
+        <span id={errorId} className="px-2 text-2xs text-semantic-error">
+          {t('prompts.blankInvalid')}
+        </span>
+      )}
     </div>
   )
 }

@@ -2,8 +2,6 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {renderHook, act} from '@testing-library/react'
 import {useFullscreen} from './useFullscreen'
 
-// jsdom has no Fullscreen API: install a minimal one whose request/exit calls
-// flip `fullscreenElement` and fire `fullscreenchange`, like a browser does.
 let fullscreenEl: Element | null = null
 const request = vi.fn(() => {
   fullscreenEl = document.documentElement

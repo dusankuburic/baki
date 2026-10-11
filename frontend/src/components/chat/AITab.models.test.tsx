@@ -14,10 +14,6 @@ import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import type {ModelDetail, ProviderInfo, ChatMessage} from '@/types'
 import type {ReactNode} from 'react'
 
-// Per-thread model memory in the chat panel: the header's picker, the model
-// notice (announced through the panel's status region), the welcome line,
-// the composer's guidance, and a send refused because the model is gone.
-
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({
     data = [],
@@ -41,7 +37,6 @@ vi.mock('react-virtuoso', () => ({
 
 vi.mock('@/hooks/useMediaQuery', () => ({useIsDesktop: () => true, useMediaQuery: () => true}))
 
-// The event stream is "open", so a send reaches the create request.
 vi.mock('@/api/client', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api/client')>()),
   subscribeToEvents: vi.fn(async () => () => {}),
@@ -225,7 +220,6 @@ describe('AITab per-thread model', () => {
 
     const text = '“Docs writer” is no longer available. This chat now uses “GPT-4.1”.'
     await waitFor(() => expect(notice()).toHaveTextContent(text))
-    // Announced once, by the always-mounted region — the row is not live.
     const region = screen.getAllByRole('status').find(el => el.textContent === text)
     expect(region).toHaveClass('sr-only')
     expect(notice()!.closest('[aria-live], [role="status"], [role="alert"]')).toBeNull()
@@ -267,7 +261,6 @@ describe('AITab per-thread model', () => {
 
   it('a send refused with MODEL_NOT_AVAILABLE: the text returns, the listing refreshes, the notice shows', async () => {
     const user = userEvent.setup()
-    // The model is removed after the picker listed it.
     vi.mocked(providersApi.listProviders)
       .mockResolvedValueOnce([azure([GPT, DOCS])])
       .mockResolvedValue([azure([GPT])])
@@ -283,12 +276,9 @@ describe('AITab per-thread model', () => {
 
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
     expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].model).toBe(DOCS.id)
-    // The text is back in the composer; no orphan question, no error bubble.
     await waitFor(() => expect(composer).toHaveValue('Document this flow'))
     expect(useChatStore.getState().getMessages(T1)).toHaveLength(0)
-    // The listing is refetched past the GET micro-cache…
     await waitFor(() => expect(providersApi.listProviders).toHaveBeenLastCalledWith(undefined, {noDedup: true}))
-    // …and the thread's notice explains it.
     await waitFor(() =>
       expect(notice()).toHaveTextContent('“Docs writer” is no longer available. This chat now uses “GPT-4.1”.'),
     )
@@ -358,8 +348,6 @@ describe('AITab per-thread model: review fixes', () => {
   ]
   const pinOfT1 = () => threadModelOf(useChatStore.getState().threads.find(th => th.id === T1)!)
 
-  // Unpinned, the stand-in's first reply became the thread's last reply,
-  // and legacy inference adopted the stand-in for good.
   it("a legacy thread whose model is only unavailable keeps it: a reply from the stand-in doesn't move it", async () => {
     const user = userEvent.setup()
     vi.mocked(providersApi.listProviders).mockResolvedValue([azure([GPT, LEGACY])])
@@ -368,7 +356,6 @@ describe('AITab per-thread model: review fixes', () => {
     useChatStore.setState({conversations: new Map([[T1, legacyHistory]])})
     renderPanel()
     await waitFor(() => expect(notice()).toHaveTextContent(/unavailable until its resource's credentials/))
-    // Pinned to its own model at once (through the alias), not to the stand-in.
     await waitFor(() => expect(pinOfT1()).toMatchObject({provider: 'azure-foundry', model: LEGACY.id}))
 
     const composer = screen.getByRole('textbox', {name: 'Message the assistant'})
@@ -376,7 +363,6 @@ describe('AITab per-thread model: review fixes', () => {
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
     expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].model).toBe(GPT.id)
 
-    // The stand-in's reply lands (what the done commit appends).
     act(() => {
       useChatStore.getState().endStream(T1)
       useChatStore.getState().appendMessage(T1, {
@@ -393,15 +379,12 @@ describe('AITab per-thread model: review fixes', () => {
     expect(pinOfT1()).toMatchObject({model: LEGACY.id})
     expect(notice()).toHaveTextContent(/unavailable until its resource's credentials/)
 
-    // Once its credentials are back, the thread is on its own model again.
     vi.mocked(providersApi.listProviders).mockResolvedValue([azure([GPT, {...LEGACY, status: 'ready'}])])
     act(() => useChatStore.getState().bumpProviderEpoch())
     await waitFor(() => expect(picker()).toHaveAccessibleName(/^Model for this chat: Old GPT/))
     expect(notice()).toBeNull()
   })
 
-  // Azure configured with no models (its legacy import is pending) read
-  // as "every model removed", and the thread moved to another model.
   it('a thread keeps its Azure model while Azure lists nothing to chat with — no notice, no move', async () => {
     vi.mocked(providersApi.listProviders).mockResolvedValue([azure([])])
     seed({provider: 'azure-foundry', model: DOCS.id, modelLabel: 'Docs writer'})
@@ -409,12 +392,9 @@ describe('AITab per-thread model: review fixes', () => {
     await waitFor(() => expect(picker()).toHaveAccessibleName('Model for this chat: Docs writer, Azure AI Foundry'))
     expect(notice()).toBeNull()
     expect(pinOfT1()).toEqual({provider: 'azure-foundry', model: DOCS.id, modelLabel: 'Docs writer'})
-    // The composer's guidance is for a thread with no model at all.
     expect(screen.queryByText(/^No Azure AI Foundry models yet\. Add the deployments/)).toBeNull()
   })
 
-  // With nothing to pick, focus never entered the popup, so Escape went
-  // to the chat (leaving focus mode) and the popup stayed.
   it('the picker with nothing to pick takes focus; Escape closes it, not focus mode', async () => {
     const user = userEvent.setup()
     vi.mocked(providersApi.listProviders).mockResolvedValue([azure([])])
@@ -431,8 +411,6 @@ describe('AITab per-thread model: review fixes', () => {
     expect(useUIStore.getState().chatFocus).toBe(true)
   })
 
-  // A refused send whose listing refetch failed returned the text
-  // silently — no notice (it waited for a listing), no toast.
   it('a send refused for its model says so at once, and the notice shows even when the refetch fails', async () => {
     const user = userEvent.setup()
     vi.mocked(providersApi.listProviders)
@@ -453,8 +431,6 @@ describe('AITab per-thread model: review fixes', () => {
     )
   })
 
-  // The guidance held the composer only; a suggested prompt (or a
-  // template, or Regenerate) still went out with model ''.
   it('a suggested prompt sends nothing while Azure has no model to chat with, and says why', async () => {
     const user = userEvent.setup()
     vi.mocked(chatApi.getSuggestedPrompts).mockResolvedValue(['Explain this flow'])
@@ -477,10 +453,6 @@ describe('AITab per-thread model: review fixes', () => {
     expect(useChatStore.getState().getMessages(T1)).toHaveLength(0)
   })
 
-  // The status region sat in a tree that rendered only once the
-  // providers were checked, so it was inserted already holding a notice
-  // raised by that first listing — and a region inserted with its text is
-  // not announced.
   it('the status region is on screen, empty, before the first listing — the notice then fills it', async () => {
     let resolveListing: (ps: ProviderInfo[]) => void = () => {}
     vi.mocked(providersApi.listProviders).mockImplementation(
@@ -509,7 +481,6 @@ describe('AITab per-thread model: review fixes', () => {
       await act(async () => resolveListing([azure([GPT])]))
       const text = '“Docs writer” is no longer available. This chat now uses “GPT-4.1”.'
       await waitFor(() => expect(notice()).toHaveTextContent(text))
-      // The same element — mounted before — now holds the text.
       expect(region).toHaveTextContent(text)
       expect(region?.isConnected).toBe(true)
       expect(insertedWithText).toEqual([])
@@ -518,7 +489,6 @@ describe('AITab per-thread model: review fixes', () => {
     }
   })
 
-  // Dismiss unmounted the focused button and focus fell to <body>.
   it('Dismiss moves focus to the model picker, which names the model the thread now uses', async () => {
     const user = userEvent.setup()
     vi.mocked(providersApi.listProviders).mockResolvedValue([azure([GPT])])
@@ -534,8 +504,6 @@ describe('AITab per-thread model: review fixes', () => {
     expect(picker()).toHaveAccessibleName(/GPT-4\.1/)
   })
 
-  // Sent while an unpinned thread's history loaded, a turn pinned the
-  // new-chat default, and legacy inference never ran on that history.
   it("a send while the thread's history loads pins nothing; the history's own model then does", async () => {
     const user = userEvent.setup()
     let resolveLoad: (load: {messages: typeof legacyHistory}) => void = () => {}
@@ -561,7 +529,6 @@ describe('AITab per-thread model: review fixes', () => {
     )
   })
 
-  // An inactive thread's tab tooltip ignored its own history.
   it("an inactive legacy thread's tab tooltip names its own model", async () => {
     const T2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
     seed({provider: 'azure-foundry', model: GPT.id, modelLabel: 'GPT-4.1'})
@@ -580,7 +547,6 @@ describe('AITab per-thread model: review fixes', () => {
   })
 })
 
-// Keeps act() warnings from a late provider refetch out of other files.
 afterEach(async () => {
   await act(async () => {})
 })

@@ -1,7 +1,3 @@
-// English source of truth for the `admin` namespace: the Admin Dashboard
-// (overview tiles, user management, operations, audit log). Same conventions
-// as en.ts: plurals use `_one`/`_other` with `{{count}}`, and English stays
-// identical to whatever the tests pin.
 export const enAdmin = {
   page: {
     title: 'Admin Dashboard',

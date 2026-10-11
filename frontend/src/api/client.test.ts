@@ -1,7 +1,6 @@
 import {describe, it, expect, vi, afterEach} from 'vitest'
 import {mockFetch} from '@/testing/testHelpers'
 
-// Mock the platform adapter so we control the returned config
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
     getBackendConfig: vi.fn().mockResolvedValue({
@@ -12,17 +11,13 @@ vi.mock('@/platform/adapters', () => ({
   }),
 }))
 
-// Re-import after mocking so the module gets the mocked adapter
-// We use a dynamic import so each test file gets a fresh module state.
 async function getClient() {
-  // Reset module cache between tests by re-importing
   return import('./client')
 }
 
 describe('api/client', () => {
   afterEach(() => {
     vi.restoreAllMocks()
-    // Reset the module's cached config between test runs
     vi.resetModules()
   })
 
@@ -94,7 +89,6 @@ describe('api/client', () => {
     })
 
     it('uses the standard envelope message ({code,message}) when present', async () => {
-      // render.Error shape — the backend's primary error envelope.
       mockFetch({code: 'BAD_REQUEST', message: 'flowId is required', requestId: 'r-1'}, 400)
       const {request} = await getClient()
 
@@ -109,8 +103,6 @@ describe('api/client', () => {
     })
 
     it('throws an ApiError carrying the envelope status, code and requestId', async () => {
-      // Consumers branch on err.code (machine-readable) instead of regexing
-      // the message — the message is masked on 5xx and may be reworded.
       mockFetch(
         {code: 'CHAT_CAPACITY_REACHED', message: 'too many chat responses running at once', requestId: 'r-42'},
         429,
@@ -185,11 +177,11 @@ describe('api/client', () => {
       const {request} = await getClient()
 
       const first = await request<{items: {id: number}[]}>('/api/list', {method: 'GET'})
-      first.items.sort((a, b) => a.id - b.id) // consumer A mutates its copy in place
+      first.items.sort((a, b) => a.id - b.id)
 
       const second = await request<{items: {id: number}[]}>('/api/list', {method: 'GET'})
-      expect(second).not.toBe(first) // separate object, not a shared reference
-      expect(second.items).toEqual([{id: 3}, {id: 1}, {id: 2}]) // pristine server order
+      expect(second).not.toBe(first)
+      expect(second.items).toEqual([{id: 3}, {id: 1}, {id: 2}])
     })
 
     it('in-flight sharers each get their own copy of the result', async () => {
@@ -201,14 +193,11 @@ describe('api/client', () => {
         request<{items: number[]}>('/api/shared', {method: 'GET'}),
       ])
 
-      expect(a).not.toBe(b) // shared round trip, not a shared object
+      expect(a).not.toBe(b)
       expect(a.items).toEqual([3, 1, 2])
       expect(b.items).toEqual([3, 1, 2])
     })
 
-    // Regression (epoch guard): a GET that resolves after clearRequestCache()
-    // (logout mid-flight / org switch) must not write the previous session's
-    // response back into the freshly-cleared cache.
     it('a GET resolving after clearRequestCache does not re-populate the cache', async () => {
       let resolveFetch!: (body: string) => void
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
@@ -220,15 +209,13 @@ describe('api/client', () => {
       const {request, clearRequestCache} = await getClient()
 
       const pending = request<{account: string}>('/api/session-data', {method: 'GET'})
-      // Let the request reach the (suspended) fetch call before "logout".
       await new Promise(r => setTimeout(r, 0))
       clearRequestCache()
       resolveFetch(JSON.stringify({account: 'previous-user'}))
 
       const first = await pending
-      expect(first).toEqual({account: 'previous-user'}) // initiator still gets its response
+      expect(first).toEqual({account: 'previous-user'})
 
-      // The next account's request must hit the network, not the stale cache.
       fetchSpy.mockImplementation(async () => new Response(JSON.stringify({account: 'next-user'}), {status: 200}))
       const second = await request<{account: string}>('/api/session-data', {method: 'GET'})
       expect(fetchSpy).toHaveBeenCalledTimes(2)
@@ -251,7 +238,6 @@ describe('api/client', () => {
       let call = 0
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
         call++
-        // 404 (non-transient) so the retry layer doesn't mask the failure.
         if (call === 1) return new Response(JSON.stringify({message: 'missing'}), {status: 404})
         return new Response(JSON.stringify({ok: true}), {status: 200})
       })
@@ -264,12 +250,7 @@ describe('api/client', () => {
     })
   })
 
-  // The micro-cache clones every cached body on write and on every hit. For a
-  // multi-megabyte document that clone cost more than the parse (413 ms and
-  // +44 MB for 21 MB of JSON), so bodies above GET_CACHE_MAX_BODY_CHARS are
-  // neither cached nor cloned; small bodies keep the dedup + TTL behaviour.
   describe('GET micro-cache size gate', () => {
-    // Fresh Response per call — a Response body can be consumed only once.
     function mockFetchSequence(bodies: unknown[]) {
       let call = 0
       return vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
@@ -287,14 +268,14 @@ describe('api/client', () => {
       const clone = vi.fn((v: unknown) => JSON.parse(JSON.stringify(v)))
       vi.stubGlobal('structuredClone', clone)
       const {request, GET_CACHE_MAX_BODY_CHARS, requestCacheSize} = await getClient()
-      const big = {rev: 1, blocks: 'x'.repeat(1024 * 1024)} // ~1 MB of JSON
+      const big = {rev: 1, blocks: 'x'.repeat(1024 * 1024)}
       const fetchSpy = mockFetchSequence([big, {...big, rev: 2}])
 
       const first = await request<{rev: number}>('/api/library/f1/content', {method: 'GET'})
       const second = await request<{rev: number}>('/api/library/f1/content', {method: 'GET'})
 
       expect(first.rev).toBe(1)
-      expect(second.rev).toBe(2) // the changed body, not a 5 s-old copy
+      expect(second.rev).toBe(2)
       expect(fetchSpy).toHaveBeenCalledTimes(2)
       expect(clone).not.toHaveBeenCalled()
       expect(requestCacheSize()).toBe(0)
@@ -325,15 +306,13 @@ describe('api/client', () => {
       vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
         call++
         if (call === 1) return new Response(JSON.stringify({rev: 1}), {status: 200})
-        // 404 (non-transient): the re-read fails, so nothing writes the cache
-        // afterwards — the only way the expired entry goes is the read itself.
         return new Response(JSON.stringify({message: 'gone'}), {status: 404})
       })
 
       await request('/api/expiring', {method: 'GET'})
       expect(requestCacheSize()).toBe(1)
-      vi.advanceTimersByTime(6_000) // past the 5 s TTL
-      expect(requestCacheSize()).toBe(1) // still referenced until something touches it
+      vi.advanceTimersByTime(6_000)
+      expect(requestCacheSize()).toBe(1)
 
       await expect(request('/api/expiring', {method: 'GET'})).rejects.toThrow('gone')
       expect(call).toBe(2)
@@ -370,11 +349,6 @@ describe('api/client', () => {
     })
   })
 
-  // Regression: the AnalysisReport/Finding schemas MUST use .passthrough() so
-  // backend fields not explicitly enumerated (autoFix, fingerprint, confidence,
-  // autoFixHint, metadata, metrics, groups, ruleProfiles) survive validation.
-  // Without passthrough, zod's default .strip() silently deletes them, breaking
-  // the Apply-fix button, health-score badge, per-rule timing, and triage keys.
   describe('requestValidated() passthrough — no silent field stripping', () => {
     it('preserves Finding extra fields (autoFix, confidence, fingerprint, metadata)', async () => {
       const finding = {
@@ -398,7 +372,6 @@ describe('api/client', () => {
       const out = await requestValidated('/api/finding', await getFindingSchema())
 
       expect(out).toMatchObject(finding)
-      // The previously-stripped fields must survive:
       expect(out).toHaveProperty('autoFix', 'replace-with-variable')
       expect(out).toHaveProperty('confidence', 'high')
       expect(out).toHaveProperty('fingerprint')
@@ -460,7 +433,6 @@ describe('api/client', () => {
 
   describe('request() consumer cancellation (signal)', () => {
     it('rejects with AbortError when the consumer aborts mid-flight', async () => {
-      // fetch that never settles on its own — only the abort path resolves it.
       vi.spyOn(globalThis, 'fetch').mockImplementation(
         (_url, init) =>
           new Promise<Response>((_resolve, reject) => {
@@ -476,8 +448,6 @@ describe('api/client', () => {
       controller.abort()
 
       const err: unknown = await pending.catch(e => e)
-      // Consumers branch on err.name (documented contract); instanceof is
-      // cross-realm-fragile under jsdom.
       expect((err as {name?: string}).name).toBe('AbortError')
     })
 
@@ -508,7 +478,6 @@ describe('api/client', () => {
       controller.abort()
       await pending.catch(() => {})
 
-      // A later GET on the same path must hit the network (nothing cached).
       const fetchSpy = vi
         .spyOn(globalThis, 'fetch')
         .mockImplementation(async () => new Response(JSON.stringify({fresh: true}), {status: 200}))
@@ -517,10 +486,6 @@ describe('api/client', () => {
       expect(out).toEqual({fresh: true})
     })
 
-    // Regression: an in-flight GET used to be shared with any identical GET,
-    // signal or not. StrictMode mounts the library twice; the first mount
-    // aborted its request and the second, sharing that promise, rejected too
-    // and rendered "No flows yet".
     it('never shares an abortable GET: aborting one leaves an identical concurrent GET intact', async () => {
       let calls = 0
       vi.spyOn(globalThis, 'fetch').mockImplementation(
@@ -539,7 +504,6 @@ describe('api/client', () => {
 
       const a = request('/api/library', {method: 'GET', signal: first.signal})
       const b = request('/api/library', {method: 'GET', signal: second.signal})
-      // Both fetches are on the wire before the first caller gives up.
       await new Promise(r => setTimeout(r, 0))
       expect(calls).toBe(2)
       first.abort()
@@ -561,8 +525,6 @@ describe('api/client', () => {
       const {request, abortAllRequests} = await getClient()
 
       const pending = request('/api/batch', {body: {ids: [1]}, timeoutMs: 300_000})
-      // Let the request reach doFetch (config resolution registers its
-      // controller) before aborting — mirrors a real logout a moment later.
       await new Promise(r => setTimeout(r, 0))
       abortAllRequests()
 
@@ -584,9 +546,6 @@ async function failureOf(promise: Promise<unknown>): Promise<Failure> {
 }
 
 describe('network failures', () => {
-  // A connection that is refused or reset never yields an HTTP response; the
-  // browser throws a bare TypeError("Failed to fetch"). Callers get a worded
-  // ApiError with a machine code instead of that string.
   it('words a failed connection on a mutation without retrying it', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
     const {request, ApiError, NETWORK_CODE} = await getClient()
@@ -615,8 +574,6 @@ describe('network failures', () => {
     controller.abort()
 
     const err = await failureOf(request('/api/test', {signal: controller.signal}))
-    // instanceof DOMException is cross-realm-fragile under jsdom; the name is
-    // what consumers check (DOMException.code is its legacy numeric code).
     expect(err.name).toBe('AbortError')
     expect(err.code).not.toBe(NETWORK_CODE)
   })

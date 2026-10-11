@@ -1,5 +1,5 @@
 import {getErrorMessage} from '@/lib/getErrorMessage'
-import React, {useState, useRef, useEffect} from 'react'
+import React, {useId, useState, useRef, useEffect} from 'react'
 import {useTranslation} from 'react-i18next'
 import {Users, UserPlus, Trash2, Shield, Eye, Edit3, Link2, Clock, Copy, Check} from 'lucide-react'
 import {sharingApi, type Collaborator, type Permission} from '@/api/sharing'
@@ -11,10 +11,10 @@ import {EmptyState, Spinner, useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
 import {writeClipboard} from '@/lib/clipboard'
 import {useAsync} from '@/hooks/useAsync'
+import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
+import {emailErrorKey} from '@/lib/validators'
+import {EMAIL_MAX_LENGTH} from '@/lib/constraints'
 
-// shareLinkURL builds the public viewer URL for a raw share token. The viewer
-// is the unauthenticated /shared route (see main.tsx); BASE_URL keeps it
-// correct when the app is served under a sub-path.
 export function shareLinkURL(token: string): string {
   const base = (import.meta.env.BASE_URL || '/').replace(/\/?$/, '/')
   return `${window.location.origin}${base}shared?token=${encodeURIComponent(token)}`
@@ -31,9 +31,18 @@ export const SharingTab: React.FC = () => {
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null)
   const removeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const {error: toastError} = useToast()
+  const emailErrorId = useId()
 
-  // Clear the pending-remove confirm timer on unmount so setPendingRemoveId
-  // can't fire on a gone component if the inspector closes mid-confirm.
+  const v = useFormValidation<'email'>({
+    fields: ['email'],
+    validate: () => {
+      const errors: FieldErrors<'email'> = {}
+      const key = emailErrorKey(newEmail)
+      if (key) errors.email = t(key, {ns: 'common', max: EMAIL_MAX_LENGTH})
+      return errors
+    },
+  })
+
   useEffect(() => {
     return () => {
       if (removeTimerRef.current) clearTimeout(removeTimerRef.current)
@@ -52,17 +61,9 @@ export const SharingTab: React.FC = () => {
       throw err
     })
   }, [document?.id])
-  // Stale collaborators intentionally remain visible on a fetch error (matches
-  // the previous behavior — only the form's error banner reflects the failure).
   const collaborators = data ?? []
   const error = formError ?? (fetchError ? t('errors.loadCollaboratorsFailed') : null)
 
-  // The server grants sharing rights to the flow OWNER, org admins and
-  // admin-tier collaborators (handlers_sharing.go). The owner never appears in
-  // the collaborator table, so deriving canManage from that list alone hid the
-  // invite form and share links on every flow the user created themselves.
-  // `canShare` from the library record is the authoritative answer; the
-  // collaborator check remains as a fallback when the record cannot be read.
   const {data: libraryFlow} = useAsync<LibraryFlow | null>(() => {
     if (!document) return Promise.resolve(null)
     return libraryApi.get(document.id).catch(() => null)
@@ -73,6 +74,7 @@ export const SharingTab: React.FC = () => {
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!document || !newEmail) return
+    if (v.submitValidate()) return
 
     setIsAdding(true)
     setFormError(null)
@@ -145,19 +147,31 @@ export const SharingTab: React.FC = () => {
             <UserPlus size={14} />
             {t('sharing.inviteHeading')}
           </h3>
-          <form onSubmit={handleAdd} className="space-y-3">
+          <form onSubmit={handleAdd} noValidate className="space-y-3">
             <input
               type="email"
               placeholder={t('sharing.emailPlaceholder')}
+              aria-label={t('sharing.emailPlaceholder')}
               value={newEmail}
               onChange={e => setNewEmail(e.target.value)}
-              required
-              className="w-full bg-surface-0 border border-border-default rounded-md px-3 py-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-brand-500/50"
+              onBlur={() => v.touch('email')}
+              aria-invalid={!!v.errorFor('email') || undefined}
+              aria-describedby={v.errorFor('email') ? emailErrorId : undefined}
+              className={
+                'w-full bg-surface-0 border rounded-md px-3 py-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-brand-500/50 ' +
+                (v.errorFor('email') ? 'border-semantic-error' : 'border-border-default')
+              }
             />
+            {v.errorFor('email') && (
+              <p id={emailErrorId} className="-mt-2 text-2xs text-semantic-error">
+                {v.errorFor('email')}
+              </p>
+            )}
             <div className="flex gap-2">
               <select
                 value={newPermission}
                 onChange={e => setNewPermission(e.target.value as Permission)}
+                aria-label={t('sharing.permissionAria')}
                 className="flex-1 bg-surface-0 border border-border-default rounded-md px-2 py-1 text-xs focus:outline-hidden focus:ring-2 focus:ring-brand-500/50"
               >
                 <option value="viewer">{t('sharing.viewerOption')}</option>
@@ -172,7 +186,11 @@ export const SharingTab: React.FC = () => {
                 {isAdding ? t('sharing.inviting') : t('sharing.invite')}
               </button>
             </div>
-            {error && <p className="text-2xs text-red-500 font-medium">{error}</p>}
+            {error && (
+              <p role="alert" className="text-2xs text-semantic-error font-medium">
+                {error}
+              </p>
+            )}
           </form>
         </div>
       )}
@@ -227,16 +245,18 @@ export const SharingTab: React.FC = () => {
                         <select
                           value={c.permission}
                           onChange={e => handleUpdatePermission(c.userId, e.target.value as Permission)}
+                          aria-label={t('sharing.permissionAria')}
                           className="bg-transparent border-none text-2xs text-text-tertiary hover:text-text-primary focus:ring-0 cursor-pointer"
                         >
-                          <option value="viewer">Viewer</option>
-                          <option value="editor">Editor</option>
-                          <option value="admin">Admin</option>
+                          <option value="viewer">{t('sharing.viewerOption')}</option>
+                          <option value="editor">{t('sharing.editorOption')}</option>
+                          <option value="admin">{t('sharing.adminOption')}</option>
                         </select>
                         <button
                           onClick={() => requestRemove(c.userId)}
-                          className="p-1.5 text-text-tertiary hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="p-1.5 text-text-tertiary hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                           title={t('sharing.removeAccessTitle')}
+                          aria-label={t('sharing.removeAccessTitle')}
                         >
                           <Trash2 size={14} />
                         </button>
@@ -271,8 +291,6 @@ function ShareLinksSection({flowId}: {flowId: string}) {
   } = useAsync<ShareInfo[]>(() => flowApi.listShares(flowId).catch(() => []), [flowId])
   const shareList = shares ?? []
   const [revokingId, setRevokingId] = useState<string | null>(null)
-  // The raw token is returned exactly once by createShare (the list endpoint
-  // only ever has the hash), so the link must be surfaced here or it is lost.
   const [created, setCreated] = useState<{id: string; url: string; expiresAt?: string} | null>(null)
   const [copied, setCopied] = useState(false)
 
@@ -388,8 +406,9 @@ function ShareLinksSection({flowId}: {flowId: string}) {
                 <button
                   onClick={() => handleRevoke(s.id)}
                   disabled={revokingId === s.id}
-                  className="p-1.5 text-text-tertiary hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-30"
+                  className="p-1.5 text-text-tertiary hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity disabled:opacity-30"
                   title={t('sharing.revokeTitle')}
+                  aria-label={t('sharing.revokeTitle')}
                 >
                   <Trash2 size={14} />
                 </button>

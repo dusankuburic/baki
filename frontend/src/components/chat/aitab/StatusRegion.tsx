@@ -3,9 +3,6 @@ import {AlertTriangle, RefreshCw} from 'lucide-react'
 import {Spinner} from '@/components/shared'
 import {ApiKeyMissingState} from '..'
 
-// Announced through the status region below — the row is not a live
-// region — so a notice is read once, when it is raised (and only while
-// the row is on screen: not over the "add an API key" state).
 export function StatusRegion({text}: {text: string}) {
   return (
     <div role="status" className="sr-only">
@@ -14,8 +11,6 @@ export function StatusRegion({text}: {text: string}) {
   )
 }
 
-// Still checking the providers — render nothing rather than flash the
-// "add an API key" screen.
 export function ProvidersPendingState() {
   return (
     <div className="flex-1 flex items-center justify-center">
@@ -24,7 +19,6 @@ export function ProvidersPendingState() {
   )
 }
 
-// A failed provider check gets a way to retry.
 export function ProvidersErrorState({onRetry}: {onRetry: () => void}) {
   const {t} = useTranslation('chat')
   return (
@@ -45,7 +39,6 @@ export function ProvidersErrorState({onRetry}: {onRetry: () => void}) {
   )
 }
 
-// The panel with no providers configured: the "add an API key" state.
 export function ProvidersNotConfiguredState() {
   return <ApiKeyMissingState />
 }

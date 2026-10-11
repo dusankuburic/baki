@@ -21,9 +21,6 @@ const mockGetContent = vi.fn()
 const mockLoadFlowFromPath = vi.fn()
 const mockLoadFlowFolder = vi.fn()
 
-// The flow:loaded payload is a lightweight summary; the hook refetches the
-// full document over HTTP (library content in cloud mode, load-path /
-// load-folder in local mode).
 vi.mock('@/api', () => ({
   flowApi: {
     loadFlowFromPath: (...a: unknown[]) => mockLoadFlowFromPath(...a),
@@ -53,7 +50,6 @@ function TestComponent({openDocument}: {openDocument: (doc: unknown) => void}) {
   return null
 }
 
-// A fetched document that passes the FlowDocumentEnvelopeSchema boundary check.
 const fullDoc = (id: string, name: string) => ({id, name, subflows: [{id: 'sf1', name: 'Main', blocks: []}]})
 
 beforeEach(() => {
@@ -105,7 +101,6 @@ describe('useAppEvents', () => {
     await new Promise(r => setTimeout(r, 10))
 
     const docData = fullDoc('test-1', 'Test')
-    // No filePath on the summary → cloud mode → library content endpoint.
     mockGetContent.mockResolvedValue(docData)
     capturedCallback!({name: 'flow:loaded', data: {id: 'test-1', name: 'Test'}})
 
@@ -169,8 +164,6 @@ describe('useAppEvents', () => {
 
     await new Promise(r => setTimeout(r, 10))
 
-    // Not a summary (no usable id) — e.g. a proxy error page or a different
-    // event's data shape. Must be rejected at the boundary, without a fetch.
     capturedCallback!({name: 'flow:loaded', data: {html: '<html>err</html>'}})
     capturedCallback!({name: 'flow:loaded', data: {id: '', name: 'x'}})
     await new Promise(r => setTimeout(r, 10))
@@ -203,20 +196,13 @@ describe('useAppEvents', () => {
     expect(openDocument).not.toHaveBeenCalled()
   })
 
-  // Regression: a flow:loaded event for a flow OTHER than the one currently open
-  // must not hijack the editor. Such an event is stale/unsolicited (another tab,
-  // an admin action, or a late event for a flow the user navigated away from).
-  // The initial load (no document open) is still honored.
   it('does not hijack the editor with a flow:loaded for a different flow', async () => {
     const openDocument = vi.fn()
-    // Simulate a document already open in the editor.
     useFlowStore.setState({document: {id: 'current-flow', name: 'Current'} as never})
     render(<TestComponent openDocument={openDocument} />)
 
     await new Promise(r => setTimeout(r, 10))
 
-    // A flow:loaded for a DIFFERENT flow arrives — must be ignored (the guard
-    // runs synchronously before any refetch).
     capturedCallback!({
       name: 'flow:loaded',
       data: {id: 'stale-flow', name: 'Stale'},
@@ -226,9 +212,6 @@ describe('useAppEvents', () => {
     expect(mockGetContent).not.toHaveBeenCalled()
   })
 
-  // A same-id event is an echo of a load whose HTTP response this tab already
-  // applied; refetching on it would ping-pong forever between tabs because the
-  // local refetch endpoints re-emit flow:loaded themselves.
   it('ignores a flow:loaded echo for the flow already open (no refetch loop)', async () => {
     const openDocument = vi.fn()
     useFlowStore.setState({document: {id: 'current-flow', name: 'Current'} as never})
@@ -246,18 +229,13 @@ describe('useAppEvents', () => {
     expect(mockLoadFlowFromPath).not.toHaveBeenCalled()
   })
 
-  // Regression (async-validation race): a flow:loaded that passed the stale-
-  // flow guard at arrival must not hijack the editor if the user opens a
-  // DIFFERENT flow before the refetch completes.
   it('does not hijack the editor when a different flow is opened during the refetch', async () => {
     const openDocument = vi.fn()
-    // No document open yet, so the arrival-time guard passes for any flow.
     useFlowStore.setState({document: null})
     render(<TestComponent openDocument={openDocument} />)
 
     await new Promise(r => setTimeout(r, 10))
 
-    // Event for flow A arrives and passes the guard…
     let resolveFetch!: (doc: unknown) => void
     mockGetContent.mockReturnValue(
       new Promise(r => {
@@ -265,7 +243,6 @@ describe('useAppEvents', () => {
       }),
     )
     capturedCallback!({name: 'flow:loaded', data: {id: 'flow-a', name: 'A'}})
-    // …but before the refetch resolves, the user opens flow B directly.
     useFlowStore.setState({document: {id: 'flow-b', name: 'B'} as never})
     resolveFetch(fullDoc('flow-a', 'A'))
 
@@ -280,15 +257,11 @@ describe('useAppEvents', () => {
     await new Promise(r => setTimeout(r, 10))
 
     capturedCallback!({name: 'governance:alert', data: {flowId: 'f1', type: 'drift'}})
-    // refreshUnread is async; let it settle.
     await new Promise(r => setTimeout(r, 10))
 
     expect(useGovernanceStore.getState().unreadCount).toBe(3)
   })
 
-  // The server emits settings:changed (with org fan-out) and nothing listened,
-  // so a change made in another tab, on another device or by an org admin
-  // stayed invisible until the next full reload.
   it('refetches settings once after a burst of settings:changed events', async () => {
     const loadFromBackend = vi.fn().mockResolvedValue(undefined)
     const original = useSettingsStore.getState().loadFromBackend
@@ -301,7 +274,6 @@ describe('useAppEvents', () => {
       capturedCallback!({name: 'settings:changed', data: {}})
       capturedCallback!({name: 'settings:changed', data: {}})
       vi.advanceTimersByTime(1000)
-      // Still inside the coalescing window: a save echo mid-edit must not reload.
       expect(loadFromBackend).not.toHaveBeenCalled()
       capturedCallback!({name: 'settings:changed', data: {}})
       vi.advanceTimersByTime(1500)

@@ -2,8 +2,6 @@ import {describe, it, expect} from 'vitest'
 import {flattenBlocks, flattenTreeRows, buildBlockLookup} from './tree'
 import type {Block, FlowDocument, Subflow} from '@/types'
 
-// ---- helpers ----
-
 function makeBlock(id: string, type: Block['type'] = 'ACTION', children: Block[] = []): Block {
   return {
     id,
@@ -52,8 +50,6 @@ const allTypes = new Set<Block['type']>([
   'UNKNOWN',
 ])
 
-// ---- flattenBlocks ----
-
 describe('flattenBlocks', () => {
   it('returns empty for empty input', () => {
     expect(flattenBlocks([], new Set())).toEqual([])
@@ -84,7 +80,6 @@ describe('flattenBlocks', () => {
   it('hides children when block id is in expandedBlockIds (collapsed)', () => {
     const child = makeBlock('child')
     const loop = makeBlock('loop1', 'LOOP', [child])
-    // "expandedBlockIds" is inverted naming: having the id means collapsed
     const result = flattenBlocks([loop], new Set(['loop1']))
     expect(result).toHaveLength(1)
     expect(result[0]!.collapsed).toBe(true)
@@ -111,7 +106,6 @@ describe('flattenBlocks', () => {
     const elseBranch = makeBlock('else1', 'ELSE')
     const cond = makeBlock('cond1', 'CONDITION', [elseBranch])
     const result = flattenBlocks([cond], new Set())
-    // ELSE at depth 1 should render at depth 0
     const elseRow = result.find(r => r.block.id === 'else1')!
     expect(elseRow.depth).toBe(0)
   })
@@ -122,12 +116,9 @@ describe('flattenBlocks', () => {
     const cond = makeBlock('cond1', 'CONDITION', [elseBranch])
     const result = flattenBlocks([cond], new Set())
     const actRow = result.find(r => r.block.id === 'act1')!
-    // ELSE is at depth 0 (structural), its child should be at depth 1 not depth 2
     expect(actRow.depth).toBe(1)
   })
 })
-
-// ---- flattenTreeRows ----
 
 describe('flattenTreeRows', () => {
   const baseOptions = {
@@ -181,14 +172,13 @@ describe('flattenTreeRows', () => {
       expandedSubflowIds: new Set(['sf1']),
       visibleTypes: new Set<Block['type']>(['ACTION']),
     })
-    expect(result).toHaveLength(2) // subflow header + 1 visible block
+    expect(result).toHaveLength(2)
     expect(result[1]!.blockType).toBe('ACTION')
   })
 
   it('search: hides non-matching subflows', () => {
     const sf1 = makeSubflow('sf1', [])
     const sf2 = makeSubflow('sf2', [])
-    // Override names for search
     sf1.name = 'Alpha'
     sf2.name = 'Beta'
     const doc = makeDoc(sf1, sf2)
@@ -210,7 +200,6 @@ describe('flattenTreeRows', () => {
       ...baseOptions,
       searchQuery: 'variable',
     })
-    // subflow should be included because child matches
     expect(result.some(r => r.id === 'sf1')).toBe(true)
     expect(result.some(r => r.id === 'b1')).toBe(true)
   })
@@ -222,7 +211,6 @@ describe('flattenTreeRows', () => {
     b2.name = 'Send Email'
     const sf = makeSubflow('sf1', [b1, b2])
     const doc = makeDoc(sf)
-    // Query matches b1 by name; matchedBlockIds also points to b1 from search results
     const result = flattenTreeRows(doc, {
       ...baseOptions,
       searchQuery: 'get variable',
@@ -253,7 +241,7 @@ describe('flattenTreeRows', () => {
       ...baseOptions,
       expandedSubflowIds: new Set(['sf1', 'sf2']),
     })
-    expect(result).toHaveLength(4) // 2 headers + 2 blocks
+    expect(result).toHaveLength(4)
   })
 
   it('nested blocks are not expanded when block id is absent from expandedBlockIds', () => {
@@ -265,7 +253,7 @@ describe('flattenTreeRows', () => {
       ...baseOptions,
       expandedSubflowIds: new Set(['sf1']),
     })
-    expect(result).toHaveLength(2) // header + loop only
+    expect(result).toHaveLength(2)
     expect(result.every(r => r.id !== 'child')).toBe(true)
   })
 
@@ -279,17 +267,13 @@ describe('flattenTreeRows', () => {
       expandedSubflowIds: new Set(['sf1']),
       expandedBlockIds: new Set(['loop1']),
     })
-    expect(result).toHaveLength(3) // header + loop + child
+    expect(result).toHaveLength(3)
     expect(result[2]!.id).toBe('child')
     expect(result[2]!.depth).toBe(2)
   })
 })
 
-// ---- scale: wide trees and collapsed subtrees ----
-
 describe('flatteners at scale', () => {
-  // `push(...childRows)` spread every child row onto the call stack and threw
-  // a RangeError past ~150k direct children.
   const WIDE = 300_000
   const wideChildren = () => {
     const out: Block[] = new Array(WIDE)
@@ -328,8 +312,6 @@ describe('flatteners at scale', () => {
     expect(rows).toHaveLength(WIDE + 2)
   })
 
-  // Counts how often the walk looks at a block: `type` is the first property
-  // the row walk reads for every block it visits.
   function observedBlock(id: string): {block: Block; visits: () => number} {
     const block = makeBlock(id)
     let visits = 0
@@ -349,7 +331,7 @@ describe('flatteners at scale', () => {
     const doc = makeDoc(makeSubflow('sf1', [loop]))
     const rows = flattenTreeRows(doc, {
       expandedSubflowIds: new Set(['sf1']),
-      expandedBlockIds: new Set(), // loop1 collapsed
+      expandedBlockIds: new Set(),
       visibleTypes: allTypes,
     })
     expect(rows.map(r => r.id)).toEqual(['sf1', 'loop1'])
@@ -384,8 +366,6 @@ describe('flatteners at scale', () => {
     expect(top.visits()).toBe(0)
   })
 })
-
-// ---- buildBlockLookup ----
 
 describe('buildBlockLookup', () => {
   it('indexes every block (including nested) with its name and subflow name', () => {

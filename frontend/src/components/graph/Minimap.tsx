@@ -16,7 +16,6 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const dragging = useRef(false)
 
-  // Resolve node dot color from theme tokens (falls back to neutral grey).
   const getDotColor = useCallback(
     (type: string): string => {
       if (!tokens) {
@@ -103,7 +102,6 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
     ctx.globalAlpha = 1
   }, [cy, width, height, getDotColor, tokens?.brand500])
 
-  // Pan the main graph so the clicked/dragged minimap point is centered.
   const panToMinimapPoint = useCallback(
     (clientX: number, clientY: number) => {
       if (!cy) return
@@ -132,7 +130,6 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
       const graphX = (x - offsetX) / scale + bounds.x1
       const graphY = (y - offsetY) / scale + bounds.y1
 
-      // Set absolute pan so the clicked graph point is centered in the viewport.
       cy.pan({
         x: cy.width() / 2 - graphX * cy.zoom(),
         y: cy.height() / 2 - graphY * cy.zoom(),
@@ -151,7 +148,6 @@ export default function Minimap({cy, tokens, width = MINIMAP_W, height = MINIMAP
     }
   }, [cy, drawMinimap])
 
-  // Window-level drag handlers so dragging outside the canvas still works.
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (dragging.current) panToMinimapPoint(e.clientX, e.clientY)

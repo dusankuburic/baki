@@ -30,18 +30,6 @@ type ConfirmActions = {
 
 const ConfirmContext = React.createContext<ConfirmActions | null>(null)
 
-/**
- * Promise-based replacement for the native window.confirm()/prompt() dialogs.
- * `confirm()` resolves a boolean; `prompt()` resolves the entered string or null
- * on cancel. Built on the shared Modal (focus-trap + Esc-to-close). We render our
- * own heading inside the body rather than using Modal's `title` prop so the first
- * focusable element is the input (for prompts) or the Cancel button (for
- * destructive confirms) — never the destructive Confirm action.
- *
- * Because the heading is our own, the dialog is named and described by id:
- * aria-labelledby points at the heading and aria-describedby at the message.
- * Without them every confirm announced as an unnamed "dialog".
- */
 export function ConfirmProvider({children}: {children: React.ReactNode}) {
   const {t} = useTranslation()
   const [state, setState] = useState<DialogState | null>(null)
@@ -94,9 +82,6 @@ export function ConfirmProvider({children}: {children: React.ReactNode}) {
   const confirmLabel = state?.confirmLabel ?? (danger ? t('delete') : isPrompt ? t('save') : t('confirm'))
   const cancelLabel = state?.cancelLabel ?? t('cancel')
 
-  // Named by the heading, described by the message. Without a title the
-  // message is the name (and not repeated as the description); a bare
-  // prompt falls back to its field label.
   const hasTitle = !!state?.title
   const hasMessage = !!state?.message
   const promptLabel = state?.kind === 'prompt' ? state.label : undefined
@@ -127,10 +112,6 @@ export function ConfirmProvider({children}: {children: React.ReactNode}) {
                 disabled={!canConfirm}
                 className={clsx(
                   'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50',
-                  // The theme's error colour with its own foreground token
-                  // (≥ 4.5:1 in every theme, themeContrast.test). The raw
-                  // red-600 ignored the theme; hover rings the button rather
-                  // than shading it, so the text never loses contrast.
                   danger
                     ? 'bg-semantic-error text-(--error-foreground) hover:ring-2 hover:ring-semantic-error/40'
                     : 'bg-brand-600 hover:bg-brand-700 text-brand-foreground',

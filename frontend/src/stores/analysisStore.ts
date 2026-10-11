@@ -18,10 +18,6 @@ import {logger} from '@/lib/logger'
 import {notifyIfBackground} from '@/hooks/usePlatform'
 import {useFlowStore} from './flowStore'
 
-// The categories the built-in rules file findings under (core/analyzer
-// TestRuleMeta_KnownCategories). The category filter HIDES categories rather
-// than listing the shown ones, so a category no chip and no saved view knows
-// (a custom rule's, a newer server's) still shows.
 export const FINDING_CATEGORIES = [
   'Security',
   'Reliability',
@@ -33,20 +29,15 @@ export const FINDING_CATEGORIES = [
 ] as const
 export type FindingCategory = (typeof FINDING_CATEGORIES)[number]
 
-// The categories a saved view of an older bundle chose from: it lists the ones
-// it SHOWS, so any category outside these was never one it hid.
 const LEGACY_VIEW_CATEGORIES: readonly string[] = ['Security', 'Reliability', 'Performance', 'Style', 'Logic']
 
 export interface SavedFilterView {
   name: string
   severities: Severity[]
-  /** The categories the view hides; every other one shows. Absent in views saved by older bundles. */
   hiddenCategories?: string[]
-  /** The legacy five categories the view shows: what older bundles read (they know only these five). */
   categories: string[]
 }
 
-/** The categories a saved view hides; for an older view, the legacy categories it did not show. */
 export function viewHiddenCategories(view: SavedFilterView): Set<string> {
   if (Array.isArray(view.hiddenCategories)) return new Set(view.hiddenCategories)
   const shown = new Set(Array.isArray(view.categories) ? view.categories : LEGACY_VIEW_CATEGORIES)
@@ -68,14 +59,9 @@ function persistSavedViews(views: SavedFilterView[]) {
   try {
     localStorage.setItem(SAVED_VIEWS_KEY, JSON.stringify(views))
   } catch {
-    // localStorage unavailable (private browsing) — views stay in-memory only
   }
 }
 
-// findingKey is the stable identity for a finding: the backend's content-derived
-// fingerprint (ruleId:blockId), falling back to computing it locally for older
-// payloads. Suppression and triage are keyed by this — NOT by finding.id, which
-// is a per-run index that shifts as findings come and go.
 export function findingKey(f: Finding): string {
   return f.fingerprint || `${f.ruleId}:${f.blockId}`
 }
@@ -87,12 +73,6 @@ export interface SuppressedFinding {
   suppressedAt: string
 }
 
-// Per-block index of a report's findings, built on demand and cached per
-// report object (a WeakMap, so it is collected with the report). The store
-// used to keep an eager index for every retained report — a second copy of
-// every findings array, for flows only the inspector of the OPEN flow reads
-// — and rebuilt it on every setReport. Building one costs ~3 ms for 20k
-// findings, once per report.
 const EMPTY_BLOCK_INDEX: ReadonlyMap<string, Finding[]> = new Map()
 const blockIndexCache = new WeakMap<AnalysisReport, Map<string, Finding[]>>()
 
@@ -117,11 +97,7 @@ interface AnalysisState {
   analyzingGen: number
   progress: {current: number; total: number; ruleName: string}
   severityFilter: Set<Severity>
-  // Categories the findings list hides; empty shows every category, known or not.
   hiddenCategories: Set<string>
-  // Triage-queue filters (R0-3): status chips + "assigned to me" narrow the
-  // list to the user's working set — resolved/acknowledged findings used to
-  // stay fully visible with no way to hide them.
   statusFilter: Set<TriageStatus>
   assignedToMeOnly: boolean
   variableLineage: VariableHistory | null
@@ -129,17 +105,11 @@ interface AnalysisState {
   suppressedKeys: Set<string>
   findingSearch: string
   protectedFlowId: string | null
-  // Triage (cloud mode): per-finding status map (acknowledged / in_progress /
-  // resolved / suppressed). Suppressed entries are also mirrored in
-  // suppressedKeys for the existing suppress UI.
   triageMap: Map<string, FindingStatus>
   baseline: FlowBaseline | null
   baselineNewCount: number | null
   savedViews: SavedFilterView[]
   selectedFindingIds: Set<string>
-  // focusedFindingKey is a stable findingKey the findings list should scroll to
-  // and briefly highlight — set by a chat "finding:" deep-link, cleared once
-  // the list has revealed it.
   focusedFindingKey: string | null
 
   setReport: (flowId: string, report: AnalysisReport) => void
@@ -161,12 +131,7 @@ interface AnalysisState {
   unsuppressFinding: (finding: Finding) => void
   clearSuppressed: () => void
   loadSuppressions: (flowId: string) => Promise<void>
-  // justification is the user-authored reason (prompted when suppressing);
-  // stored on the triage entry so the status chip can show it.
   setFindingTriage: (finding: Finding, status: TriageStatus, justification?: string) => void
-  // triageFindingsBatch applies one triage patch (status and/or assignee) to
-  // many findings (bulk triage): optimistic triageMap update + ONE persisted
-  // batch request. prev entries are snapshotted for rollback.
   triageFindingsBatch: (findings: Finding[], patch: {status?: TriageStatus; assigneeId?: string | null}) => void
   assignFinding: (finding: Finding, assigneeId: string | null) => void
   loadBaseline: (flowId: string) => Promise<void>
@@ -181,16 +146,10 @@ interface AnalysisState {
   reset: () => void
 }
 
-// Retained reports are capped by count AND by the findings they hold: 20
-// reports of a 20k-finding flow kept ~10 MB of JSON each alive per session.
-// The open flow's report (protectedFlowId) and the report just set are never
-// evicted, so the budget can be exceeded by exactly those two.
 const MAX_REPORTS = 20
 export const MAX_RETAINED_FINDINGS = 100_000
 
 const defaultSeverityFilter = (): Set<Severity> => new Set(['error', 'warning', 'info'])
-// All statuses on by default: 'suppressed' is listed for completeness, but
-// suppressed findings are hidden by the suppress filter regardless.
 const defaultStatusFilter = (): Set<TriageStatus> => new Set(['open', 'acknowledged', 'in_progress', 'resolved'])
 
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
@@ -219,14 +178,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setReport: (flowId, report) => {
     set(state => {
       const next = new Map(state.reports)
-      // Delete-then-set: a Map keeps a re-set key's ORIGINAL position, so a
-      // refreshed report would otherwise still count as the oldest.
       next.delete(flowId)
       next.set(flowId, report)
-      // Evict oldest entries beyond the count cap or the findings budget, but
-      // never the currently-open flow's report — losing it causes the
-      // per-block findings UI to silently go empty while the dashboard
-      // aggregate still shows it — nor the one just set.
       const protectedId = state.protectedFlowId
       let retained = 0
       for (const r of next.values()) retained += r.findings?.length ?? 0
@@ -238,9 +191,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       }
       return {reports: next}
     })
-    // Best-effort notification when the user has tabbed away from the app.
-    // notifyIfBackground is a no-op while the document is visible, so this
-    // never disturbs an active session.
     const count = report.findings?.length ?? 0
     const noun = count === 1 ? 'finding' : 'findings'
     void notifyIfBackground({
@@ -286,10 +236,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   setFindingSearch: q => set({findingSearch: q}),
 
-  // Suppression is keyed by the stable findingKey and, in cloud mode, persisted
-  // as team-shared triage state (status="suppressed"). Updates are optimistic;
-  // a failed persist reverts the local change. Desktop (Tauri) has no backend,
-  // so it stays in-memory only.
   suppressFinding: (finding, reason) => {
     const key = findingKey(finding)
     set(state => {
@@ -344,7 +290,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
         )
         .catch(err => {
           logger.warn('Failed to persist bulk suppression', err)
-          // Roll back the optimistic update so local state matches the server.
           set(state => {
             const keys = new Set(state.suppressedKeys)
             for (const k of addedKeys) keys.delete(k)
@@ -375,9 +320,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     if (isTauri() || !flowId) return
     try {
       const statuses = await analysisApi.listFindingStatuses(flowId)
-      // Guard against a stale response: if the user switched flows while this
-      // request was in flight, applying flowId's suppressions would clobber the
-      // now-current flow's triage state.
       if (useFlowStore.getState().document?.id !== flowId) return
       const suppressed = (statuses || []).filter(s => s.status === 'suppressed')
       const triageMap = new Map<string, FindingStatus>()
@@ -401,8 +343,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   setFindingTriage: (finding, status, justification) => {
     const key = findingKey(finding)
-    // Preserve any existing assignee across a status change so triaging a
-    // finding (e.g. open → in_progress) doesn't silently drop its owner.
     const preservedAssignee = get().triageMap.get(key)?.assigneeId
     set(state => {
       const triageMap = new Map(state.triageMap)
@@ -419,8 +359,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           updatedAt: new Date().toISOString(),
         })
       }
-      // Keep the suppress filter in sync with the triage status: a finding is
-      // hidden iff its status is 'suppressed'; any other status must reveal it.
       const isSuppressed = status === 'suppressed'
       if (isSuppressed && !state.suppressedKeys.has(key)) {
         const keys = new Set(state.suppressedKeys)
@@ -458,11 +396,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     }
   },
 
-  // Assign (or unassign) a finding without changing its triage status. The
-  // backend persists assigneeId alongside the status, so we re-send the current
-  // status with the new owner. Cloud-only (desktop triage is in-memory).
-  // A finding whose stored status this bundle does not know is left as it is
-  // when the patch keeps the status: requests send known statuses only.
   triageFindingsBatch: (findings, patch) => {
     if (findings.length === 0) return
     const flowId = useFlowStore.getState().document?.id ?? ''
@@ -492,8 +425,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     })
     if (!isTauri()) {
       const items = findings.flatMap((f, i) => {
-        // Index into prev directly: indexOf(f) is O(n²) AND wrong
-        // when the same object reference appears twice.
         const existing = prev[i]
         const status = patch.status ?? existing?.status ?? 'in_progress'
         if (!isKnown(TRIAGE_STATUSES, status)) return []
@@ -503,7 +434,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       if (items.length === 0) return
       analysisApi.setFindingStatusBatch(items).catch(err => {
         logger.warn('Failed to persist bulk triage', err)
-        // Roll back: restore each entry's prior shape (or absence).
         set(state => {
           const triageMap = new Map(state.triageMap)
           findings.forEach((f, i) => {
@@ -521,13 +451,10 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   assignFinding: (finding, assigneeId) => {
     const key = findingKey(finding)
     const status = get().triageMap.get(key)?.status ?? 'open'
-    // The request repeats the status, and a status this bundle does not know
-    // cannot be sent (the triage menu offers no assignment then).
     if (!isKnown(TRIAGE_STATUSES, status)) return
     set(state => {
       const triageMap = new Map(state.triageMap)
       if (status === 'open' && !assigneeId) {
-        // Unassigning a finding that was never triaged: nothing to persist.
         if (!triageMap.has(key)) return state
         triageMap.delete(key)
         return {triageMap}
@@ -553,10 +480,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     if (isTauri() || !flowId) return
     try {
       const [bl, drift] = await Promise.all([analysisApi.getBaseline(flowId), analysisApi.baselineDrift(flowId)])
-      // Guard against a stale response overwriting the now-current flow's baseline.
       if (useFlowStore.getState().document?.id !== flowId) return
-      // The badge counts drift: findings of a rule newer than the baseline's rule
-      // set (one notice, not drift) and of preview rules are in `new` too.
       const driftCount = drift.new.length - (drift.newFromNewRules ?? 0) - (drift.preview ?? 0)
       set({baseline: bl, baselineNewCount: drift.hasBaseline ? Math.max(0, driftCount) : null})
     } catch (err) {
@@ -568,7 +492,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     const flowId = useFlowStore.getState().document?.id
     if (!flowId) return
     try {
-      // `baselineNewCount` is definitionally 0 right after setting a baseline.
       await analysisApi.setBaseline(flowId)
       set({baseline: await analysisApi.getBaseline(flowId), baselineNewCount: 0})
     } catch (err) {
@@ -594,8 +517,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       name,
       severities: [...severities],
       hiddenCategories: [...hiddenCategories],
-      // Written the way an older bundle would have (out of the five it knows), so a
-      // rolled-back bundle applying this view gets a filter it could have saved itself.
       categories: LEGACY_VIEW_CATEGORIES.filter(c => !hiddenCategories.has(c)),
     }
     set(state => {
@@ -625,7 +546,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   selectAllFindings: ids => {
     set(state => {
       const current = state.selectedFindingIds
-      // If all given ids are already selected, deselect them (toggle-all)
       const allSelected = ids.every(id => current.has(id))
       const next = new Set(current)
       if (allSelected) {
@@ -660,12 +580,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       baseline: null,
       baselineNewCount: null,
       selectedFindingIds: new Set(),
-      // savedViews are DEVICE-LOCAL prefs (persisted to localStorage, loaded
-      // at module init) — logout must not blank them for the session:
-      // they'd stay gone until a reload despite surviving on disk.
       focusedFindingKey: null,
     }),
 }))
 
-// Reset on logout (see storeRegistry).
 registerStoreReset(() => useAnalysisStore.getState().reset())

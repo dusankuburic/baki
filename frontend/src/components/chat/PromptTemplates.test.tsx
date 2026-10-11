@@ -10,7 +10,6 @@ function open(hasBlock: boolean) {
 describe('PromptTemplates', () => {
   it('hides the block template when no block is in scope', () => {
     open(false)
-    // It asks about "this block" — sent without one, the model had nothing to explain.
     expect(screen.queryByText('Explain block in detail')).not.toBeInTheDocument()
     expect(screen.getByText('Explain entire flow')).toBeInTheDocument()
   })

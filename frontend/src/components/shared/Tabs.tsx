@@ -2,11 +2,6 @@ import {useRef} from 'react'
 import clsx from 'clsx'
 import type {LucideIcon} from 'lucide-react'
 
-// Tabs is the accessible tab strip (U5a.1): proper tablist/tab roles, roving
-// tabindex (only the selected tab is tabbable), arrow/Home/End navigation
-// with selection-follows-focus, and aria-controls wiring when a panel id is
-// given. Extracted so the Sidebar and Inspector strips (previously plain
-// button rows with no tab semantics) share one implementation.
 export interface TabItem<T extends string> {
   value: T
   label: string
@@ -18,7 +13,6 @@ interface TabsProps<T extends string> {
   value: T
   onChange: (v: T) => void
   'aria-label': string
-  // When set, each tab gets aria-controls={`${panelIdPrefix}-${value}`}.
   panelIdPrefix?: string
   className?: string
 }

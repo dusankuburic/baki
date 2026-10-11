@@ -1,4 +1,5 @@
 import {useState, useCallback, useEffect} from 'react'
+import {useTranslation} from 'react-i18next'
 import {FlaskConical, Search, Wrench, Download, Sparkles, ChevronRight, X} from 'lucide-react'
 import Modal from '@/components/shared/Modal'
 import {Spinner, useToast} from '@/components/shared'
@@ -7,15 +8,13 @@ import {useFlowStore} from '@/stores/flowStore'
 import {flowApi, analysisApi, providersApi} from '@/api'
 import {SAMPLE_FLOW_NAME, SAMPLE_FLOW_FILES} from '@/data/sampleFlow'
 import {useUIStore} from '@/stores/uiStore'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
 interface WelcomeModalProps {
   isOpen: boolean
   onClose: () => void
 }
 
-// The analysis-step copy needs the live rule count. It's built lazily from the
-// fetched count so the onboarding never shows a stale hard-coded number again
-// (the previous copy said "29" while the engine ships 41).
 interface StepDef {
   icon: typeof FlaskConical
   title: string
@@ -51,14 +50,13 @@ const STEPS: StepDef[] = [
   {
     icon: Sparkles,
     title: 'Explain & fix with AI',
-    // The provider-configured flag arrives live; the copy degrades gracefully
-    // while the check is in flight.
     body: () =>
       'Connect an AI provider key (Settings → AI Accounts) to explain findings, fix with AI, and chat about your flows. Analysis and auto-fix work without one.',
   },
 ]
 
 export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
+  const {t} = useTranslation('shell')
   const [step, setStep] = useState(0)
   const [loadingSample, setLoadingSample] = useState(false)
   const [ruleCount, setRuleCount] = useState<number | null>(null)
@@ -67,9 +65,6 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
   const {error: toastError} = useToast()
   const isLast = step === STEPS.length - 1
 
-  // Provider detection (onboarding R1-6): the tour previously never steered
-  // an unconfigured user toward the one setup step the headline AI features
-  // need. Checked once when the modal opens; failure = unknown (no nag).
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
   useEffect(() => {
     if (!isOpen) return
@@ -87,7 +82,6 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
     }
   }, [isOpen])
 
-  // Fetch the live rule count so the copy never drifts from the engine again.
   useEffect(() => {
     if (!isOpen) return
     let cancelled = false
@@ -97,7 +91,6 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
         if (!cancelled && Array.isArray(rules)) setRuleCount(rules.length)
       })
       .catch(() => {
-        // Non-fatal — the copy falls back to "dozens of".
       })
     return () => {
       cancelled = true
@@ -110,35 +103,22 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
   }, [updateGeneral, onClose])
 
   const handleStart = useCallback(async () => {
-    // Load the sample flow so the user lands on something concrete.
     setLoadingSample(true)
     try {
       const doc = await flowApi.uploadFlow(SAMPLE_FLOW_NAME, SAMPLE_FLOW_FILES)
       if (doc) setDocument(doc)
     } catch (e) {
-      // Sample failed — still complete onboarding so the user isn't stuck, but
-      // surface WHY (backend down, disk full, etc.) instead of dropping them on
-      // an empty MainPane with no explanation.
-      toastError('Could not load the sample flow', {description: String(e)})
+      toastError(t('toasts.loadSampleFailed'), {description: getErrorMessage(e)})
     } finally {
       setLoadingSample(false)
     }
     complete()
-  }, [setDocument, complete, toastError])
+  }, [setDocument, complete, t, toastError])
 
-  // Skip / X / Esc DISMISS the tour: they used to jump to the last step, so
-  // the only way out was "Load sample & start" — the modal could not be
-  // closed, and on desktop (where it is now shown, see App.tsx) that blocked
-  // the whole app. Completing persists firstRunCompleted so it never returns
-  // uninvited; "Replay tour" in Settings brings it back on demand.
   const handleSkip = useCallback(() => {
     complete()
   }, [complete])
 
-  // step only ever holds 0..STEPS.length-1 (Next is hidden on the last step,
-  // the dots index the array), so the guard below is unreachable — it just
-  // makes that invariant visible to the type system. Kept after the last hook
-  // so the early return doesn't skip any hook calls.
   const current = STEPS[step]
   if (!current) return null
   const Icon = current.icon
@@ -175,16 +155,11 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
 
       <p className="text-sm text-text-secondary leading-relaxed mb-6 min-h-[3rem]">{current.body(ruleCount)}</p>
 
-      {/* AI setup nudge: only on the AI step, only when the check confirms NO
-          provider is configured (null = unknown; never nag on a maybe). */}
       {current.title.startsWith('Explain') && aiConfigured === false && (
         <div className="flex items-center justify-between gap-3 mb-6 px-3 py-2 rounded-lg border border-brand-500/30 bg-brand-500/5">
           <span className="text-xs text-text-secondary">No AI provider connected yet.</span>
           <button
             onClick={() => {
-              // 'accounts' is the AI Accounts section id (see
-              // settings/sections.ts); 'providers' does not exist and
-              // silently landed on General.
               useUIStore.getState().openSettings('accounts')
               complete()
             }}
@@ -196,7 +171,6 @@ export default function WelcomeModal({isOpen, onClose}: WelcomeModalProps) {
         </div>
       )}
 
-      {/* Progress dots */}
       <div className="flex gap-1.5 mb-6">
         {STEPS.map((_, i) => (
           <button

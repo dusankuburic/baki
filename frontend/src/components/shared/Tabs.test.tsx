@@ -9,8 +9,6 @@ const items = [
   {value: 'library' as const, label: 'Library'},
 ]
 
-// The accessible tab strip contract (U5a.1): tablist/tab roles, roving
-// tabindex, arrow/Home/End navigation with selection-follows-focus.
 describe('Tabs', () => {
   it('renders tablist semantics with aria-selected and roving tabindex', () => {
     const onChange = vi.fn()
@@ -31,7 +29,7 @@ describe('Tabs', () => {
     fireEvent.keyDown(screen.getByRole('tablist'), {key: 'ArrowRight'})
     expect(onChange).toHaveBeenCalledWith('variables')
     fireEvent.keyDown(screen.getByRole('tablist'), {key: 'ArrowLeft'})
-    expect(onChange).toHaveBeenCalledWith('library') // wraps from first to last
+    expect(onChange).toHaveBeenCalledWith('library')
     fireEvent.keyDown(screen.getByRole('tablist'), {key: 'Home'})
     expect(onChange).toHaveBeenLastCalledWith('explorer')
     fireEvent.keyDown(screen.getByRole('tablist'), {key: 'End'})

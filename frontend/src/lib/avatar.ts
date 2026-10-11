@@ -13,7 +13,5 @@ export function userColor(userId: string): string {
   for (let i = 0; i < userId.length; i++) {
     hash = (hash * 31 + userId.charCodeAt(i)) >>> 0
   }
-  // The modulo keeps the index inside PALETTE; the fallback (= PALETTE[0])
-  // only satisfies the index-access type.
   return PALETTE[hash % PALETTE.length] ?? '#5b61ef'
 }

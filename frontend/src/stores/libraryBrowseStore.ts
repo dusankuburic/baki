@@ -2,23 +2,14 @@ import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import type {LibraryScope, LibrarySort} from '@/api/library'
 
-// UI state for the Cloud Library workspace (browse view). Pure presentation —
-// nothing persisted, nothing fetched here. Lives outside the workspace
-// component so that toolbar/filter-rail/grid/detail can subscribe to slices
-// without prop-drilling, and so re-opening the view restores the last
-// selection within the same session.
 export type LibraryViewMode = 'grid' | 'list'
 
 interface LibraryBrowseState {
   view: LibraryViewMode
   scope: LibraryScope
-  // null = include flows from every org the user belongs to (the default
-  // "all orgs" view). Otherwise, only flows from one of these orgs (an empty
-  // string represents the personal "no org" bucket).
   selectedOrgIds: ReadonlySet<string> | null
   sort: LibrarySort
   query: string
-  // ANY-of tag filter, sent as ?tags=. Empty = no tag filter.
   selectedTags: ReadonlySet<string>
   page: number
   selectedFlowId: string | null
@@ -57,7 +48,6 @@ export const useLibraryBrowseStore = create<LibraryBrowseState>((set, get) => ({
   setSelectedOrgIds: ids => set({selectedOrgIds: ids, page: 0, selectedFlowId: null}),
   toggleOrg: id => {
     const current = get().selectedOrgIds
-    // Going from "all" (null) to a curated set: start from just-this-one.
     if (current === null) {
       set({selectedOrgIds: new Set([id]), page: 0, selectedFlowId: null})
       return
@@ -65,7 +55,6 @@ export const useLibraryBrowseStore = create<LibraryBrowseState>((set, get) => ({
     const next = new Set(current)
     if (next.has(id)) next.delete(id)
     else next.add(id)
-    // Empty set is a degenerate state (nothing visible). Snap back to "all".
     set({selectedOrgIds: next.size === 0 ? null : next, page: 0, selectedFlowId: null})
   },
   setSort: s => set({sort: s, page: 0}),
@@ -82,5 +71,4 @@ export const useLibraryBrowseStore = create<LibraryBrowseState>((set, get) => ({
   reset: () => set(DEFAULTS),
 }))
 
-// Reset on logout (see storeRegistry).
 registerStoreReset(() => useLibraryBrowseStore.getState().reset())

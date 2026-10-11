@@ -22,23 +22,18 @@ export function formatDuration(hours: number): string {
   return remH > 0 ? `${days}d ${remH}h` : `${days}d`
 }
 
-// How the team is working through findings: the status distribution as
-// single-hue bars (states are not a funnel — findings move both ways) and the
-// two numbers that say whether the backlog is moving.
 export function TriageCard({data, onDetails, className}: {data: Workflow; onDetails?: () => void; className?: string}) {
   const {t} = useTranslation('dashboard')
   const theme = useChartTheme()
-  const funnel = data.funnel ?? {}
-  const total = TRIAGE_STATUSES.reduce((s, k) => s + (funnel[k] ?? 0), 0)
+  const total = TRIAGE_STATUSES.reduce((s, k) => s + (data.funnel?.[k] ?? 0), 0)
   const rows = useMemo<Row[]>(
     () =>
       TRIAGE_STATUSES.map(k => ({
         key: k,
         label: t(`triage.${k}`),
-        value: funnel[k] ?? 0,
-        share: total > 0 ? (funnel[k] ?? 0) / total : 0,
+        value: data.funnel?.[k] ?? 0,
+        share: total > 0 ? (data.funnel?.[k] ?? 0) / total : 0,
       })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [data, total, t],
   )
   const title = t('home.triage')

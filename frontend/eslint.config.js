@@ -16,7 +16,6 @@ export default [
       parserOptions: {
         ecmaVersion: 'latest',
         sourceType: 'module',
-        // Type-aware rules (no-floating-promises) need the project service.
         projectService: true,
         tsconfigRootDir: import.meta.dirname,
       },
@@ -30,19 +29,13 @@ export default [
       ...reactHooks.configs.recommended.rules,
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['warn', {argsIgnorePattern: '^_', varsIgnorePattern: '^_'}],
-      // Every async call is awaited, void-ed, or caught — the convention held
-      // repo-wide already; this locks it in (catches bare fire-and-forget
-      // calls whose rejections would vanish).
       '@typescript-eslint/no-floating-promises': 'error',
       'no-console': ['warn', {allow: ['warn', 'error']}],
       'prefer-const': 'error',
-      'no-undef': 'off', // TypeScript handles this
-      // Intentional patterns: updating ref.current during render is a valid stale-closure workaround
+      'no-empty': ['error', {allowEmptyCatch: true}],
+      'no-undef': 'off',
       'react-hooks/refs': 'warn',
-      // setState in effect body is sometimes intentional (conditional initialization)
       'react-hooks/set-state-in-effect': 'warn',
-      // Keep platform-specific code isolated: only the platform adapters may import Tauri APIs.
-      // (Dynamic import() is not flagged by this rule, so guarded lazy imports remain allowed.)
       'no-restricted-imports': ['error', {
         patterns: [{
           group: ['@tauri-apps/*'],
@@ -52,14 +45,10 @@ export default [
     },
   },
   {
-    // The platform adapters are the designated home for Tauri-specific imports.
     files: ['src/platform/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-imports': 'off',
     },
   },
-  // MUST be last: eslint-config-prettier turns off stylistic rules that clash
-  // with Prettier (which owns formatting). Previously declared but never wired
-  // in, so any future rule additions could have silently conflicted.
   prettier,
 ]

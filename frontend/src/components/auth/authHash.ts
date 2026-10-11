@@ -1,12 +1,3 @@
-// Account-recovery tokens arrive in the URL fragment placed there by links in
-// transactional emails (see internal/mail/service.go):
-//   #resetPassword=<token>  -> password reset
-//   #verifyEmail=<token>    -> email verification
-//   #invite=<token>         -> org invitation acceptance
-//
-// parseRecoveryHash is pure (safe to call from a render/useState initializer,
-// which React StrictMode double-invokes); clearRecoveryHash performs the
-// history mutation and must run from an effect, not during render.
 export interface RecoveryHash {
   resetToken?: string
   verifyToken?: string
@@ -24,8 +15,6 @@ export function parseRecoveryHash(): RecoveryHash {
   }
 }
 
-// clearRecoveryHash strips the fragment so the single-use token doesn't linger
-// in browser history. Call from an effect after the token has been captured.
 export function clearRecoveryHash(): void {
   history.replaceState(null, '', window.location.pathname + window.location.search)
 }

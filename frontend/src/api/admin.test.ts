@@ -21,8 +21,6 @@ describe('adminApi.setUserRole wire contract', () => {
     vi.resetModules()
   })
 
-  // Regression: the route is registered PUT-only (routes_chi.go). The default
-  // POST returned 405 and admin role changes silently failed.
   it('sends PUT to /api/admin/users/{id}/role', async () => {
     const fetchSpy = mockFetch({status: 'ok'})
     const adminApi = await getAdminApi()

@@ -14,7 +14,6 @@ vi.mock('@/api/client', async importOriginal => {
   return {
     ...actual,
     request: (...a: unknown[]) => requestMock(...a),
-    // Real ApiError so instanceof + code checks behave exactly as production.
   }
 })
 
@@ -69,8 +68,6 @@ describe('KnowledgeBasePanel', () => {
     expect(screen.getByText(/3 chunks \(3 searchable\)/)).toBeInTheDocument()
   })
 
-  // G3: members used to see admin-gated controls (upload card, delete,
-  // re-index) that 403'd on use — the backend requires requireAdmin.
   it('hides all management controls from plain members', async () => {
     seedStore('member')
     requestMock.mockResolvedValue([{id: 'd1', filename: 'guide.md', createdAt: new Date().toISOString()}])
@@ -92,9 +89,6 @@ describe('KnowledgeBasePanel', () => {
     expect(screen.getByText(/dimension mismatch; re-index/i)).toBeInTheDocument()
   })
 
-  // ADR 0027: a document whose chunks were embedded under another embedding
-  // model than the viewer's is searchable by width but never found; the list
-  // says so next to the width warning and points at re-index.
   it('marks documents indexed with another embedding model', async () => {
     seedStore('admin')
     requestMock.mockResolvedValue([
@@ -127,8 +121,6 @@ describe('KnowledgeBasePanel', () => {
       {id: 'd1', filename: 'guide.md', createdAt: new Date().toISOString(), chunkCount: 2, vectorIndexed: 2},
     ])
     renderPanel()
-    // Toolbar trigger first (exact label avoids also matching the dialog's
-    // confirm button once it opens).
     const trigger = await screen.findByRole('button', {name: 'Re-index'})
     fireEvent.click(trigger)
     const dialog = await screen.findByRole('dialog')
@@ -141,7 +133,6 @@ describe('KnowledgeBasePanel', () => {
       ),
     )
     requestMock.mockResolvedValue({chunks: 7, docs: 2})
-    // Toast content is opaque here; the call + no error state is the contract.
   })
 
   it('explains an unconfigured embedding provider on re-index failure', async () => {
@@ -162,8 +153,6 @@ describe('KnowledgeBasePanel', () => {
     )
   })
 
-  // Routes the mocked API by URL: the document list, then the re-index /
-  // upload responses the case under test scripts.
   function routeRequests(handlers: {
     reindex?: (body: unknown, signal?: AbortSignal) => unknown
     upload?: () => unknown
@@ -186,9 +175,6 @@ describe('KnowledgeBasePanel', () => {
     fireEvent.click(within(dialog).getByRole('button', {name: 'Re-index'}))
   }
 
-  // #35: re-indexing a corpus built with another embedding model strands every
-  // member on that model, so the 409 turns into a second, explicit confirm
-  // and only then is the request resent with force.
   it('asks again and resends with force when the embedding model changed', async () => {
     seedStore('admin')
     routeRequests({
@@ -247,9 +233,6 @@ describe('KnowledgeBasePanel', () => {
     )
   })
 
-  // Contract: `truncated` means the request hit its 10 000-chunk ceiling with
-  // documents still waiting — a warning, not a success, since the admin has
-  // to run it again.
   it('warns instead of celebrating when a re-index was truncated', async () => {
     seedStore('admin')
     routeRequests({reindex: () => Promise.resolve({chunks: 10000, docs: 4, truncated: true})})
@@ -295,12 +278,9 @@ describe('KnowledgeBasePanel', () => {
     const input = container.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, {target: {files: [new File(['# rules'], 'rules.md', {type: 'text/markdown'})]}})
     fireEvent.click(screen.getByText('Index Document'))
-    // The message mentions the embedding provider, yet it is not the
-    // missing-key case: the verdict wins over the regex fallback.
     expect(await screen.findByText('embedding rate limit hit; retry in 20s')).toBeInTheDocument()
     expect(screen.queryByText(/Indexing requires an embedding-capable provider key/)).toBeNull()
 
-    // 503: the server masks the transport detail, so the copy is ours.
     routeRequests({
       upload: () => Promise.reject(new ApiError('upstream unavailable', 503, 'EMBEDDING_PROVIDER_UNAVAILABLE')),
     })
@@ -309,8 +289,6 @@ describe('KnowledgeBasePanel', () => {
     expect(screen.queryByText('upstream unavailable')).toBeNull()
   })
 
-  // The server gives both bulk calls a 5-minute deadline; the client's default
-  // 30-second abort would cut a large corpus off first.
   it('waits at least five minutes on upload and re-index', async () => {
     seedStore('admin')
     routeRequests({reindex: () => Promise.resolve({chunks: 1, docs: 1}), upload: () => Promise.resolve({})})
@@ -331,9 +309,6 @@ describe('KnowledgeBasePanel', () => {
     }
   })
 
-  // R-7: a resumable server answers one committed page at a time with a
-  // cursor for the next; the panel keeps posting (with the same force) until
-  // no cursor comes back, then reports the total.
   it('follows nextCursor across pages and reports the total', async () => {
     seedStore('admin')
     const pages = [
@@ -381,7 +356,6 @@ describe('KnowledgeBasePanel', () => {
       reindex: (_body, signal) => {
         call++
         if (call === 1) return Promise.resolve({chunks: 250, docs: 2, nextCursor: {docId: 'd2'}})
-        // The second page hangs until the admin stops it.
         return new Promise((_resolve, reject) => {
           signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
         })
@@ -432,8 +406,6 @@ describe('KnowledgeBasePanel', () => {
     expect(await screen.findByText(/Your embedding model changed while the re-index was running/)).toBeInTheDocument()
     expect(call).toBe(2)
   })
-  // Stop keeps the committed pages resumable — the Resume action
-  // continues from the last committed page's cursor without a re-confirm.
   it('offers Resume after Stop and continues from the committed page', async () => {
     seedStore('admin')
     let call = 0
@@ -441,7 +413,6 @@ describe('KnowledgeBasePanel', () => {
       reindex: (_body, signal) => {
         call++
         if (call === 1) return Promise.resolve({chunks: 250, docs: 2, nextCursor: {docId: 'd2'}})
-        // The second page hangs until the admin stops it.
         return new Promise((_resolve, reject) => {
           signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
         })
@@ -462,14 +433,11 @@ describe('KnowledgeBasePanel', () => {
         expect.objectContaining({body: {cursor: {docId: 'd2'}}}),
       ),
     )
-    // A resume needs no confirmation: the model question was settled.
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(await screen.findByText('Re-indexed 30 chunks across 1 documents')).toBeInTheDocument()
     expect(await waitFor(() => screen.queryByRole('button', {name: 'Resume re-index'}))).toBeNull()
   })
 
-  // Stopped before the first page answered: no cursor exists, so the toast
-  // must not promise a Resume that never appears.
   it('says to run Re-index again when stopped before the first page', async () => {
     seedStore('admin')
     routeRequests({
@@ -490,9 +458,6 @@ describe('KnowledgeBasePanel', () => {
     expect(screen.queryByRole('button', {name: 'Resume re-index'})).toBeNull()
   })
 
-  // A resumed run's first page is a later page of the run it resumes: a model
-  // change refused there must start over, not re-arm a Resume that can only
-  // fail the same way.
   it('explains a model change refused on the first page of a resumed run and drops Resume', async () => {
     seedStore('admin')
     routeRequests({
@@ -516,8 +481,6 @@ describe('KnowledgeBasePanel', () => {
     expect(screen.queryByRole('button', {name: 'Resume re-index'})).toBeNull()
   })
 
-  // A failed page hands the committed progress back on the error
-  // envelope (details.nextCursor); the panel resumes from THAT cursor.
   it('resumes a failed page from the error details cursor', async () => {
     seedStore('admin')
     routeRequests({
@@ -543,8 +506,6 @@ describe('KnowledgeBasePanel', () => {
     )
   })
 
-  // The document-too-large verdict is the server's own message (the
-  // figures name the real limit), not a generic upload failure.
   it('shows the document-too-large verdict verbatim on upload', async () => {
     seedStore('admin')
     routeRequests({
@@ -565,8 +526,6 @@ describe('KnowledgeBasePanel', () => {
     expect(await screen.findByText(/3000 passages exceed the limit of 2500/)).toBeInTheDocument()
   })
 
-  // The org credential's missing embedding deployment is the org
-  // admin's to fix — the server message says so verbatim.
   it("shows the org's not-configured verdict verbatim on re-index", async () => {
     seedStore('admin')
     routeRequests({
@@ -584,9 +543,6 @@ describe('KnowledgeBasePanel', () => {
     expect(await screen.findByText(/ask an org admin to add one/)).toBeInTheDocument()
   })
 
-  // A confirmed change of the Azure AI Foundry knowledge-base model (AI
-  // Accounts, with force) leaves the corpus refusing uploads until it is
-  // re-indexed: the panel asks for that until a re-index went through.
   describe('after the knowledge-base model changed', () => {
     const NOTICE = /The knowledge base embedding model changed/
 

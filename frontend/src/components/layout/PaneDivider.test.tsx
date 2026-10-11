@@ -69,7 +69,6 @@ describe('PaneDivider', () => {
     fireEvent.pointerCancel(separator, {pointerId: 1})
     fireEvent.lostPointerCapture(separator, {pointerId: 1})
     expect(onResizeEnd).toHaveBeenCalledTimes(1)
-    // No drag in flight any more: further moves are ignored.
     fireEvent.pointerMove(separator, {clientX: 200, pointerId: 1})
     expect(onDrag).toHaveBeenCalledTimes(1)
   })

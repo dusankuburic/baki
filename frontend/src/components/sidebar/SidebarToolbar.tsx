@@ -69,8 +69,6 @@ export default function SidebarToolbar({hasFlow, isAnalyzing = false, findingCou
           <BarChart3 size={16} />
         </button>
 
-        {/* Cloud Library is a storage-backend feature: on desktop the list is
-            always empty and tag edits 400, so the nav is hidden there. */}
         {!isTauri() && (
           <button
             onClick={() => setMainPaneView('library')}

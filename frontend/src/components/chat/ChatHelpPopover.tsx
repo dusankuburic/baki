@@ -6,10 +6,6 @@ interface Props {
   onClose: () => void
 }
 
-// `keys` are literal keycaps and stay untranslated; `descriptionKey` points at
-// the localized explanation.
-// `as const` keeps descriptionKey a literal union so the typed t() accepts it —
-// a widened `string` would defeat the key checking the i18next augmentation adds.
 const SHORTCUTS = [
   {keys: 'Enter', descriptionKey: 'help.sendMessage'},
   {keys: 'Cmd/Ctrl + Enter', descriptionKey: 'help.sendMessage'},
@@ -22,13 +18,6 @@ const SHORTCUTS = [
   {keys: '/', descriptionKey: 'help.openCommandMenu'},
 ] as const
 
-// ChatHelpPopover lists the slash commands and keyboard shortcuts. Backs the
-// /help slash command.
-//
-// Built on the shared <Modal>: the hand-rolled version put role="dialog" and
-// the accessible name on the BACKDROP rather than the panel, and had a
-// window-level Escape listener with no focus trap, no initial focus and no
-// focus restoration.
 export default function ChatHelpPopover({onClose}: Props) {
   const {t} = useTranslation('chat')
 

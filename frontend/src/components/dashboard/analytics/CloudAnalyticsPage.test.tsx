@@ -42,7 +42,6 @@ function lastQuery(): URLSearchParams {
 }
 
 beforeAll(() => {
-  // jsdom has no scrollIntoView; the section nav and Home's "Details" use it.
   Element.prototype.scrollIntoView = vi.fn()
 })
 
@@ -72,10 +71,8 @@ describe('CloudAnalyticsPage', () => {
     for (const name of ['Trends', 'Findings', 'Flows', 'Triage', 'AI usage', 'Activity', 'Security']) {
       expect(screen.getByRole('heading', {name})).toBeInTheDocument()
     }
-    // Headline tiles carry the value and the comparison.
     expect(screen.getByText('72')).toBeInTheDocument()
     expect(screen.getAllByText(/vs previous 30 days/).length).toBeGreaterThan(0)
-    // The rule chips carry facet counts.
     expect(screen.getByRole('button', {name: 'Missing error handling, 12 findings'})).toHaveAttribute(
       'aria-pressed',
       'false',
@@ -93,7 +90,6 @@ describe('CloudAnalyticsPage', () => {
     await waitFor(() => expect(getAnalytics).toHaveBeenCalledTimes(2))
     expect(lastQuery().get('severity')).toBe('error')
     expect(screen.getByRole('button', {name: 'Errors, 6 findings'})).toHaveAttribute('aria-pressed', 'true')
-    // Previous charts stay on screen, marked busy, while the new payload loads.
     expect(screen.getByRole('heading', {name: 'Overview'})).toBeInTheDocument()
     expect(screen.getByRole('progressbar', {name: 'Updating analytics'})).toHaveClass('is-active')
     expect(document.querySelectorAll('.chart-card[aria-busy="true"]').length).toBeGreaterThan(0)
@@ -101,7 +97,6 @@ describe('CloudAnalyticsPage', () => {
     await act(async () => {
       resolveSecond(mockDashboardAnalytics({derived: true}))
     })
-    // Once idle the bar is aria-hidden (and so nameless to a role query).
     await waitFor(() => expect(document.querySelector('.analytics-progress')).not.toHaveClass('is-active'))
     expect(screen.getByText(/Showing Last 30 days · All my flows · Errors · vs previous period/)).toBeInTheDocument()
     expect(screen.getByText(/map each flow’s per-rule counts/)).toBeInTheDocument()
@@ -115,7 +110,8 @@ describe('CloudAnalyticsPage', () => {
     fireEvent.change(screen.getByLabelText('From'), {target: {value: '2026-09-10'}})
     fireEvent.change(screen.getByLabelText('To'), {target: {value: '2026-09-01'}})
     fireEvent.click(screen.getByRole('button', {name: 'Apply'}))
-    expect(screen.getByRole('alert')).toHaveTextContent('The start must not be after the end.')
+    expect(screen.getByText('The start must not be after the end.')).toBeInTheDocument()
+    expect(screen.getByLabelText('To')).toHaveAttribute('aria-invalid', 'true')
     expect(getAnalytics).toHaveBeenCalledTimes(1)
 
     fireEvent.change(screen.getByLabelText('To'), {target: {value: '2026-09-12'}})

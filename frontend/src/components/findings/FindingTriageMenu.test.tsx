@@ -61,7 +61,6 @@ describe('FindingTriageMenu', () => {
     expect(screen.getByText('Other status')).toBeInTheDocument()
     expect(screen.queryByText(/needs_review|triage\.status/)).toBeNull()
     expect(screen.queryByText('Assign to…')).toBeNull()
-    // Every known status can still be chosen: that request sends a known value.
     expect(screen.getByRole('button', {name: 'Resolved'})).toBeInTheDocument()
   })
 })

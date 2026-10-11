@@ -9,19 +9,7 @@ export interface ThemeMeta {
   category: Exclude<ThemeCategory, 'system'>
 }
 
-// Single source of truth for theme metadata shown in the Appearance panel.
-// `category` drives the grouped layout (Dark / Light) and is also used to pick
-// a Prism code theme via the runtime `color-scheme` read in CodeBlock.
-//
-// Adding a theme means touching FIVE places:
-//   1. This registry
-//   2. The ThemeMode union (types/settings.ts)
-//   3. Go ThemeMode constants (core/models/settings.go)
-//   4. The [data-theme="…"] token block in index.css
-//   5. The [data-theme="…"] input:-webkit-autofill override in index.css
-// themeContrast.test.ts cross-checks 1 ↔ 4; nothing enforces 5, so don't skip it.
 export const THEME_REGISTRY: ThemeMeta[] = [
-  // ---- Dark themes ----
   {id: 'dark', label: 'Deep Dark', description: 'The standard high-contrast dark mode.', category: 'dark'},
   {id: 'midnight', label: 'Midnight', description: 'A cool, deep navy palette for night owls.', category: 'dark'},
   {id: 'warm', label: 'Warm Sand', description: 'A soft, sepia-toned dark theme.', category: 'dark'},
@@ -56,7 +44,6 @@ export const THEME_REGISTRY: ThemeMeta[] = [
     description: 'Calm green-based, low-stress for long sessions.',
     category: 'dark',
   },
-  // ---- Light themes ----
   {id: 'light', label: 'Clean Light', description: 'Bright and airy for high-light environments.', category: 'light'},
   {
     id: 'gruvbox-light',

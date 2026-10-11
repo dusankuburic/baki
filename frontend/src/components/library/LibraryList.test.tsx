@@ -27,7 +27,6 @@ describe('LibraryList', () => {
     const onOpen = vi.fn()
     render(<LibraryList items={[flow('a', 'padframework')]} selectedId="a" onSelect={onSelect} onOpen={onOpen} />)
 
-    // The row used to carry a garbled aria-label ("Flow null {flow.name}").
     const row = screen.getByRole('button', {name: /padframework/})
     expect(row).not.toHaveAttribute('aria-label')
 
@@ -54,7 +53,6 @@ describe('LibraryList', () => {
     const {container} = render(
       <LibraryList items={[flow('a', 'A'), flow('b', 'B')]} selectedId={null} onSelect={() => {}} onOpen={() => {}} />,
     )
-    // One heading + two rows.
     expect(container.querySelectorAll('.library-row')).toHaveLength(3)
     expect(container.querySelectorAll('.library-col-owner')).toHaveLength(3)
     expect(container.querySelectorAll('.library-col-subflows')).toHaveLength(3)

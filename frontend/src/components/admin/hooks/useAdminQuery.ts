@@ -12,20 +12,11 @@ interface Loaded<T> {
 export interface AdminQueryResult<T> {
   data: T | null
   error: string | null
-  /** No data yet: show a skeleton. */
   isLoading: boolean
-  /** New data on its way while the previous page stays on screen. */
   isRefetching: boolean
   retry: () => void
 }
 
-// The load cycle every admin section shares. `key` names what is on screen
-// (filters, page, refresh nonces); when it changes the request it supersedes
-// is aborted and the previous payload stays visible (isRefetching) until the
-// new one lands. A failure after data was shown keeps that data and reports
-// through `onRefetchError` (a toast); a failure with nothing to show is left to
-// the section's inline notice. In-flight requests and the last successful
-// load are mirrored into the admin store for the page header.
 export function useAdminQuery<T>(
   key: string,
   fetcher: (signal: AbortSignal) => Promise<T>,

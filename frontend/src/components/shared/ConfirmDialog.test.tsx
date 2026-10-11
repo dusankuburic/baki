@@ -17,8 +17,6 @@ function PromptTrigger({options}: {options: PromptOptions}) {
 }
 
 describe('ConfirmDialog', () => {
-  // Regression: the confirm renders its own heading, and nothing pointed the
-  // dialog at it — every danger confirm announced as an unnamed "dialog".
   it('is named by its heading and described by its message', async () => {
     render(
       <ConfirmProvider>
@@ -71,9 +69,6 @@ describe('ConfirmDialog', () => {
   })
 })
 
-// The bug the dialog stack fixes, end to end: Escape in a confirm opened from
-// Settings closed Settings as well — and Settings re-rendering with a new
-// onClose while the confirm was open put Settings' listener back on top.
 describe('ConfirmDialog over Settings', () => {
   function Settings({onClose, onResult}: {onClose: () => void; onResult: (ok: boolean) => void}) {
     const {confirm} = useConfirm()
@@ -99,7 +94,6 @@ describe('ConfirmDialog over Settings', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Remove resource'}))
     const confirmDialog = await screen.findByRole('dialog', {name: 'Remove?'})
 
-    // A parent re-render hands Settings a fresh inline onClose.
     rerender(
       <ConfirmProvider>
         <Settings onClose={() => settingsClose()} onResult={onResult} />
@@ -112,7 +106,6 @@ describe('ConfirmDialog over Settings', () => {
     expect(settingsClose).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog', {name: 'Settings'})).toBeInTheDocument()
 
-    // The next Escape belongs to Settings.
     fireEvent.keyDown(document.body, {key: 'Escape'})
     expect(settingsClose).toHaveBeenCalledTimes(1)
   })

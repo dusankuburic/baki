@@ -11,10 +11,6 @@ import {useUIStore} from '@/stores/uiStore'
 import {deviceFlowSpec, mockProviderCatalog, providerSpec} from '@/testing/fixtures/providerCatalog'
 import type {AppInfo, AzureConnection, ProviderInfo, ProviderSpec} from '@/types'
 
-// Every section does a lookup on mount: the key inputs ask hasApiKey, the
-// device-flow buttons ask for the signed-in user, and the Azure AI Foundry
-// panel loads its resources and models. ConfirmProvider is required by the
-// Azure panel's remove/discard confirms.
 vi.mock('@/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api')>()
   return {
@@ -84,7 +80,6 @@ function seedAzure(connections: AzureConnection[] = []) {
   api.listAzureModels.mockResolvedValue({models: []})
 }
 
-// What a server without the catalogue route answers.
 const notFound = () => new ApiError('not found', 404, null)
 
 function seedCatalog(specs: unknown[]) {
@@ -102,11 +97,8 @@ function renderPanel() {
 beforeEach(async () => {
   vi.resetAllMocks()
   await resetAllStores()
-  // Switching the active provider saves the settings (debounced): a pending
-  // save of the previous case must not fire into this one.
   __resetPersistQueueForTest()
   vi.mocked(settingsApi.updateSettings).mockResolvedValue(undefined)
-  // Not loaded yet: the local section asks the server itself.
   useSystemStore.setState({info: null, isLoaded: false})
   api.getProviderCatalog.mockRejectedValue(notFound())
   api.getGitHubUser.mockResolvedValue(null)
@@ -117,12 +109,9 @@ beforeEach(async () => {
   seedAzure()
 })
 
-// A server older than this bundle has no GET /api/providers/catalog (404):
-// the panel renders its built-in sections exactly as before.
 describe('ProvidersPanel: the legacy panel when the catalogue answers 404', () => {
   it('falls back to the legacy panel: every provider section as a heading, in order, Azure AI Foundry then the local model between GLM and GitHub Models', async () => {
     renderPanel()
-    // The Azure and local blocks appear once their own GETs resolve.
     expect(await screen.findByText('Connect an Azure AI Foundry resource')).toBeInTheDocument()
     expect(await screen.findByPlaceholderText('http://127.0.0.1:11434/v1')).toBeInTheDocument()
 
@@ -131,20 +120,16 @@ describe('ProvidersPanel: the legacy panel when the catalogue answers 404', () =
       const follows = headings[i - 1]!.compareDocumentPosition(headings[i]!) & Node.DOCUMENT_POSITION_FOLLOWING
       expect(follows, `${SECTION_NAMES[i]} follows ${SECTION_NAMES[i - 1]}`).toBeTruthy()
     }
-    // The Azure heading is the "Manage models…" deep link's anchor.
     expect(screen.getByRole('heading', {level: 3, name: 'Azure AI Foundry'})).toHaveAttribute(
       'id',
       'provider-azure-foundry',
     )
-    // The resource cards sit one level below.
     expect(screen.getByRole('heading', {level: 4, name: 'Connect an Azure AI Foundry resource'})).toBeInTheDocument()
     expect(api.listAzureConnections).toHaveBeenCalledWith({kind: 'user'})
-    // The provider list itself is not fetched on mount: nothing reads it.
     expect(api.listProviders).not.toHaveBeenCalled()
     expect(api.getProviderCatalog).toHaveBeenCalledTimes(1)
     expect(screen.getByText(/Requires a GitHub account with an active/)).toBeInTheDocument()
 
-    // Let the remaining mount-time lookups settle inside act.
     await act(async () => {})
   })
 
@@ -158,7 +143,6 @@ describe('ProvidersPanel: the legacy panel when the catalogue answers 404', () =
   })
 
   it('drops the local model section when the server does not offer local models', async () => {
-    // What a cloud server's GET /api/providers/local/config answers.
     api.getLocalModelsConfig.mockRejectedValue(
       new ApiError('local models are available in the desktop app only', 400, 'LOCAL_MODELS_UNAVAILABLE'),
     )
@@ -195,8 +179,6 @@ describe('ProvidersPanel: the legacy panel when the catalogue answers 404', () =
   })
 })
 
-// Like the Copilot and GitHub sign-ins, the first Azure chat model makes
-// Azure the active provider — but only when the current one cannot chat.
 describe('ProvidersPanel: the first Azure AI Foundry chat model', () => {
   const providers = (claudeConfigured: boolean): ProviderInfo[] => [
     {
@@ -239,7 +221,6 @@ describe('ProvidersPanel: the first Azure AI Foundry chat model', () => {
   it('switches to Azure AI Foundry when the active provider is not configured', async () => {
     api.listProviders.mockResolvedValue(providers(false))
     await addFirstChatModel()
-    // New chats take their provider from the setting.
     await waitFor(() => expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('azure-foundry'))
     expect(api.listProviders).toHaveBeenCalledWith(undefined, {noDedup: true})
   })
@@ -260,8 +241,6 @@ describe('ProvidersPanel: the first Azure AI Foundry chat model', () => {
     expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('claude')
   })
 
-  // The same rule through the catalogue-driven panel: the Azure override is
-  // today's registry panel, and the first chat model still switches.
   it('switches through the catalogue-driven panel too', async () => {
     seedCatalog([providerSpec({id: 'claude', name: 'Claude', configured: false}), azureSpec()])
     api.listProviders.mockResolvedValue(providers(false))
@@ -279,8 +258,6 @@ const azureSpec = () =>
     color: '#0078d4',
   })
 
-// The server's catalogue drives the sections: its order, its names, its
-// credential forms. A provider the bundle does not know still gets a section.
 describe('ProvidersPanel: catalogue-driven sections', () => {
   it('renders a section per catalogue entry in catalogue order, with provider-<id> anchors', async () => {
     seedCatalog([
@@ -293,11 +270,8 @@ describe('ProvidersPanel: catalogue-driven sections', () => {
     const names = screen.getAllByRole('heading', {level: 3}).map(h => h.textContent)
     expect(names).toEqual(['Mistral', 'GitHub Models', 'Claude'])
     expect(screen.getByRole('heading', {level: 3, name: 'Claude'})).toHaveAttribute('id', 'provider-claude')
-    // Nothing of the legacy panel: no section the catalogue did not name.
     expect(screen.queryByRole('heading', {level: 3, name: 'xAI (Grok)'})).toBeNull()
     expect(api.listAzureConnections).not.toHaveBeenCalled()
-    // Two key boxes (Mistral, Claude; each once its key store has answered),
-    // one sign-in button.
     await waitFor(() => expect(screen.getAllByLabelText('API key')).toHaveLength(2))
     expect(screen.getByRole('button', {name: 'Sign in with GitHub'})).toBeInTheDocument()
     await act(async () => {})
@@ -320,7 +294,6 @@ describe('ProvidersPanel: catalogue-driven sections', () => {
     ])
     expect(api.getGitHubUser).not.toHaveBeenCalled()
     expect(api.getCopilotUser).not.toHaveBeenCalled()
-    // Copilot signed in: the PAT fallback is not offered.
     expect(screen.queryByText('Or use a Personal Access Token')).toBeNull()
     expect(screen.getByText(/Requires a GitHub account with an active/)).toBeInTheDocument()
   })
@@ -342,7 +315,6 @@ describe('ProvidersPanel: catalogue-driven sections', () => {
     fireEvent.click(within(section).getByRole('button', {name: 'Test'}))
     expect(await within(section).findByText('Valid · 42 ms')).toBeInTheDocument()
     expect(api.testProviderConnection).toHaveBeenCalledWith('mistral')
-    // The known api_key provider still gets its key box.
     expect(
       await within(screen.getByRole('heading', {level: 3, name: 'Claude'}).closest('section')!).findByLabelText(
         'API key',
@@ -361,9 +333,7 @@ describe('ProvidersPanel: catalogue-driven sections', () => {
     expect(await screen.findByRole('heading', {level: 3, name: 'Iris'})).toBeInTheDocument()
     expect(screen.getByRole('heading', {level: 3, name: 'Quantum AI'})).toBeInTheDocument()
     expect(document.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    // Unknown kind and unknown field type both say the form needs a newer Baki.
     expect(screen.getAllByText("This version of Baki can't show the set-up form for this provider.")).toHaveLength(2)
-    // An unknown, unconfigured document provider is set up elsewhere.
     expect(screen.getAllByText('This provider is set up by a newer version of Baki.')).toHaveLength(3)
     expect(screen.getAllByText('Not configured')).toHaveLength(3)
     expect(screen.queryByRole('button', {name: 'Test'})).toBeNull()
@@ -392,8 +362,6 @@ describe('ProvidersPanel: catalogue-driven sections', () => {
     await act(async () => {})
   })
 
-  // F5: the other half of the gate — a backend known not to be local never
-  // shows a catalogue `local` entry, not even until its own GET is refused.
   it('hides a catalogue local entry once the backend is known not to be local', async () => {
     seedCatalog([
       providerSpec({id: 'local', name: 'Local', credential: {kind: 'document', fields: []}, endpoints: {}}),

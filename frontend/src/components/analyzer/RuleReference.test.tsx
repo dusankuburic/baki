@@ -66,7 +66,6 @@ describe('RuleReference', () => {
       expect(screen.getByText('hardcoded-credential')).toBeInTheDocument()
       expect(screen.getByText('deep-nesting')).toBeInTheDocument()
     })
-    // Summary line: 4 rules, 2 with auto-fix
     expect(screen.getByText(/4 rules/)).toBeInTheDocument()
     expect(screen.getByText(/2 with auto-fix/)).toBeInTheDocument()
   })
@@ -97,10 +96,7 @@ describe('RuleReference', () => {
     render(<RuleReference />)
     await waitFor(() => expect(screen.getByText('unhandled-error')).toBeInTheDocument())
 
-    // unhandled-error has auto-fix
     expect(screen.getAllByText('auto-fix').length).toBeGreaterThanOrEqual(1)
-    // deep-nesting has no auto-fix — its card shouldn't show the badge
-    // (we check by counting: 2 rules have autoFix, so 2 badges)
     expect(screen.getAllByText('auto-fix')).toHaveLength(2)
   })
 
@@ -129,7 +125,6 @@ describe('RuleReference', () => {
         kind: 'library',
         introducedIn: 1,
       },
-      // A stage and kind a newer server added: shown like a stable per-flow rule.
       {...mockRules[3]!, id: 'future-rule', stage: 'beta', kind: 'project'},
     ] as Rule[])
     render(<RuleReference />)

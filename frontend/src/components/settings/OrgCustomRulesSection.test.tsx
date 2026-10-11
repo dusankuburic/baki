@@ -13,8 +13,6 @@ const validateCustomRules = vi.fn()
 const testCustomRule = vi.fn()
 const libraryList = vi.fn()
 
-// The real module with the API object replaced: the component also uses its
-// pure helpers (isNewerRule).
 vi.mock('@/api/governance', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api/governance')>()),
   orgRulesApi: {
@@ -25,9 +23,6 @@ vi.mock('@/api/governance', async importOriginal => ({
   },
 }))
 
-// The full surface the component imports. An incomplete factory throws at CALL
-// time, not import time, so a missing export can leave a test passing while the
-// path it claims to cover never runs.
 vi.mock('@/api', () => ({
   analysisApi: {
     validateCustomRules: (...a: unknown[]) => validateCustomRules(...a),
@@ -87,9 +82,6 @@ describe('OrgCustomRulesSection', () => {
   })
 
   it('reports when a rule compiles but matches nothing', async () => {
-    // The failure an author cannot otherwise see: validate says "valid", and
-    // the rule would never fire. Distinguishing the two is the whole reason the
-    // try-it action exists.
     testCustomRule.mockResolvedValue({matches: 0, flowName: 'Main', findings: []})
     renderSection()
 
@@ -114,8 +106,6 @@ describe('OrgCustomRulesSection', () => {
   })
 
   it('clears a stale try-it result when the rule is edited', async () => {
-    // A "matches 3" left next to a changed regex is worse than no result: it
-    // reports on a rule that no longer exists.
     testCustomRule.mockResolvedValue({matches: 3, flowName: 'Main', findings: []})
     renderSection()
 
@@ -179,13 +169,10 @@ describe('OrgCustomRulesSection', () => {
   })
 
   it('pauses a rule without sending its config', async () => {
-    // The config may no longer validate (a severity from before severities were
-    // checked); pausing it must not depend on that.
     list.mockResolvedValue([stored({problemReason: 'INVALID_SEVERITY', problem: 'bad severity'})])
     renderSection()
 
     fireEvent.click(await screen.findByRole('button', {name: /pause rule/i}))
-    // The config rides along only for a server from before rule schemas (orgRulesApi.setEnabled).
     await waitFor(() =>
       expect(setEnabled).toHaveBeenCalledWith('org-1', 'row-1', false, expect.objectContaining({id: 'house'})),
     )
@@ -193,7 +180,6 @@ describe('OrgCustomRulesSection', () => {
   })
 
   it('will not create a rule under an id the org already uses', async () => {
-    // The save upserts by id: a new rule named "house" would silently replace the stored one.
     list.mockResolvedValue([stored({enabled: false})])
     renderSection()
 
@@ -256,8 +242,6 @@ describe('OrgCustomRulesSection', () => {
   })
 
   it('accepts the built-in id a saved rule already has', async () => {
-    // A rule saved before ids were checked may carry a built-in rule's id; the
-    // server keeps accepting it for that rule, so the editor must not block it.
     list.mockResolvedValue([stored({ruleId: 'dead-code'}, {id: 'dead-code'})])
     validateCustomRules.mockResolvedValue({
       entries: [

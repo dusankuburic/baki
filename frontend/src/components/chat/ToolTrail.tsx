@@ -9,14 +9,9 @@ function formatDuration(ms: number | undefined): string {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
-// ToolTrail renders the persisted tool-call record behind an assistant
-// message: collapsed to a one-line summary ("Used 3 tools"), expandable to the
-// per-call rows (name, duration, one-line outcome). Pure display — the records
-// arrive from tool_result events and travel with the saved conversation.
 export function ToolTrail({calls}: {calls: ToolCallRecord[]}) {
   const {t} = useTranslation('chat')
   const [open, setOpen] = useState(false)
-  // useId BEFORE the early return — hooks must run unconditionally.
   const listId = useId()
   if (calls.length === 0) return null
   const failed = calls.filter(c => !c.ok).length
@@ -59,8 +54,6 @@ export function ToolTrail({calls}: {calls: ToolCallRecord[]}) {
   )
 }
 
-// Tone only — the status COPY lives in chat:outcome.* / chat:itemOutcome.*,
-// keyed by the same status strings the backend sends.
 const OUTCOME_DOT: Record<string, string> = {
   cancelled: 'bg-text-disabled',
   applied: 'bg-semantic-success/70',
@@ -79,13 +72,8 @@ const ITEM_OUTCOME_DOT: Record<string, string> = {
   'already-resolved': 'bg-text-tertiary/60',
 }
 
-// The kind a record without one was: every proposal before previewKind was
-// a fix patch (the same default as the live ApprovalCard).
 const DEFAULT_PREVIEW_KIND = 'fix-patch'
 
-// A proposal of a kind this bundle does not know, in the generic strip's
-// terms: the item keys are a fix's ruleId and block label, as on the live
-// card; a single proposal with no item list is its own one item.
 function asApproval(snapshot: FixProposalSnapshot, previewKind: string): ApprovalSnapshot {
   const items = snapshot.items ?? []
   return {
@@ -107,17 +95,10 @@ function asApproval(snapshot: FixProposalSnapshot, previewKind: string): Approva
   }
 }
 
-// FixOutcomeStrip is the persisted record of an apply_fix / apply_fixes
-// approval: what was proposed and how it resolved, attached to the assistant
-// message so it survives the stream that produced it. Batches render one
-// per-fix row list under the overall status. A proposal a later server
-// previewed as another kind has no fix shape to show and takes the generic
-// strip instead — the tool's name and its items, never a blank "Fix".
 export function FixOutcomeStrip({snapshot}: {snapshot: FixProposalSnapshot}) {
   const {t} = useTranslation('chat')
   const kind = snapshot.previewKind || DEFAULT_PREVIEW_KIND
   if (kind !== DEFAULT_PREVIEW_KIND) return <ApprovalOutcomeStrip snapshot={asApproval(snapshot, kind)} />
-  // Unknown status falls back to the raw wire value rather than a blank row.
   const outcome = {
     text: t(`outcome.${snapshot.status}`, {defaultValue: snapshot.status}),
     dot: OUTCOME_DOT[snapshot.status] ?? 'bg-text-tertiary/60',
@@ -167,17 +148,10 @@ export function FixOutcomeStrip({snapshot}: {snapshot: FixProposalSnapshot}) {
   )
 }
 
-// ApprovalOutcomeStrip is the persisted record of an approval of any other
-// kind — a tool this bundle does not know — worded in the tool's terms like
-// the live card's generic preview: the tool, the overall outcome, and the
-// items by label (one inline, a batch as rows with their own outcomes).
-// Nothing is interpreted; the labels and messages are the server's text.
 export function ApprovalOutcomeStrip({snapshot}: {snapshot: ApprovalSnapshot}) {
   const {t} = useTranslation('chat')
   const items = snapshot.items
   const batch = items.length > 1
-  // The live card shows a countdown instead of pending copy, so that one
-  // status borrows the fix wording; the rest fall back to the raw value.
   const statusKey = snapshot.status === 'pending' ? 'outcome.pending' : `approvalCard.status.${snapshot.status}`
   const outcome = {
     text: t(statusKey, {defaultValue: snapshot.status}),

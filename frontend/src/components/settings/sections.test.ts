@@ -10,8 +10,6 @@ import {
   visibleSectionIds,
 } from './sections'
 
-// The registry is the one place a section is declared; these checks are what
-// fails when a new section is added without every piece it needs.
 describe('settings registry', () => {
   it('places every section exactly once in the sidebar', () => {
     const placed = [...SETTINGS_GROUPS.flatMap(g => g.sections), ...SETTINGS_FOOTER_SECTIONS]

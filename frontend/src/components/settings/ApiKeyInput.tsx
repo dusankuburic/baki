@@ -9,9 +9,6 @@ interface Props {
   onConfigured?: () => void
 }
 
-// The one-key form of the built-in sections (providers/LegacyProvidersPanel):
-// the generic CredentialForm over an api_key entry the bundle writes itself,
-// since a server without the catalogue sends none. Goes with the legacy panel.
 export default function ApiKeyInput({provider, label, onConfigured}: Props) {
   const {t} = useTranslation('settings')
   const spec = useMemo<ProviderSpec>(

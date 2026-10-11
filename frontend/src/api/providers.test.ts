@@ -10,8 +10,6 @@ vi.mock('@/platform/adapters', () => ({
   }),
 }))
 
-// A fresh Response per call (a body can be read only once), so a test may
-// make several requests against one mock.
 function respond(payload: unknown, status = 200) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(
     async () =>
@@ -42,8 +40,6 @@ async function load() {
 const USER = {kind: 'user'} as const
 const ORG = {kind: 'org', orgId: 'org 1'} as const
 
-// A resource as the Go AzureConnectionView marshals it (every field is sent;
-// only orgId/orgName/statusReason/credentialUpdatedAt/sharedBy are omitempty).
 const aConn = (over: Record<string, unknown> = {}) => ({
   id: 'default',
   name: 'my-res',
@@ -60,7 +56,6 @@ const aConn = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
-// A model as the Go AzureModelView marshals it.
 const aModel = (over: Record<string, unknown> = {}) => ({
   id: 'bbbbbbbbbb',
   modelId: 'm/bbbbbbbbbb',
@@ -117,7 +112,6 @@ describe('providersApi Azure registry: connections', () => {
     await api.listAzureConnections(USER)
 
     expect(call(spy)).toEqual({path: '/api/providers/azure-foundry/connections', method: 'GET', body: undefined})
-    // Two reads, two round trips: the store dedupes, not the 5 s cache.
     expect(spy).toHaveBeenCalledTimes(2)
   })
 
@@ -151,7 +145,6 @@ describe('providersApi Azure registry: connections', () => {
       recoveredCopyPath: '/cfg/azure-models.json.bad',
     })
     vi.restoreAllMocks()
-    // The backend marshals recoveredCopyPath omitempty: absent when there is none.
     respond({
       connections: [],
       registryState: 'recovered',
@@ -304,7 +297,6 @@ describe('providersApi Azure registry: models and test', () => {
     const {api} = await load()
     await expect(api.listAzureModels(USER)).resolves.toEqual({models: [model], serverDefault: 'm/bbbbbbbbbb'})
     vi.restoreAllMocks()
-    // serverDefault is omitempty on the backend: absent when there is none.
     respond({models: [model]})
     await expect(api.listAzureModels(ORG)).resolves.toEqual({models: [model]})
   })
@@ -378,9 +370,6 @@ describe('providersApi Azure registry: error codes', () => {
   })
 })
 
-// C2: POST /api/keys/has answers {has: boolean}. Read as a bare boolean the
-// envelope is truthy, and every unconfigured api_key provider showed "API key
-// configured". A bare boolean (a server before the envelope) still reads.
 describe('providersApi.hasApiKey', () => {
   it('reads the {has} envelope, and a bare boolean', async () => {
     const spy = respond({has: false})
@@ -396,7 +385,6 @@ describe('providersApi.hasApiKey', () => {
   })
 })
 
-// F5: the only guard between a catalogue route and a same-session POST.
 describe('apiPath', () => {
   it('accepts a path of plain segments under /api/ and nothing else', async () => {
     const {apiPath} = await import('./providers')
@@ -427,8 +415,6 @@ describe('apiPath', () => {
   })
 })
 
-// F8: a device-flow provider other than GitHub may answer its `user` route
-// with another shape ({id, email}); the signed-in state must still read.
 describe('providersApi.getDeviceAuthUser', () => {
   it('reads the GitHub shape, derives a login from another, and keeps null as "not connected"', async () => {
     const spy = respond({login: 'octocat', name: 'Octo Cat'})
@@ -438,7 +424,6 @@ describe('providersApi.getDeviceAuthUser', () => {
       name: 'Octo Cat',
     })
     expect(call(spy)).toMatchObject({path: '/api/providers/acme/user', method: 'GET'})
-    // Distinct routes: a GET is served from the 5 s micro-cache otherwise.
     spy.mockImplementation(async () => Response.json({id: 7, email: 'ann@example.com'}))
     await expect(api.getDeviceAuthUser('/api/providers/bcme/user')).resolves.toEqual({
       login: 'ann@example.com',

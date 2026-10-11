@@ -1,19 +1,10 @@
-/**
- * Web-specific platform adapter implementation
- */
 
 import type {PlatformAdapter, BackendConfig, FileOpenOptions, FileSaveOptions, NotificationOptions} from '../types'
 import {logger} from '@/lib/logger'
 
-/**
- * Web adapter for browser-specific operations
- */
 export class WebAdapter implements PlatformAdapter {
   private config: BackendConfig | null = null
 
-  /**
-   * Get backend configuration from environment or API
-   */
   async getBackendConfig(): Promise<BackendConfig> {
     if (this.config) {
       return this.config
@@ -21,16 +12,6 @@ export class WebAdapter implements PlatformAdapter {
 
     const apiUrl = import.meta.env.VITE_API_URL || window.location.origin
 
-    // In local (non-JWT) mode the backend can expose its per-session token so the
-    // web client self-configures. That is OPT-IN on the server
-    // (PAD_LOCAL_CONFIG_ENDPOINT=true) and off by default: the route is public
-    // and local-mode CORS reflects any loopback Origin, so serving the token
-    // unconditionally let any page on any localhost port read it cross-origin.
-    // Without the opt-in the response carries only {"mode":"local"} and `token`
-    // is undefined, which is the correct outcome for the desktop build — there
-    // the Tauri shell supplies the token through invoke("get_backend_config").
-    // In JWT/cloud mode this returns {"mode":"cloud"} and the client
-    // authenticates via login instead (sessionToken is set by authStore).
     let token: string | undefined
     try {
       const res = await fetch(`${apiUrl}/api/local-config`)
@@ -39,7 +20,6 @@ export class WebAdapter implements PlatformAdapter {
         token = data.token
       }
     } catch {
-      // backend unreachable or JWT mode — leave token undefined
     }
 
     this.config = {
@@ -51,9 +31,6 @@ export class WebAdapter implements PlatformAdapter {
     return this.config
   }
 
-  /**
-   * Open file dialog using HTML5 File API
-   */
   async fileOpen(options: FileOpenOptions): Promise<string | string[] | null> {
     return new Promise(resolve => {
       const input = document.createElement('input')
@@ -67,9 +44,6 @@ export class WebAdapter implements PlatformAdapter {
       }
 
       let settled = false
-      // gotChange is set synchronously at the top of onchange so the focus
-      // listener can tell "dialog closed with a selection" (change fires before
-      // focus) from "dialog dismissed without choosing" — see onFocus below.
       let gotChange = false
       const cleanup = () => {
         if (input.parentNode) document.body.removeChild(input)
@@ -82,13 +56,7 @@ export class WebAdapter implements PlatformAdapter {
         clearTimeout(fallbackTimer)
         resolve(val)
       }
-      // Fallback: if neither onchange nor oncancel fires (some browsers don't
-      // fire oncancel when the user dismisses via Esc), resolve after 5 minutes.
       const fallbackTimer = setTimeout(() => done(null), 300_000)
-      // Dialog-dismissal detection: when the window regains focus (dialog just
-      // closed) and no selection started, resolve null promptly instead of
-      // leaving the caller hanging on the 5-minute fallback. The 100ms delay
-      // lets a selection's onchange mark gotChange first.
       const onFocus = () => {
         setTimeout(() => {
           if (!settled && !gotChange) done(null)
@@ -140,9 +108,6 @@ export class WebAdapter implements PlatformAdapter {
     })
   }
 
-  /**
-   * Open directory dialog using webkitdirectory
-   */
   async fileOpenDirectory(): Promise<string | null> {
     return new Promise(resolve => {
       const input = document.createElement('input')
@@ -151,9 +116,6 @@ export class WebAdapter implements PlatformAdapter {
       input.style.display = 'none'
 
       let settled = false
-      // gotChange is set synchronously at the top of onchange (which is async
-      // here — it reads many files) so the focus listener can distinguish
-      // "selection in progress" from "dismissed without choosing".
       let gotChange = false
       const cleanup = () => {
         if (input.parentNode) document.body.removeChild(input)
@@ -167,8 +129,6 @@ export class WebAdapter implements PlatformAdapter {
         resolve(val)
       }
       const fallbackTimer = setTimeout(() => done(null), 300_000)
-      // Dismissal detection: resolve null promptly when the window regains
-      // focus without a selection having started, instead of waiting 5 min.
       const onFocus = () => {
         setTimeout(() => {
           if (!settled && !gotChange) done(null)
@@ -232,26 +192,15 @@ export class WebAdapter implements PlatformAdapter {
     })
   }
 
-  /**
-   * Save file using browser download
-   */
   async fileSave(_options: FileSaveOptions): Promise<string | null> {
     logger.warn('File save dialogs not supported in web browsers. Use download instead.')
     return null
   }
 
-  /**
-   * Open URL in new tab
-   */
   async openURL(url: string): Promise<void> {
-    // noopener: the opened page (e.g. a device-auth verification URI) must not
-    // get a window.opener handle back into the app (tabnabbing).
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
-  /**
-   * Show browser notification
-   */
   async showNotification(options: NotificationOptions): Promise<void> {
     if ('Notification' in window) {
       if (Notification.permission === 'granted') {
@@ -260,8 +209,6 @@ export class WebAdapter implements PlatformAdapter {
           icon: options.icon,
         })
       } else if (Notification.permission !== 'denied') {
-        // Permission request can reject on some browsers; a notification
-        // failure must never surface as an unhandled rejection.
         Notification.requestPermission()
           .then(permission => {
             if (permission === 'granted') {
@@ -278,9 +225,6 @@ export class WebAdapter implements PlatformAdapter {
     }
   }
 
-  /**
-   * Write to clipboard using Clipboard API
-   */
   async writeClipboard(text: string): Promise<void> {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -295,13 +239,10 @@ export class WebAdapter implements PlatformAdapter {
     }
   }
 
-  // Window controls are managed by the browser chrome in web mode — no-ops.
   async minimizeWindow(): Promise<void> {}
   async toggleMaximizeWindow(): Promise<void> {}
   async closeWindow(): Promise<void> {}
 
-  // The web build talks to a remote server, not a child process: there are
-  // no lifecycle events to forward and nothing to restart.
   onBackendEvent(): () => void {
     return () => {}
   }

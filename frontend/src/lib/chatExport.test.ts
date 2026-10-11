@@ -33,8 +33,6 @@ describe('conversationToMarkdown', () => {
     expect(md).toContain('partial')
   })
 
-  // An Azure AI Foundry reply is sent as "m/<id>", which means nothing to a
-  // reader: the transcript names the model by the label it was sent with.
   it('prints the model label instead of a registry id', () => {
     const md = conversationToMarkdown('t', [
       msg({role: 'assistant', content: 'docs', model: 'm/a1b2c3d4e5', modelLabel: 'Docs writer'}),
@@ -48,8 +46,6 @@ describe('conversationToMarkdown', () => {
     const plain = conversationToMarkdown('t', [unlabelled])
     expect(plain).toContain('## AI')
     expect(plain).not.toContain('m/zzzzzzzzzz')
-    // The chat resolves names against the listing ("removed model" for one
-    // nothing lists any more).
     const named = conversationToMarkdown('t', [unlabelled], () => 'removed model')
     expect(named).toContain('## AI (removed model)')
   })
@@ -80,7 +76,6 @@ describe('safeFilename (non-ASCII titles)', () => {
 describe('safeFilename (combining marks)', () => {
   it('keeps vowel signs and decomposed accents as part of their letters', () => {
     expect(safeFilename('नमस्ते')).toBe('chat-नमस्ते.md')
-    // "S" + combining caron: normalised to "š", not split at the mark.
     expect(safeFilename('S\u030Cta')).toBe('chat-šta.md')
   })
 })

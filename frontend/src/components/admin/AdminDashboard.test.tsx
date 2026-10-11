@@ -92,7 +92,6 @@ describe('AdminDashboard', () => {
   it('renders admin dashboard for admin user', async () => {
     renderDashboard()
     expect(screen.getByRole('heading', {level: 1, name: 'Admin Dashboard'})).toBeInTheDocument()
-    // The dashboard should render the admin sections
     await waitFor(() => {
       const content = document.body.textContent ?? ''
       expect(content).toMatch(/user|audit|migration/i)
@@ -120,7 +119,6 @@ describe('AdminDashboard', () => {
       expect(listUsers).toHaveBeenCalled()
       expect(getMigrationStatus).toHaveBeenCalled()
     })
-    // The first page of users: ten rows, from the start.
     expect(listUsers).toHaveBeenCalledWith(expect.objectContaining({limit: 10, offset: 0}), expect.anything())
     expect(userStats).toHaveBeenCalled()
     expect(systemHealth).toHaveBeenCalled()

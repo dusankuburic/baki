@@ -1,7 +1,3 @@
-// describeUserAgent turns a raw User-Agent string into a short "Browser on OS"
-// label for session lists. This is intentionally approximate (order-sensitive
-// substring checks, not a full UA-parser dependency) — good enough to help a
-// user recognize "is this me?", not to fingerprint precisely.
 export function describeUserAgent(ua: string | undefined): string {
   if (!ua) return 'Unknown device'
 
@@ -19,8 +15,6 @@ export function describeUserAgent(ua: string | undefined): string {
               ? 'Safari'
               : null
 
-  // iOS UAs also contain "like Mac OS X" (WebKit's iOS compatibility string),
-  // so the iPhone/iPad/iPod check must run before the macOS one.
   const os = /Windows/.test(ua)
     ? 'Windows'
     : /iPhone|iPad|iPod/.test(ua)
@@ -41,8 +35,6 @@ export function describeUserAgent(ua: string | undefined): string {
 
 export type DeviceKind = 'desktop' | 'mobile' | 'tablet' | 'unknown'
 
-// deviceKind picks the icon for a session row. Tablets go first: an iPad UA
-// carries no "Mobile" token, and an Android UA without one is a tablet too.
 export function deviceKind(ua: string | undefined): DeviceKind {
   if (!ua) return 'unknown'
   if (/iPad|Tablet/i.test(ua) || (/Android/.test(ua) && !/Mobile/.test(ua))) return 'tablet'

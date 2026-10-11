@@ -10,9 +10,6 @@ export interface ContextMenuItem {
   icon: LucideIcon
   onClick: () => void
   variant?: 'default' | 'danger'
-  // Keyboard equivalent (V1.1), registry format ('alt+up', 'mod+d', 'delete')
-  // — rendered as kbd chips on the row's right so shortcuts are discoverable
-  // where the action lives instead of only in the ? dialog.
   shortcut?: string
 }
 
@@ -23,11 +20,6 @@ interface ContextMenuProps {
   items: ContextMenuItem[]
 }
 
-// ContextMenu needs explicit a11y semantics (role, Esc, focus
-// management): a keyboard/screen-reader user couldn't tell it was a menu, Esc
-// didn't close it, and opening it left focus wherever it was. Now it carries
-// role=menu / role=menuitem, closes on Esc, auto-focuses the first item, and
-// restores focus to the trigger on close (via the shared useDialogFocus hook).
 export default function ContextMenu({x, y, onClose, items}: ContextMenuProps) {
   const {t} = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -43,7 +35,6 @@ export default function ContextMenu({x, y, onClose, items}: ContextMenuProps) {
     return () => window.removeEventListener('mousedown', handleClick)
   }, [onClose])
 
-  // Adjust position if menu goes off-screen
   const left = Math.min(x, window.innerWidth - 200)
   const top = Math.min(y, window.innerHeight - (items.length * 32 + 20))
 

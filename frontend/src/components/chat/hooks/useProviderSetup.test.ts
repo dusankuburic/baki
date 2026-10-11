@@ -13,8 +13,6 @@ vi.mock('@/api', () => ({
 import {providersApi} from '@/api'
 import {useProviderSetup} from './useProviderSetup'
 
-// ---- listings ----
-
 const HAIKU: ModelDetail = {
   id: 'haiku',
   displayName: 'Haiku',
@@ -39,8 +37,6 @@ const CLAUDE = {
   models: [HAIKU, OPUS],
 }
 
-// Azure AI Foundry registry entries ("m/<id>"); the migrated resource's
-// carry their pre-registry ids as aliases.
 const GPT: ModelDetail = {
   id: 'm/gpt4100000',
   displayName: 'GPT-4.1',
@@ -87,8 +83,6 @@ function listing(...providers: object[]) {
   vi.mocked(providersApi.listProviders).mockResolvedValue(providers as unknown as ProviderInfo[])
 }
 
-// ---- stores ----
-
 function setAI(activeProvider: ProviderID, defaults: Record<ProviderID, string> = {}) {
   const s = useSettingsStore.getState().settings
   const providers = {...s.ai.providers}
@@ -101,8 +95,6 @@ function setAI(activeProvider: ProviderID, defaults: Record<ProviderID, string> 
 const T1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const T2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 
-// Adds a thread (made active) with its messages — its history loaded, as a
-// new thread's is (history: 'loading' for one whose load is in flight).
 function seedThread(
   id: string,
   extra: Partial<ChatThread> = {},
@@ -152,9 +144,6 @@ beforeEach(() => {
   useOrgStore.setState({activeOrgId: null, organisations: []})
   useFlowStore.setState({document: null})
   localStorage.clear()
-  // The real action would hit the (here unmocked) settings API; this fake
-  // applies the patch like the real one's optimistic half and reports the
-  // save as landed.
   const originalUpdateProvider = useSettingsStore.getState().updateProvider
   updateProvider = vi.fn(async (id: ProviderID, config: Partial<AIProviderConfig>): Promise<boolean> => {
     const cur = useSettingsStore.getState().settings
@@ -172,7 +161,6 @@ beforeEach(() => {
   updateAI = vi.fn(async (_ai: Partial<AISettings>): Promise<void> => {})
   useSettingsStore.setState({updateAI})
   onTestFinished(() => useSettingsStore.setState({updateAI: originalUpdateAI}))
-  // New chats start on Claude, whose Default for new chats is Haiku.
   setAI('claude', {claude: 'haiku', 'azure-foundry': ''})
 })
 
@@ -210,15 +198,9 @@ describe('useProviderSetup listing', () => {
       statusReason: 'Enter the credentials again',
       aliases: ['claude:docs'],
     })
-    // The header's "no native tools" hint.
     expect(result.current.providers[0]!.models.find(m => m.id === 'opus')?.supportsTools).toBe(false)
   })
 
-  // Tolerant wire enums: a newer server's provider, auth type, kind or status
-  // renders the rest of the listing. A provider this bundle has no catalogue
-  // entry for is listed as sent — the server resolves its credential, so a
-  // turn can go to it; a model kind or status the chat cannot use is kept so
-  // it reads as unusable.
   it('lists a provider a newer server added, as sent, and keeps a kind or status it added', async () => {
     const voice = {...GPT, id: 'm/voice00000', displayName: 'Voice', kind: 'realtime', aliases: undefined}
     const paused = {...DOCS, status: 'suspended'}
@@ -237,7 +219,6 @@ describe('useProviderSetup listing', () => {
     expect(models.find(m => m.id === DOCS.id)).toMatchObject({status: 'suspended'})
   })
 
-  // The server sends it (ProviderInfo.suggestDiscovery, omitted when false).
   it("passes the picker's Review prompt flag through, and only a true one", async () => {
     listing(CLAUDE, azure([GPT], {suggestDiscovery: true}))
     const {result} = renderHook(() => useProviderSetup())
@@ -282,8 +263,6 @@ describe('useProviderSetup listing', () => {
     expect(result.current.providers[0]!.shared).toBe(true)
     expect(result.current.orgName).toBe('Contoso')
 
-    // Leaving the org drops the scope and refetches: the org's shared
-    // credentials no longer count.
     act(() => {
       useOrgStore.setState({activeOrgId: null})
     })
@@ -302,9 +281,6 @@ describe('useProviderSetup listing', () => {
   })
 })
 
-// R-2: a chat turn resolves shared credentials through the OPEN flow's org, so
-// the picker must list with that org — never the active one while a flow is
-// open.
 describe('useProviderSetup org scope follows the open flow', () => {
   const openFlow = (orgId?: string) =>
     useFlowStore.setState({
@@ -367,7 +343,6 @@ describe('useProviderSetup per-thread model', () => {
     await waitFor(() => expect(result.current.listingLoaded).toBe(true))
     expect(result.current.selection).toMatchObject({model: GPT.id, label: 'GPT-4.1', reason: 'serverDefault'})
     expect(result.current.threadModelDetail?.id).toBe(GPT.id)
-    // The picker's [DEFAULT] per provider.
     expect(result.current.newChatDefaults).toEqual({claude: 'haiku', 'azure-foundry': GPT.id})
   })
 
@@ -383,12 +358,10 @@ describe('useProviderSetup per-thread model', () => {
     expect(updateProvider).not.toHaveBeenCalled()
     expect(updateAI).not.toHaveBeenCalled()
 
-    // Another thread still starts on the Default for new chats…
     act(() => {
       seedThread(T2)
     })
     expect(result.current.selection).toMatchObject({provider: 'claude', model: 'haiku'})
-    // …and the first keeps its pick.
     act(() => useChatStore.getState().switchThread(T1))
     expect(result.current.selection.model).toBe(DOCS.id)
   })
@@ -399,8 +372,6 @@ describe('useProviderSetup per-thread model', () => {
     await waitFor(() => expect(result.current.listingLoaded).toBe(true))
     act(() => result.current.pickModel('claude', OPUS))
 
-    // settings:changed refetches (they also fire for this tab's own layout
-    // saves) hand out a new settings.ai.providers object.
     act(() => {
       const s = useSettingsStore.getState().settings
       useSettingsStore.setState({settings: {...s, ai: {...s.ai, providers: {...s.ai.providers}}}})
@@ -416,7 +387,6 @@ describe('useProviderSetup per-thread model', () => {
     const {result} = renderHook(() => useProviderSetup())
     await waitFor(() => expect(result.current.listingLoaded).toBe(true))
 
-    // OpenAI has no key here: this thread falls back, for itself only.
     expect(result.current.selection).toMatchObject({provider: 'claude', model: 'haiku', reason: 'fallbackUnavailable'})
     expect(result.current.notice).toMatchObject({kind: 'unavailable', cause: 'provider'})
     expect(result.current.turnModel.pinThread).toBe(false)
@@ -424,7 +394,6 @@ describe('useProviderSetup per-thread model', () => {
     expect(updateProvider).not.toHaveBeenCalled()
     expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('claude')
     expect(useChatStore.getState().selectedProvider).toBe('claude')
-    // Never re-pinned: the thread returns to its model once OpenAI is set up.
     expect(pinOf(T1)?.provider).toBe('openai')
   })
 
@@ -483,7 +452,6 @@ describe('useProviderSetup per-thread model', () => {
     const {result} = renderHook(() => useProviderSetup())
     await waitFor(() => expect(result.current.notice).not.toBeNull())
     expect(result.current.notice).toMatchObject({kind: 'unavailable', cause: 'needs_credentials'})
-    // The turn goes to the stand-in without re-pinning.
     expect(result.current.turnModel).toMatchObject({model: GPT.id, pinThread: false})
     expect(pinOf(T1)?.model).toBe(DOCS.id)
   })
@@ -495,8 +463,6 @@ describe('useProviderSetup per-thread model', () => {
     const {result} = renderHook(() => useProviderSetup())
     await waitFor(() => expect(result.current.listingLoaded).toBe(true))
 
-    // The engine records the refusal and bumps the epoch for the refetch;
-    // until that listing lands there is nothing to say yet.
     act(() => {
       useChatStore
         .getState()
@@ -511,8 +477,6 @@ describe('useProviderSetup per-thread model', () => {
     expect(result.current.notice).toBeNull()
   })
 
-  // The refusal is the server's own word — it needs no listing to be
-  // believed when the refetch it asked for fails.
   it('raises the refusal notice when the refetch after it fails', async () => {
     setAI('azure-foundry')
     listing(CLAUDE, azure([GPT, DOCS]))
@@ -531,8 +495,6 @@ describe('useProviderSetup per-thread model', () => {
     expect(result.current.notice).toMatchObject({kind: 'refused', wanted: {label: 'Docs writer'}})
   })
 
-  // A turn sent while an unpinned thread's history loads must not pin
-  // the new-chat default — legacy inference never ran on that history.
   it('does not pin an unpinned thread until its history is in', async () => {
     setAI('azure-foundry')
     listing(CLAUDE, azure([GPT, DOCS]))
@@ -549,14 +511,12 @@ describe('useProviderSetup per-thread model', () => {
     act(() => useChatStore.getState().markHistoryLoaded(T1))
     expect(result.current.turnModel.pinThread).toBe(true)
 
-    // A pinned thread's turn pins (to the same pair) whatever its history.
     act(() => {
       seedThread(T2, {provider: 'azure-foundry', model: DOCS.id, modelLabel: 'Docs writer'}, [], 'loading')
     })
     expect(result.current.turnModel).toMatchObject({model: DOCS.id, pinThread: true})
   })
 
-  // Before the listing loads, a registry id has no name to send.
   it('never sends an id as the turn’s label', async () => {
     setAI('azure-foundry', {'azure-foundry': DOCS.id})
     vi.mocked(providersApi.listProviders).mockReturnValue(new Promise(() => {}))
@@ -607,7 +567,6 @@ describe('the saved Azure default from before the registry', () => {
     await waitFor(() =>
       expect(first.result.current.legacyDefaultNotice).toEqual({saved: 'gone-deployment', fallback: 'GPT-4.1'}),
     )
-    // Ignored, not written: new chats use the server default meanwhile.
     expect(updateProvider).not.toHaveBeenCalled()
 
     act(() => first.result.current.dismissLegacyDefaultNotice())
@@ -619,7 +578,6 @@ describe('the saved Azure default from before the registry', () => {
     expect(second.result.current.legacyDefaultNotice).toBeNull()
   })
 
-  // Azure lists nothing while its legacy import is pending.
   it('says nothing, and rewrites nothing, while Azure lists nothing to chat with', async () => {
     setAI('azure-foundry', {'azure-foundry': 'gpt-4.1'})
     listing(CLAUDE, azure([], {defaultModel: ''}))

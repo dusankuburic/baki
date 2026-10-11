@@ -41,11 +41,6 @@ describe('DetailsTab', () => {
     expect(screen.getByText('Select a block')).toBeTruthy()
   })
 
-  // Regression test: an earlier version called useMemo AFTER the "nothing
-  // selected" early return, so a single mounted instance went from 2 hook
-  // calls (placeholder render) to 3 (block-selected render) across renders —
-  // a Rules-of-Hooks violation. Selecting a block on an already-mounted
-  // instance exercises exactly that transition.
   it('renders block details after a block is selected on an already-mounted instance', () => {
     render(<DetailsTab />)
     expect(screen.getByText('Select a block')).toBeTruthy()

@@ -16,7 +16,6 @@ export default function RegressionDiffView() {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const [currentIndex, setCurrentIndex] = useState(-1)
 
-  // Flatten the diff for virtualization — must be before any early return to satisfy rules-of-hooks
   const items = useMemo(() => {
     if (!diff) return []
     const list: Array<{type: 'header'; data: SubflowDiff} | {type: 'block'; data: BlockDiff}> = []
@@ -136,17 +135,14 @@ export default function RegressionDiffView() {
                 isRemoved && 'bg-semantic-error/5 hover:bg-semantic-error/10',
               )}
             >
-              {/* Diff Gutter */}
               <div className="w-8 flex flex-col items-center shrink-0 border-r border-border-subtle/30 mr-4">
                 {isAdded && <Plus size={12} className="text-semantic-success mt-1" />}
                 {isRemoved && <Minus size={12} className="text-semantic-error mt-1" />}
                 <span className="text-2xs font-mono text-text-tertiary mt-auto">{block.lineNumber}</span>
               </div>
 
-              {/* Indent Spacer */}
               <div style={{width: block.indent * 20}} className="shrink-0" />
 
-              {/* Block Content */}
               <div className="flex-1 flex items-center gap-3 py-1.5 min-w-0">
                 <Icon
                   size={16}

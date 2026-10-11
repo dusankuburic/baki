@@ -12,9 +12,6 @@ const MAX_TABS_PER_GROUP = 8
 interface EditorState {
   groups: EditorGroup[]
   focusedGroupIndex: number
-  // Fractions of the container width summing to ~1 (not percentages):
-  // useEditorGroups' divider-drag math adds pixel-delta/containerWidth to
-  // these, so any other scale makes dragging near-inert.
   groupWidths: number[]
 
   openInGroup: (subflowId: string, groupIndex?: number) => void
@@ -38,11 +35,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const {groups, focusedGroupIndex} = get()
     const targetIndex = groupIndex !== undefined ? groupIndex : focusedGroupIndex
     if (targetIndex < 0 || targetIndex >= groups.length) return
-    // No-op when nothing would change. selectBlock calls this on EVERY block
-    // click, so bailing out here keeps those clicks from churning the groups
-    // array and re-rendering every pane; it also terminates the
-    // selectSubflow ↔ openInGroup echo (MainPane syncs the focused group's
-    // active tab back into the flow store).
     const target = groups[targetIndex]
     if (!target) return
     if (targetIndex === focusedGroupIndex && target.activeTabId === subflowId && target.tabs.includes(subflowId)) {
@@ -53,8 +45,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     if (!group.tabs.includes(subflowId)) {
       if (group.tabs.length >= MAX_TABS_PER_GROUP) {
-        // At the tab cap — evict the oldest tab so the newly opened subflow
-        // still gets a tab. This keeps activeTabId always present in tabs.
         group.tabs = [...group.tabs.slice(1), subflowId]
       } else {
         group.tabs = [...group.tabs, subflowId]
@@ -80,7 +70,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
     nextGroups[groupIndex] = group
 
-    // If a group becomes empty and it's not the only group, close it
     if (group.tabs.length === 0 && nextGroups.length > 1) {
       get().closeGroup(groupIndex)
       return
@@ -134,8 +123,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (groups.length <= 1) return
     const nextGroups = groups.filter((_, i) => i !== index)
     const nextWidths = nextGroups.map(() => 1 / nextGroups.length)
-    // Removing a group left of the focused one shifts the focused group down
-    // an index — follow it, otherwise focus silently jumps to its neighbor.
     const nextFocused =
       index < focusedGroupIndex ? focusedGroupIndex - 1 : Math.min(focusedGroupIndex, nextGroups.length - 1)
     set({
@@ -145,11 +132,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })
   },
 
-  // pruneToSubflows drops tabs whose subflow doesn't exist in the loaded
-  // document — a flow switch (all old ids die) or a reparse that changed
-  // subflow ids. Groups that lose every tab are removed so no dead panes
-  // remain; when nothing is stale this is a referential no-op, so an
-  // apply-fix reload with content-stable ids preserves the split layout.
   pruneToSubflows: validSubflowIds => {
     const valid = new Set(validSubflowIds)
     const {groups, focusedGroupIndex, groupWidths} = get()
@@ -178,7 +160,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const {groups} = get()
     if (fromGroup === toGroup || toGroup >= groups.length) return
 
-    // Remove from source
     const nextGroups = [...groups]
     const srcGroup = groups[fromGroup]
     const destGroup = groups[toGroup]
@@ -190,7 +171,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
     nextGroups[fromGroup] = src
 
-    // Add to dest (same cap/eviction policy as openInGroup)
     const dest = {...destGroup}
     if (!dest.tabs.includes(subflowId)) {
       dest.tabs =
@@ -199,9 +179,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     dest.activeTabId = subflowId
     nextGroups[toGroup] = dest
 
-    // Moving the last tab out leaves an empty group that renders no tab strip
-    // (and therefore no close button) — remove it instead of stranding a dead
-    // pane the user can't interact with.
     if (src.tabs.length === 0) {
       const finalGroups = nextGroups.filter((_, i) => i !== fromGroup)
       set({
@@ -218,7 +195,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setGroupWidths: widths => set({groupWidths: widths}),
 }))
 
-// Reset on logout (see storeRegistry).
 registerStoreReset(() =>
   useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0, groupWidths: [1]}),
 )

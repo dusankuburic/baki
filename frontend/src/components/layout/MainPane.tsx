@@ -16,20 +16,13 @@ import {SAMPLE_FLOW_NAME, SAMPLE_FLOW_FILES} from '@/data/sampleFlow'
 import type {EditorGroup} from '@/stores/editorStore'
 import type {FlowDocument} from '@/types'
 import {useEditorGroups} from '@/hooks/useEditorGroups'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
-// GraphView pulls in cytoscape (~100KB+); keep it out of the entry chunk like
-// its lazy siblings below.
-// BlockView pulls in react-virtuoso (~55KB) plus the block-rendering surface;
-// it only renders once a flow is open, and the app boots to a system view, so
-// lazy keeps it out of the entry chunk too.
 const GraphView = lazy(() => import('@/components/graph/GraphView'))
 const BlockView = lazy(() => import('@/components/flow/BlockView'))
 const ExecutionGraphView = lazy(() => import('@/components/flow/ExecutionGraphView'))
 const RegressionDiffView = lazy(() => import('@/components/flow/RegressionDiffView'))
 
-// MainPane is a thin router: system views (profile/admin/dashboards/library/
-// portfolio) delegate to SystemViewRouter; everything else is the flow editor,
-// which owns the document-dependent split-pane groups.
 export default function MainPane() {
   const mainPaneView = useUIStore(s => s.mainPaneView)
   if (isSystemView(mainPaneView)) {
@@ -38,9 +31,6 @@ export default function MainPane() {
   return <FlowEditorPane mainPaneView={mainPaneView} />
 }
 
-// FlowEditorPane renders the no-document empty/error state, or the split editor
-// groups for the loaded document. Editor-group state and divider math come from
-// the useEditorGroups hook.
 function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
   const {t} = useTranslation('shell')
   const document = useFlowStore(s => s.document)
@@ -48,9 +38,6 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
   const setDocument = useFlowStore(s => s.setDocument)
   const toast = useToast()
   const editor = useEditorGroups()
-  // Pulled out of `editor` before use: react-hooks/refs taints every property
-  // access on an object that holds a ref, so `editor.containerRef` was reported
-  // as a ref read during render (see the same note in App.tsx).
   const {containerRef: editorContainerRef} = editor
   const [loadingSample, setLoadingSample] = useState(false)
   const showHelp = useUIStore(s => s.showHelpOverlay)
@@ -58,13 +45,6 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
   const showSource = useUIStore(s => s.showSourceEditor)
   const setShowSource = useUIStore(s => s.setShowSourceEditor)
 
-  // Keep the flow store's selected subflow in sync with the focused group's
-  // active tab, whatever changed it — tab click, closing a tab (a neighbor
-  // activates), dragging a tab between groups, closing a group. Breadcrumbs,
-  // the sidebar highlight and the inspector all follow selectedSubflowId, so
-  // without this they keep showing the previous subflow. The echo through
-  // selectSubflow → openInGroup terminates immediately (openInGroup no-ops
-  // when the tab is already active in the focused group).
   useEffect(() => {
     const activeId = editor.groups[editor.focusedGroupIndex]?.activeTabId
     if (activeId && activeId !== useFlowStore.getState().selectedSubflowId) {
@@ -72,9 +52,6 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
     }
   }, [editor.groups, editor.focusedGroupIndex])
 
-  // Open the bundled sample flow so a first-run user sees a real analysis
-  // without having to export their own flow first. Posts the embedded PAD
-  // text through the normal upload path (parsed server-side), then loads it.
   const handleOpenSample = async () => {
     setLoadingSample(true)
     try {
@@ -85,7 +62,7 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
         toast.error(t('mainPane.sampleFailed'))
       }
     } catch (err) {
-      toast.error(t('mainPane.sampleFailed'), {description: String(err)})
+      toast.error(t('mainPane.sampleFailed'), {description: getErrorMessage(err)})
     } finally {
       setLoadingSample(false)
     }
@@ -184,10 +161,6 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
               className={`flex flex-col overflow-hidden ${gi === focusedGroupIndex ? '' : 'opacity-90'}`}
               style={{flex: `${widths[gi]} 0 0`, minWidth: 200}}
               onMouseDown={() => {
-                // Focus follows ANY click inside the group, content included.
-                // selectBlock/selectSubflow route openInGroup to the focused
-                // group, so if clicking a block in an unfocused pane didn't
-                // move focus first, it would retarget the OTHER pane's tabs.
                 if (gi !== focusedGroupIndex) editor.focusGroup(gi)
               }}
               onDragOver={e => {
@@ -202,7 +175,6 @@ function FlowEditorPane({mainPaneView}: {mainPaneView: string}) {
                   const {fromGroup, subflowId} = JSON.parse(data)
                   if (fromGroup !== gi) editor.moveTabToGroup(fromGroup, subflowId, gi)
                 } catch {
-                  /* ignore invalid drop data */
                 }
               }}
             >
@@ -350,10 +322,6 @@ const GroupTabStrip = memo(function GroupTabStrip({
                       ? 'bg-surface-1 text-text-primary font-medium border-t-2 border-t-brand-400/50'
                       : 'text-text-secondary hover:bg-surface-2 border-t-2 border-t-transparent'
                 }`}
-                // Activate on mousedown, not click: WebKitGTK (the Tauri
-                // Linux webview) starts an HTML5 drag on draggable elements
-                // after ~1px of movement and swallows the ensuing click, so
-                // click-based switching randomly "does nothing" there.
                 onMouseDown={e => {
                   if (e.button === 0) onSelectTab(tabId)
                 }}

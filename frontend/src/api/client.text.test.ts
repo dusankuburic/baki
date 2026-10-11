@@ -1,8 +1,5 @@
 import {describe, it, expect, vi, afterEach} from 'vitest'
 
-// requestText/requestBlob: downloads whose body is not JSON. The findings
-// panel's JUnit export used request(), which JSON-parses every 200, so it
-// always failed with "Server returned a non-JSON response".
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
     getBackendConfig: vi.fn().mockResolvedValue({apiUrl: 'http://localhost:9999', token: 'mock-token', port: 9999}),
@@ -38,7 +35,6 @@ describe('requestText', () => {
   })
 
   it('keeps a JSON document byte for byte (no parse and re-stringify)', async () => {
-    // Go escapes <, > and & in JSON strings; JSON.stringify would not.
     const sarif =
       '{\n  "version": "2.1.0",\n  "runs": [{"results": [{"message": {"text": "\\u003cb\\u003e \\u0026"}}]}]\n}\n'
     respond(sarif, 200, 'application/sarif+json')

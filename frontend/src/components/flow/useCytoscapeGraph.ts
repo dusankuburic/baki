@@ -1,7 +1,6 @@
 import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useRef, useEffect, useState} from 'react'
 import cytoscape from 'cytoscape'
-// @ts-expect-error cytoscape-dagre has no types
 import dagre from 'cytoscape-dagre'
 import {analysisApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
@@ -10,8 +9,6 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 
 cytoscape.use(dagre)
 
-// The theme-derived stylesheet, read from the CSS variables on <html> at the
-// time of the call.
 function buildStyle(): cytoscape.StylesheetJson {
   const cs = getComputedStyle(document.documentElement)
   const cssVar = (v: string) => cs.getPropertyValue(v).trim()
@@ -60,7 +57,6 @@ function buildStyle(): cytoscape.StylesheetJson {
         'border-width': 3,
       },
     },
-    // Error indicator
     {
       selector: 'node[errorCount > 0]',
       style: {
@@ -68,7 +64,6 @@ function buildStyle(): cytoscape.StylesheetJson {
         'border-width': 2,
       },
     },
-    // Warning indicator
     {
       selector: 'node[warnCount > 0][errorCount = 0]',
       style: {
@@ -76,7 +71,6 @@ function buildStyle(): cytoscape.StylesheetJson {
         'border-width': 2,
       },
     },
-    // Search highlight + dim
     {
       selector: 'node.search-match',
       style: {
@@ -94,11 +88,6 @@ function buildStyle(): cytoscape.StylesheetJson {
   ]
 }
 
-// useCytoscapeGraph owns the Cytoscape instance lifecycle (create/destroy,
-// theme-derived styling), data loading (execution-graph fetch, element
-// swap, layout), zoom sync with the toolbar, the window "graph:fit" event,
-// and node search/highlight. Extracted from ExecutionGraphView so the
-// component itself only wires the container ref and renders overlays.
 export function useCytoscapeGraph(subflowId?: string) {
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
@@ -155,7 +144,6 @@ export function useCytoscapeGraph(subflowId?: string) {
         ]
 
         const cy = cyRef.current
-        // Batch the remove+add so the whole swap restyles once, not per element.
         cy.batch(() => {
           cy.elements().remove()
           cy.add(elements)
@@ -204,15 +192,8 @@ export function useCytoscapeGraph(subflowId?: string) {
       instance.destroy()
       cyRef.current = null
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  // ↑ One instance per mount. The loadGraph effect below runs the initial
-  // load and handles document, report and subflow changes by swapping
-  // elements on the reused instance.
+  }, [setGraphZoom, selectSubflow])
 
-  // The stylesheet is derived from the theme's CSS vars, so a theme change
-  // restyles the instance in place — same elements, same layout, new colours.
-  // Recreating it (the previous approach) re-fetched the graph and re-ran the
-  // layout animation on every theme switch.
   const styledFor = useRef(resolvedTheme)
   useEffect(() => {
     if (styledFor.current === resolvedTheme) return
@@ -220,7 +201,6 @@ export function useCytoscapeGraph(subflowId?: string) {
     cyRef.current?.style().fromJson(buildStyle()).update()
   }, [resolvedTheme])
 
-  // Sync zoom from toolbar
   useEffect(() => {
     if (!cyRef.current) return
     const cy = cyRef.current
@@ -230,7 +210,6 @@ export function useCytoscapeGraph(subflowId?: string) {
     }
   }, [graphZoom])
 
-  // Listen for fit event
   useEffect(() => {
     const handleFit = () => {
       if (!cyRef.current) return
@@ -241,22 +220,17 @@ export function useCytoscapeGraph(subflowId?: string) {
     return () => window.removeEventListener('graph:fit', handleFit)
   }, [setGraphZoom])
 
-  // Re-load when document or report changes
   useEffect(() => {
-    // Drives the cytoscape instance — an external system, which is what effects are for.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadGraph()
   }, [flowDoc?.id, report?.generatedAt, subflowId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Highlight matched nodes (and dim the rest) live as the query changes; re-runs
-  // after a (re)load so highlights survive graph refreshes. Also drives the count.
   useEffect(() => {
     const cy = cyRef.current
     if (!cy) return
     const q = searchQuery.trim().toLowerCase()
     if (!q) {
       cy.elements().removeClass('search-match search-dim')
-      // Publishes a count derived from cytoscape's live graph, which React does not own.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setMatchCount(null)
       return

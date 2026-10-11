@@ -19,8 +19,6 @@ export default function RuleReference() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<string>('all')
 
-  // Scope to the active org so the reference lists the org's custom rules
-  // and reflects its overrides, matching what analysis applies to its flows.
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const {
     data: rules,

@@ -31,7 +31,7 @@ describe('ProfileSection', () => {
   it('lists the identity fields with honest empty values', () => {
     render(<Harness />)
     expect(screen.getByText('Display name')).toBeInTheDocument()
-    expect(screen.getAllByText('Not set')).toHaveLength(2) // display name + avatar
+    expect(screen.getAllByText('Not set')).toHaveLength(2)
     expect(screen.getByText('ada@example.com')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Copy email'})).toBeInTheDocument()
   })
@@ -50,7 +50,7 @@ describe('ProfileSection', () => {
     expect(save).toBeDisabled()
 
     fireEvent.change(screen.getByLabelText('Avatar URL'), {target: {value: 'ftp://img.example.com/ada.png'}})
-    expect(screen.getByText('Enter a valid http(s) URL.')).toBeInTheDocument()
+    expect(screen.getByText('Enter a valid http(s) URL')).toBeInTheDocument()
     expect(save).toBeDisabled()
 
     fireEvent.change(screen.getByLabelText('Avatar URL'), {target: {value: 'https://img.example.com/ada.png'}})

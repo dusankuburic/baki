@@ -1,0 +1,12 @@
+
+export const EMAIL_MAX_LENGTH = 254
+
+export const DISPLAY_NAME_MAX_LENGTH = 100
+
+export const AVATAR_URL_MAX_LENGTH = 2048
+
+export const TOKEN_MAX_EXPIRY_DAYS = 365
+
+export const CI_CREDENTIAL_MAX_EXPIRY_DAYS = 365
+
+export const CI_CREDENTIAL_MAX_NAME = 100

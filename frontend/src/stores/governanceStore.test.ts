@@ -2,7 +2,6 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {useGovernanceStore, startGovernancePolling, stopGovernancePolling} from './governanceStore'
 import type {GovernanceAlert} from '@/api/governance'
 
-// Stub the API layer so tests don't hit a real backend.
 const mockList = vi.fn()
 const mockUnreadCount = vi.fn()
 const mockMarkAllRead = vi.fn()
@@ -38,8 +37,6 @@ beforeEach(() => {
   mockMarkAllRead.mockResolvedValue({status: 'ok'})
   mockDismiss.mockResolvedValue({status: 'ok'})
   mockClear.mockResolvedValue({status: 'ok'})
-  // Partial reset (merge) — a full `setState(..., true)` would wipe the action
-  // methods, which are part of the Zustand state object.
   useGovernanceStore.setState({
     alerts: [],
     unreadCount: 0,
@@ -60,7 +57,6 @@ describe('governanceStore', () => {
   it('refreshUnread swallows errors (best-effort poll)', async () => {
     mockUnreadCount.mockRejectedValue(new Error('boom'))
     await useGovernanceStore.getState().refreshUnread()
-    // No throw; count stays at its previous value.
     expect(useGovernanceStore.getState().unreadCount).toBe(0)
   })
 
@@ -83,8 +79,6 @@ describe('governanceStore', () => {
     mockMarkAllRead.mockRejectedValue(new Error('fail'))
     await useGovernanceStore.getState().markAllRead()
     const st = useGovernanceStore.getState()
-    // The optimistic "all read" must be undone — otherwise the badge claims 0
-    // unread while the server still holds them unread.
     expect(st.unreadCount).toBe(2)
     expect(st.alerts.every(a => a.readAt === undefined)).toBe(true)
     expect(st.lastError).toBeTruthy()
@@ -103,9 +97,6 @@ describe('governanceStore', () => {
     expect(useGovernanceStore.getState().alerts[0]!.dismissedAt).toBeTruthy()
   })
 
-  // "Clear dismissed" only reaches alerts the list actually contains. The
-  // default list hides dismissed rows, so without includeDismissed an alert
-  // dismissed in an earlier session could never be cleared.
   it('the list only asks for dismissed alerts once the toggle is on', async () => {
     await useGovernanceStore.getState().openPanel()
     expect(mockList).toHaveBeenLastCalledWith({limit: 50, includeDismissed: false})
@@ -138,16 +129,10 @@ describe('governanceStore', () => {
     await useGovernanceStore.getState().reloadList()
     const st = useGovernanceStore.getState()
     expect(st.alerts).toHaveLength(2)
-    // reloadList must NOT call markAllRead (the panel was already acked on open;
-    // a newly-arrived alert should stay unread until the user sees it).
     expect(mockMarkAllRead).not.toHaveBeenCalled()
-    // unreadCount is untouched by reloadList (it doesn't know the new total;
-    // refreshUnread owns the badge).
     expect(st.unreadCount).toBe(2)
   })
 
-  // A "new rules" notice rides in the alert list (type new_rules, no flow):
-  // the inbox reads, acknowledges and dismisses it like an alert, by its id.
   it('lists a new_rules notice beside the alerts and dismisses it by its id', async () => {
     const notice = baseAlert({
       id: 'new_rules|org|org-1|rs1:d',
@@ -206,16 +191,11 @@ describe('governanceStore unread polling and page visibility', () => {
   it('skips the tick while the tab is hidden and refreshes once when it becomes visible', () => {
     visibility = 'hidden'
     startGovernancePolling()
-    // The initial fetch still runs (the badge needs a value for when the
-    // tab is next shown)...
     expect(mockUnreadCount).toHaveBeenCalledTimes(1)
-    // ...but three intervals in the background fetch nothing.
     vi.advanceTimersByTime(180_000)
     expect(mockUnreadCount).toHaveBeenCalledTimes(1)
-    // Coming back catches up with one refresh.
     becomeVisible()
     expect(mockUnreadCount).toHaveBeenCalledTimes(2)
-    // A visibilitychange that lands on 'hidden' is not a refresh.
     visibility = 'hidden'
     document.dispatchEvent(new Event('visibilitychange'))
     expect(mockUnreadCount).toHaveBeenCalledTimes(2)

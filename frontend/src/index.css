@@ -2,10 +2,6 @@
 
 @custom-variant dark (&:is([data-theme="dark"], [data-theme="midnight"], [data-theme="warm"], [data-theme="tokyo-night"], [data-theme="one-dark"], [data-theme="dracula"], [data-theme="nord"], [data-theme="gruvbox-dark"], [data-theme="catppuccin-mocha"], [data-theme="rose-pine"], [data-theme="rose-pine-moon"], [data-theme="github-dark"], [data-theme="kanagawa"], [data-theme="everforest"]));
 
-/* v3's ringColor.DEFAULT, carried over: a bare ring-* utility takes the brand
-   tint unless an explicit ring-color class overrides it on the element (v4's
-   ring utilities read --tw-ring-color with a currentcolor fallback, so a root
-   default restores the old behaviour exactly). */
 @layer base {
   :root {
     --tw-ring-color: color-mix(in srgb, var(--brand-500) 100%, transparent);
@@ -332,14 +328,6 @@
   --backdrop-blur-glass: 16px;
 }
 
-/*
-  The default border color has changed to `currentcolor` in Tailwind CSS v4,
-  so we've added these compatibility styles to make sure everything still
-  looks the same as it did with Tailwind CSS v3.
-
-  If we ever want to remove these styles, we need to add an explicit border
-  color utility to any element that depends on these defaults.
-*/
 @layer base {
   *,
   ::after,
@@ -350,7 +338,6 @@
   }
 }
 
-/* === FONT FACES === */
 @font-face {
   font-family: 'Inter';
   font-style: normal;
@@ -386,7 +373,6 @@
 :root {
   color-scheme: dark;
 
-  /* === SURFACES — dark theme default === */
   --surface-0: #0a0a0b;
   --surface-1: #131316;
   --surface-2: #1c1c21;
@@ -394,25 +380,18 @@
   --surface-4: #34343d;
   --surface-overlay: rgba(10, 10, 11, 0.7);
 
-  /* === TEXT === */
   --text-primary: #f4f4f5;
   --text-secondary: #a1a1aa;
-  /* Tertiary/disabled are contrast-bumped for WCAG AA on surface-2: the old
-     #71717a/#52525b measured 3.5:1/2.2:1. Tertiary now ≥4.5:1 (small-text
-     hint/metadata style); the placeholder token lands ≥3:1 — placeholders
-     stay visually subordinate to input values by convention. */
   --text-tertiary: #8e8e99;
   --text-disabled: #6b6b76;
   --text-inverse: #0a0a0b;
   --text-sm: 13px;
 
-  /* === BORDERS === */
   --border-subtle: #1f1f24;
   --border-default: #2a2a31;
   --border-strong: #3f3f47;
   --border-focus: var(--brand-500);
 
-  /* === BRAND === */
   --brand-50: #eef2ff;
   --brand-100: #e0e7ff;
   --brand-300: #a5b4fc;
@@ -423,7 +402,6 @@
   --brand-glow: rgba(91, 97, 239, 0.4);
   --brand-foreground: #ffffff;
 
-  /* === BLOCK TYPE COLORS === */
   --block-action: #3b82f6;
   --block-action-bg: rgba(59, 130, 246, 0.08);
   --block-loop: #f59e0b;
@@ -443,7 +421,6 @@
   --block-wait: #14b8a6;
   --block-wait-bg: rgba(20, 184, 166, 0.08);
 
-  /* === SEMANTIC === */
   --success: #22c55e;
   --success-bg: rgba(34, 197, 94, 0.1);
   --warning: #eab308;
@@ -453,13 +430,6 @@
   --info: #3b82f6;
   --info-bg: rgba(59, 130, 246, 0.1);
 
-  /* === TEXT ON TONE FILLS ===
-     The error foreground is the text on a solid error fill (the danger
-     button of a confirm); the badge foregrounds are the text of each
-     shared/Badge tone. The tone colours fail as text on their own tints in
-     many themes, so every theme block sets all of these to values that pass
-     4.5:1 on surface-1, surface-2 and the badge fill over either one
-     (lib/themeContrast.test.ts measures each theme). */
   --error-foreground: #0a0a0b;
   --badge-neutral-fg: #a1a1aa;
   --badge-brand-fg: #818cf8;
@@ -468,12 +438,10 @@
   --badge-warning-fg: #eab308;
   --badge-error-fg: #f26363;
 
-  /* === GLASS / BLUR === */
   --glass-bg: rgba(28, 28, 33, 0.72);
   --glass-border: rgba(255, 255, 255, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
 
-  /* === ELEVATION (shadows) === */
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
@@ -482,10 +450,6 @@
   --shadow-glow: 0 0 0 1px var(--brand-500), 0 0 24px var(--brand-glow);
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(239, 68, 68, 0.3);
 
-  /* === SPACING SCALE (4px base) === */
-  /* Half steps use an underscore: a custom-property name cannot contain a
-     dot, so the dotted names were parse errors the browser dropped and every
-     utility reading them (p-1.5, gap-1.5, py-0.5, h-3.5) computed to 0. */
   --space-0: 0;
   --space-0_5: 2px;
   --space-1: 4px;
@@ -502,7 +466,6 @@
   --space-12: 48px;
   --space-16: 64px;
 
-  /* === RADII === */
   --radius-xs: 2px;
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -511,13 +474,11 @@
   --radius-2xl: 20px;
   --radius-full: 9999px;
 
-  /* === TYPE === */
   --font-sans:
     'Inter', 'Geist', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI',
     Roboto, 'Helvetica Neue', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
 
-  /* === MOTION === */
   --duration-instant: 50ms;
   --duration-fast: 120ms;
   --duration-normal: 200ms;
@@ -527,7 +488,6 @@
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  /* === Z-INDEX === */
   --z-base: 0;
   --z-raised: 10;
   --z-overlay: 20;
@@ -536,11 +496,6 @@
   --z-tooltip: 50;
   --z-toast: 60;
 
-  /* === DATA VIZ ===
-     Chart colours, read as hex by src/components/charts/useChartTheme.ts.
-     The eight series slots are the dataviz reference palette in its fixed,
-     CVD-validated order (assign in sequence, never cycle); --viz-seq-* is the
-     one-hue ordinal ramp; severity and health keep the semantic tokens. */
   --viz-1: #3987e5;
   --viz-2: #d95926;
   --viz-3: #199e70;
@@ -563,9 +518,6 @@
   --viz-tooltip-border: var(--border-default);
 }
 
-/* The light themes step the same eight hues for a light card surface. They
-   are matched here in one rule instead of repeated per theme block, which
-   also keeps them out of the theme-contrast test's per-theme parser. */
 :is(
   [data-theme='light'],
   [data-theme='gruvbox-light'],
@@ -672,7 +624,6 @@
 
 [data-theme='midnight'] {
   color-scheme: dark;
-  /* === SURFACES — cool navy === */
   --surface-0: #070d1a;
   --surface-1: #0d1829;
   --surface-2: #131f38;
@@ -680,19 +631,16 @@
   --surface-4: #263758;
   --surface-overlay: rgba(7, 13, 26, 0.75);
 
-  /* === TEXT === */
   --text-primary: #e8edf5;
   --text-secondary: #a8b8d4;
   --text-tertiary: #7891ba;
   --text-disabled: #3c5070;
   --text-inverse: #070d1a;
 
-  /* === BORDERS === */
   --border-subtle: #111e35;
   --border-default: #1c2e4a;
   --border-strong: #2c4268;
 
-  /* === BRAND — cyan/teal accent === */
   --brand-50: #ecfeff;
   --brand-100: #cffafe;
   --brand-300: #67e8f9;
@@ -703,7 +651,6 @@
   --brand-glow: rgba(6, 182, 212, 0.4);
   --brand-foreground: #070d1a;
 
-  /* === BLOCK TYPE COLORS === */
   --block-action: #38bdf8;
   --block-action-bg: rgba(56, 189, 248, 0.08);
   --block-loop: #fbbf24;
@@ -723,7 +670,6 @@
   --block-wait: #2dd4bf;
   --block-wait-bg: rgba(45, 212, 191, 0.08);
 
-  /* === SEMANTIC === */
   --success: #10d97e;
   --success-bg: rgba(16, 217, 126, 0.1);
   --warning: #fbbf24;
@@ -740,12 +686,10 @@
   --badge-warning-fg: #fbbf24;
   --badge-error-fg: #f87171;
 
-  /* === GLASS / BLUR === */
   --glass-bg: rgba(13, 24, 41, 0.78);
   --glass-border: rgba(255, 255, 255, 0.05);
   --glass-blur: blur(16px) saturate(1.3);
 
-  /* === ELEVATION === */
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.45);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.55);
@@ -757,7 +701,6 @@
 
 [data-theme='warm'] {
   color-scheme: dark;
-  /* === SURFACES — sepia/brown dark === */
   --surface-0: #110e0a;
   --surface-1: #1a1612;
   --surface-2: #231e18;
@@ -765,19 +708,16 @@
   --surface-4: #3c3228;
   --surface-overlay: rgba(17, 14, 10, 0.75);
 
-  /* === TEXT — warm off-white === */
   --text-primary: #f5ede3;
   --text-secondary: #b09880;
   --text-tertiary: #7d6a56;
   --text-disabled: #54453a;
   --text-inverse: #110e0a;
 
-  /* === BORDERS === */
   --border-subtle: #1e1a15;
   --border-default: #2a2318;
   --border-strong: #3e3226;
 
-  /* === BRAND — amber/gold accent === */
   --brand-50: #fffbeb;
   --brand-100: #fef3c7;
   --brand-300: #fcd34d;
@@ -788,7 +728,6 @@
   --brand-glow: rgba(245, 158, 11, 0.4);
   --brand-foreground: #110e0a;
 
-  /* === BLOCK TYPE COLORS === */
   --block-action: #60a5fa;
   --block-action-bg: rgba(96, 165, 250, 0.08);
   --block-loop: #fb923c;
@@ -808,7 +747,6 @@
   --block-wait: #2dd4bf;
   --block-wait-bg: rgba(45, 212, 191, 0.08);
 
-  /* === SEMANTIC === */
   --success: #22c55e;
   --success-bg: rgba(34, 197, 94, 0.1);
   --warning: #f59e0b;
@@ -825,12 +763,10 @@
   --badge-warning-fg: #f59e0b;
   --badge-error-fg: #f87171;
 
-  /* === GLASS / BLUR === */
   --glass-bg: rgba(26, 22, 18, 0.78);
   --glass-border: rgba(255, 220, 160, 0.06);
   --glass-blur: blur(16px) saturate(1.2);
 
-  /* === ELEVATION === */
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
@@ -1124,7 +1060,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(191, 97, 106, 0.3);
 }
 
-/* === GRUVBOX DARK === */
 [data-theme='gruvbox-dark'] {
   color-scheme: dark;
   --surface-0: #1d2021;
@@ -1195,7 +1130,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(251, 73, 52, 0.3);
 }
 
-/* === GRUVBOX LIGHT === */
 [data-theme='gruvbox-light'] {
   color-scheme: light;
   --surface-0: #fbf1c7;
@@ -1266,7 +1200,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(204, 36, 20, 0.15);
 }
 
-/* === CATPPUCCIN MOCHA === */
 [data-theme='catppuccin-mocha'] {
   color-scheme: dark;
   --surface-0: #11111b;
@@ -1337,7 +1270,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(243, 139, 168, 0.3);
 }
 
-/* === CATPPUCCIN LATTE === */
 [data-theme='catppuccin-latte'] {
   color-scheme: light;
   --surface-0: #eff1f5;
@@ -1408,7 +1340,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(210, 15, 57, 0.15);
 }
 
-/* === ROSE PINE === */
 [data-theme='rose-pine'] {
   color-scheme: dark;
   --surface-0: #191724;
@@ -1479,7 +1410,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(235, 111, 146, 0.3);
 }
 
-/* === ROSE PINE MOON === */
 [data-theme='rose-pine-moon'] {
   color-scheme: dark;
   --surface-0: #1f1d2e;
@@ -1550,7 +1480,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(235, 111, 146, 0.3);
 }
 
-/* === ROSE PINE DAWN === */
 [data-theme='rose-pine-dawn'] {
   color-scheme: light;
   --surface-0: #faf4ed;
@@ -1621,7 +1550,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(180, 99, 122, 0.15);
 }
 
-/* === GITHUB DARK === */
 [data-theme='github-dark'] {
   color-scheme: dark;
   --surface-0: #010409;
@@ -1692,7 +1620,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(248, 81, 73, 0.3);
 }
 
-/* === GITHUB LIGHT === */
 [data-theme='github-light'] {
   color-scheme: light;
   --surface-0: #f6f8fa;
@@ -1763,7 +1690,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(207, 34, 46, 0.15);
 }
 
-/* === KANAGAWA === */
 [data-theme='kanagawa'] {
   color-scheme: dark;
   --surface-0: #16161d;
@@ -1834,7 +1760,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(228, 104, 118, 0.3);
 }
 
-/* === EVERFOREST === */
 [data-theme='everforest'] {
   color-scheme: dark;
   --surface-0: #22272a;
@@ -1905,7 +1830,6 @@
   --shadow-glow-error: 0 0 0 1px var(--error), 0 0 16px rgba(230, 126, 128, 0.3);
 }
 
-/* === GLASS UTILITY === */
 .glass-panel {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
@@ -1920,9 +1844,6 @@
   background-position: 10px 10px;
 }
 
-/* === KEYFRAME ANIMATIONS === */
-/* Touch baseline (U5b): buttons/inputs/links get manipulation — no
-   double-tap-zoom delay, no pointercancel surprises on scroll. */
 button,
 a,
 input,
@@ -2094,9 +2015,6 @@ textarea,
   }
 }
 
-/* === CHAT ANIMATIONS === */
-
-/* Message entrance animation with spring effect */
 @keyframes message-slide-in {
   from {
     opacity: 0;
@@ -2108,7 +2026,6 @@ textarea,
   }
 }
 
-/* Improved streaming cursor with glow */
 @keyframes cursor-pulse {
   0%,
   100% {
@@ -2131,11 +2048,6 @@ textarea,
   }
 }
 
-/* Enhanced typing indicator with ripple effect */
-/* Thinking indicator: each dot rises and brightens in turn (a wave the eye
-   reads as travel, where the old scale ripple read as a static row), and
-   the label's highlight sweeps left to right. Both loops start and end in
-   the dim state, so the repeat has no visible seam. */
 @keyframes thinking-wave {
   0%,
   60%,
@@ -2168,7 +2080,6 @@ textarea,
   }
 }
 
-/* Progress bar shimmer for streaming */
 @keyframes progress-shimmer {
   0% {
     background-position: -200% 0;
@@ -2178,7 +2089,6 @@ textarea,
   }
 }
 
-/* Word fade-in for progressive rendering */
 @keyframes word-fade-in {
   from {
     opacity: 0;
@@ -2190,7 +2100,6 @@ textarea,
   }
 }
 
-/* Button pulse for sending state */
 @keyframes btn-pulse {
   0%,
   100% {
@@ -2201,7 +2110,6 @@ textarea,
   }
 }
 
-/* Message fade out animation */
 @keyframes message-fade-out {
   from {
     opacity: 1;
@@ -2213,9 +2121,6 @@ textarea,
   }
 }
 
-/* Jump-to-block highlight: one-shot ring that blooms out and fades when a
-   block becomes selected (finding "Jump", search, lineage navigation).
-   Themed via --brand-500; settles back into the static selection glow. */
 @keyframes jump-pulse {
   0% {
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand-500) 65%, transparent);
@@ -2225,7 +2130,6 @@ textarea,
   }
 }
 
-/* === ANIMATION UTILITY CLASSES === */
 .animate-fade-in {
   animation: fade-in 200ms var(--ease-out);
 }
@@ -2276,7 +2180,6 @@ textarea,
   animation: shimmer 2s linear infinite;
 }
 
-/* Chat animation utilities */
 .animate-message-in {
   animation: message-slide-in 280ms var(--ease-spring);
 }
@@ -2290,7 +2193,6 @@ textarea,
   animation: btn-pulse 1.5s ease-in-out infinite;
 }
 
-/* === REDUCED MOTION === */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -2307,15 +2209,11 @@ textarea,
   .animate-spin {
     animation-duration: 2s !important;
   }
-  /* The wait is essential feedback: the dots keep a slow opacity pulse
-     with no travel, and the label's shimmer simply stops. */
   .thinking-dot {
     animation: thinking-pulse 2s ease-in-out infinite !important;
   }
 }
 
-/* === USER OPT-IN: REDUCE MOTION === */
-/* Triggered by the AppearancePanel "Reduce Motion" toggle (data-reduce-motion="true"). */
 [data-reduce-motion='true'] *,
 [data-reduce-motion='true'] *::before,
 [data-reduce-motion='true'] *::after {
@@ -2331,9 +2229,6 @@ textarea,
   animation-duration: 2s !important;
 }
 
-/* === USER OPT-IN: HIGH CONTRAST === */
-/* Triggered by the AppearancePanel "High Contrast" toggle (data-high-contrast="true").
-   Collapses the text ramp toward primary and strengthens borders for legibility. */
 [data-high-contrast='true'] {
   --text-secondary: var(--text-primary);
   --text-tertiary: var(--text-primary);
@@ -2343,10 +2238,6 @@ textarea,
   --border-strong: var(--text-primary);
 }
 
-/* === OS-LEVEL HIGH CONTRAST === */
-/* `[data-theme]` is included so this also strengthens the non-default themes,
-   not just the `:root` dark defaults. Both selectors have equal specificity to
-   the per-theme blocks, so source order (this block is later) lets them win. */
 @media (prefers-contrast: more) {
   :root,
   [data-theme] {
@@ -2357,10 +2248,6 @@ textarea,
   }
 }
 
-/* === UI DENSITY === */
-/* Triggered by the AppearancePanel "UI Density" selector (data-density="compact").
-   Shrinks the var-based spacing scale ~20-25%. Also drops --text-sm 13px→12px,
-   which currently only affects chat prose (.prose-chat), not Tailwind's text-sm. */
 [data-density='compact'] {
   --space-1_5: 5px;
   --space-2: 6px;
@@ -2373,32 +2260,16 @@ textarea,
   --text-sm: 12px;
 }
 
-/* === THEME SWITCH === */
-/* A theme switch is one attribute write on <html>. Every theme redefines
-   ~60 custom properties, so every element restyles once (about 50ms for a
-   3,000-element view). The cross-fade comes from the View Transitions API
-   (useTheme.ts): the browser blends a snapshot of the old page into the new
-   one on the compositor. The previous `.theme-transitioning *` rule put a
-   transition on every element and pseudo-element instead, which made that
-   restyle ~13x slower and then ran thousands of animations for the next few
-   frames — over two seconds of blocked main thread on the analytics page. */
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation-duration: 160ms;
   animation-timing-function: var(--ease-out);
 }
 
-/* The page stays interactive while the snapshots fade. */
 ::view-transition {
   pointer-events: none;
 }
 
-/* The settings dialog (view-transition-name: settings, SettingsModal) is
-   where a theme is picked, so it switches at once: its old snapshot is
-   dropped and the new one shows without a fade, and the selection ring,
-   check and dialog colours move together. Only the page behind it
-   cross-fades. (Blending the two snapshots showed the previous card's ring
-   fading out next to the new one — a double border for a few frames.) */
 ::view-transition-group(settings),
 ::view-transition-new(settings) {
   animation: none;
@@ -2416,7 +2287,6 @@ textarea,
   }
 }
 
-/* === BASE RESET === */
 html,
 body,
 #root {
@@ -2431,13 +2301,11 @@ body,
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Firefox scrollbar theming (Chrome/Safari use ::-webkit-scrollbar below) */
 html {
   scrollbar-color: var(--surface-4) transparent;
   scrollbar-width: thin;
 }
 
-/* Enable code ligatures (=>, !==, >=) and slashed zero for monospace text */
 code,
 pre,
 .font-mono {
@@ -2464,7 +2332,6 @@ pre,
   background: var(--text-disabled);
 }
 
-/* Utility: hidden scrollbar for horizontal overflow containers */
 .no-scrollbar::-webkit-scrollbar,
 .scrollbar-none::-webkit-scrollbar {
   display: none;
@@ -2475,9 +2342,6 @@ pre,
   scrollbar-width: none;
 }
 
-/* Utility: styled scrollbar (explicit opt-in, mirrors global scrollbar styles) */
-/* scrollbar-width is not inherited: without it here Firefox draws its
-   full-size arrowed bar on every chat scroller. */
 .custom-scrollbar {
   scrollbar-color: var(--surface-4) transparent;
   scrollbar-width: thin;
@@ -2502,16 +2366,6 @@ pre,
   color: var(--text-primary);
 }
 
-/* === KEYBOARD FOCUS RING === */
-/* Only visible for keyboard navigation (:focus-visible), not mouse clicks.
-   Uses the theme brand color so the ring adapts to every theme.
-   Modern browsers make outline follow the element's border-radius.
-   :where() keeps specificity at zero so components that already draw their
-   own focus indicator (e.g. shared/Input's focus-within border) win with
-   their plain `outline-none` opt-out — without it this rule outranked the
-   class (later in source, same specificity), and text fields showed BOTH the
-   wrapper border and this outline ring on click, since text inputs match
-   :focus-visible even for mouse focus. */
 :where(:focus-visible) {
   outline: 2px solid var(--brand-500);
   outline-offset: 2px;
@@ -2525,8 +2379,6 @@ pre,
   font-size: var(--chat-font-size, var(--text-sm));
   line-height: 1.6;
   color: var(--text-primary);
-  /* A URL, a path or a token with no break opportunity wraps instead of
-     widening the column: the conversation never scrolls sideways. */
   overflow-wrap: anywhere;
   min-width: 0;
 }
@@ -2555,18 +2407,8 @@ pre,
   padding: 0.1em 0.35em;
   font-size: 0.875em;
   font-family: var(--font-mono);
-  /* Was the one utility on markdownComponents.code that actually took effect
-     (this rule sets no colour, so it did not outrank it). Declared here now
-     that inline code has a single owner. */
   color: var(--brand-300);
 }
-
-/* NOTE: there is deliberately no `.prose-chat pre` block. Every <pre> inside
-   chat prose is rendered by <CodeBlock>, which brings its own bordered frame,
-   header and padding (and sets margin/padding/background inline). The old rule
-   still matched that inner <pre> and drew a SECOND border inside CodeBlock's
-   own. Only the print rule at the bottom of this file targets it, to keep a
-   block from splitting across pages. */
 
 .prose-chat a {
   color: var(--brand-400);
@@ -2638,8 +2480,6 @@ pre,
   color: var(--text-secondary);
 }
 
-/* Tables scroll inside their own box (see MessageBubble's `table`
-   override); before, a wide table scrolled the whole conversation. */
 .prose-chat .chat-table-wrap {
   margin: 0.75em 0;
   max-width: 100%;
@@ -2657,9 +2497,6 @@ pre,
   font-size: 0.875em;
 }
 
-/* Cells wrap between words so a table fits the column wherever its words
-   do; one whose longest words cannot fit side by side scrolls inside its
-   own wrapper (above) rather than breaking "Column" into "Col/umn". */
 .prose-chat th,
 .prose-chat td {
   border: 1px solid var(--border-default);
@@ -2688,11 +2525,6 @@ pre,
   font-style: italic;
 }
 
-/* === CHAT MESSAGE BUBBLE STYLES === */
-
-/* Make the last paragraph inline during streaming so the cursor appears on
-   the same line as the text rather than below it. The cursor span is always
-   the LAST child, so the paragraph before it is nth-last-child(2). */
 .prose-chat.is-streaming > p:nth-last-child(2) {
   display: inline;
 }
@@ -2703,12 +2535,6 @@ pre,
     cursor-wave 0.8s ease-in-out infinite;
 }
 
-/* === THINKING INDICATOR ===
-   Motion is transform, opacity and background-position only (no layout
-   work), so it stays smooth while a stream is parsed. The base declarations
-   are the calm state: under prefers-reduced-motion the global rule ends
-   every animation at once and these are what remain — three solid brand
-   dots and a plain tertiary label. */
 .thinking-dots {
   display: inline-flex;
   align-items: center;
@@ -2720,8 +2546,6 @@ pre,
   border-radius: var(--radius-full);
   background: var(--brand-400);
   animation: thinking-wave 1.4s ease-in-out infinite;
-  /* backwards: the delayed dots hold the dim first keyframe until their
-     turn instead of flashing solid for a third of a second on mount. */
   animation-fill-mode: backwards;
 }
 .thinking-dot:nth-child(2) {
@@ -2730,9 +2554,6 @@ pre,
 .thinking-dot:nth-child(3) {
   animation-delay: 0.32s;
 }
-/* The gradient is three times the label wide with the highlight in its
-   middle third; the sweep moves the window across it, so the text is plain
-   tertiary at both ends of the loop and at rest. */
 .thinking-label {
   color: var(--text-tertiary);
   background-image: linear-gradient(90deg, var(--text-tertiary) 40%, var(--text-primary) 50%, var(--text-tertiary) 60%);
@@ -2744,9 +2565,6 @@ pre,
   animation: thinking-shimmer 2.4s linear infinite;
 }
 
-/* Search hit inside chat prose. Uses the brand tint rather than a UA yellow so
-   it reads correctly on all themes, and keeps the surrounding text colour so a
-   match never changes the line's rhythm. */
 .chat-search-hit {
   background: color-mix(in srgb, var(--brand-500) 28%, transparent);
   color: inherit;
@@ -2754,20 +2572,10 @@ pre,
   padding: 0 0.1em;
 }
 
-/* === CHAT PANEL CONTAINER QUERIES ===
-
-   The chat lives in the Inspector pane, whose width the user drags between
-   280px and 560px (usePaneResize), and on mobile in an ~80vw drawer. That
-   width has nothing to do with the viewport, so viewport breakpoints cannot
-   describe it — every rule below keys off the panel itself. */
-
 .chat-root {
   container: chat / inline-size;
 }
 
-/* Chat text size (Settings › Appearance, or the chat menu), stamped on the
-   chat root as data-chat-text. Medium follows density; an explicit small or
-   large beats it. `.chat-text` is the user bubble, `.prose-chat` the answer. */
 .chat-root {
   --chat-font-size: var(--text-sm);
   --chat-code-size: 13px;
@@ -2780,7 +2588,6 @@ pre,
   --chat-font-size: 15px;
   --chat-code-size: 14px;
 }
-/* Focus mode reads two sizes up. */
 .chat-focus .chat-root {
   --chat-font-size: calc(var(--text-sm) + 2px);
   --chat-code-size: 14px;
@@ -2797,11 +2604,7 @@ pre,
   font-size: var(--chat-font-size, var(--text-sm));
 }
 
-/* Narrow (< 340px): the composer's context toggle relies on its checkbox
-   alone, and thread tabs and prompt chips shrink. */
 @container chat (max-width: 339px) {
-  /* Visually hidden, NOT display:none — the label is the checkbox's
-     accessible name, which display:none removed along with the text. */
   .cq-exclude-label {
     position: absolute;
     width: 1px;
@@ -2816,14 +2619,12 @@ pre,
   .chat-thread-tab {
     max-width: 84px;
   }
-  /* Chips wrap instead of scrolling off the edge under an invisible scrollbar. */
   .chat-prompt-strip {
     flex-wrap: wrap;
     overflow-x: visible;
   }
 }
 
-/* Roomy (>= 460px): there is space for the secondary numbers again. */
 @container chat (max-width: 459px) {
   .cq-count {
     display: none;
@@ -2831,8 +2632,6 @@ pre,
   .cq-usage-detail {
     display: none;
   }
-  /* The composer's @ / slash chips drop to icon-only. Visually hidden, not
-     display:none — the label is the button's accessible name. */
   .cq-chip-label {
     position: absolute;
     width: 1px;
@@ -2846,14 +2645,6 @@ pre,
   }
 }
 
-/* === CHAT GUTTERS ===
-
-   Everything in the chat is fluid: messages, the composer and the bars fill
-   whatever width the panel has (a drag, or the whole window in focus mode);
-   only the side gutter scales with it. One variable feeds them all, so the
-   message text, the composer's edge, the header's provider name and the
-   thread tabs line up on the same x. The queries set it on the root's
-   children — a container cannot query its own size. */
 .chat-root {
   --chat-gutter: 12px;
 }
@@ -2867,39 +2658,23 @@ pre,
     --chat-gutter: 24px;
   }
 }
-/* Content rows: the message column, the welcome block, the composer. */
 .chat-gutter,
 .chat-msg-item {
   padding-inline: var(--chat-gutter);
 }
-/* Bars whose first control carries 8px of its own padding (the header's
-   provider button, the thread tabs, the context chips): inset by the gutter
-   minus that, so the control's text — not its box — sits on the gutter.
-   Never tighter than 8px, so the buttons at the right keep their room. */
 .chat-bar {
   padding-inline: max(8px, calc(var(--chat-gutter) - 8px));
 }
-/* The composer grows with the draft up to a share of the window, so a long
-   prompt stays readable on a tall screen without swallowing the list.
-   ChatInput reads this back instead of hard-coding the cap. */
 .chat-composer-input {
   max-height: clamp(120px, 30vh, 320px);
 }
 
-/* === MAIN PANE TOOLBAR ===
-
-   The toolbar sits at the top of the main pane, whose width the sidebar and
-   inspector set. It answers to that width: the view switcher drops its
-   labels, then the secondary actions fold into a "More" menu, then the
-   history buttons go — so no control is pushed outside the pane and
-   clipped, as the fixed layout did below ~600px. */
 .main-toolbar {
   container: main-toolbar / inline-size;
 }
 .main-toolbar-narrow {
   display: none;
 }
-/* The graph views add a zoom cluster, so their labels go first. */
 @container main-toolbar (max-width: 879px) {
   .main-toolbar[data-tools='graph'] .seg-label {
     display: none;
@@ -2910,9 +2685,6 @@ pre,
     display: none;
   }
 }
-/* Compact: the secondary actions fold into "More", the view switcher
-   tightens, the zoom readout goes. The graph views get there 80px earlier
-   for the same reason as above. */
 @container main-toolbar (max-width: 639px) {
   .main-toolbar[data-tools='graph'] .main-toolbar-wide {
     display: none;
@@ -2946,7 +2718,6 @@ pre,
     display: none;
   }
 }
-/* Phone widths: pinch and wheel zoom the graph; the dividers go too. */
 @container main-toolbar (max-width: 359px) {
   .main-toolbar-sep,
   .main-toolbar-zoom {
@@ -2954,8 +2725,6 @@ pre,
   }
 }
 
-/* The parse-issues banner under the toolbar: the hint, then the counts,
-   drop out before the summary would wrap. */
 .parse-banner {
   container: parse-banner / inline-size;
 }
@@ -2970,11 +2739,6 @@ pre,
   }
 }
 
-/* === CLOUD LIBRARY ===
-
-   The library lives in the main pane, whose width the app's sidebar and
-   inspector set, so its panes and the results inside answer to the
-   workspace's own width — never the viewport's. */
 .library-workspace {
   container: library / inline-size;
 }
@@ -2987,11 +2751,6 @@ pre,
   }
 }
 
-/* The detail panel docks beside the results once there is room for the
-   rail, a results pane of at least 400px and a 16rem panel (20rem from
-   1100px). Narrower than that it slides over the results while a flow is
-   selected, so details, Load, Rename and Delete stay reachable at every
-   width instead of vanishing below a viewport breakpoint. */
 .library-detail {
   display: none;
 }
@@ -3026,17 +2785,12 @@ pre,
   }
 }
 
-/* As many cards as fit at 15rem or wider: the count follows the pane the
-   grid actually has, so a card never shrinks below its own content. */
 .library-grid {
   display: grid;
   gap: 0.75rem;
   grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr));
 }
 
-/* The list's columns are ranked. The name always shows and takes what is
-   left; owner, then subflows, drop out as the results pane narrows, so no
-   column is ever crushed to nothing under a heading that still names it. */
 .library-list {
   container: library-list / inline-size;
 }
@@ -3067,13 +2821,6 @@ pre,
   }
 }
 
-/* === USER PROFILE ===
-
-   The profile lives in the main pane, whose width the sidebar and inspector
-   set, so its layout answers to that width, never the viewport's: the
-   section nav is a sticky rail beside the content from 880px and a sticky
-   row of chips above it below that; the hero's actions drop under the name
-   in a narrow pane; the identity fields go from stacked to two columns. */
 .profile-page {
   container: profile / inline-size;
 }
@@ -3105,14 +2852,9 @@ pre,
   flex: none;
   white-space: nowrap;
 }
-/* Room for the sticky chip row when a group scrolls to the top. */
 .profile-group {
   scroll-margin-top: 3.5rem;
 }
-/* A card's head action drops below the description once the title block
-   cannot keep 11rem beside it, instead of squeezing the description into a
-   two-word column next to the button. A short "Edit" stays inline where a
-   wide "Sign out other sessions" wraps; either way it keeps the right edge. */
 .profile-card-head {
   flex-wrap: wrap;
 }
@@ -3181,14 +2923,6 @@ pre,
   }
 }
 
-/* === ADMIN DASHBOARD ===
-
-   The Profile layout again: the section nav is a sticky chip row in a
-   narrow pane and a sticky rail beside the content from 880px, and the
-   tables drop their optional columns (joined, id) below 640px so a row
-   never forces sideways scrolling. The tiles grid and the refetch bar are
-   the analytics rules (.admin-tiles and .admin-progress share their
-   selectors). */
 .admin-page {
   position: relative;
   container: admin / inline-size;
@@ -3221,7 +2955,6 @@ pre,
   flex: none;
   white-space: nowrap;
 }
-/* Room for the sticky chip row when a section scrolls to the top. */
 .admin-section {
   scroll-margin-top: 3.5rem;
 }
@@ -3268,11 +3001,6 @@ pre,
   }
 }
 
-/* === CHARTS ===
-
-   Shared chrome for the chart cards (src/components/charts). The card's
-   chart/table switch is icon-only at every width; axis ticks align on
-   tabular figures. */
 .chart-card-toggle .seg-label {
   display: none;
 }
@@ -3280,15 +3008,7 @@ pre,
   font-variant-numeric: tabular-nums;
 }
 
-/* === HOME DASHBOARD ===
-
-   The overview answers to the main pane's width (the sidebar and inspector
-   set it), never the viewport's: one column in a narrow pane, two from
-   640px, the 12-column bento from 960px. */
 .home-dashboard {
-  /* A containing block for absolutely positioned descendants (sr-only
-     captions, chart tooltips): otherwise they sit against the viewport and
-     give the overflow-hidden <html> scrollable height it should not have. */
   position: relative;
   container: home / inline-size;
 }
@@ -3346,11 +3066,6 @@ pre,
   }
 }
 
-/* === ANALYTICS PAGE ===
-
-   Same idea as Home: the filter row, a section nav that is a sticky chip
-   row in a narrow pane and a sticky rail beside the content from 880px,
-   and the 12-column card grid from 960px. */
 .analytics-page {
   position: relative;
   container: analytics / inline-size;
@@ -3389,8 +3104,6 @@ pre,
   margin-inline: 0.25rem;
   background: var(--border-subtle);
 }
-/* A 2px indeterminate bar under the filters while a refetch is in flight;
-   the charts stay on screen at reduced opacity meanwhile. */
 .analytics-progress,
 .admin-progress {
   position: relative;
@@ -3527,20 +3240,6 @@ pre,
   }
 }
 
-/* === SETTINGS MODAL ===
-
-   A fixed frame — min(75rem, 100vw − 3rem) by min(60rem, 100vh − 3rem) —
-   so switching sections never resizes the dialog: a 15rem nav rail (13.5rem
-   on a narrow desktop) beside a content column whose header stays put and
-   whose body is the single scroll region. Below md, or on a viewport shorter
-   than 640px, the dialog fills the screen; below md the rail also becomes a
-   title+search row over a scrolling chip row (.profile-nav's shape).
-
-   Ownership: the Tailwind classes on the elements own colours, borders and
-   paddings (density-aware through the --space-* tokens); this block owns the
-   frame (rem on purpose, so compact density cannot shrink it), the layout
-   and the responsive overrides, which win over the utilities because they
-   come later at equal specificity. */
 .settings-dialog {
   margin-inline: 1.5rem;
   overflow: hidden;
@@ -3565,8 +3264,6 @@ pre,
   overflow-y: auto;
   scrollbar-width: thin;
 }
-/* Pinned under the groups: sticks to the bottom while the list scrolls,
-   sits at the bottom when it does not. */
 .settings-nav-footer {
   position: sticky;
   bottom: 0;
@@ -3597,7 +3294,6 @@ pre,
     padding: 1.25rem 1.5rem 2rem;
   }
 }
-/* Full-screen: phones, and any viewport too short for the frame. */
 @media (max-width: 767.98px), (max-height: 639.98px) {
   .settings-dialog {
     position: fixed;
@@ -3610,7 +3306,6 @@ pre,
     border-radius: 0;
   }
 }
-/* Phones: the rail becomes a title+search row and a scrolling chip row. */
 @media (max-width: 767.98px) {
   .settings-shell {
     grid-template-columns: minmax(0, 1fr);
@@ -3655,17 +3350,6 @@ pre,
   }
 }
 
-/* === AZURE AI FOUNDRY MODEL LIST ===
-
-   AI Accounts' model rows (components/settings/azure/AzureModelList): a
-   ul/li grid, not a scrolling table, that answers to the list's own width —
-   the Settings body, a card inside an organisation's block — never the
-   viewport's. From 720px every cell has its column; below that the context
-   window moves under the name; below 560px the purpose joins it there and
-   the last test shrinks to an icon and a word; below 440px the cells stack.
-   The header row is aria-hidden: each cell carries a label that screen
-   readers always get and that shows while no header names its column.
-   Usable at 320px without horizontal scrolling. */
 .azure-models {
   container: azure-models / inline-size;
   --azure-actions: 6.25rem;
@@ -3677,7 +3361,6 @@ pre,
   display: none;
 }
 .azure-model-row {
-  /* Contains the sr-only cell labels (absolutely positioned). */
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3821,9 +3504,6 @@ pre,
     border-width: 0;
   }
 }
-
-/* === AUTOFILL OVERRIDE === */
-/* Chrome does not resolve CSS custom properties inside :-webkit-autofill — hardcode per theme */
 
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
@@ -3997,10 +3677,6 @@ input:-webkit-autofill:active {
   caret-color: #d3c6aa;
 }
 
-/* === PRINT STYLES === */
-/* Force light output regardless of active theme. Ink-efficient: white backgrounds,
-   dark text, no shadows. UI chrome is hidden via Tailwind's print:hidden utility
-   on TitleBar, StatusBar, Sidebar, and Inspector wrappers. */
 @media print {
   :root,
   [data-theme] {
@@ -4027,14 +3703,12 @@ input:-webkit-autofill:active {
     background: #ffffff;
   }
 
-  /* Strip shadows and effects that waste ink or cause rendering artifacts */
   * {
     box-shadow: none !important;
     text-shadow: none !important;
     backdrop-filter: none !important;
   }
 
-  /* Avoid breaking inside block cards, code blocks, and table rows */
   .block-view,
   .prose-chat pre,
   tr {
@@ -4042,10 +3716,6 @@ input:-webkit-autofill:active {
   }
 }
 
-/* Reduced motion (WCAG 2.3.3): users who opt out of animation get instant
-   state transitions instead of the decorative keyframes above. Print styles
-   already neutralize most surface chrome; this covers the interactive ones
-   (modal/toast/dropdown enter-exit, pulse, shimmer, slides). */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -4055,4 +3725,8 @@ input:-webkit-autofill:active {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+.__________cytoscape_container.absolute {
+  position: absolute;
 }

@@ -22,10 +22,6 @@ describe('api/client while offline', () => {
     vi.resetModules()
   })
 
-  // A mutation while offline used to go to fetch and die with a bare
-  // "Failed to fetch" (after retries, for idempotent verbs) while the offline
-  // banner implied the change had been queued. Nothing queues edits. Fail
-  // fast, and say the change was not saved.
   it('refuses a mutation without touching the network', async () => {
     setOnline(false)
     const fetchSpy = mockFetch({ok: true})

@@ -13,7 +13,6 @@ describe('SuppressionsPanel', () => {
     listSuppressions.mockReset()
   })
 
-  // The audit re-runs every rule, so nothing is fetched until the user opens it.
   it('fetches only when opened, then lists entries with a stale marker', async () => {
     listSuppressions.mockResolvedValue([
       {line: 3, rule: 'missing-timeout', blockLabel: 'Invoke web service', stale: false},

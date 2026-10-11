@@ -31,8 +31,6 @@ function baseProps() {
 
 beforeEach(() => vi.clearAllMocks())
 
-// U1.5: the toolbar popovers (saved views, undo ring) close on outside click
-// and Escape — they previously stuck open until their trigger was re-clicked.
 describe('FindingsToolbar popover dismissal (U1.5)', () => {
   it('closes the undo popover on outside mousedown', async () => {
     render(
@@ -92,7 +90,6 @@ describe('sort dropdown + chip counts (U2.3)', () => {
     expect(screen.getByRole('menuitemradio', {name: /by severity/i})).toHaveAttribute('aria-checked', 'true')
     fireEvent.click(screen.getByRole('menuitemradio', {name: /by count/i}))
     expect(onSetSortMode).toHaveBeenCalledWith('count')
-    // Choosing closes the menu.
     await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
   })
 
@@ -121,7 +118,6 @@ describe('sort dropdown + chip counts (U2.3)', () => {
     const errors = screen.getByText('Errors').closest('button')
     expect(errors).toHaveTextContent('3')
     expect(errors?.className).toContain('text-semantic-error')
-    // Zero counts don't render a ghost 0.
     expect(screen.getByText('Warnings').closest('button')).toHaveTextContent('Warnings')
   })
 })

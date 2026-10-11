@@ -2,14 +2,6 @@ import {useTranslation} from 'react-i18next'
 import {useRef, useState, type ReactNode} from 'react'
 import {useDialogFocus} from '@/hooks/useDialogFocus'
 
-// MobileDrawer is the overlay-drawer chrome for the mobile sidebar/inspector
-// panes. Like the shared <Modal>, it
-// provides the WCAG dialog behaviours: role=dialog + aria-modal, a Tab focus
-// trap, Esc-to-close, and focus restoration to the trigger on close.
-//
-// The drawer mounts only while open (the parent's conditional), so isOpen is
-// always true here and the hook's open-path runs on mount; the cleanup on
-// unmount restores focus.
 export default function MobileDrawer({
   side,
   label,
@@ -25,15 +17,8 @@ export default function MobileDrawer({
   const ref = useRef<HTMLDivElement>(null)
   useDialogFocus({isOpen: true, onClose, closeOnEsc: true, containerRef: ref})
 
-  // Swipe-to-close (U5b): the drawer follows the finger along its open axis
-  // and releases past 40% of its width (or a fast 80px flick). Keyboard and
-  // pointer-device users keep Esc/backdrop/click paths.
   const [dragX, setDragX] = useState(0)
   const drag = useRef<{startX: number; width: number} | null>(null)
-  // A drawer closes by sliding toward the edge it is anchored to: the left
-  // drawer moves LEFT (negative dx), the right drawer moves RIGHT (positive).
-  // These were the other way round, so swiping a drawer off its own edge did
-  // nothing and only a swipe across the screen (into the content) tracked.
   const closesLeftward = side === 'left'
 
   return (
@@ -56,7 +41,6 @@ export default function MobileDrawer({
         onPointerMove={e => {
           if (!drag.current) return
           const dx = e.clientX - drag.current.startX
-          // Only track the outward direction; the inward one resists at 0.
           const outward = closesLeftward ? Math.min(0, dx) : Math.max(0, dx)
           setDragX(outward)
         }}

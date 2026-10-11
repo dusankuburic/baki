@@ -16,48 +16,32 @@ import {modelKindLabelKey, purposeLabel, purposeLabelKey, type PurposeLabelOf} f
 import {matchesQuery} from '@/lib/textMatch'
 import {PROVIDERS, isKnownProviderId, type ModelDetail} from '@/types'
 
-/** A configured provider as the picker lists it. */
 export interface PickerProvider {
   id: string
   name: string
-  /** Its credentials come from the listing scope's organisation. */
   shared?: boolean
-  /** The catalogue's glyph name (ProviderSpec.icon); the id map applies without one. */
   icon?: string
   models: ModelDetail[]
 }
 
 interface Props {
-  /** The configured providers; the Provider select appears when there is more than one. */
   providers: PickerProvider[]
-  /** The thread's provider, model ('' = nothing usable) and the model's name. */
   provider: string
   model: string
   label: string
-  /** The thread model's listing entry (purpose, kind, shared), when listed. */
   modelDetail?: ModelDetail
-  /** Per provider id: the model its new chats start on here (the [DEFAULT] badge). */
   defaults: Record<string, string>
-  /** A pick: pins the thread to this provider's model. */
   onSelect: (providerId: string, model: ModelDetail) => void
-  /** The listing scope's organisation, named by "Shared" badges. */
   orgName?: string
-  /** Show "Your project has models you haven't added · Review" (ProviderInfo.suggestDiscovery). */
   reviewPrompt?: boolean
-  /** No thread to pin a pick to: the trigger only shows the model. */
   disabled?: boolean
-  /** Rendered first inside the trigger (the connection dot), with its hover title. */
   leading?: React.ReactNode
   title?: string
   className?: string
-  /** Also receives the trigger (the chat moves focus to it after a notice is dismissed). */
   triggerRef?: React.MutableRefObject<HTMLButtonElement | null>
 }
 
-// More models than this in one provider and the popup offers a search box.
 export const PICKER_SEARCH_THRESHOLD = 7
-// The AI Accounts heading "Manage models…" lands on for Azure AI Foundry
-// (the panel owns the id).
 export const AZURE_ACCOUNTS_ANCHOR = AZURE_SECTION_ANCHOR
 
 type StatusKey =
@@ -67,7 +51,6 @@ type StatusKey =
   | 'modelStatus.unsupported'
   | 'modelStatus.unknown'
 
-// Why an entry cannot be used right now; null when it can.
 function statusKey(status: string | undefined): StatusKey | null {
   switch (status) {
     case undefined:
@@ -84,18 +67,13 @@ function statusKey(status: string | undefined): StatusKey | null {
   }
 }
 
-// The glyphs a catalogue entry may name (ProviderSpec.icon).
 const PROVIDER_ICONS: Record<string, ComponentType<{size?: number}>> = {
   cloud: Cloud,
   'hard-drive': HardDrive,
   github: GithubMark,
 }
 
-// The provider's glyph in the trigger (its name is the tooltip and part of
-// the trigger's accessible name): the catalogue's icon when the listing
-// names one the bundle has, else by id.
 function ProviderGlyph({id, icon}: {id: string; icon?: string}) {
-  // An own key only: a name such as `constructor` must not resolve to Object.prototype.
   const Icon = icon && Object.prototype.hasOwnProperty.call(PROVIDER_ICONS, icon) ? PROVIDER_ICONS[icon] : undefined
   if (Icon) return <Icon size={12} />
   if (id === 'local') return <HardDrive size={12} />
@@ -109,22 +87,6 @@ interface GroupView {
   models: ModelDetail[]
 }
 
-// ModelPicker is the chat header's model control: each thread keeps its own
-// model, and this is where it is chosen.
-//
-// The trigger names the thread's model first — at every width, the default
-// 320 px chat included — with the provider as an icon (its name in the
-// tooltip and the accessible name) and a Shared badge.
-//
-// The popup is a NON-modal dialog: it closes when focus leaves it. In Tab
-// order: the Provider select (more than one configured provider; it only
-// filters the list — nothing is pinned until a model is chosen), the search
-// box (more than PICKER_SEARCH_THRESHOLD models; a combobox driving the
-// listbox through aria-activedescendant), the grouped listbox (arrows move
-// between options, never onto group headers; Enter picks), then "Manage
-// models…". The first Escape clears the search, the next closes and returns
-// focus to the trigger — both claimed (preventDefault + stopPropagation),
-// so the chat's own Escape (stop the reply, leave focus mode) never fires.
 export default function ModelPicker({
   providers,
   provider,
@@ -149,10 +111,8 @@ export default function ModelPicker({
   const providerSelectId = `${baseId}-provider`
 
   const [open, setOpen] = useState(false)
-  // The provider whose models the list shows (the Provider select).
   const [shownProvider, setShownProvider] = useState(provider)
   const [query, setQuery] = useState('')
-  // The active option (aria-activedescendant), by model id.
   const [activeId, setActiveId] = useState<string | null>(null)
 
   const triggerRef = useRef<HTMLButtonElement | null>(null)
@@ -194,13 +154,10 @@ export default function ModelPicker({
   }, [pickable, labelOf, t, searchable, query])
 
   const options = useMemo(() => groups.flatMap(g => g.models), [groups])
-  // Each option's place in `options` (the arrow-key order), by entry.
   const indexOf = useMemo(() => new Map(options.map((m, i) => [m, i])), [options])
   const activeIndex = activeId === null ? -1 : options.findIndex(m => m.id === activeId)
   const optionId = (index: number) => `${baseId}-option-${index}`
   const activeDescendant = activeIndex >= 0 ? optionId(activeIndex) : undefined
-
-  // ---- open / close ----
 
   const close = useCallback((restoreFocus: boolean) => {
     if (blurTimerRef.current !== null) {
@@ -214,7 +171,6 @@ export default function ModelPicker({
 
   const openPicker = useCallback(() => {
     if (disabled) return
-    // The list starts on the thread's own provider, on its model.
     const own = providers.some(p => p.id === provider)
     setShownProvider(own ? provider : (providers[0]?.id ?? provider))
     setActiveId(own && model ? model : null)
@@ -222,12 +178,6 @@ export default function ModelPicker({
     setOpen(true)
   }, [disabled, providers, provider, model])
 
-  // Focus lands in the popup once it is on screen: the search box, else the
-  // list, else — a provider with nothing to pick — its first control (the
-  // Provider select, "Add models…", "Manage models…"), else the dialog
-  // itself. Never left outside: the popup's own Escape and close-on-focus-out
-  // only work with focus inside it (else Escape reached the chat's, which
-  // stopped the reply or left focus mode).
   useEffect(() => {
     if (!open) return
     const dialog = dialogRef.current
@@ -236,22 +186,16 @@ export default function ModelPicker({
     target?.focus({preventScroll: true})
   }, [open])
 
-  // The popup's height follows what it lists: re-anchor on every change.
   const {update: reposition} = position
   useEffect(() => {
     if (open) reposition()
   }, [open, reposition, groups, shownProvider])
 
-  // Keep the active option in view.
   useEffect(() => {
     if (!open || !activeDescendant) return
     document.getElementById(activeDescendant)?.scrollIntoView({block: 'nearest'})
   }, [open, activeDescendant])
 
-  // "Choose model" (a notice) and "Choose another model" (an error bubble)
-  // ask for the picker through the chat store; a request made while this
-  // picker was not mounted is not replayed. Only a request opens it: the
-  // counter going back to 0 is the store's logout reset.
   useEffect(
     () =>
       useChatStore.subscribe((state, prev) => {
@@ -260,8 +204,6 @@ export default function ModelPicker({
     [openPicker],
   )
 
-  // A press outside both the trigger and the popup closes it (focus goes
-  // where the press lands).
   useEffect(() => {
     if (!open) return
     const onPointerDown = (e: MouseEvent) => {
@@ -280,10 +222,6 @@ export default function ModelPicker({
     [],
   )
 
-  // Non-modal: focus leaving the popup closes it. With no new focus target
-  // (a press on the page, or the window losing focus) it waits a tick: a
-  // window that lost focus keeps the popup's element active, and the popup
-  // stays.
   const onDialogBlur = (e: React.FocusEvent<HTMLDivElement>) => {
     const next = e.relatedTarget as Node | null
     if (next && dialogRef.current?.contains(next)) return
@@ -302,8 +240,6 @@ export default function ModelPicker({
 
   const onDialogKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Escape' || isImeKeydown(e)) return
-    // Claimed either way, so neither the chat's Escape nor an enclosing
-    // dialog (focus mode) acts on it.
     e.preventDefault()
     e.stopPropagation()
     if (searchable && query) {
@@ -314,17 +250,12 @@ export default function ModelPicker({
     close(true)
   }
 
-  // ---- choosing ----
-
   const choose = (m: ModelDetail) => {
     if (statusKey(m.status)) return
     onSelect(current?.id ?? shownProvider, m)
     close(true)
   }
 
-  // "Manage models…": the popup closes and focus is back on the trigger
-  // BEFORE Settings opens, so Settings restores focus to an element that is
-  // still there when it closes.
   const manage = () => {
     const target = current?.id === 'azure-foundry' ? AZURE_ACCOUNTS_ANCHOR : undefined
     close(true)
@@ -380,13 +311,8 @@ export default function ModelPicker({
     }
   }
 
-  // ---- the trigger ----
-
   const threadProvider = providers.find(p => p.id === provider)
-  // A provider not configured here (the thread's own, while it falls back)
-  // is not in the list: name it from the catalogue.
   const providerName = threadProvider?.name || (isKnownProviderId(provider) ? PROVIDERS[provider].label : provider)
-  // Only a registry entry has a purpose (a catalogue model has none).
   const purpose = modelDetail && isRegistryEntry(modelDetail) ? purposeLabel(modelDetail, labelOf) : undefined
   const sharedModel = !!modelDetail?.shared
   const sharedCredentials = !sharedModel && !!threadProvider?.shared
@@ -414,8 +340,6 @@ export default function ModelPicker({
     </Badge>
   )
 
-  // ---- the list ----
-
   const isAzure = current?.id === 'azure-foundry'
 
   return (
@@ -430,8 +354,6 @@ export default function ModelPicker({
         aria-label={triggerName}
         title={title}
         disabled={disabled}
-        // A press on the trigger while open must not blur the popup first
-        // (that would close it, and the click would open it again).
         onMouseDown={e => {
           if (open) e.preventDefault()
         }}
@@ -551,7 +473,6 @@ export default function ModelPicker({
                 onFocus={onListFocus}
               >
                 {groups.map((group, groupIndex) => {
-                  // By position: a custom purpose's key is free text.
                   const groupHeadingId = `${baseId}-group-${groupIndex}`
                   return (
                     <div key={group.key} role="group" aria-labelledby={groupHeadingId}>
@@ -596,16 +517,12 @@ export default function ModelPicker({
                               index === activeIndex ? 'bg-surface-3 border-brand-500' : 'border-transparent',
                               reasonKey ? 'cursor-not-allowed text-text-tertiary' : 'cursor-pointer text-text-primary',
                             )}
-                            // Keeps focus in the search box or the list.
                             onMouseDown={e => e.preventDefault()}
                             onMouseMove={() => {
                               if (activeId !== m.id) setActiveId(m.id)
                             }}
                             onClick={() => choose(m)}
                           >
-                            {/* The {' '} separators keep the option's name
-                                readable ("Docs writer Claude 200k context
-                                window"); a flex row ignores them. */}
                             <div className="flex items-center gap-1.5 min-w-0">
                               <Check
                                 size={12}
@@ -652,8 +569,6 @@ export default function ModelPicker({
                               )}
                             </div>
                             {detail && (
-                              // aria-hidden keeps line 2 out of the option's
-                              // NAME; aria-describedby still reads it.
                               <div
                                 id={detailId}
                                 aria-hidden="true"

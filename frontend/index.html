@@ -24,16 +24,13 @@
     <link rel="apple-touch-icon" href="/icon-256.png">
     <script>
         (function () {
-            // Sync the browser/PWA chrome color with the active theme's surface-0.
-            // Best-effort: the stylesheet may not be parsed on the first call, so
-            // also retry after the first frame. useTheme keeps it in sync after mount.
             function syncThemeColor() {
                 try {
                     var surface = getComputedStyle(document.documentElement)
                         .getPropertyValue('--surface-0').trim();
                     var meta = document.querySelector('meta[name="theme-color"]');
                     if (meta && surface) meta.setAttribute('content', surface);
-                } catch (e) { /* ignore */ }
+                } catch (e) {}
             }
             try {
                 var cached = window.__INITIAL_THEME__ || localStorage.getItem('pad-theme');

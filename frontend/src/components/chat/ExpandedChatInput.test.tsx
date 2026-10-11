@@ -25,15 +25,10 @@ function renderEditor(overrides: Partial<Props> = {}) {
 }
 
 describe('ExpandedChatInput', () => {
-  // The expanded editor is for writing: it must open with the caret in its
-  // textarea. The Modal's own initial focus (its title bar's Close button,
-  // applied a frame later) used to win, so typing went nowhere and the first
-  // Space or Enter closed the editor.
   it('opens with focus in the textarea, not on Close', async () => {
     vi.useFakeTimers()
     try {
       renderEditor()
-      // Let the Modal's deferred (requestAnimationFrame) focus run.
       await act(async () => {
         vi.advanceTimersByTime(50)
       })

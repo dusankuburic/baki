@@ -7,8 +7,6 @@ import {ROLES, ROLE_LABEL_KEYS, roleLabelKey} from './helpers'
 
 interface MembersSectionProps {
   org: Organisation
-  // The roster comes with the list, but a server that omits it must
-  // not take the whole panel down with a nil dereference.
   members: OrgMember[]
   currentUser: AuthUser | null
   canManageMembers: boolean

@@ -1,24 +1,10 @@
 import {Page, Route} from '@playwright/test'
 
-/**
- * Shared E2E test helpers: auth bypass, boot-call stubs, and mock-data
- * factories. Tests call setupAuthenticatedPage() in beforeEach to get an
- * app shell that past the login gate, then add their own route mocks for
- * the specific flow under test.
- */
-
-// --- Auth bypass + boot stubs ---
-
 export async function setupAuthenticatedPage(page: Page) {
-  // 1. Preset a fake refresh token so ProtectedRoute's loadFromStorage proceeds
-  //    past the login gate. A non-JWT string passes the local expiry check
-  //    (decodeJwtPayload returns null → isJwtExpired returns false).
   await page.addInitScript(() => {
     localStorage.setItem('auth_refresh_token', 'fake-non-jwt-token')
   })
 
-  // 2. Mock auth + boot endpoints. These must be fulfilled before the first
-  //    page.goto so no real network call is attempted.
   const stubs: Record<string, unknown> = {
     '/api/local-config': {mode: 'cloud'},
     '/api/auth/refresh': {accessToken: 'fake-access-token', expiresAt: '2099-01-01T00:00:00Z'},
@@ -31,9 +17,6 @@ export async function setupAuthenticatedPage(page: Page) {
       gitCommit: '',
       capabilities: {sessionAnalytics: false},
     },
-    // Full AppSettings shape (zod-validated on the client); firstRunCompleted
-    // suppresses the onboarding welcome modal that would otherwise overlay
-    // every post-login interaction in specs using this helper.
     '/api/system/settings': {
       version: 1,
       general: {firstRunCompleted: true},
@@ -55,13 +38,9 @@ export async function setupAuthenticatedPage(page: Page) {
         return
       }
     }
-    // Let un-mocked routes pass through (they'll hit the dev server and 404,
-    // which is fine — the app handles errors gracefully).
     await route.fallback()
   })
 }
-
-// --- Mock data factories ---
 
 export function mockFlowDocument() {
   return {
@@ -233,9 +212,6 @@ export function mockAnalysisReport() {
   }
 }
 
-// The real DashboardHomeData shape (frontend/src/types/dashboard.ts). The old
-// stub had a different shape, so the KPI strip threw and the main pane's
-// error boundary quietly swallowed the whole dashboard in every spec.
 export function mockDashboardHome() {
   return {
     greeting: {userDisplayName: 'Tester'},

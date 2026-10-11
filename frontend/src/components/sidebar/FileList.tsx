@@ -13,13 +13,8 @@ import {
 import clsx from 'clsx'
 import ContextMenu, {type ContextMenuItem} from '@/components/shared/ContextMenu'
 import {writeClipboard} from '@/lib/clipboard'
+import {formatSize} from '@/lib/format'
 import type {FlowFileInfo} from '@/types'
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 type SortMode = 'name' | 'size'
 
@@ -32,10 +27,6 @@ type FileListProps = {
   onReloadFile?: (path: string) => void
 }
 
-// A PAD flow-export folder is a flat sibling group of subflow .txt files for
-// ONE flow (Main.txt + the subflows it calls) — there is no meaningful
-// subdirectory nesting here, so this stays a flat, sortable/filterable list
-// rather than a directory tree.
 export default function FileList({
   files,
   selectedFilePath,
@@ -58,10 +49,6 @@ export default function FileList({
     return sorted
   }, [files, filter, sortMode])
 
-  // focusedIndex can go stale/out-of-range when the filtered/sorted set
-  // changes size (e.g. narrowing the filter past the previously-focused
-  // row) — clamp it for display and navigation instead of syncing it back
-  // with an effect, so an out-of-range value never renders or steps wrong.
   const clampedFocusedIndex =
     visibleFiles.length === 0 ? -1 : Math.min(Math.max(focusedIndex, 0), visibleFiles.length - 1)
 

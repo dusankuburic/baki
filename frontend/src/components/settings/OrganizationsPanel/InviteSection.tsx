@@ -1,4 +1,5 @@
 import type {Dispatch, SetStateAction} from 'react'
+import {useId} from 'react'
 import {useTranslation} from 'react-i18next'
 import {UserPlus, X, Link2, Copy, Check} from 'lucide-react'
 import {writeClipboard} from '@/lib/clipboard'
@@ -40,6 +41,7 @@ export default function InviteSection({
   toastError,
 }: InviteSectionProps) {
   const {t} = useTranslation('settings')
+  const errorId = useId()
   return (
     <div>
       <h4 className="text-xs font-bold uppercase tracking-wider text-text-tertiary mb-2">
@@ -57,7 +59,9 @@ export default function InviteSection({
           }}
           placeholder={t('orgs.inviteEmailPlaceholder')}
           type="email"
+          aria-label={t('orgs.inviteEmailPlaceholder')}
           aria-invalid={!!inviteError}
+          aria-describedby={inviteError ? errorId : undefined}
           className={
             'flex-1 px-3 py-1.5 rounded-lg bg-surface-2 border text-sm focus:outline-hidden focus:border-brand-500 ' +
             (inviteError ? 'border-semantic-error' : 'border-border-default')
@@ -84,7 +88,7 @@ export default function InviteSection({
         </button>
       </div>
       {inviteError && (
-        <p className="mt-1 text-2xs text-semantic-error" role="alert">
+        <p id={errorId} className="mt-1 text-2xs text-semantic-error" role="alert">
           {inviteError}
         </p>
       )}

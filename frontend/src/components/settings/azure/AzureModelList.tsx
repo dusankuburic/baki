@@ -8,42 +8,27 @@ import {absoluteTime, relativeTimeText} from '@/lib/time'
 import {AZURE_MODEL_KINDS, AZURE_STATUSES, isKnown, type AzureModelEntry, type AzureStatus} from '@/types'
 import {focusKey, isChatKind} from './registryView'
 
-/** What a row offers; a row without any is read-only. */
 export interface ModelRowActions {
   onEdit?: (entry: AzureModelEntry) => void
   onTest?: (entry: AzureModelEntry) => void
-  /** Personal rows: "Make default" (for new chats). */
   onMakeDefault?: (entry: AzureModelEntry) => void
-  /** An organisation's rows, for its admins: "Make default for members". */
   onMakeOrgDefault?: (entry: AzureModelEntry) => void
-  /** Embedding rows, offered only where the knowledge base exists (the row's `knowledgeEnabled`). */
   onUseForKnowledge?: (entry: AzureModelEntry) => void
   onRemove?: (entry: AzureModelEntry) => void
 }
 
 export interface AzureModelRowProps {
   entry: AzureModelEntry
-  /** The effective "Default for new chats" ([DEFAULT]). */
   isDefault?: boolean
-  /**
-   * An Azure knowledge base exists here (GET /connections
-   * knowledgeEmbeddingEnabled): only then is the knowledge-base model marked
-   * [KB] — elsewhere (the desktop app) the designation means nothing.
-   */
   knowledgeEnabled?: boolean
   actions?: ModelRowActions
-  /** A test of this row is running. */
   testing?: boolean
-  /** A change to this row is in flight. */
   busy?: boolean
-  /** Shared rows ("Shared with you"): the organisation, for the SHARED badge. */
   sharedOrgName?: string
-  /** Name the resource on the second line (rows listed outside their resource's card). */
   showResource?: boolean
   labelOf?: PurposeLabelOf
 }
 
-// Why Test is unavailable, by the row's status (the resource's, inherited).
 const TEST_UNAVAILABLE: Partial<Record<AzureStatus, 'needsCredentials' | 'invalidConfig' | 'unsupported'>> = {
   needs_credentials: 'needsCredentials',
   unreadable: 'needsCredentials',
@@ -51,12 +36,6 @@ const TEST_UNAVAILABLE: Partial<Record<AzureStatus, 'needsCredentials' | 'invali
   unsupported: 'unsupported',
 }
 
-// One model: name and badges over "deployment · description", then purpose,
-// context window and last test as cells that the list's container query
-// arranges (see index.css "AZURE AI FOUNDRY MODEL LIST"), then Edit and a
-// kebab — two tab stops, the most common action visible. Each cell carries a
-// label: read out always, shown only while no header names its column.
-// Admin-written text (names, descriptions) renders as plain text.
 export function AzureModelRow({
   entry,
   isDefault = false,
@@ -73,8 +52,6 @@ export function AzureModelRow({
   const purpose = resolvePurpose(entry, labelOf)
   const purposeText = purpose.kind === 'preset' ? t(purposeLabelKey(purpose.preset), {ns: 'common'}) : purpose.text
   const kindText = t(modelKindLabelKey(entry.kind), {ns: 'common'})
-  // A kind or status a newer server added: listed under a neutral label, and
-  // not editable here (the form could not show the kind, nor send it back).
   const knownKind = isKnown(AZURE_MODEL_KINDS, entry.kind)
   const knownStatus = isKnown(AZURE_STATUSES, entry.status)
   const contextWindow = entry.kind === 'embedding' ? undefined : (entry.contextWindow ?? entry.reportedContextWindow)
@@ -90,8 +67,6 @@ export function AzureModelRow({
           ? entry.statusReason || t('azureModels.status.rowUnsupported')
           : null
 
-  // While a change or a test of the row is in flight its actions stay listed
-  // but unavailable (the kebab itself stays put: it may hold focus).
   const items: DropdownItem[] = []
   if (actions?.onTest) {
     const onTest = actions.onTest
@@ -307,17 +282,12 @@ export function AzureModelRow({
 }
 
 interface AzureModelListProps {
-  /** The list's accessible name ("Models of contoso-prod"). */
   label: string
   models: AzureModelEntry[]
-  /** Per-row props besides the entry. */
   row: (entry: AzureModelEntry) => Omit<AzureModelRowProps, 'entry'>
-  /** No row offers actions: the actions column takes no room. */
   readOnly?: boolean
 }
 
-// The rows as a ul/li container-query grid, not a scrolling table: the
-// visual header row is aria-hidden, and each cell names itself instead.
 export default function AzureModelList({label, models, row, readOnly = false}: AzureModelListProps) {
   const {t} = useTranslation('settings')
   return (

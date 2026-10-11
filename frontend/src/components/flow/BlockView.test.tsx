@@ -6,13 +6,10 @@ import {ToastProvider} from '@/components/shared/Toast'
 import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import type {Block, FlowDocument} from '@/types'
 
-// The DnD affordance is desktop-gated (HTML5 DnD never fires on touch);
-// jsdom's matchMedia stub reports a phone-ish viewport, so force desktop.
 vi.mock('@/hooks/useMediaQuery', () => ({
   useIsDesktop: () => true,
 }))
 
-// Virtuoso is virtualized and measures nothing in jsdom — render flat.
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({
     data = [],
@@ -92,16 +89,11 @@ function renderView() {
 beforeEach(() => {
   vi.clearAllMocks()
   analyzeFlow.mockResolvedValue(null)
-  // A distinct marker doc so the store swap is observable.
   const updatedDoc = {...doc, name: 'F-updated'} as unknown as FlowDocument
   moveBlockTo.mockResolvedValue({document: updatedDoc})
   useFlowStore.setState({document: doc, selectedBlockId: null, readOnly: false} as never)
 })
 
-// Layout effect polyfill guard: jsdom lacks getBoundingClientRect positioning —
-// rows report height 0, making every clientY land "after" (>= top+0). The
-// tests therefore assert the after-position contract and the wiring, not the
-// half-row split (a real-browser concern).
 describe('BlockView drag-to-reorder (R3.3)', () => {
   it('marks editable rows draggable and structural rows not', () => {
     const endDoc = {
@@ -129,7 +121,6 @@ describe('BlockView drag-to-reorder (R3.3)', () => {
     expect(draggedId).toBe('b1')
     expect(refId).toBe('b2')
     expect(position === 'before' || position === 'after').toBe(true)
-    // Success: the doc swaps in and re-analysis fires (debounced per flow).
     await waitFor(() => expect(useFlowStore.getState().document?.name).toBe('F-updated'))
     await waitFor(() => expect(analyzeFlow).toHaveBeenCalledWith('flow-1'))
   })
@@ -165,7 +156,6 @@ describe('BlockView drag-to-reorder (R3.3)', () => {
       clientY: 0,
     })
     await waitFor(() => expect(moveBlockTo).toHaveBeenCalled())
-    // No document swap on failure.
     expect(useFlowStore.getState().document?.name).toBe('F')
     await waitFor(() => expect(screen.getByText('Move failed')).toBeInTheDocument())
   })
@@ -178,7 +168,6 @@ describe('multi-select bulk actions (U3b)', () => {
     st.selectBlock('b1')
     const card = document.querySelector('[data-block-id="b3"] [role="button"]') as HTMLElement
     fireEvent.click(card, {shiftKey: true})
-    // Visible order: b1, b2, cond1, inner1, b3 — the RANGE spans all five.
     expect(useFlowStore.getState().selectedBlockIds).toEqual(new Set(['b1', 'b2', 'cond1', 'inner1', 'b3']))
   })
 
@@ -199,15 +188,12 @@ describe('multi-select bulk actions (U3b)', () => {
     const bar = await screen.findByTestId('bulk-bar')
     expect(bar).toHaveTextContent('2 blocks selected')
 
-    // Group DOWN of [b1,b2]: the top-level sibling AFTER the selection
-    // (cond1) moves BEFORE the first selected block — one moveBlockTo call.
     fireEvent.click(screen.getByText('Move down'))
     await waitFor(() => expect(moveBlockTo).toHaveBeenCalledWith('flow-1', 'cond1', 'b1', 'before'))
   })
 
   it('refuses a group move when the selection is non-contiguous', async () => {
     renderView()
-    // b1 and b3 selected, b2 in between → refuse with guidance, no API call.
     useFlowStore.getState().setBlockSelection(new Set(['b1', 'b3']))
     fireEvent.click(await screen.findByText('Move up'))
     expect(moveBlockTo).not.toHaveBeenCalled()
@@ -221,7 +207,6 @@ describe('multi-select bulk actions (U3b)', () => {
     renderView()
     useFlowStore.getState().setBlockSelection(new Set(['b1', 'b2']))
     fireEvent.click(await screen.findByText('Delete'))
-    // Danger dialog → confirm with the DIALOG's Delete (the last rendered).
     const delBtns = await screen.findAllByRole('button', {name: 'Delete'})
     fireEvent.click(delBtns[delBtns.length - 1]!)
     await waitFor(() => expect(removeBlocks).toHaveBeenCalledWith('flow-1', ['b1', 'b2']))
@@ -268,7 +253,7 @@ describe('BlockView canvas legibility (U3a)', () => {
     const target = document.querySelector('[data-block-id="b2"]') as HTMLElement
     fireEvent.dragOver(target, {
       dataTransfer: {types: {includes: (t: string) => t === 'application/x-baki-block'}, dropEffect: 'move'},
-      clientY: 0, // jsdom rects are 0-height → the "after" half
+      clientY: 0,
     })
     const content = target.querySelector('[data-testid="row-content"]') as HTMLElement
     expect(content.style.marginBottom).toBe('10px')
@@ -304,10 +289,8 @@ describe('BlockView canvas legibility (U3a)', () => {
         })
         fireEvent(el, ev)
       }
-      // Within 64px of the BOTTOM edge → scrollTop += 14.
       dragOverAt(target, 590)
       expect(fake._scrollTop).toBe(114)
-      // Top edge → scrolls back up.
       dragOverAt(target, 10)
       expect(fake._scrollTop).toBe(100)
     } finally {

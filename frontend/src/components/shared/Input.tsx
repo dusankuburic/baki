@@ -6,17 +6,12 @@ type InputProps = React.InputHTMLAttributes<HTMLInputElement> & {
   icon?: LucideIcon
   trailingIcon?: LucideIcon
   onTrailingClick?: () => void
-  // Names the trailing button (e.g. "Show password") and makes it a real tab
-  // stop with aria-pressed; without a label it stays a decorative shortcut.
   trailingLabel?: string
   trailingPressed?: boolean
   error?: string
   hint?: string
 }
 
-// The error/hint text is programmatically linked to the field via a generated
-// id + aria-describedby, and invalid fields carry aria-invalid — screen
-// readers announce the message when the field is focused (WCAG 3.3.1/3.3.2).
 export default function Input({
   icon: Icon,
   trailingIcon: TrailingIcon,

@@ -42,9 +42,6 @@ describe('uiStore', () => {
 
   describe('isSystemView', () => {
     it('treats standalone destinations as system views', () => {
-      // Regression: 'deps' and 'rules' were missing from SYSTEM_VIEWS while
-      // SystemViewRouter already handled them, so opening a flow from those
-      // views left it off-screen. Keep this list in sync with SystemViewRouter.
       for (const v of [
         'home',
         'dashboard',
@@ -102,7 +99,6 @@ describe('uiStore', () => {
     expect(s.mainPaneView).toBe('home')
     expect(s.inspectorTab).toBe('details')
     expect(s.sidebarCollapsed).toBe(false)
-    // Theme is intentionally preserved across logout to avoid a flash.
     expect(s.resolvedTheme).toBe('dracula')
   })
 })
@@ -165,8 +161,6 @@ describe('uiStore settings modal', () => {
     expect(useUIStore.getState().settingsSection).toBeNull()
   })
 
-  // Regression: Ctrl+, closes through the toggle, which used to leave the
-  // consumed deep link behind, so the next plain open landed on it again.
   it('toggleSettings clears a consumed deep link when it closes', () => {
     useUIStore.getState().openSettings('orgs')
     useUIStore.getState().toggleSettings()
@@ -193,9 +187,6 @@ describe('uiStore settings modal', () => {
     expect(useUIStore.getState().settingsSection).toBe('accounts')
   })
 
-  // A deep link fired while the modal is already open ("Manage in
-  // Organizations" from AI Accounts) retargets it, and a plain open never
-  // inherits an earlier anchor.
   it('retargets an open modal and drops a stale anchor on a plain open', () => {
     useUIStore.getState().openSettings('accounts', 'provider-azure-foundry')
     useUIStore.getState().openSettings('orgs')

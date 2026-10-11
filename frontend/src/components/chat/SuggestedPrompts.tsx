@@ -4,10 +4,6 @@ import clsx from 'clsx'
 interface Props {
   prompts: string[]
   onSelect: (prompt: string) => void
-  /**
-   * Why nothing can be sent right now (the composer's guidance). The chips
-   * stay reachable, marked unavailable, with this as their description.
-   */
   disabledReason?: string
 }
 

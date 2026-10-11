@@ -12,7 +12,6 @@ export interface ScatterPoint {
   label: string
   x: number
   y: number
-  /** The group (legend entry) the point belongs to. */
   group: string
 }
 
@@ -22,8 +21,6 @@ export interface ScatterGroup {
   color: string
 }
 
-// Points in groups (health tiers). Markers are 8px with a 2px surface ring so
-// overlaps stay countable; the tooltip names the point and both axes.
 export function ScatterPlot({
   points,
   groups,

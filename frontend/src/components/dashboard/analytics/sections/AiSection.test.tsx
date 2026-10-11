@@ -6,8 +6,6 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import type {DashboardAnalyticsData} from '@/types'
 import {AiSection, modelLabel} from './AiSection'
 
-// A fixed-size chart (jsdom measures nothing), so the bars, their value
-// labels and the axis ticks actually render.
 vi.mock('recharts', async importOriginal => {
   const actual = await importOriginal<typeof import('recharts')>()
   const {cloneElement} = await import('react')
@@ -24,9 +22,6 @@ vi.mock('@/lib/csv', async importOriginal => {
   return {...actual, downloadBlob: (...a: unknown[]) => downloadBlob(...a)}
 })
 
-// D-42: usage rows carry the model that actually answered next to what was
-// asked for. The by-model table labels a row "deployment · served" only when
-// they differ, so plain providers read exactly as before.
 describe('AiSection model breakdown', () => {
   it('labels a row "deployment · served" when the served model differs', () => {
     const data: DashboardAnalyticsData = mockDashboardAnalytics()
@@ -54,7 +49,7 @@ describe('AiSection model breakdown', () => {
     render(<AiSection data={data} refetching={false} />)
 
     const table = screen.getByRole('table', {name: 'Usage by model'})
-    const rows = within(table).getAllByRole('row').slice(1) // header row first
+    const rows = within(table).getAllByRole('row').slice(1)
     expect(rows).toHaveLength(3)
     expect(within(rows[0]!).getByText('model-router · gpt-4o')).toBeInTheDocument()
     expect(within(rows[1]!).getByText('model-router · gpt-4.1-mini')).toBeInTheDocument()
@@ -66,7 +61,6 @@ describe('AiSection model breakdown', () => {
     const t = i18n.getFixedT('en', 'dashboard')
     expect(modelLabel(t, {model: 'gpt-5'})).toBe('gpt-5')
     expect(modelLabel(t, {model: 'gpt-4o', servedModel: 'gpt-4o'})).toBe('gpt-4o')
-    // Internal routing prefixes render as the picker labels them.
     expect(modelLabel(t, {model: 'agent:support-bot', servedModel: 'gpt-4o-2024-11-20'})).toBe(
       'Agent · support-bot · gpt-4o-2024-11-20',
     )
@@ -74,7 +68,6 @@ describe('AiSection model breakdown', () => {
       'prod · Claude · claude-opus-5-5',
     )
     expect(modelLabel(t, {model: 'claude:prod'})).toBe('prod · Claude')
-    // A plain deployment id reads exactly as before.
     expect(modelLabel(t, {model: 'my-deployment'})).toBe('my-deployment')
   })
 
@@ -89,9 +82,6 @@ describe('AiSection model breakdown', () => {
   })
 })
 
-// Azure AI Foundry usage is not priced by baki (its cost is read in the Azure
-// portal): its cost cells read "—" instead of a misleading $0.00, the other
-// providers keep their currency, and the CSV export keeps the raw number.
 describe('AiSection unpriced Azure AI Foundry rows', () => {
   beforeEach(() => downloadBlob.mockClear())
 
@@ -149,7 +139,6 @@ describe('AiSection unpriced Azure AI Foundry rows', () => {
       .getAllByRole('row')
       .slice(1)
     expect(rows).toHaveLength(2)
-    // Sorted by cost: the priced provider first, Azure's $0 last.
     expect(within(rows[0]!).getByText('openai')).toBeInTheDocument()
     expect(within(rows[0]!).getByText('$1.02')).toBeInTheDocument()
     expect(within(rows[1]!).getByText('azure-foundry')).toBeInTheDocument()
@@ -168,7 +157,6 @@ describe('AiSection unpriced Azure AI Foundry rows', () => {
   })
 
   it('leaves Azure out of the cost-by-provider chart (no $0.00 bar label)', () => {
-    // Unanimated, so the bar value labels render at once.
     useSettingsStore.setState(s => ({
       settings: {...s.settings, appearance: {...s.settings.appearance, reduceMotion: true}},
     }))

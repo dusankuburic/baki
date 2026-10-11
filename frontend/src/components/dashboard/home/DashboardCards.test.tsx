@@ -1,7 +1,6 @@
 import {describe, it, expect, vi} from 'vitest'
 import {render, screen, fireEvent} from '@testing-library/react'
 
-// Mock recharts ResponsiveContainer to avoid jsdom sizing issues.
 vi.mock('recharts', async importOriginal => {
   const actual = await importOriginal<typeof import('recharts')>()
   return {
@@ -67,7 +66,7 @@ describe('HomeKpiRow', () => {
 
   it('shows total findings with the severity breakdown', () => {
     kpis()
-    expect(screen.getByText('45')).toBeTruthy() // 3+12+30
+    expect(screen.getByText('45')).toBeTruthy()
     expect(screen.getByText('3 E · 12 W · 30 I')).toBeTruthy()
   })
 
@@ -134,15 +133,12 @@ describe('SecurityPostureCard', () => {
     expect(screen.getByText('Credential findings')).toBeTruthy()
   })
 
-  // A failed or stubbed source arrives as all zeros; rendering that as an
-  // all-clear told admins nothing was wrong when nothing had been checked.
   it('shows a placeholder, not the all-clear, when the posture is unavailable', () => {
     render(<SecurityPostureCard data={{...base, available: false}} />)
     expect(screen.queryByText(/No security issues detected/)).toBeNull()
     expect(screen.getByText(/Security posture is unavailable/)).toBeTruthy()
   })
 
-  // The locked-account count is instance-wide: only admins get the tile.
   it('shows locked accounts to admins only', () => {
     const {rerender} = render(<SecurityPostureCard data={{...base, lockedAccounts: 2}} />)
     expect(screen.queryByText('Locked accounts')).toBeNull()

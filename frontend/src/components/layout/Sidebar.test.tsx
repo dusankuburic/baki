@@ -7,9 +7,6 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import type {AnalysisReport} from '@/types'
 import Sidebar from './Sidebar'
 
-// The sidebar's panels are not under test; only what Sidebar itself derives
-// from the stores and hands down. FlowTree records its props so the finding
-// counts can be checked.
 const flowTreeProps = vi.fn()
 vi.mock('@/components/sidebar/FlowTree', () => ({
   default: (p: unknown) => {
@@ -78,11 +75,9 @@ describe('Sidebar analysis-report subscription', () => {
     const before = commits.mock.calls.length
     expect(before).toBeGreaterThan(0)
 
-    // Another flow's analysis lands: nothing here depends on it.
     act(() => useAnalysisStore.getState().setReport('f2', report('b-other')))
     expect(commits).toHaveBeenCalledTimes(before)
 
-    // This flow's report: one re-render, and the tree gets the counts.
     act(() => useAnalysisStore.getState().setReport('f1', report('b1')))
     expect(commits.mock.calls.length).toBeGreaterThan(before)
     const last = flowTreeProps.mock.calls.at(-1)?.[0] as {findingCounts?: Map<string, number>}

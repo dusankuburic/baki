@@ -16,15 +16,11 @@ interface ModelNamesDeps {
   providers: ProviderSetup['providers']
 }
 
-// The model names the panel renders: the header picker's list, a listed
-// model's display name, the purpose labels and the export naming. All derive
-// from the providers listing (useProviderSetup).
 export function useModelNames({providers}: ModelNamesDeps) {
   const {t} = useTranslation('chat')
   const {t: tc} = useTranslation('common')
 
   const labelOf: PurposeLabelOf = useCallback(p => tc(purposeLabelKey(p)), [tc])
-  // A listed model's purpose label; none for a catalogue model.
   const purposeOf = useCallback(
     (m: ModelDetail | undefined) => (m && isRegistryEntry(m) ? purposeLabel(m, labelOf) : undefined),
     [labelOf],
@@ -35,7 +31,6 @@ export function useModelNames({providers}: ModelNamesDeps) {
     [providers],
   )
 
-  // The header picker's list: the configured providers and their models.
   const pickerProviders: PickerProvider[] = useMemo(
     () =>
       providers
@@ -50,8 +45,6 @@ export function useModelNames({providers}: ModelNamesDeps) {
     [providers],
   )
 
-  // The listing's name for a message's model, for a message that kept no
-  // label of its own (one that is only an id counts as none).
   const listedModelName = useCallback(
     (m: ChatMessage): string | undefined => {
       if (m.role !== 'assistant' || !m.model || storableModelLabel(m.modelLabel, m.model)) return undefined
@@ -60,8 +53,6 @@ export function useModelNames({providers}: ModelNamesDeps) {
     },
     [listedModels],
   )
-  // An exported turn names its model the same way ("removed model" for a
-  // registry id nothing names any more), never by its "m/<id>".
   const exportModelName = useCallback(
     (m: ChatMessage): string | undefined => {
       if (!m.model) return undefined
@@ -73,8 +64,6 @@ export function useModelNames({providers}: ModelNamesDeps) {
   return {labelOf, purposeOf, providerName, listedModels, pickerProviders, listedModelName, exportModelName}
 }
 
-// openAzureAccounts opens the settings' Azure AI Accounts section (composer
-// guidance action and the notice's "Manage").
 export function openAzureAccounts() {
   useUIStore.getState().openSettings('accounts', AZURE_ACCOUNTS_ANCHOR)
 }

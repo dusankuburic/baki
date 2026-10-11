@@ -23,8 +23,6 @@ describe('matchesQuery', () => {
     expect(matchesQuery('Azure AI Foundry', 'zur ai')).toBe(true)
   })
 
-  // The Settings search moved its matcher here; the registry re-exports it so
-  // the nav keeps one implementation.
   it('is the matcher the Settings registry exports', () => {
     expect(settingsMatchesQuery).toBe(matchesQuery)
   })

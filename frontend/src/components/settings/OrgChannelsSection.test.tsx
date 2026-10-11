@@ -8,8 +8,6 @@ import type {OrgMember} from '@/stores/orgStore'
 import {unknownValue} from '@/testing/testHelpers'
 import OrgChannelsSection from './OrgChannelsSection'
 
-// The real module with the API object replaced: the component builds its
-// save bodies with the module's pure helpers, which these tests pin.
 vi.mock('@/api/governance', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api/governance')>()),
   channelsApi: {list: vi.fn(), options: vi.fn(), save: vi.fn(), remove: vi.fn(), test: vi.fn()},
@@ -17,7 +15,6 @@ vi.mock('@/api/governance', async importOriginal => ({
 
 const api = vi.mocked(channelsApi)
 
-// As the reworked server lists it: the URL redacted for admins too, hasSecret.
 const channel = (over: Partial<OrgChannel> = {}): OrgChannel => ({
   id: 'c1',
   name: 'Ops hook',
@@ -47,7 +44,6 @@ const members: OrgMember[] = [
   },
 ]
 
-// What a server with Jira and email channels offers its admins.
 const fullOptions = (over: Partial<ChannelOptions> = {}): ChannelOptions => ({
   kinds: ['email', 'jira', 'slack', 'teams', 'teams-workflow', 'webhook'],
   events: ['drift', 'health_regression', 'new_rules'],
@@ -77,7 +73,6 @@ beforeEach(() => {
   vi.resetAllMocks()
   api.save.mockResolvedValue(channel())
   api.test.mockResolvedValue(undefined)
-  // A server before the options route: the legacy kinds, no host hint.
   api.options.mockResolvedValue(null)
 })
 
@@ -87,7 +82,6 @@ describe('OrgChannelsSection', () => {
     renderSection()
     fireEvent.click(await screen.findByRole('button', {name: 'Pause channel'}))
     await waitFor(() => expect(api.save).toHaveBeenCalledTimes(1))
-    // Exact: no `secret` key (an older server wiped the secret on "" too).
     expect(api.save).toHaveBeenCalledWith('org-1', {
       id: 'w1',
       name: 'Build hook',
@@ -96,13 +90,9 @@ describe('OrgChannelsSection', () => {
       urlUnchanged: true,
       enabled: false,
     })
-    // The list is read again (not from the GET micro-cache) to show the new state.
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2))
   })
 
-  // Tolerant wire enums: a kind a newer server added is listed as sent and
-  // can be tested and removed, but pausing or editing would save the kind
-  // back, and this app sends only the kinds it knows.
   it('lists a channel of a kind a newer server added, which it can test but not pause or edit', async () => {
     api.list.mockResolvedValue([channel({id: 'c2', name: 'Pager', kind: unknownValue('pagerduty')})])
     renderSection()
@@ -123,7 +113,6 @@ describe('OrgChannelsSection', () => {
     api.list.mockResolvedValue([
       webhook(),
       webhook({id: 'w2', name: 'Unsigned hook', hasSecret: false}),
-      // A secret an older server stored on a Teams channel signs nothing.
       channel({id: 't1', name: 'Teams room', hasSecret: true}),
     ])
     renderSection()
@@ -132,8 +121,6 @@ describe('OrgChannelsSection', () => {
     expect(screen.getByTitle('Deliveries are signed with an HMAC secret')).toBeInTheDocument()
   })
 
-  // B1/B2: an edit that types no secret and no URL keeps both, and keeps a
-  // paused channel paused.
   it('edits a paused channel keeping its URL, secret and paused state', async () => {
     api.list.mockResolvedValue([webhook({enabled: false})])
     renderSection()
@@ -223,9 +210,6 @@ describe('OrgChannelsSection', () => {
     expect(lastBody()).not.toHaveProperty('clear')
   })
 
-  // A server before the rework lists no hasSecret and the full URL to admins:
-  // the URL is re-sent as listed (which keeps it there) and no secret action
-  // is offered on a state the UI cannot know.
   it('works against a server that does not say whether a secret is set', async () => {
     const {hasSecret: _, ...old} = webhook({url: 'https://hooks.example.com/full/path?token=t'})
     api.list.mockResolvedValue([old])
@@ -269,8 +253,6 @@ describe('OrgChannelsSection', () => {
     expect(lastBody()).toEqual({name: 'Room', kind: 'teams', url: 'https://hooks.example.com/x'})
   })
 
-  // Microsoft is retiring the Teams incoming webhooks; Teams Workflows is
-  // their replacement, unsigned like them.
   it('creates a Teams Workflows channel, without a secret, and says what it replaces', async () => {
     api.list.mockResolvedValue([])
     renderSection()
@@ -323,7 +305,6 @@ describe('OrgChannelsSection', () => {
     const url = screen.getByLabelText('Channel URL')
     await waitFor(() => expect(url).toHaveAttribute('aria-invalid', 'true'))
     expect(url).toHaveAccessibleDescription(/url must use https/)
-    // The form stays open with what was typed.
     expect(url).toHaveValue('http://hooks.example.com/x')
     fireEvent.change(url, {target: {value: 'https://hooks.example.com/x'}})
     expect(url).not.toHaveAttribute('aria-invalid')
@@ -396,9 +377,8 @@ describe('OrgChannelsSection', () => {
       fireEvent.change(screen.getByPlaceholderText(/Channel name/), {target: {value: 'Tickets'}})
       fireEvent.change(screen.getByLabelText('Channel URL'), {target: {value: 'https://acme.atlassian.net'}})
       fireEvent.click(screen.getByRole('button', {name: 'Add'}))
-      expect(
-        await screen.findByText('The Jira account email, API token and project key are required'),
-      ).toBeInTheDocument()
+      expect(await screen.findAllByText('Required')).toHaveLength(3)
+      expect(api.save).not.toHaveBeenCalled()
 
       fireEvent.change(screen.getByLabelText('Jira account email'), {target: {value: 'bot@acme.io'}})
       fireEvent.change(screen.getByLabelText('Jira API token'), {target: {value: 'tok'}})
@@ -498,9 +478,6 @@ describe('OrgChannelsSection', () => {
       expect(await screen.findByText('Allowed hosts: hooks.slack.com, *.logic.azure.com')).toBeInTheDocument()
     })
 
-    // The server's encryption key changed and it cannot read this channel's URL:
-    // it is listed, cannot be paused (that would save the unreadable URL back),
-    // and an edit asks for the URL again.
     it('lists an unreadable channel and asks for its URL again', async () => {
       api.list.mockResolvedValue([webhook({url: '', unreadable: true, hasSecret: false})])
       renderSection()

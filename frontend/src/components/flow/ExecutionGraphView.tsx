@@ -9,7 +9,6 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
 
   return (
     <div className="flex-1 relative bg-surface-0 overflow-hidden">
-      {/* Search Overlay */}
       <form
         onSubmit={handleSearch}
         className="absolute top-6 left-6 z-20 flex items-center gap-2 p-1 bg-surface-1/80 backdrop-blur-md border border-border-default rounded-lg shadow-xl"
@@ -55,7 +54,6 @@ export default function ExecutionGraphView({subflowId}: {subflowId?: string} = {
 
       <div ref={containerRef} className="absolute inset-0" />
 
-      {/* Legend / Stats overlay */}
       {!loading && !error && (
         <div className="absolute bottom-6 left-6 p-4 bg-surface-1/80 backdrop-blur-md border border-border-default rounded-xl shadow-lg pointer-events-none animate-slide-up">
           <h4 className="text-2xs font-black uppercase tracking-widest text-text-tertiary mb-3">

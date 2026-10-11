@@ -32,7 +32,6 @@ function makeProvider(): DeviceAuthProvider & {
         interval: 5,
         expires_in: 900,
       }),
-    // The abandoned code expires; the new one is still pending.
     pollAuth: vi.fn(async (code: string) =>
       code === 'old' ? {status: 'error', error: 'expired_token'} : {status: 'pending'},
     ),
@@ -68,7 +67,6 @@ describe('DeviceAuthLoginButton', () => {
       await vi.advanceTimersByTimeAsync(11_000)
     })
 
-    // Only the live code is polled; the old loop stayed dead.
     expect(provider.pollAuth).not.toHaveBeenCalledWith('old')
     expect(provider.pollAuth).toHaveBeenCalledWith('new')
     expect(screen.getByText('NEW-2')).toBeInTheDocument()
@@ -101,9 +99,6 @@ describe('DeviceAuthLoginButton', () => {
     expect(provider.pollAuth.mock.calls.length).toBe(calls)
   })
 
-  // F8: a provider whose `user` route answers a shape the bundle cannot
-  // read (or fails) still completes the sign-in — the host must relist and
-  // switch; the name is the only thing missing.
   it('completes the sign-in even when the user lookup after it fails', async () => {
     const provider = makeProvider()
     provider.startAuth.mockReset().mockResolvedValue({

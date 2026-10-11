@@ -7,9 +7,6 @@ import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import type {AnalysisSnapshot} from '@/types'
 
-// HealthTrend renders the persisted analysis snapshots as a health-score
-// sparkline with per-run severity counts on hover. Hidden until there are at
-// least two distinct runs to connect.
 export default function HealthTrend() {
   const {t} = useTranslation('inspector')
   const doc = useFlowStore(s => s.document)
@@ -41,9 +38,6 @@ export default function HealthTrend() {
   const step = (W - PAD * 2) / (snapshots.length - 1)
   const y = (score: number) => PAD + (H - PAD * 2) * (1 - Math.max(0, Math.min(100, score)) / 100)
   const points = snapshots.map((s, i) => `${PAD + i * step},${y(s.healthScore)}`).join(' ')
-  // hover can point past the end after a re-fetch replaces snapshots with a
-  // shorter array (e.g. slice(-20)); a stale index would crash the render, so
-  // fall back to the latest snapshot.
   const hovered = hover != null ? snapshots[hover] : undefined
   const active = hovered ?? snapshots[snapshots.length - 1]
   if (!active) return null
@@ -72,7 +66,6 @@ export default function HealthTrend() {
         <polyline points={points} fill="none" stroke="var(--brand-500)" strokeWidth="1.5" strokeLinejoin="round" />
         {snapshots.map((s, i) => (
           <g key={s.timestamp + i}>
-            {/* invisible wide hit area per point */}
             <rect
               x={PAD + i * step - step / 2}
               y={0}

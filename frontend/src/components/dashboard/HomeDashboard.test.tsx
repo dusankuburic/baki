@@ -57,9 +57,6 @@ function renderHome() {
   )
 }
 
-// The chart cards are lazy (HomeDashboard imports them through this module);
-// loading it once up front keeps the real recharts import's cost out of each
-// test's wait budget.
 beforeAll(async () => {
   await import('./home/HomeChartCards')
 })
@@ -116,8 +113,6 @@ describe('HomeDashboard', () => {
     expect(screen.getByText('Open analytics')).toBeInTheDocument()
   })
 
-  // Every cloud card links into the section of the Analytics page that
-  // expands on it; the page picks the requested section up on mount.
   it('"Details" opens the analytics page at the card\'s section', async () => {
     getHome.mockResolvedValue({...emptyData, isCloud: true})
     renderHome()

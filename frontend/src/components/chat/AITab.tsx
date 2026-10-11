@@ -32,32 +32,16 @@ import {
 import {SelectionContextBar} from './aitab/SelectionContextBar'
 import {SelectionPromptTemplates} from './aitab/SelectionPromptTemplates'
 
-// Rarely-rendered overlays load on first open: the context-preview modal only
-// appears when the user confirms a context-heavy send, and the help popover
-// only on explicit help clicks. Keeping them out of the AITab chunk shaves
-// its initial fetch.
 const ContextPreviewModal = lazy(() => import('./ContextPreviewModal'))
 const ChatHelpPopover = lazy(() => import('./ChatHelpPopover'))
 
-// Welcome copy is keyed by provider id under chat:welcome.*, with a fallback
-// for providers that have no dedicated line; above it, the thread's model and
-// what it is for.
-
 export default function AITab() {
   const {t} = useTranslation('chat')
-  // The canvas selection is NOT subscribed here: the controls that show the
-  // selected block (SelectionContextBar, SelectionPromptTemplates below)
-  // follow it on their own, so block navigation in the editor leaves this
-  // panel — and the memoised message list — alone. The suggested prompts only
-  // care whether a block is selected at all.
   const hasSelectedBlock = useFlowStore(s => s.selectedBlockId != null)
   const chatTextSize = useSettingsStore(s => s.settings.appearance.chatTextSize)
   const updateAppearance = useSettingsStore(s => s.updateAppearance)
   const chatPanel = useChatPanel()
 
-  // Per-thread model memory: `selection` is the ACTIVE thread's provider and
-  // model (its pin, else its last reply's pair, else the Default for new
-  // chats) — every turn this panel sends goes there.
   const {
     configured,
     providersError,
@@ -77,18 +61,10 @@ export default function AITab() {
     settings: selectionSettings,
   } = useProviderSetup()
 
-  // Model names: the header picker's list, a message's display name, the
-  // purpose labels and the export naming.
   const {purposeOf, providerName, listedModels, pickerProviders, listedModelName, exportModelName} = useModelNames({
     providers,
   })
 
-  // The composer's guidance: the thread is on Azure AI Foundry, and Azure
-  // offers nothing to chat with — no model added yet, or none usable (every
-  // resource needs its credentials again). Sending would go out with no
-  // model at all, so while it holds nothing sends: not the composer, and not
-  // the suggested prompts, templates or Retry/Regenerate either (they are
-  // disabled with the same reason).
   const azure = providers.find(p => p.id === 'azure-foundry')
   const guidance = useMemo(() => {
     if (!listingLoaded || selection.provider !== 'azure-foundry' || selection.model || !azure?.configured) return null
@@ -105,8 +81,6 @@ export default function AITab() {
   }, [listingLoaded, selection.provider, selection.model, azure, t])
   const sendBlockedReason = guidance?.text
 
-  // The model picker's trigger: focus goes back to it when a notice's
-  // Dismiss takes the row (and the focused button) away.
   const pickerTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   const {
@@ -161,21 +135,10 @@ export default function AITab() {
   const [helpOpen, setHelpOpen] = useState(false)
   const showHelp = useCallback(() => setHelpOpen(true), [])
 
-  // Chat-scope shortcuts (mod+enter lives in ChatInput, next to the draft it
-  // sends). containerRef keeps them to the chat panel: mod+l or Escape pressed
-  // in the canvas or a findings comment box is not a request to touch the chat.
-  // Enabled only while the panel is rendered: with no root mounted useKeyboard
-  // has no container to check and would claim these keys app-wide.
   const chatRootRef = useRef<HTMLDivElement>(null)
   const {confirm} = useConfirm()
   const toast = useToast()
-  // Every clear path — Ctrl+L, the /clear command — asks first, like the
-  // header's Clear action: Ctrl+L is browser muscle memory (focus the address
-  // bar), and /clear used to fire straight from an autocomplete keypress.
   const confirmClear = useCallback(() => {
-    // Nothing to confirm while the thread is generating: the clear would be
-    // refused anyway (handleClearThread), so the dialog used to ask and then
-    // do nothing.
     if (isCurrentThreadStreaming) {
       toast.warning(t('errors.busyTitle'), {description: t('errors.clearWhileStreaming')})
       return
@@ -190,14 +153,10 @@ export default function AITab() {
     })
   }, [confirm, t, handleClearThread, isCurrentThreadStreaming, toast])
 
-  // Closing a thread drops it from the thread list for good (its history is
-  // no longer reachable), so a thread with messages — or not yet loaded, or
-  // still generating — asks first. An empty thread closes straight away.
   const confirmCloseThread = useCallback(
     (threadId: string) => {
       const st = useChatStore.getState()
       const msgs = st.conversations.get(threadId)
-      // A draft counts: closeThread deletes it with the thread.
       const worthAsking = msgs === undefined || msgs.length > 0 || !!st.streams[threadId] || !!st.drafts[threadId]
       if (!worthAsking) {
         handleCloseThread(threadId)
@@ -225,14 +184,6 @@ export default function AITab() {
         if (!readOnly) confirmClear()
       },
       'ai.cancel.stream': e => {
-        // An open @/slash menu or the find bar handles Escape first. Next a
-        // fix awaiting approval: the newest pending card (the one in view, as
-        // its own Escape would take) is declined and the reply itself goes on
-        // (the card no longer takes focus while the user types, so its own
-        // Escape handler is not in the path). A bare Escape stops the reply;
-        // with nothing streaming it leaves focus mode. Escapes inside the
-        // portaled dialogs (Compose editor, preview, confirm) never reach
-        // here: useKeyboard requires the focus to be inside the chat root.
         if (e.defaultPrevented || isImeKeydown(e)) return
         if (isCurrentThreadStreaming) {
           e.preventDefault()
@@ -255,8 +206,6 @@ export default function AITab() {
     },
   })
 
-  // Text size cycles S → M → L from the header menu; Settings › Appearance
-  // offers the same three.
   const cycleTextSize = useCallback(() => {
     const order: ChatTextSize[] = ['sm', 'md', 'lg']
     const next = order[(order.indexOf(chatTextSize) + 1) % order.length]
@@ -288,12 +237,6 @@ export default function AITab() {
     scrollTo,
   } = useMessageSearch(activeThreadMessages)
 
-  // Identify the regeneratable turn by message ID, not by index. Comparing a
-  // render index against a position in the FILTERED array attached Regenerate
-  // to whichever message happened to sit last in the search results. Only
-  // the thread's LAST message qualifies: an assistant message with a newer
-  // user message after it is no turn Retry/Regenerate can act on (handleResend
-  // bails), so it must not offer a dead button.
   const lastAssistantId = useMemo(() => {
     const last = activeThreadMessages[activeThreadMessages.length - 1]
     return last?.role === 'assistant' ? last.id : null
@@ -306,9 +249,6 @@ export default function AITab() {
     [setThreadUseTools, activeThread],
   )
 
-  // Stable across renders that change none of its inputs, so the memoised
-  // list (ChatMessageList) skips them — a fresh arrow here re-rendered every
-  // visible bubble on each canvas selection and thinking-state flip.
   const renderMessage = useCallback(
     (i: number, m: ChatMessage) => (
       <MessageBubble
@@ -316,9 +256,6 @@ export default function AITab() {
         modelLabel={listedModelName(m)}
         isLastAssistant={m.id === lastAssistantId}
         onRegenerate={m.id === lastAssistantId ? handleResend : undefined}
-        // Retry resends the LAST exchange, so only the last reply may offer
-        // it: on an older error bubble it deleted the latest answer and
-        // resent the wrong question.
         onRetry={m.finishReason === 'error' && m.id === lastAssistantId ? handleResend : undefined}
         resendDisabledReason={sendBlockedReason}
         highlight={searchQuery || undefined}
@@ -336,24 +273,13 @@ export default function AITab() {
     respondFixProposal,
   })
 
-  // The notice row: the thread's own (removed / unavailable / refused), else
-  // the one-time word about a saved Azure default that names nothing.
   const noticeView: ModelNoticeView | null =
     notice ?? (legacyDefaultNotice ? {kind: 'legacyDefault', ...legacyDefaultNotice} : null)
-  // Announced through the status region below — the row is not a live
-  // region — so a notice is read once, when it is raised (and only while
-  // the row is on screen: not over the "add an API key" state).
   const noticeText =
     configured && activeThread && noticeView ? modelNoticeSentences(t, noticeView, providerName).join(' ') : ''
-  // Rendered by EVERY branch below, at the same place, so it is mounted —
-  // empty — from the panel's first render on: a live region inserted
-  // already holding its text (a notice raised as the listing first loads) is
-  // not announced.
   const statusRegion = <StatusRegion text={noticeText} />
 
   if (configured === null) {
-    // Still checking the providers — render nothing rather than flash the
-    // "add an API key" screen; a failed check gets a way to retry.
     if (!providersError) {
       return (
         <>
@@ -384,8 +310,6 @@ export default function AITab() {
   const showWelcome = messages.length === 0 && !isCurrentThreadStreaming && !historyLoading
   const threadPurpose = purposeOf(threadModelDetail)
 
-  // Dismiss takes the row away with the button that has focus: focus moves
-  // to the model picker's trigger, which names the model the thread now uses.
   const dismissModelNotice = () => {
     if (notice) dismissNotice()
     else dismissLegacyDefaultNotice()
@@ -393,16 +317,7 @@ export default function AITab() {
   }
 
   const main = (
-    // The thread-keyed boundary wraps only the scroll region below: keying
-    // this outer one remounted the header, tab bar and composer on every
-    // thread switch, which threw keyboard focus off the thread tabs.
     <ChatErrorBoundary>
-      {/* chat-root establishes the container that every density rule below
-          keys off. The panel is anywhere from 280px to most of the window by
-          drag (or the whole window in focus mode), independent of the
-          viewport, so viewport breakpoints cannot describe it. tabIndex: a
-          click on message text lands focus in the chat, so the chat-scoped
-          shortcuts (Escape, mod+l, mod+.) work after reading. */}
       <div
         ref={chatRootRef}
         tabIndex={-1}
@@ -499,8 +414,6 @@ export default function AITab() {
           </div>
         )}
 
-        {/* Scroll region — exactly one of welcome / messages / empty-state fills it
-          and owns its own scrolling. Its boundary resets per thread. */}
         <ChatErrorBoundary key={activeThreadId ?? 'no-thread'}>
           <div className="flex-1 min-h-0 flex flex-col">
             {doc && activeThread && historyLoading ? (
@@ -538,8 +451,6 @@ export default function AITab() {
                   </div>
                 </div>
               ) : (
-                // key = thread id: switching threads remounts the virtualized
-                // list so it opens at the new thread's bottom (initialTopMostItemIndex).
                 <ChatMessageList
                   key={activeThread.id}
                   messages={activeThreadMessages}
@@ -555,7 +466,6 @@ export default function AITab() {
           </div>
         </ChatErrorBoundary>
 
-        {/* Pinned bottom — the composer, and nothing else. */}
         {doc && activeThread && (
           <div className="shrink-0">
             <ChatInput

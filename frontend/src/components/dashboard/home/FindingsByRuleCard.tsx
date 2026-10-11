@@ -12,9 +12,6 @@ interface Row extends HBarRow {
 
 const SEVERITIES = new Set(['error', 'warning', 'info'])
 
-// The ten most frequent rules as single-hue bars; the severity a rule fires at
-// is a chip in the table twin, not a bar colour (status colours stay reserved
-// for severity charts).
 export function FindingsByRuleCard({
   data,
   onDetails,

@@ -27,9 +27,6 @@ export const ALL_TYPES: BlockType[] = [
   'UNKNOWN',
 ]
 
-// Global document-load generation counter. All code paths that load a document
-// call beginDocLoad() before their async fetch and isDocLoadCurrent(gen) after,
-// so a stale load from one path can't overwrite a newer load from another.
 let docLoadGen = 0
 export function beginDocLoad(): number {
   return ++docLoadGen
@@ -41,11 +38,7 @@ export function isDocLoadCurrent(gen: number): boolean {
 interface FlowState {
   document: FlowDocument | null
   selectedBlockId: string | null
-  // Multi-select (U3b): cmd/ctrl-click toggles, shift-click range-selects.
-  // Bulk actions (delete / group move) operate on this set; single-select
-  // interactions keep using selectedBlockId as the anchor.
   selectedBlockIds: Set<string>
-  // Inline rename target (F2 / double-click on LABEL & COMMENT names).
   renamingBlockId: string | null
   visibleBlockId: string | null
   selectedSubflowId: string | null
@@ -60,22 +53,12 @@ interface FlowState {
 
   libraryFlowId: string | null
   libraryVersion: number
-  // True when the active flow was opened from the cloud library without
-  // edit permission (view-only share). Mutation UI (block edit menu, DnD,
-  // apply-fix, source save) hides behind this instead of failing on the
-  // server after the fact. Same-document refreshes keep the flag; loading a
-  // different document resets it (callers like the library open path set it
-  // explicitly right after).
   readOnly: boolean
 
   navigationHistory: {blockId: string | null; subflowId: string | null}[]
   historyIndex: number
 
   setDocument: (doc: FlowDocument | null) => void
-  // Refreshes the document for a SAME-FLOW remote change (collaborator edit)
-  // without resetting per-flow UI state. Unlike setDocument, it preserves the
-  // active chat thread, selection, search, and editor focus — only the document
-  // (and a still-valid selection) is updated.
   applyRemoteDocumentUpdate: (doc: FlowDocument | null) => void
   setVisibleBlockId: (id: string | null) => void
   selectBlock: (blockId: string | null, skipHistory?: boolean) => void
@@ -98,8 +81,6 @@ interface FlowState {
   navigateToSubflowByName: (name: string) => void
   navigateToBlock: (blockId: string) => void
   navigateToLabelByName: (labelName: string) => void
-  // navigateToSourceFile resolves a source-file mention (e.g. "@Login.txt")
-  // to its subflow and selects it. Returns true if a match was found.
   navigateToSourceFile: (fileName: string) => boolean
 
   reset: () => void
@@ -131,8 +112,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   setDocument: doc => {
     const firstId = doc?.subflows[0]?.id ?? null
-    // A different document resets read-only (local docs are editable); a
-    // same-document refresh (watcher, undo, mutation result) preserves it.
     const changedDoc = doc?.id !== get().document?.id
     set({
       document: doc,
@@ -151,15 +130,11 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       historyIndex: firstId ? 0 : -1,
     })
 
-    // Clear derived per-flow UI state (search, analysis, chat, editor) via the
-    // shared coordinator so the cross-store reset contract lives in one place.
     resetDerivedStateForFlow(doc)
   },
 
   applyRemoteDocumentUpdate: doc => {
     const prev = get()
-    // Preserve the user's block selection if it still exists in the refreshed
-    // document; a remote edit may have moved or removed it.
     const selectedBlockId =
       prev.selectedBlockId && doc && findSubflowIdByBlock(doc, prev.selectedBlockId) ? prev.selectedBlockId : null
 
@@ -171,8 +146,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       parseError: null,
     })
 
-    // Drop editor tabs for subflows that no longer exist, but keep the active
-    // tab + focus. Do NOT call resetDerivedStateForFlow — same-flow refresh.
     if (doc) {
       useEditorStore.getState().pruneToSubflows(doc.subflows.map(s => s.id))
     }
@@ -198,11 +171,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const state = get()
     if (!state.document) {
       set({selectedBlockId: blockId})
-      return // no flow loaded → no collaboration to broadcast
+      return
     }
     if (!blockId) {
-      // Deselect with a flow loaded: broadcast so collaborators stop seeing us
-      // on the previous block.
       set({selectedBlockId: null})
       usePresenceStore.getState().updateSelectedBlock('')
       return
@@ -217,7 +188,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     let nextIndex = state.historyIndex
 
     if (!skipHistory) {
-      // Don't push if it's the same as the current entry
       const current = state.navigationHistory[state.historyIndex]
       if (!current || current.blockId !== blockId || current.subflowId !== subflowId) {
         nextHistory = [...state.navigationHistory.slice(0, state.historyIndex + 1), {blockId, subflowId}].slice(-50)
@@ -225,9 +195,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       }
     }
 
-    // Un-collapse any collapsed ancestor containers, otherwise the target is
-    // absent from the flattened block list and the jump silently does nothing.
-    // (expandedBlockIds is inverted: ids in the set are collapsed.)
     let nextExpanded = state.expandedBlockIds
     const ancestors = findAncestorIds(state.document, blockId)
     if (ancestors.some(id => nextExpanded.has(id))) {
@@ -292,10 +259,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     }
   },
 
-  // This was drillUp, popping a path stack. Nothing pushes onto that stack any
-  // more (the drill-into-subflow action is gone), so the path held at most the
-  // subflow selected on load and "up" could only ever clear it. Named for what
-  // it does.
   clearSubflowSelection: () => set({selectedSubflowId: null}),
 
   toggleSubflowExpand: id =>
@@ -309,8 +272,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     })),
 
   setVisibleTypes: types => set({visibleTypes: types}),
-  // Progress only means something while a parse is running; clearing the flag
-  // resets it so the next parse does not start from a stale percentage.
   setParsing: (parsing, progress = 0) => set({isParsing: parsing, parseProgress: parsing ? progress : 0}),
   setParseError: error => set({parseError: error, isParsing: false}),
   setFolderFiles: files => set({folderFiles: files, selectedFilePath: null}),
@@ -332,7 +293,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   navigateToSourceFile: fileName => {
     const doc = get().document
     if (!doc) return false
-    // Match on the basename so "@dir/Login.txt" and "@Login.txt" both resolve.
     const base = fileName.split(/[/\\]/).pop()?.toLowerCase() ?? ''
     const sf = doc.subflows.find(s => {
       const sfBase = (s.sourceFile ?? '').split(/[/\\]/).pop()?.toLowerCase() ?? ''
@@ -374,10 +334,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       navigationHistory: [],
       historyIndex: -1,
     })
-    // Logout teardown. This intentionally differs from resetDerivedStateForFlow
-    // (the flow-switch path): it also resets editor group widths, and it leaves
-    // the chat activeThreadId alone because the chat store self-resets via its
-    // own registerStoreReset handler in the logout cascade.
     useSearchStore.getState().clear()
     clearAnalysisState(null)
     useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0, groupWidths: [1]})
@@ -395,46 +351,22 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 }))
 
-// Reset on logout (see storeRegistry). reset() also clears search/analysis/editor.
 registerStoreReset(() => useFlowStore.getState().reset())
 
-// ---- Cross-store reset coordinator ----
-//
-// Several stores hold UI state derived from the active document (search,
-// analysis, chat, editor groups); it must be cleared on document change so the
-// user never sees data belonging to another flow.
-
-// clearAnalysisState resets the analysis store's document-derived fields. Shared
-// by the flow-switch coordinator (resetDerivedStateForFlow) and the logout
-// teardown (reset).
 function clearAnalysisState(flowId: string | null) {
   useAnalysisStore.getState().setVariableLineage(null)
   useAnalysisStore.getState().setFindingSearch('')
   useAnalysisStore.getState().setProtectedFlowId(flowId)
   useAnalysisStore.getState().clearFindingSelection()
-  // Clear the finding-focus deep-link so a "finding:" link from flow A doesn't
-  // drive a fruitless scroll/highlight against flow B after a switch.
   useAnalysisStore.getState().setFocusedFinding(null)
 }
 
-// resetDerivedStateForFlow clears all per-flow UI state in the stores that
-// derive from the active document when a flow is loaded or switched. Called by
-// setDocument; exported so it can be unit-tested in isolation.
 export function resetDerivedStateForFlow(doc: FlowDocument | null) {
   const firstId = doc?.subflows[0]?.id ?? null
   useSearchStore.getState().clear()
   clearAnalysisState(doc?.id ?? null)
-  // Point the chat at THIS flow's thread (the one last active on it, if it is
-  // still open) so the new flow never shows the previous flow's conversation.
-  // A same-flow refresh (Findings fix, History restore, toolbar refresh) used
-  // to null it too, dropping the chat to its empty state mid-conversation.
-  // With no thread in memory yet, useChatConversations hydrates or creates one.
   useChatStore.setState({activeThreadId: doc ? useChatStore.getState().threadForFlow(doc.id) : null})
   if (firstId) {
-    // Drop tabs referencing subflows this document doesn't have (flow switch,
-    // or a reparse that changed subflow ids) — otherwise old-flow tabs linger
-    // invisibly in the strip and split panes keep a dead activeTabId whose
-    // pane silently renders fallback content with no tab shown.
     useEditorStore.getState().pruneToSubflows(doc?.subflows.map(s => s.id) ?? [])
     useEditorStore.getState().openInGroup(firstId, 0)
   } else {

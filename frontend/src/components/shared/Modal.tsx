@@ -5,10 +5,6 @@ import {X} from 'lucide-react'
 import Portal from './Portal'
 import {useDialogFocus} from '@/hooks/useDialogFocus'
 
-// Body-scroll lock is REFCOUNTED across every Modal instance. Modals nest
-// (Settings → a confirm dialog inside it), and the previous per-instance
-// cleanup reset body overflow unconditionally — so tearing down the INNER
-// modal unlocked scrolling behind the outer one that was still open.
 let scrollLockCount = 0
 let previousBodyOverflow = ''
 
@@ -29,45 +25,19 @@ function releaseScrollLock(): void {
 type ModalProps = {
   isOpen: boolean
   onClose: () => void
-  // Rendered in the title bar and names the dialog (aria-labelledby).
   title?: string
-  // Accessible name when title isn't rendered (title bar hidden). Provide
-  // title, labelledBy OR ariaLabel so screen readers always announce the
-  // dialog.
   ariaLabel?: string
-  // Id of an element inside the dialog that names it, for a dialog that
-  // renders its own heading (ConfirmDialog). Wins over title and ariaLabel.
   labelledBy?: string
-  // One line under the title (or above the body when there is no title
-  // bar), announced with the name through aria-describedby.
   description?: React.ReactNode
-  // Id(s) of elements inside the dialog that describe it (a confirm's
-  // message). Joined with the description's id.
   describedBy?: string
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
-  // Below the breakpoint ('sm' = 640px) the panel fills the viewport: a form
-  // in a centred card leaves a phone no room once its keyboard is up.
   fullScreenBelow?: 'sm'
   closeOnBackdrop?: boolean
   closeOnEsc?: boolean
-  // 'tall' makes the panel a fixed-height flex column so its size stays
-  // constant regardless of content (avoids the window resizing per tab).
-  // 'fill' is the same idea for a large multi-section dialog (Settings): the
-  // frame fills the viewport minus a 1.5rem margin, capped at 60rem tall.
-  // Defaults to 'auto' (height driven by content, capped at 70vh).
   height?: 'auto' | 'tall' | 'fill'
-  // Extra classes for the panel element itself (e.g. a hook class whose
-  // responsive rules live in index.css). Applied after the size/height ones.
   className?: string
-  // When false, the body wrapper does not scroll or pad — the child owns the
-  // full area and provides its own single scroll region. Defaults to true.
   bodyScroll?: boolean
-  // Focus this element on open instead of the first focusable one (which is
-  // the title bar's Close button when a title is shown).
   initialFocusRef?: React.RefObject<HTMLElement | null>
-  // Names the dialog for the View Transitions API so a page-wide transition
-  // (a theme switch, see useTheme) captures it as its own group; index.css
-  // decides how that group animates.
   viewTransitionName?: string
   children: React.ReactNode
   footer?: React.ReactNode
@@ -81,8 +51,6 @@ const sizeClasses: Record<string, string> = {
   '2xl': 'max-w-300',
 }
 
-// The panel becomes a full-viewport flex column (so the footer sits at the
-// bottom) and the body drops its 70vh cap to take the height in between.
 const fullScreenPanelClasses: Record<'sm', string> = {
   sm: 'max-sm:mx-0 max-sm:h-full max-sm:max-h-none max-sm:max-w-none max-sm:rounded-none max-sm:border-0 max-sm:flex max-sm:flex-col',
 }
@@ -116,8 +84,6 @@ export default function Modal({
   const descriptionId = useId()
   const describedByIds = [describedBy, description ? descriptionId : undefined].filter(Boolean).join(' ')
 
-  // Focus trap, Esc-to-close and focus restoration come from the shared hook —
-  // <Modal> used to carry a byte-identical private copy of all three.
   useDialogFocus({isOpen, onClose, closeOnEsc, containerRef: modalRef, initialFocusRef})
 
   useEffect(() => {
@@ -128,10 +94,6 @@ export default function Modal({
 
   if (!isOpen) return null
 
-  // Render through a portal to document.body so the dialog escapes any
-  // ancestor that creates a stacking context (transform/filter/perspective)
-  // or clips with overflow:hidden — both would defeat z-index / clip a
-  // fixed-position overlay.
   return (
     <Portal>
       <div className="fixed inset-0 z-modal flex items-center justify-center">
@@ -152,8 +114,6 @@ export default function Modal({
           style={viewTransitionName ? {viewTransitionName} : undefined}
           role="dialog"
           aria-modal="true"
-          // Named by the visible heading when there is one, so the name and
-          // what is on screen cannot drift apart.
           aria-labelledby={labelledBy ?? (title ? titleId : undefined)}
           aria-label={labelledBy || title ? undefined : ariaLabel}
           aria-describedby={describedByIds || undefined}

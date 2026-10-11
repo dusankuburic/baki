@@ -5,14 +5,6 @@ import {logger} from '@/lib/logger'
 import {useToast} from '@/components/shared'
 import type {DashboardStats} from '@/types'
 
-// useDashboardStats owns the session-analytics fetch: capability gating, the
-// per-request id race guard (a stale response from an older refresh must never
-// overwrite a newer one), the "first load vs background refresh" loading/error
-// split (a background refresh failure toasts instead of blowing away good
-// data), and re-fetching when the open document changes.
-//
-// Extracted from AnalyticsDashboard so the fetch/state machine is independently
-// testable and the component is just rendering.
 export interface DashboardStatsState {
   stats: DashboardStats | null
   loading: boolean
@@ -28,7 +20,6 @@ export function useDashboardStats(enabled: boolean, isLoaded: boolean, depKey: s
 
   const reqIdRef = useRef(0)
   const hasStatsRef = useRef(false)
-  // Keep the latest toast so the async callbacks don't capture a stale one.
   const toastRef = useRef(toast)
   useEffect(() => {
     toastRef.current = toast
@@ -36,11 +27,6 @@ export function useDashboardStats(enabled: boolean, isLoaded: boolean, depKey: s
 
   const refresh = useCallback(
     (background = false) => {
-      // Session analytics aggregate the app's in-process analyzer cache and read
-      // server-local folders. In cloud/JWT mode the backend returns 403 (data
-      // would otherwise span tenants), so we check the capability flag provided
-      // by the backend. Wait for the capability to load before fetching so we
-      // don't fire a doomed 403 in cloud mode.
       if (!isLoaded || !enabled) return
 
       reqIdRef.current++
@@ -61,8 +47,6 @@ export function useDashboardStats(enabled: boolean, isLoaded: boolean, depKey: s
           if (myReq !== reqIdRef.current) return
           logger.warn('Failed to load dashboard stats', err)
           if (hasStatsRef.current) {
-            // We already have data on screen — a background refresh failure
-            // toasts rather than wiping the good data with an error state.
             toastRef.current.error('Dashboard refresh failed', {
               description: getErrorMessage(err, 'Unknown error'),
             })
@@ -78,14 +62,9 @@ export function useDashboardStats(enabled: boolean, isLoaded: boolean, depKey: s
   )
 
   useEffect(() => {
-    // Enters the loading state for an async fetch (external system).
     // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh()
     return () => {
-      // Invalidate any in-flight request on unmount/dep-change so a late
-      // response can't write state into an unmounted/changed component.
-      // Incrementing the LIVE ref is the point; the rule's suggested local
-      // copy would pin a stale id and cancel nothing.
       // eslint-disable-next-line react-hooks/exhaustive-deps
       reqIdRef.current++
     }

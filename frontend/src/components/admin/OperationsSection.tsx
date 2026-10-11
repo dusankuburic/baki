@@ -5,18 +5,14 @@ import {Activity, Database, HardDrive, Info, Play, RefreshCw, Server, ShieldChec
 import {adminApi, type ComponentStatus, type SystemHealth} from '@/api/admin'
 import {Button, useToast} from '@/components/shared'
 import {SectionCard, SectionNotice} from '@/components/auth/SectionCard'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useAsync} from '@/hooks/useAsync'
 import {useAdminStore} from '@/stores/adminStore'
 import {useSystemStore} from '@/stores/systemStore'
 import {AdminSection} from './AdminSection'
 
-// The ops surface: per-subsystem health (checked on demand, mirrored into the
-// admin store for the overview tile), the one-click governance scan, the
-// server's version, and — passed in by the page, which owns its confirm
-// dialog — the legacy data migration card.
 interface Props {
   visible?: boolean
-  /** Bumped by the page's Refresh so the health check runs again. */
   refreshKey?: number
   children?: ReactNode
 }
@@ -48,7 +44,7 @@ export function OperationsSection({visible = true, refreshKey = 0, children}: Pr
       await adminApi.triggerScannerScan()
       toast.success(t('operations.scanStarted'))
     } catch (e) {
-      toast.error(t('operations.scanFailed'), {description: String(e)})
+      toast.error(t('operations.scanFailed'), {description: getErrorMessage(e)})
     } finally {
       setScanBusy(false)
     }

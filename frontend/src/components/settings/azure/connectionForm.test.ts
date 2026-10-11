@@ -59,7 +59,6 @@ describe('field validators (moved from AzureFoundrySection)', () => {
     expect(endpointErrorKey('not a url')).toBe('providers.azureEndpointInvalid')
     expect(endpointErrorKey('http://x.openai.azure.com')).toBe('providers.azureEndpointHttps')
     expect(endpointErrorKey('https://example.com')).toBe('providers.azureHostRejected')
-    // A bare suffix is no resource host.
     expect(endpointErrorKey('https://.openai.azure.com')).toBe('providers.azureHostRejected')
     expect(endpointErrorKey(' https://my-res.services.ai.azure.com/ ')).toBeNull()
     expect(endpointErrorKey('https://my-res.cognitiveservices.azure.com')).toBeNull()
@@ -132,16 +131,11 @@ describe('the form', () => {
     expect(connectionFormFromConnection(connection())).toMatchObject({tenantId: '', clientId: '', projectEndpoint: ''})
   })
 
-  // U1: without a readable credential document (a lender's credential
-  // disabled, an unreadable one) the server sends blank settings with
-  // authMode ''. The form still starts on a real sign-in mode, so one is
-  // selected and its fields are the ones validated and sent.
   it('starts a resource whose settings came back blank on a real sign-in mode', () => {
     const blank = connection({endpoint: '', authMode: '', hasSecret: false}, {status: 'unreadable'})
     const f = connectionFormFromConnection(blank)
     expect(f).toMatchObject({endpoint: '', authMode: 'api_key', tenantId: '', clientId: ''})
     expect(formAuthMode(blank.config)).toBe('api_key')
-    // What the API-key field shows is what is validated and sent.
     expect(validateConnectionForm(f, {connection: blank}).errors).toEqual({endpoint: 'required', secret: 'required'})
     const filled = {...f, endpoint: 'https://my-res.openai.azure.com', apiKey: ' sk-new '}
     expect(validateConnectionForm(filled, {connection: blank}).firstInvalid).toBeNull()
@@ -150,14 +144,12 @@ describe('the form', () => {
       updatedAt: blank.updatedAt,
     })
 
-    // A mode this client doesn't know: Entra ID when a principal is known.
     const unknown = (config: Partial<AzureConnection['config']>) =>
       formAuthMode({endpoint: 'https://x.openai.azure.com', hasSecret: true, ...config, authMode: 'managed' as never})
     expect(unknown({tenantId: GUID})).toBe('entra')
     expect(unknown({clientId: GUID2})).toBe('entra')
     expect(unknown({})).toBe('api_key')
     expect(formAuthMode({endpoint: '', authMode: '', hasSecret: false, tenantId: ' '})).toBe('api_key')
-    // The known modes stay as they are.
     expect(formAuthMode(connection({authMode: 'entra_cli'}).config)).toBe('entra_cli')
   })
 
@@ -173,7 +165,6 @@ describe('the form', () => {
     expect(secretValue(form({apiKey: 'k', clientSecret: 's'}))).toBe('k')
     expect(secretValue(form({authMode: 'entra', apiKey: 'k', clientSecret: 's'}))).toBe('s')
     expect(secretValue(form({authMode: 'entra_cli', apiKey: 'k'}))).toBe('')
-    // The field the modal renders for each mode.
     expect(secretField('api_key')).toBe('apiKey')
     expect(secretField('entra')).toBe('clientSecret')
     expect(secretField('entra_cli')).toBeNull()
@@ -196,7 +187,6 @@ describe('secretCarry', () => {
     expect(secretCarry(connection(), form({authMode: 'entra'}))).toBe('required')
   })
 
-  // "Enter credentials": the stored secret is unusable, so blank never keeps it.
   it('requires one when the resource needs its credentials entered again', () => {
     expect(secretCarry(connection({}, {status: 'needs_credentials'}), form())).toBe('required')
     expect(secretCarry(connection({}, {status: 'unreadable'}), form())).toBe('required')
@@ -205,9 +195,7 @@ describe('secretCarry', () => {
 
   it('keeps it for the same mode, principal and hosts', () => {
     expect(secretCarry(connection(), form())).toBe('kept')
-    // Tenant and client compare trimmed and case-insensitively.
     expect(secretCarry(entraConn, entraForm({tenantId: ` ${GUID.toUpperCase()} `}))).toBe('kept')
-    // A stored principal without ids matches a form without them.
     expect(secretCarry(connection({authMode: 'entra'}), form({authMode: 'entra'}))).toBe('kept')
   })
 
@@ -332,7 +320,6 @@ describe('request bodies', () => {
       credentialUpdatedAt: conn.credentialUpdatedAt,
       updatedAt: conn.updatedAt,
     })
-    // Whitespace alone changes nothing.
     expect(toConnectionUpdateInput({...base, endpoint: ` ${base.endpoint} `}, base, conn)).toEqual({
       updatedAt: conn.updatedAt,
     })
@@ -377,7 +364,6 @@ describe('connectionErrorTarget', () => {
     expect(withField('INVALID_AUTH', 'clientSecret')).toBe('secret')
     expect(withField('MISSING_SECRET', 'mode')).toBe('authMode')
     expect(withField('MISSING_SECRET', 'clientSecret')).toBe('secret')
-    // An unknown or malformed field falls back to the message (or the secret).
     expect(withField('INVALID_AUTH', 'toString', 'the client ID must be a GUID')).toBe('clientId')
     expect(withField('MISSING_SECRET', 42)).toBe('secret')
     expect(connectionErrorTarget({code: 'MISSING_SECRET', details: null})).toBe('secret')

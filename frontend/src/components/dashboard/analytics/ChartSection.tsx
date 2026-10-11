@@ -1,7 +1,5 @@
 import type {ReactNode} from 'react'
 
-// One section of the Analytics page: a heading the section nav lands focus
-// on, a one-line description, and a grid of cards.
 export function ChartSection({
   id,
   title,

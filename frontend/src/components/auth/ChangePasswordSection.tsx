@@ -1,13 +1,14 @@
 import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
 import React, {useState, useCallback} from 'react'
-import clsx from 'clsx'
-import {Check, Circle, Eye, EyeOff, KeyRound} from 'lucide-react'
+import {Eye, EyeOff, KeyRound} from 'lucide-react'
 import {authApi} from '@/api/auth'
 import {useAuthStore} from '@/stores/authStore'
 import {Button, Input} from '@/components/shared'
-import {checkPassword, PASSWORD_CLASSES, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH} from '@/lib/password'
+import {checkPassword, PASSWORD_MAX_LENGTH} from '@/lib/password'
+import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
 import {SectionCard, SectionNotice} from './SectionCard'
+import {PasswordRuleList} from './PasswordRuleList'
 import {setPostLogoutNotice} from './authNotice'
 
 type Field = 'current' | 'new' | 'confirm'
@@ -20,16 +21,19 @@ export const ChangePasswordSection: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [revealed, setRevealed] = useState<Record<Field, boolean>>({current: false, new: false, confirm: false})
   const [isSubmitting, setIsSubmitting] = useState(false)
-  // Inline field validation: a persistent, screen-reader-announced error bound
-  // to the field via the shared Input's aria-describedby wiring, instead of a
-  // vanishing toast. The server's answer lands inline too.
-  const [confirmError, setConfirmError] = useState('')
   const [submitError, setSubmitError] = useState('')
 
-  // The rules are the server's (validatePasswordStrength), shown while typing.
   const check = checkPassword(newPassword)
   const matches = confirmPassword.length > 0 && confirmPassword === newPassword
   const canSubmit = currentPassword.length > 0 && check.valid && matches
+  const v = useFormValidation<'confirm'>({
+    fields: ['confirm'],
+    validate: () => {
+      const errors: FieldErrors<'confirm'> = {}
+      if (confirmPassword && newPassword !== confirmPassword) errors.confirm = t('password.mismatch')
+      return errors
+    },
+  })
 
   const revealProps = (field: Field) => ({
     type: revealed[field] ? 'text' : 'password',
@@ -47,10 +51,6 @@ export const ChangePasswordSection: React.FC = () => {
       setIsSubmitting(true)
       try {
         await authApi.changePassword(currentPassword, newPassword)
-        // The server revokes every refresh token of the account, this tab's
-        // included, so the session would die at the next silent refresh
-        // anyway. Go to the sign-in screen now, with the reason waiting there
-        // (a toast would unmount with the shell).
         setPostLogoutNotice('password-changed')
         await logout()
       } catch (err) {
@@ -90,10 +90,7 @@ export const ChangePasswordSection: React.FC = () => {
           <Input
             id="change-password-new"
             value={newPassword}
-            onChange={e => {
-              setNewPassword(e.target.value)
-              if (confirmError) setConfirmError('')
-            }}
+            onChange={e => setNewPassword(e.target.value)}
             placeholder={t('password.newPlaceholder')}
             autoComplete="new-password"
             required
@@ -101,27 +98,7 @@ export const ChangePasswordSection: React.FC = () => {
             aria-describedby={check.tooLong ? undefined : 'change-password-rules'}
             {...revealProps('new')}
           />
-          <ul id="change-password-rules" aria-label={t('password.rulesLabel')} className="mt-2 space-y-1">
-            <Rule met={check.longEnough}>{t('password.ruleLength', {count: PASSWORD_MIN_LENGTH})}</Rule>
-            <Rule met={check.enoughClasses}>
-              {t('password.ruleClasses')}
-              <span className="inline-flex flex-wrap gap-1 ml-1.5 align-middle">
-                {PASSWORD_CLASSES.map(c => (
-                  <span
-                    key={c}
-                    className={clsx(
-                      'px-1.5 rounded text-2xs font-medium leading-4',
-                      check.classes[c]
-                        ? 'bg-semantic-success/10 text-semantic-success'
-                        : 'bg-surface-3 text-text-tertiary',
-                    )}
-                  >
-                    {t(`passwordClass.${c}`)}
-                  </span>
-                ))}
-              </span>
-            </Rule>
-          </ul>
+          <PasswordRuleList id="change-password-rules" check={check} />
         </div>
         <div>
           <label htmlFor="change-password-confirm" className="text-xs font-medium text-text-secondary block mb-1.5">
@@ -130,14 +107,9 @@ export const ChangePasswordSection: React.FC = () => {
           <Input
             id="change-password-confirm"
             value={confirmPassword}
-            onChange={e => {
-              setConfirmPassword(e.target.value)
-              if (confirmError) setConfirmError('')
-            }}
-            onBlur={() => {
-              if (confirmPassword && newPassword !== confirmPassword) setConfirmError(t('password.mismatch'))
-            }}
-            error={confirmError || undefined}
+            onChange={e => setConfirmPassword(e.target.value)}
+            error={v.errorFor('confirm')}
+            onBlur={() => v.touch('confirm')}
             placeholder={t('password.confirmPlaceholder')}
             autoComplete="new-password"
             required
@@ -152,24 +124,5 @@ export const ChangePasswordSection: React.FC = () => {
         </Button>
       </form>
     </SectionCard>
-  )
-}
-
-function Rule({met, children}: {met: boolean; children: React.ReactNode}) {
-  const {t} = useTranslation('auth')
-  const Icon = met ? Check : Circle
-  return (
-    <li
-      className={clsx('flex items-start gap-1.5 text-xs', met ? 'text-text-secondary' : 'text-text-tertiary')}
-      data-met={met || undefined}
-    >
-      <Icon
-        size={13}
-        className={clsx('mt-px shrink-0', met ? 'text-semantic-success' : 'text-text-disabled')}
-        aria-hidden="true"
-      />
-      <span className="sr-only">{met ? t('password.ruleMet') : t('password.ruleUnmet')}</span>
-      <span>{children}</span>
-    </li>
   )
 }

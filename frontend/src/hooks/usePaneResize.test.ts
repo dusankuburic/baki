@@ -13,7 +13,6 @@ vi.mock('@/api', () => ({
 
 const initialState = useSettingsStore.getState()
 
-// makeDiv builds a minimal fake pane element recording style writes.
 function makeDiv(initialWidth: number) {
   return {
     style: {width: initialWidth + 'px'},
@@ -40,7 +39,6 @@ describe('usePaneResize — DOM-mutation drag contract', () => {
     act(() => result.current.handleSidebarDrag(50))
     act(() => result.current.handleSidebarDrag(10))
     expect(div.style.width).toBe('340px')
-    // The committed width is untouched until resize end — no re-render storm.
     expect(useSettingsStore.getState().settings.layout.sidebarWidth).toBe(280)
     expect(result.current.sidebarWidth).toBe(280)
   })
@@ -70,7 +68,6 @@ describe('usePaneResize — DOM-mutation drag contract', () => {
       await vi.advanceTimersByTimeAsync(1000)
     })
     expect(useSettingsStore.getState().settings.layout.sidebarWidth).toBe(340)
-    // A resize end with no drag in flight is a no-op.
     await act(async () => {
       result.current.handleSidebarResizeEnd()
       await vi.advanceTimersByTimeAsync(1000)

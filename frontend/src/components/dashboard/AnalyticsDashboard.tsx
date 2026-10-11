@@ -13,22 +13,13 @@ import {BatchResultsTable} from './BatchResultsTable'
 import {useDashboardStats} from './hooks/useDashboardStats'
 import {useBatchAnalysis} from './hooks/useBatchAnalysis'
 
-// AnalyticsDashboard is now a thin shell: it gates on the session-analytics
-// capability, wires the stats + batch hooks, and renders the presentational
-// tiles. All fetch/state-machine logic lives in the hooks; all rendering lives
-// in the tile components (StatCard / SeverityChips / RuleBarChart /
-// TopProblemFlows / BatchResultsTable).
 export default function AnalyticsDashboard() {
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const sessionAnalyticsEnabled = useSystemStore(s => s.info?.capabilities.sessionAnalytics ?? false)
   const isLoaded = useSystemStore(s => s.isLoaded)
 
-  // Session analytics accumulate across single-file loads (only opening a base
-  // folder clears the server-side cache); re-fetch when the open document
-  // changes so the view reflects the latest state either way.
   const docId = useFlowStore(s => s.document?.id ?? null)
   const {stats, loading, error, refresh} = useDashboardStats(sessionAnalyticsEnabled, isLoaded, docId)
-  // Refresh aggregates after a successful batch so the new runs are reflected.
   const {batch, batchRunning, sortedResults, runBatch, exportCSV} = useBatchAnalysis(() => refresh(true))
 
   const ruleEntries = useMemo(
@@ -43,8 +34,6 @@ export default function AnalyticsDashboard() {
   const maxRuleCount = ruleEntries[0]?.[1] ?? 1
   const isEmpty = !stats || stats.totalFlowsAnalyzed === 0
 
-  // Gated view: session analytics + folder batch are only available when the
-  // backend supports them (e.g. local mode). Show a notice and point to Home.
   if (isLoaded && !sessionAnalyticsEnabled) {
     return (
       <div className="max-w-4xl mx-auto space-y-5">

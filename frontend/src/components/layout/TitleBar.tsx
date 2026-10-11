@@ -15,7 +15,6 @@ export default function TitleBar() {
   const toggleSidebar = useUIStore(s => s.toggleSidebar)
   const toggleInspector = useUIStore(s => s.toggleInspector)
 
-  // Shared derivation (U5a.3): same source as the interactive Breadcrumbs.
   const {flowName, path} = useBreadcrumbPath()
   const breadcrumb = [flowName ?? t('titleBar.appName'), ...path.map(c => c.name)]
 
@@ -26,7 +25,6 @@ export default function TitleBar() {
       className="flex items-center h-8 px-3 border-b border-border-subtle bg-surface-1 shrink-0 print:hidden"
       data-tauri-drag-region
     >
-      {/* Mobile sidebar toggle (hamburger) */}
       <button
         onClick={toggleSidebar}
         className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast md:hidden"
@@ -48,7 +46,6 @@ export default function TitleBar() {
       <div className="flex-1 h-full pointer-events-none" />
       <div className="flex items-center gap-1">
         <PresenceIndicators className="mr-1" />
-        {/* Mobile inspector toggle */}
         <button
           onClick={toggleInspector}
           className="w-6 h-6 flex items-center justify-center rounded-sm hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors duration-fast md:hidden"

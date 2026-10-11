@@ -6,8 +6,6 @@ import {ApiError, VersionConflictError} from '@/api/client'
 import {resetAllStores} from '@/stores/storeRegistry'
 import type {AzureConnection, AzureScope} from '@/types'
 
-// The discard and re-index confirms go through the shared useConfirm hook:
-// a partial mock of the real barrel keeps every other primitive real.
 const confirmMock = vi.hoisted(() => vi.fn())
 vi.mock('@/components/shared', async importOriginal => ({
   ...(await importOriginal<typeof import('@/components/shared')>()),
@@ -33,7 +31,6 @@ const api = vi.mocked(providersApi)
 const USER: AzureScope = {kind: 'user'}
 const ORG: AzureScope = {kind: 'org', orgId: 'org-1'}
 
-// Real GUID shapes: the form rejects Entra IDs that are not GUIDs.
 const TENANT_GUID = '11111111-2222-4333-8444-555555555555'
 const CLIENT_GUID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 const KEEP = 'Leave blank to keep the stored secret'
@@ -94,7 +91,6 @@ function renderModal(
   return {...utils, onClose, onSaved}
 }
 
-// Modal focuses inside a rAF.
 async function flushFrame() {
   await act(async () => {
     await new Promise(resolve => requestAnimationFrame(() => resolve(null)))
@@ -130,12 +126,10 @@ describe('AzureConnectionModal: the form', () => {
     expect(screen.getByRole('radio', {name: 'API key'})).toHaveAttribute('aria-checked', 'true')
     const secret = apiKey()
     expect(secret).toHaveAttribute('type', 'password')
-    // "off" is ignored on password fields by password managers.
     expect(secret).toHaveAttribute('autocomplete', 'new-password')
     expect(secret).toHaveAttribute('spellcheck', 'false')
     expect(secret).not.toHaveAttribute('placeholder', KEEP)
 
-    // A toggle whose name says which secret it reveals.
     const show = screen.getByRole('button', {name: 'Show API key'})
     expect(show).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(show)
@@ -143,7 +137,6 @@ describe('AzureConnectionModal: the form', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Hide API key'}))
     expect(apiKey()).toHaveAttribute('type', 'password')
 
-    // An API key has no project: an info line stands in for the field.
     expect(screen.queryByRole('textbox', {name: 'Project endpoint (optional)'})).toBeNull()
     expect(screen.getByText(/An API key can't list deployments: add them by name/)).toBeInTheDocument()
   })
@@ -158,7 +151,6 @@ describe('AzureConnectionModal: the form', () => {
     expect(save).toHaveAttribute('type', 'submit')
     expect(save).toHaveAttribute('form', form.id)
     expect(form.contains(save)).toBe(false)
-    // Save stays enabled on an invalid form: submitting says what is wrong.
     expect(save).toBeEnabled()
   })
 
@@ -185,8 +177,6 @@ describe('AzureConnectionModal: the form', () => {
     expect(screen.queryByRole('textbox', {name: 'Tenant ID'})).toBeNull()
   })
 
-  // The Azure CLI's signed-in user is the credential — desktop only,
-  // never for an organisation's resource (the host passes allowCli).
   it('offers the Azure CLI only where allowed, with no secret and an optional tenant', async () => {
     const {unmount} = renderModal()
     expect(screen.queryByRole('radio', {name: 'Azure CLI'})).toBeNull()
@@ -240,7 +230,6 @@ describe('AzureConnectionModal: validation and focus', () => {
 
     fireEvent.change(endpoint(), {target: {value: 'https://my-res.openai.azure.com'}})
     submit()
-    // The name followed the endpoint; the secret is what is missing now.
     expect(apiKey()).toHaveFocus()
     expect(apiKey()).toHaveAttribute('aria-invalid', 'true')
 
@@ -312,9 +301,6 @@ describe('AzureConnectionModal: validation and focus', () => {
   })
 })
 
-// The placeholder promises the stored secret only while the server
-// would carry it — another host, project host or Entra principal needs the
-// secret again, and the form says so before the round trip.
 describe('AzureConnectionModal: carrying the stored secret', () => {
   it('keeps the secret for an unchanged edit and sends no secret', async () => {
     const {onSaved} = renderModal({connection: conn()})
@@ -334,7 +320,6 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
     fireEvent.change(endpoint(), {target: {value: 'https://other-res.openai.azure.com'}})
     expect(apiKey()).not.toHaveAttribute('placeholder', KEEP)
     expect(apiKey()).toHaveAccessibleDescription(REENTER)
-    // The models stay with the resource.
     expect(screen.getByText('The resource keeps its 3 models; test them after saving.')).toBeInTheDocument()
 
     submit('Save changes')
@@ -373,7 +358,6 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
   it('needs a new secret when the sign-in mode changes', () => {
     renderModal({connection: conn()})
     fireEvent.click(screen.getByRole('radio', {name: 'Microsoft Entra ID'}))
-    // The stored API key cannot stand in for a client secret.
     expect(clientSecret()).not.toHaveAttribute('placeholder', KEEP)
   })
 
@@ -382,7 +366,6 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
     expect(screen.getByRole('dialog', {name: 'Enter credentials for my-res'})).toBeInTheDocument()
     await flushFrame()
     expect(apiKey()).toHaveFocus()
-    // Nothing usable to carry.
     expect(apiKey()).not.toHaveAttribute('placeholder', KEEP)
     submit('Save credentials')
     expect(apiKey()).toHaveAttribute('aria-invalid', 'true')
@@ -394,12 +377,6 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
     })
   })
 
-  // U1: the server sends blank settings ({endpoint: '', authMode: '',
-  // hasSecret: false}) when the stored credential document is gone (a
-  // lender's credential disabled) or unreadable. The form used to select no
-  // sign-in mode while it showed the Entra ID fields, read their secret as
-  // blank ("Required"), and focus an API-key field that wasn't there: Save
-  // sent nothing.
   it('enters credentials for a resource whose settings came back blank', async () => {
     const blank = conn({
       status: 'unreadable',
@@ -408,11 +385,9 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
     })
     const {onSaved} = renderModal({mode: 'reauth', connection: blank})
     expect(screen.getByRole('dialog', {name: 'Enter credentials for my-res'})).toBeInTheDocument()
-    // One sign-in mode is selected, and its fields are the ones shown.
     expect(screen.getByRole('radio', {name: 'API key'})).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByRole('radio', {name: 'Microsoft Entra ID'})).toHaveAttribute('aria-checked', 'false')
     expect(screen.queryByRole('textbox', {name: 'Tenant ID'})).toBeNull()
-    // Nothing to read the secret against yet: the endpoint comes first.
     await flushFrame()
     expect(endpoint()).toHaveFocus()
 
@@ -440,7 +415,6 @@ describe('AzureConnectionModal: carrying the stored secret', () => {
     fireEvent.change(screen.getByRole('textbox', {name: 'Tenant ID'}), {target: {value: TENANT_GUID}})
     fireEvent.change(screen.getByRole('textbox', {name: 'Client ID'}), {target: {value: CLIENT_GUID}})
     submit('Save credentials')
-    // The secret asked for is the one on screen.
     expect(clientSecret()).toHaveFocus()
     expect(clientSecret()).toHaveAttribute('aria-invalid', 'true')
     fireEvent.change(clientSecret(), {target: {value: 's3cret'}})
@@ -480,18 +454,15 @@ describe('AzureConnectionModal: server errors', () => {
   async function fillAndSave() {
     fireEvent.change(endpoint(), {target: {value: 'https://my-res.services.ai.azure.com'}})
     fireEvent.change(apiKey(), {target: {value: 'sk-test'}})
-    // Focus away from the field the server blames, so moving it is visible.
     apiKey().focus()
     submit()
   }
 
   it('puts each code on its field, and anything else in the form alert', async () => {
     renderModal()
-    // Let the dialog's own initial focus land first.
     await flushFrame()
     api.createAzureConnection.mockRejectedValueOnce(new ApiError('host rejected', 400, 'HOST_NOT_ALLOWED'))
     await fillAndSave()
-    // The allow-list verdict gets the local copy naming the accepted hosts.
     await waitFor(() => expect(endpoint()).toHaveAccessibleDescription(/not an Azure AI Foundry endpoint/))
     expect(endpoint()).toHaveAttribute('aria-invalid', 'true')
     expect(endpoint()).toHaveFocus()
@@ -502,7 +473,6 @@ describe('AzureConnectionModal: server errors', () => {
     submit()
     await waitFor(() => expect(apiKey()).toHaveAccessibleDescription('a secret for this endpoint must be entered'))
     expect(apiKey()).toHaveFocus()
-    // Editing the field clears the server's verdict.
     fireEvent.change(apiKey(), {target: {value: 'sk-test2'}})
     expect(apiKey()).not.toHaveAttribute('aria-invalid')
 
@@ -516,7 +486,6 @@ describe('AzureConnectionModal: server errors', () => {
     submit()
     const dialog = screen.getByRole('dialog')
     await waitFor(() => expect(within(dialog).getAllByRole('alert')[0]).toHaveTextContent('limit 10'))
-    // The form and its values survive rejected saves.
     expect(endpoint()).toHaveValue('https://my-res.services.ai.azure.com')
   })
 
@@ -546,7 +515,6 @@ describe('AzureConnectionModal: server errors', () => {
     fireEvent.change(endpoint(), {target: {value: 'https://my-res.openai.azure.com/'}})
     fireEvent.change(apiKey(), {target: {value: 'sk-mine'}})
     submit('Save changes')
-    // The credential's own stamp went along (org compare-and-swap).
     await waitFor(() => expect(api.updateAzureConnection).toHaveBeenCalledTimes(1))
     expect(api.updateAzureConnection.mock.calls[0]![2]).toMatchObject({
       credentialUpdatedAt: '2026-09-30T09:00:00.123456Z',
@@ -593,7 +561,6 @@ describe('AzureConnectionModal: server errors', () => {
     await flushFrame()
     fireEvent.change(endpoint(), {target: {value: 'https://my-res.openai.azure.com'}})
     fireEvent.change(apiKey(), {target: {value: 'sk-test'}})
-    // The tenant field belongs to Entra ID sign-in, not shown for an API key.
     api.createAzureConnection.mockRejectedValueOnce(
       new ApiError('this directory does not exist', 400, 'INVALID_AUTH', undefined, {field: 'tenantId'}),
     )
@@ -666,11 +633,9 @@ describe('AzureConnectionModal: closing', () => {
     expect(confirmMock).toHaveBeenCalledWith(
       expect.objectContaining({title: 'Discard unsaved changes?', confirmLabel: 'Discard', danger: true}),
     )
-    // The edits survive a rejected discard.
     expect(dirty.onClose).not.toHaveBeenCalled()
     expect(endpoint()).toHaveValue('https://x.openai.azure.com')
 
-    // Escape goes the same way; the X too.
     fireEvent.keyDown(document, {key: 'Escape'})
     await waitFor(() => expect(dirty.onClose).toHaveBeenCalledTimes(1))
     expect(confirmMock).toHaveBeenCalledTimes(2)
@@ -693,13 +658,11 @@ describe('AzureConnectionModal: testing the draft', () => {
     expect(test).toHaveAccessibleDescription('Checks sign-in and the endpoint only: no model call, no cost.')
     fireEvent.click(test)
     await waitFor(() => expect(api.testAzure).toHaveBeenCalledTimes(1))
-    // The saved resource's id lets the stored secret carry over.
     expect(api.testAzure).toHaveBeenCalledWith(USER, {
       connectionId: 'default',
       config: {endpoint: 'https://my-res.openai.azure.com', auth: {mode: 'api_key'}},
     })
     const dialog = screen.getByRole('dialog')
-    // A pass is read out politely; the alert region stays empty.
     await waitFor(() => expect(within(dialog).getByRole('status')).toHaveTextContent('Test passed · 12 ms'))
     expect(api.updateAzureConnection).not.toHaveBeenCalled()
   })
@@ -718,7 +681,6 @@ describe('AzureConnectionModal: testing the draft', () => {
       expect(alert).toHaveTextContent('Test failed the key was refused (401)')
     })
     expect(within(dialog).getByRole('status')).toBeEmptyDOMElement()
-    // A new draft draws the test again.
     expect(api.testAzure).toHaveBeenCalledWith(USER, {
       config: {endpoint: 'https://my-res.openai.azure.com', auth: {mode: 'api_key', key: 'sk-bad'}},
     })

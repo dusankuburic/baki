@@ -36,7 +36,7 @@ describe('ChartCard', () => {
     const toggle = screen.getByRole('radiogroup', {name: 'View Findings by rule as'})
     fireEvent.click(within(toggle).getByRole('radio', {name: 'Table'}))
     const grid = screen.getByRole('table', {name: 'Findings by rule'})
-    expect(within(grid).getAllByRole('row')).toHaveLength(3) // header + 2
+    expect(within(grid).getAllByRole('row')).toHaveLength(3)
     expect(within(grid).getByText('missing-timeout')).toBeInTheDocument()
     expect(screen.queryByTestId('chart')).not.toBeInTheDocument()
     fireEvent.click(within(toggle).getByRole('radio', {name: 'Chart'}))

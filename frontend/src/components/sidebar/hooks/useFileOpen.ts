@@ -45,11 +45,6 @@ export function useFileOpen() {
       })
   }, [document?.id])
 
-  // handleNewFlow creates a blank single-file flow ("Main" region only) and
-  // loads it — the missing CREATE entry point (the analyzer could only open
-  // existing exports; building something new meant hand-writing a file in a
-  // text editor first). Works in both modes: uploadFlow parses server-side
-  // and (cloud) persists.
   const handleNewFlow = useCallback(async () => {
     const gen = beginDocLoad()
     setIsLoadingState()
@@ -168,8 +163,6 @@ export function useFileOpen() {
           setDocument(doc)
           if (doc.isFolder && doc.files) {
             setFolderFiles(doc.files)
-            // A folder can legitimately hold zero files; selecting the first
-            // file would crash on an empty array.
             const first = doc.files[0]
             if (first) setSelectedFilePath(first.path)
           } else {
@@ -207,9 +200,6 @@ export function useFileOpen() {
     }
   }, [])
 
-  // handleRevealFile opens the OS file manager with the file selected.
-  // Requires a live local filesystem, so (like the other path-based actions
-  // in this hook) it's desktop-only.
   const handleRevealFile = useCallback(
     async (path: string) => {
       if (!getPlatformCapabilities().fileSystem) {
@@ -226,9 +216,6 @@ export function useFileOpen() {
     [toast, t],
   )
 
-  // handleReloadFile force-reloads a subflow file from disk, bypassing the
-  // "already open, just switch tabs" shortcut in handleSelectFolderFile —
-  // for picking up edits made outside the app.
   const handleReloadFile = useCallback(
     async (path: string) => {
       if (!getPlatformCapabilities().fileSystem) {

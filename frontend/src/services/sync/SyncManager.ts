@@ -13,7 +13,6 @@ interface PersistedQueue {
 
 type QueueChangeHandler = (queue: readonly PendingOp[]) => void
 
-/** SyncDropReason explains why queued ops were discarded. */
 export type SyncDropReason = 'expired' | 'overflow'
 type DropHandler = (count: number, reason: SyncDropReason) => void
 
@@ -21,10 +20,6 @@ const MAX_AGE_MS = 60_000
 const STORAGE_PREFIX = 'baki-sync-queue-'
 const MAX_QUEUE_SIZE = 200
 
-// The collaboration sync queue is a STATE-sync stream (presence, block/cursor
-// positions): a newer op for the same element supersedes the older one. So
-// under overflow we drop the OLDEST ops (keep current state) and past MAX_AGE_MS
-// we discard stale positions — both correct for superseding state.
 class SyncManager {
   private queue: PendingOp[] = []
   private changeHandlers = new Set<QueueChangeHandler>()
@@ -40,9 +35,6 @@ class SyncManager {
       this.flowId = flowId
       this.loadFromStorage()
     }
-    // Drop any prior status subscription before re-subscribing: switching flows
-    // routes through start() without an intervening stop(), and the old
-    // unsubscribe handle would be overwritten and lost.
     this.unsubscribeStatus?.()
     this.unsubscribeStatus = collaborationService.onStatusChange(this.handleStatusChange)
   }
@@ -52,16 +44,10 @@ class SyncManager {
     this.unsubscribeStatus?.()
     this.unsubscribeStatus = null
     this.queue = []
-    // Reset flowId (AFTER saveToStorage, which keys off it) so a subsequent
-    // start() with the SAME flow re-loads the persisted queue.
     this.flowId = null
     this.notifyChange()
   }
 
-  // reset discards the queue AND every persisted per-flow copy — logout/session
-  // teardown, so no queue survives into the next user's session on a shared
-  // device. Clears ALL baki-sync-queue-* keys: switching flows orphans the
-  // previous flow's persisted queue in storage.
   reset(): void {
     this.clearAllStorage()
     this.unsubscribeStatus?.()
@@ -74,8 +60,6 @@ class SyncManager {
 
   enqueue(env: Omit<Envelope, 'flowId' | 'userId' | 'ts'>): string {
     const id = `op-${++this.counter}-${Date.now()}`
-    // Always queue first so the op survives a send failure (socket
-    // closing between the status check and the actual ws.send).
     this.queue.push({id, env, queuedAt: Date.now()})
     if (this.queue.length > MAX_QUEUE_SIZE) {
       const overflow = this.queue.length - MAX_QUEUE_SIZE
@@ -85,8 +69,6 @@ class SyncManager {
     this.saveToStorage()
     this.notifyChange()
 
-    // Attempt immediate delivery if connected. flush() only removes
-    // ops that were actually delivered; undelivered ops stay queued.
     if (collaborationService.getStatus() === 'connected') {
       this.flush()
     }
@@ -102,7 +84,6 @@ class SyncManager {
     return () => this.changeHandlers.delete(handler)
   }
 
-  /** Subscribe to drop events (ops discarded on TTL expiry or queue overflow). */
   onDroppedOps(handler: DropHandler): () => void {
     this.dropHandlers.add(handler)
     return () => this.dropHandlers.delete(handler)
@@ -123,13 +104,11 @@ class SyncManager {
     const remaining: PendingOp[] = []
     for (const op of this.queue) {
       if (now - op.queuedAt >= MAX_AGE_MS) {
-        expired++ // stale state op, superseded by a newer one
+        expired++
         continue
       }
-      if (collaborationService.send(op.env)) {
-        // delivered — drop from queue
-      } else {
-        remaining.push(op) // socket not open — keep for retry
+      if (!collaborationService.send(op.env)) {
+        remaining.push(op)
       }
     }
     this.notifyDropped(expired, 'expired')
@@ -156,7 +135,6 @@ class SyncManager {
       const data: PersistedQueue = {queue: this.queue, counter: this.counter}
       localStorage.setItem(this.storageKey(), JSON.stringify(data))
     } catch {
-      // Storage full or unavailable (private mode) — ops stay in memory only
     }
   }
 
@@ -173,7 +151,6 @@ class SyncManager {
       this.notifyDropped(data.queue.length - fresh.length, 'expired')
       this.notifyChange()
     } catch {
-      // Corrupt data — start fresh
     }
   }
 
@@ -182,13 +159,9 @@ class SyncManager {
     try {
       localStorage.removeItem(this.storageKey())
     } catch {
-      // ignore
     }
   }
 
-  // clearAllStorage removes every persisted per-flow queue (all baki-sync-queue-*
-  // keys), used by reset() on logout. Keys are collected before removal because
-  // removeItem during a length/key(i) walk shifts indices.
   private clearAllStorage(): void {
     try {
       const keys: string[] = []
@@ -198,7 +171,6 @@ class SyncManager {
       }
       keys.forEach(k => localStorage.removeItem(k))
     } catch {
-      // storage unavailable — nothing to clear
     }
   }
 }

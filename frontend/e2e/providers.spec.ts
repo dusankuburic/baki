@@ -2,11 +2,6 @@ import {test, expect, type Page} from '@playwright/test'
 import {setupAuthenticatedPage, mockDashboardHome} from './helpers'
 import {mockProviderCatalog} from '../src/testing/fixtures/providerCatalog'
 
-// AI Accounts driven by GET /api/providers/catalog: one section per entry in
-// the server's order; a known api_key provider gets the key form, a provider
-// this bundle does not know gets the generic card, and a field type it does
-// not know never becomes an input.
-
 async function openAccounts(page: Page) {
   await page.locator('button[aria-label="Settings"]').first().click()
   const dialog = page.locator('[role="dialog"][aria-label="Settings"]')
@@ -22,7 +17,6 @@ test.describe('AI Accounts from the provider catalogue', () => {
     await setupAuthenticatedPage(page)
     await page.route('**/api/dashboard/home', route => route.fulfill({status: 200, json: mockDashboardHome()}))
     await page.route('**/api/providers/catalog', route => route.fulfill({status: 200, json: mockProviderCatalog()}))
-    // The real envelope: read as a bare boolean it was always truthy (C2).
     await page.route('**/api/keys/has', route => route.fulfill({status: 200, json: {has: false}}))
     await page.route('**/api/keys/save', route => route.fulfill({status: 200, json: {status: 'ok'}}))
     await page.route('**/api/providers/test', route => route.fulfill({status: 200, json: {ok: true, latencyMs: 7}}))
@@ -39,7 +33,13 @@ test.describe('AI Accounts from the provider catalogue', () => {
     const claude = dialog.locator('section[data-provider="claude"]')
     const save = claude.getByRole('button', {name: 'Save'})
     await expect(save).toBeDisabled()
-    await claude.getByLabel('API key', {exact: true}).fill('sk-test')
+    const keyField = claude.getByLabel('API key', {exact: true})
+    await keyField.focus()
+    await keyField.blur()
+    await expect(claude.getByText('Required')).toBeVisible()
+    await expect(keyField).toHaveAttribute('aria-invalid', 'true')
+    await keyField.fill('sk-test')
+    await expect(claude.getByText('Required')).toBeHidden()
     const saveRequest = page.waitForRequest(r => r.url().endsWith('/api/keys/save'))
     await save.click()
     expect((await saveRequest).postDataJSON()).toEqual({provider: 'claude', key: 'sk-test'})

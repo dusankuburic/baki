@@ -1,6 +1,3 @@
-// Settings namespace — labels, descriptions, toasts, and confirm dialogs for
-// the Settings modal and its panels. English values must match pre-i18n
-// strings exactly where tests/e2e assert on them.
 export const enSettings = {
   providers: {
     connectedAs: 'Connected as',
@@ -14,18 +11,11 @@ export const enSettings = {
     xaiKey: 'xAI API Key',
     zaiKey: 'z.ai API Key',
     githubPat: 'GitHub Token (PAT)',
-    // Azure AI Foundry resource fields and validators, shared by the Resource
-    // modal (azure/connectionForm returns these keys). Flat leaves only —
-    // this object must not mix strings with nested objects; the rest of the
-    // registry's copy is under azureModels.
     azureEndpointPlaceholder: 'https://my-resource.openai.azure.com',
     azureEndpointHint: 'The resource endpoint from the Foundry portal (Keys and Endpoint).',
     azureAuthMode: 'Authentication',
     azureAuthApiKey: 'API key',
     azureAuthEntra: 'Microsoft Entra ID',
-    // Signs in as the Azure CLI's signed-in user (az login) — no app
-    // registration and no secret. Desktop only; not offered for the
-    // org-shared credential (the server refuses it).
     azureAuthEntraCli: 'Azure CLI',
     azureEntraCliTenantHint:
       'Optional: the directory (tenant) to sign in to. Leave blank to use the Azure CLI signed-in tenant. Run az login first; the connection test says so when the CLI is not signed in.',
@@ -42,14 +32,11 @@ export const enSettings = {
       'Needed to list and chat with Foundry agents. Agents require Microsoft Entra ID authentication (an app registration with the Foundry User role).',
     azureHostRejected:
       'The endpoint host is not an Azure AI Foundry endpoint. Use https://<resource>.openai.azure.com or https://<resource>.services.ai.azure.com, or ask the operator to allow-list a custom host. Serverless API endpoints (*.models.ai.azure.com) are not supported — deploy the model to a Foundry resource and use its endpoint.',
-    // Client-side mirrors of the server's validation, shown inline while editing.
     azureEndpointInvalid: 'The endpoint must be an absolute https:// URL',
     azureEndpointHttps: 'The endpoint must use https://',
     azureGuidInvalid: 'Must be a GUID, e.g. 123e4567-e89b-42d3-a456-426614174000',
     azureTenantInvalid:
       'Must be the directory (tenant) ID GUID or a domain of the tenant, e.g. contoso.onmicrosoft.com',
-    // An organisation's shared resources and models (cloud only), in the
-    // Organizations panel for the active organisation.
     azureOrgTitle: 'Shared Azure AI Foundry',
     azureOrgHint:
       "Resources and models every admin and member of this organisation can chat with. Shared models appear alongside members' own in the chat model picker; prompts sent through them are attributed to the organisation, and Azure bills them to it (baki does not price Azure usage — see the Azure portal).",
@@ -57,7 +44,6 @@ export const enSettings = {
       "Shared Azure AI Foundry models aren't available to viewers and guests. Add a resource of your own under AI Accounts to chat with Azure AI Foundry.",
     azureShowSecretAria: 'Show {{field}}',
     azureHideSecretAria: 'Hide {{field}}',
-    // Local OpenAI-compatible model section (flat leaves only).
     localName: 'Local model (OpenAI-compatible)',
     localBaseUrl: 'Base URL',
     localBaseUrlPlaceholder: 'http://127.0.0.1:11434/v1',
@@ -87,10 +73,6 @@ export const enSettings = {
     localDiscardTitle: 'Discard unsaved changes?',
     localDiscardMessage: 'Your changes to the local model configuration have not been saved.',
     localDiscard: 'Discard',
-    // The catalogue-driven sections (settings/providers): the generic
-    // credential form and the card for a provider, credential kind or field
-    // type this bundle does not know. Field labels and help come from the
-    // server. Flat leaves only.
     catalogLoadFailed: "Couldn't load the AI providers",
     catalogRetry: 'Retry',
     genericConfigured: 'Configured',
@@ -105,18 +87,11 @@ export const enSettings = {
     replaceKeyPlaceholder: 'Leave blank to keep the stored key',
     formCancel: 'Cancel',
     removeFailed: 'Failed to remove',
-    // A refused save, keyed by the server's code; the rest show the server's
-    // message with the code.
     errorWithCode: '{{message}} ({{code}})',
     codeProviderUnknown: 'This server does not know this provider',
     codeUseProviderConfig: 'This provider is set up in its own section, not with a key',
     testFailedDetail: 'Invalid · {{detail}}',
   },
-  // AI Accounts → Azure AI Foundry, and an organisation's block in
-  // Organizations: resources (the API calls them connections; the UI says
-  // "resource", because Foundry has a Connections concept of its own) and
-  // their models. Every child is an object holding only strings and plural
-  // forms — never a string next to a nested object (see i18n/README.md).
   azureModels: {
     section: {
       addResource: 'Add resource',
@@ -150,14 +125,12 @@ export const enSettings = {
       edit: 'Edit resource',
       remove: 'Remove resource',
       enterCredentials: 'Enter credentials',
-      // The callout buttons each resource card may show: named after it.
       editAria: 'Edit resource {{name}}',
       removeAria: 'Remove resource {{name}}',
       enterCredentialsAria: 'Enter credentials for {{name}}',
       authApiKey: 'API key',
       authEntra: 'Entra ID',
       authCli: 'Azure CLI',
-      // A sign-in method a newer server added, which this version of the app does not know.
       authOther: 'Other sign-in',
       sharedBy: 'Shared by {{name}}',
       sharedByOrg: 'Shared by your organisation',
@@ -184,7 +157,6 @@ export const enSettings = {
       rowNeedsCredentials: "Unavailable until the resource's credentials are entered again",
       rowInvalidConfig: "Unavailable until the resource's settings are fixed",
       rowUnsupported: 'Unavailable: agents need Microsoft Entra ID and a project endpoint on their resource',
-      // A status a newer server added, which this version of the app does not know.
       unknownTitle: 'This resource is unavailable',
       unknown: 'Its models are unavailable in the chat meanwhile.',
       rowUnknown: 'Unavailable right now',
@@ -316,7 +288,6 @@ export const enSettings = {
       hide: 'Hide',
       review: 'Review',
       dismiss: 'Dismiss',
-      // Every resource card has these buttons: named after the resource.
       showAria: 'Show suggestions from {{name}}',
       hideAria: 'Hide suggestions from {{name}}',
       reviewAria: 'Review suggestions from {{name}}',
@@ -444,8 +415,6 @@ export const enSettings = {
       'Indexing requires an embedding-capable provider key (OpenAI, Gemini, GLM, or GitHub Models — or Azure AI Foundry when your administrator enabled it and an embedding model is marked "Use for knowledge base"). Configure one under AI Behavior → Embedding Assistant.',
     embeddingMissingReindex:
       'Re-index needs an embedding-capable provider key (OpenAI, Gemini, GLM, or GitHub Models — or Azure AI Foundry when enabled by your administrator, with an embedding model marked "Use for knowledge base")',
-    // After a confirmed change of the Azure AI Foundry knowledge-base model
-    // (AI Accounts): uploads refuse until the corpus is re-indexed.
     reindexAfterModelChange:
       'The knowledge base embedding model changed. Re-index so every document uses it — uploads are refused until then.',
     reindexAfterModelChangeMember:
@@ -474,8 +443,6 @@ export const enSettings = {
       'Your embedding model changed while the re-index was running. The pages already done are kept; start the re-index again to finish with your current model.',
     empty: 'No documents indexed yet.',
     dimensionMismatch: 'Not searchable — embedding dimension mismatch; re-index below.',
-    // Chunks embedded under another embedding model than the viewer's (same
-    // width, so "searchable", but never found by their searches).
     identityMismatch_one: '{{count}} chunk was indexed with another embedding model; re-index below.',
     identityMismatch_other: '{{count}} chunks were indexed with another embedding model; re-index below.',
     indexedTitle: 'Indexed Documents',
@@ -507,7 +474,6 @@ export const enSettings = {
       'Re-index stopped after {{count}} chunk. The pages done are kept — Resume continues from where it stopped.',
     reindexStopped_other:
       'Re-index stopped after {{count}} chunks. The pages done are kept — Resume continues from where it stopped.',
-    // Stopped before the first page answered: nothing to resume from.
     reindexStoppedRestart_one: 'Re-index stopped after {{count}} chunk. Run Re-index again to redo the rest.',
     reindexStoppedRestart_other: 'Re-index stopped after {{count}} chunks. Run Re-index again to redo the rest.',
     indexedAgo: 'Indexed {{when}}',
@@ -526,7 +492,6 @@ export const enSettings = {
   },
   apiKey: {
     placeholder: 'Enter API key...',
-    aria: 'API key',
     saveFailed: 'Failed to save',
     valid: 'Valid',
     validLatency: 'Valid · {{ms}} ms',
@@ -584,8 +549,6 @@ export const enSettings = {
       'PAD Analyzer helps you understand, analyze, and improve your Power Automate Desktop flows with static analysis rules and AI-powered insights.',
   },
   shortcuts: {
-    // "Filter", not "Search": the sidebar's "Search settings" box sits right
-    // next to this one.
     searchPlaceholder: 'Filter shortcuts…',
     searchAria: 'Filter shortcuts',
   },
@@ -608,10 +571,6 @@ export const enSettings = {
     tipPrefix: 'Tip: Elevate rules like',
     tipSuffix:
       'to Error when debugging UI synchronization issues to make them stand out in the findings list. Severity changes apply to the next analysis run.',
-    // R4 — scoped rule configuration. NOTE: flat leaves only at this level;
-    // `severity` above is the one nested object and adding a second sibling
-    // object next to string leaves is what the README warns about (the type
-    // flattener silently drops the nested keys).
     scopeDeployment: 'Whole deployment (all organisations)',
     scopeOrgHint:
       "Changes apply to this organisation's flows only. Rules you don't change stay at the deployment default.",
@@ -713,7 +672,6 @@ export const enSettings = {
     jiraTokenPlaceholderReplace: 'An API token is set (type a new one to replace it)',
     jiraProjectAria: 'Jira project key',
     jiraProjectPlaceholder: 'Project key (e.g. PAD)',
-    jiraFieldsRequired: 'The Jira account email, API token and project key are required',
     jiraProjectListed: 'project {{project}}',
     recipientsLabel: 'Recipients',
     recipientsHint: "Members only, each at their account's verified email address.",
@@ -733,12 +691,10 @@ export const enSettings = {
     eventsListed: 'only {{events}}',
     hostsRestricted: 'This deployment delivers only to hosts its operator allows; ask them which if a save is refused.',
     hostsAllowed: 'Allowed hosts: {{hosts}}',
-    // A channel whose stored URL the server cannot decrypt (its encryption key changed).
     unreadable: 'URL unreadable',
     unreadableTitle:
       "The stored URL can't be decrypted: the server's encryption key changed. Enter the URL again, or remove the channel.",
     unreadableHint: "The stored URL can't be decrypted (the server's encryption key changed). Enter it again.",
-    // A kind a newer server added: it can be tested and removed here, not paused or edited.
     unknownKind: "This version of the app can't change this kind of channel.",
     addedWhen: 'added {{when}}',
     signed: 'Signed',
@@ -771,7 +727,6 @@ export const enSettings = {
     namePlaceholder: 'Channel name (e.g. Ops Team hook)',
     kindAria: 'Channel kind',
     urlAria: 'Channel URL',
-    // The list shows the URL shortened to its host; the stored one is never shown again.
     urlKeepHint: 'Leave empty to keep the current URL.',
     secretAria: 'Signing secret',
     secretPlaceholderExisting: 'HMAC secret (unchanged unless replaced)',
@@ -785,8 +740,6 @@ export const enSettings = {
     addAction: 'Add',
     cancel: 'Cancel',
   },
-  // Org CI credentials: what `bakicli report` signs its webhook calls with.
-  // Org admins only; the credential itself is shown once, when it is created.
   ciCredentials: {
     title: 'CI credentials',
     subtitle: "Pipelines sign their bakicli report calls with these to analyse this organisation's flows.",
@@ -883,7 +836,6 @@ export const enSettings = {
     inviteEmailPlaceholder: 'teammate@example.com',
     invite: 'Invite',
     inviting: 'Inviting…',
-    inviteInvalidEmail: 'Enter a valid email address (name@example.com).',
     pendingInvites: 'Pending Invites',
     revokeTitle: 'Revoke invite',
     revokeMessage: 'Revoke the pending invite for {{email}}? They will no longer be able to accept it.',
@@ -915,16 +867,10 @@ export const enSettings = {
     addPlaceholder: 'Add a new suggested prompt...',
     addAria: 'New suggested prompt',
     add: 'Add',
+    editAria: 'Suggested prompt {{index}} of {{title}}',
+    blankInvalid: 'A prompt cannot be empty',
     remove: 'Remove prompt',
-    moveUp: 'Move up',
-    moveDown: 'Move down',
   },
-  // The Settings modal shell. Every child of `modal` is an object (see the
-  // en.ts rule about mixed levels). One `sections.<id>` block per section:
-  // `label` is the sidebar entry and the content heading, `description` the
-  // line under the heading, `keywords` what the search box matches besides
-  // those two (never rendered). Adding a section = one block here + one
-  // registry entry in components/settings/sections.ts.
   modal: {
     ui: {
       title: 'Settings',
@@ -1028,8 +974,6 @@ export const enSettings = {
     embeddingModelHintPrefix: 'Override the embedding model name (e.g.',
     embeddingModelHintSuffix:
       "). Leave blank to use the provider's default. The pgvector index tolerates a model swap; mismatched-dimension chunks are excluded at insert.",
-    // Shown instead of the model override when the embedding assistant is
-    // Azure AI Foundry: the embedding model is a registry designation there.
     embeddingModelHintAzure:
       'For Azure AI Foundry, add an embedding model under AI Accounts → Azure AI Foundry and choose "Use for knowledge base" in its menu.',
     historyCosts: 'History & Costs',
@@ -1048,8 +992,6 @@ export const enSettings = {
     precise: 'Precise',
     creative: 'Creative',
     maxTokens: 'Max Tokens',
-    // The 16384-token reasoning floor the server applies to reasoning
-    // models ({{floor}} is pre-formatted with a thousands separator).
     maxTokensHint:
       'Reasoning models (o-series, GPT-5, gpt-oss, DeepSeek-R1, Grok 4, Phi-4 reasoning, Claude Opus/Sonnet 5.x / Fable / Mythos) count their hidden thinking against this budget, so they are always sent at least {{floor}} tokens per turn — capped at the model’s own output limit — whatever is set here.',
     contextBudget: 'Context Token Budget',
@@ -1110,6 +1052,7 @@ export const enSettings = {
     nameAria: 'Token name',
     expiresPlaceholder: 'Expires (days, 0 = never)',
     expiresAria: 'Token expiry in days (0 for never)',
+    expiryInvalid: 'Expiry must be a whole number of days, at most {{max}} — or empty for no expiry.',
     create: 'Create',
     creating: 'Creating…',
     createFailed: 'Failed to create token: {{message}}',

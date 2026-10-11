@@ -1,14 +1,6 @@
 import {Spinner} from '@/components/shared'
 import {useTranslation} from 'react-i18next'
 
-// AnalysisRunner renders the two pre-report UI states of the findings panel:
-// the "Run Analysis" call-to-action (no report yet) and the progress spinner
-// (analysis in flight). Extracted from FindingsTab so the run/progress
-// presentation is isolated from the findings/results view.
-//
-// When isAnalyzing is true the spinner is shown regardless of whether a stale
-// report exists; otherwise the run button is shown (caller guarantees no report
-// in that branch).
 export interface AnalysisRunnerProps {
   onAnalyze: () => void
   isAnalyzing: boolean
@@ -18,7 +10,6 @@ export interface AnalysisRunnerProps {
 export default function AnalysisRunner({onAnalyze, isAnalyzing, progress}: AnalysisRunnerProps) {
   const {t} = useTranslation('findings')
   if (isAnalyzing) {
-    // total === 0 → no progress events yet: INDETERMINATE, never "0%".
     const pct = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : null
     return (
       <div

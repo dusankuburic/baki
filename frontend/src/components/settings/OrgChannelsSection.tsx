@@ -21,28 +21,20 @@ import {
 import {ApiError} from '@/api/client'
 import {Button, useToast} from '@/components/shared'
 import {getErrorMessage} from '@/lib/getErrorMessage'
+import {apiErrorField} from '@/lib/apiErrorField'
 import {logger} from '@/lib/logger'
 import {relativeTimeText} from '@/lib/time'
 import {useAsync} from '@/hooks/useAsync'
+import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
 import {useConfirm} from '@/components/shared'
 import type {OrgMember} from '@/stores/orgStore'
 import {isKnown} from '@/types'
 import clsx from 'clsx'
 
-// A channel of a kind a newer server added is listed as sent and can be
-// tested and removed, but not paused or edited: both save the kind back, and
-// this bundle sends only the kinds it knows.
 const isKnownChannel = (ch: OrgChannel): ch is KnownOrgChannel => isKnown(CHANNEL_KINDS, ch.kind)
 
-// OrgChannelsSection manages an org's own notification destinations
-// (webhook/Teams/Slack/Jira/email): governance events for the org's flows are
-// delivered here IN ADDITION to the deployment-global channels — routing by
-// ownership. Admin-only edits; members read.
-// Keys, not literals: this list is module-level and cannot call t(). Each entry
-// names its label/hint keys, resolved at render time by the consuming component.
 const KINDS: {id: ChannelKind; labelKey: string; hintKey: string}[] = [
   {id: 'webhook', labelKey: 'channels.kindWebhook', hintKey: 'channels.kindWebhookHint'},
-  // Before Teams: Microsoft is retiring the incoming webhooks it replaces.
   {id: 'teams-workflow', labelKey: 'channels.kindTeamsWorkflow', hintKey: 'channels.kindTeamsWorkflowHint'},
   {id: 'teams', labelKey: 'channels.kindTeams', hintKey: 'channels.kindTeamsHint'},
   {id: 'slack', labelKey: 'channels.kindSlack', hintKey: 'channels.kindSlackHint'},
@@ -56,8 +48,6 @@ const EVENT_LABELS: Record<ChannelEvent, {labelKey: string; shortKey: string}> =
   new_rules: {labelKey: 'channels.eventNewRules', shortKey: 'channels.eventNewRulesShort'},
 }
 
-// The events a channel receives: what it lists, or every event from a server
-// before subscriptions (which delivered every event).
 const channelEvents = (ch?: OrgChannel): ChannelEvent[] =>
   ch?.events ? CHANNEL_EVENTS.filter(e => ch.events?.includes(e)) : [...CHANNEL_EVENTS]
 
@@ -66,9 +56,6 @@ const memberName = (members: OrgMember[], id: string, t: TFunction<'settings'>):
   return m ? m.user?.displayName || m.user?.email || m.userId : t('channels.formerMember')
 }
 
-// testFailure says why a test delivery failed. The server masks a 5xx's
-// message, so a failed delivery is told by its details: the endpoint's HTTP
-// status, or a fixed reason such as "the connection timed out".
 function testFailure(e: unknown, t: TFunction<'settings'>): string {
   if (e instanceof ApiError) {
     if (e.code === 'CHANNEL_DELIVERIES_BUSY') return t('channels.testBusy')
@@ -87,7 +74,6 @@ export default function OrgChannelsSection({
 }: {
   orgId: string
   isAdmin: boolean
-  // The org's roster: an email channel's recipients are chosen from it.
   members?: OrgMember[]
 }) {
   const {t} = useTranslation('settings')
@@ -97,8 +83,6 @@ export default function OrgChannelsSection({
 
   const {data, isLoading, error, refetch} = useAsync<OrgChannel[]>(signal => channelsApi.list(orgId, signal), [orgId])
   const channels = data ?? []
-  // The form's choices, for admins only (the route is theirs). A failed read
-  // reads as a server without them: the legacy kinds, no host hint.
   const {data: options} = useAsync<ChannelOptions | null>(
     async signal => (isAdmin ? ((await channelsApi.options(orgId, signal)) ?? null) : null),
     [orgId, isAdmin],
@@ -129,8 +113,6 @@ export default function OrgChannelsSection({
     [orgId, t, toast],
   )
 
-  // Pausing changes `enabled` only: the URL goes back as "unchanged" and no
-  // secret is sent, so the stored ones are kept.
   const handleToggle = useCallback(
     async (ch: KnownOrgChannel) => {
       try {
@@ -225,9 +207,7 @@ function ChannelRow({
   const {confirm} = useConfirm()
   const kind = KINDS.find(k => k.id === ch.kind)
   const known = isKnownChannel(ch)
-  // A Teams row may still hold a secret an older server stored; it signs nothing.
   const signed = ch.hasSecret === true && (!isKnownChannel(ch) || channelSigns(ch.kind))
-  // Pausing saves the stored URL back, which the server cannot read: only an edit with a new URL helps.
   const canToggle = isAdmin && known && !ch.unreadable
   const events = channelEvents(ch)
   const where =
@@ -343,12 +323,10 @@ type FormField = 'kind' | 'url' | 'secret' | 'email' | 'token' | 'project' | 're
 
 const FORM_FIELDS: readonly FormField[] = ['kind', 'url', 'secret', 'email', 'token', 'project', 'recipients', 'events']
 
-// fieldErrorOf maps a refused save (400 INVALID_CHANNEL) to the form field its
-// details name; anything else is null.
 function fieldErrorOf(e: unknown): {field: FormField; message: string} | null {
   if (!(e instanceof ApiError) || e.status !== 400) return null
-  const field = e.details?.field
-  return isKnown(FORM_FIELDS, field) ? {field, message: e.message} : null
+  const named = apiErrorField(e)
+  return named && isKnown(FORM_FIELDS, named.field) ? {field: named.field, message: e.message} : null
 }
 
 const inputClass =
@@ -374,12 +352,9 @@ function ChannelForm({
   const uid = useId()
   const [name, setName] = useState(initial?.name ?? '')
   const [kind, setKind] = useState<ChannelKind>(initial?.kind ?? 'webhook')
-  // An edit starts with the URL empty: the list shows it redacted, and an
-  // empty field keeps the stored one.
   const [url, setUrl] = useState('')
   const [secret, setSecret] = useState('')
   const [clearSecret, setClearSecret] = useState(false)
-  // Jira: the email and project as listed; the token, like the secret, is never returned.
   const [jiraEmail, setJiraEmail] = useState(initial?.email ?? '')
   const [token, setToken] = useState('')
   const [project, setProject] = useState(initial?.project ?? '')
@@ -389,42 +364,39 @@ function ChannelForm({
   const [fieldError, setFieldError] = useState<{field: FormField; message: string} | null>(null)
   const [saving, setSaving] = useState(false)
 
-  // The kinds this deployment delivers; a server without the options route offers the legacy ones.
   const offered = KINDS.filter(k =>
     options ? options.kinds.includes(k.id) || k.id === initial?.kind : LEGACY_CHANNEL_KINDS.includes(k.id),
   )
   const signs = channelSigns(kind)
   const hasUrl = channelHasUrl(kind)
-  const errorOf = (field: FormField) => (fieldError?.field === field ? fieldError.message : null)
+  const v = useFormValidation<FormField>({
+    fields: FORM_FIELDS,
+    validate: () => {
+      const errors: FieldErrors<FormField> = {}
+      if (hasUrl && (!initial || initial.unreadable) && !url.trim())
+        errors.url = initial?.unreadable ? t('channels.unreadableHint') : t('channels.urlRequired')
+      if (kind === 'jira') {
+        if (!jiraEmail.trim()) errors.email = t('errors.required', {ns: 'common'})
+        if (!initial?.hasToken && !token.trim()) errors.token = t('errors.required', {ns: 'common'})
+        if (!project.trim()) errors.project = t('errors.required', {ns: 'common'})
+      }
+      if (kind === 'email' && recipients.length === 0) errors.recipients = t('channels.recipientsRequired')
+      if (events.length === 0) errors.events = t('channels.eventsRequired')
+      return errors
+    },
+  })
+  const errorOf = (field: FormField) =>
+    fieldError?.field === field ? fieldError.message : (v.errorFor(field) ?? null)
   const errorId = (field: FormField) => `${uid}-${field}-error`
   const clearError = (field: FormField) => {
     if (fieldError?.field === field) setFieldError(null)
   }
-  // Events go only when changed: an unchanged choice keeps what is stored (a newer server's events included).
   const changedEvents =
     events.length !== initialEvents.length || events.some(e => !initialEvents.includes(e)) ? events : undefined
 
-  // The secret is never returned by the API: an edit sends one only when a
-  // new value is typed, or clears it on request.
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (hasUrl && (!initial || initial.unreadable) && !url.trim()) {
-      if (initial?.unreadable) setFieldError({field: 'url', message: t('channels.unreadableHint')})
-      else toast.error(t('channels.urlRequired'))
-      return
-    }
-    if (kind === 'jira' && (!jiraEmail.trim() || !project.trim() || (!initial?.hasToken && !token.trim()))) {
-      toast.error(t('channels.jiraFieldsRequired'))
-      return
-    }
-    if (kind === 'email' && recipients.length === 0) {
-      toast.error(t('channels.recipientsRequired'))
-      return
-    }
-    if (events.length === 0) {
-      toast.error(t('channels.eventsRequired'))
-      return
-    }
+    if (v.submitValidate()) return
     const fields = {
       email: jiraEmail,
       token,
@@ -472,8 +444,8 @@ function ChannelForm({
     'aria-invalid': !!errorOf(field) || undefined,
     'aria-describedby': errorOf(field) ? errorId(field) : undefined,
     className: clsx(inputClass, errorOf(field) ? 'border-semantic-error' : 'border-border-default'),
+    onBlur: () => v.touch(field),
   })
-  // Recipients the roster no longer has (they left) stay listed, so an admin can drop them.
   const choosable = [...members.map(m => m.userId), ...recipients.filter(id => !members.some(m => m.userId === id))]
 
   return (
@@ -531,6 +503,7 @@ function ChannelForm({
             aria-invalid={!!errorOf('url') || undefined}
             aria-describedby={urlDescribedBy || undefined}
             className={clsx(inputClass, errorOf('url') ? 'border-semantic-error' : 'border-border-default')}
+            onBlur={() => v.touch('url')}
           />
           {initial && !initial.unreadable && (
             <p id={`${uid}-url-hint`} className="text-2xs text-text-tertiary/70">

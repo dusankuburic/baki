@@ -59,13 +59,10 @@ describe('PortfolioView', () => {
         <PortfolioView />
       </ToastProvider>,
     )
-    // Worst-first order is the server's responsibility; here we just confirm both render.
     expect(await screen.findByText('Bravo')).toBeInTheDocument()
     expect(screen.getByText('Alpha')).toBeInTheDocument()
   })
 
-  // The rollups cover the ranked flows only, so a capped ranking must say so
-  // rather than present its averages as the whole fleet's.
   it('says when the fleet is larger than the ranking', async () => {
     portfolio.mockResolvedValue({
       totalFlows: 4200,
@@ -168,11 +165,9 @@ describe('PortfolioView', () => {
     )
     await screen.findByText('Alpha')
 
-    // Select the first flow's row checkbox (the per-row button with that aria-label).
     const selectAlpha = screen.getByLabelText('Select Alpha')
     fireEvent.click(selectAlpha)
 
-    // Bulk toolbar appears + the re-analyze button fires the API for the selection.
     const reanalyzeBtn = await screen.findByText(/Re-analyze 1/)
     fireEvent.click(reanalyzeBtn)
     await waitFor(() => expect(analyzeFlowById).toHaveBeenCalledWith('f1'))

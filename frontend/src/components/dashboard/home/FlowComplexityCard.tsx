@@ -12,8 +12,6 @@ export interface ComplexityRow {
   health: number
 }
 
-// Blocks against findings, one point per flow, coloured by health tier. The
-// same figure serves Home (session or cloud) and the Analytics page.
 export function FlowComplexityCard({
   rows,
   title,
@@ -52,7 +50,6 @@ export function FlowComplexityCard({
       color: colour[tier],
     }))
   }, [theme, t])
-  // Critical shares the poor colour; fold it into that legend entry.
   const folded = useMemo(() => points.map(p => (p.group === 'critical' ? {...p, group: 'poor'} : p)), [points])
   const tableRows = useMemo(() => rows.map(r => ({...r, tier: t(`health.${healthTier(r.health).tier}`)})), [rows, t])
   return (

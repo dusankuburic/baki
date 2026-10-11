@@ -5,26 +5,12 @@ import {severityTone} from '@/lib/severityTone'
 export type BadgeTone = 'neutral' | 'brand' | 'info' | 'success' | 'warning' | 'error'
 
 export interface BadgeToneSpec {
-  /** Tailwind classes: the fill, the outline and the text colour. */
   className: string
-  /** The CSS custom property the fill is mixed from… */
   fill: string
-  /** …and how much of it is laid over the surface (1 = solid). */
   fillAlpha: number
-  /** The per-theme text colour token (index.css, every theme block). */
   fg: string
 }
 
-// Badge text cannot ride the tone colour itself: `text-brand-400` on a 15 %
-// brand tint measured 1.2–2.5:1 in the light themes, and the semantic
-// colours fail on their own tints in dozens of theme/surface pairs. Each tone
-// therefore has a --badge-<tone>-fg token per theme, chosen to pass 4.5:1 on
-// surface-1, surface-2 and the badge's own fill over either.
-// lib/themeContrast.test.ts checks exactly these specs in every theme, so a
-// new tone or a changed fill is measured, not eyeballed.
-//
-// The error/warning/info fills and outlines come from severityTone, so a
-// badge and a finding chip of the same severity read as one colour.
 export const BADGE_TONES: Record<BadgeTone, BadgeToneSpec> = {
   neutral: {
     className: 'bg-surface-3 border-border-default text-(--badge-neutral-fg)',
@@ -66,20 +52,10 @@ export const BADGE_TONES: Record<BadgeTone, BadgeToneSpec> = {
 
 type BadgeProps = {
   tone?: BadgeTone
-  /** Leading icon, decorative (the text carries the meaning). */
   icon?: LucideIcon
-  /** The visible text: a word or two. */
   children: React.ReactNode
-  /**
-   * What a screen reader hears instead of the visible text, for a badge
-   * whose short text needs context ("SHARED" → "Shared by Contoso"). The
-   * visible text is hidden from assistive technology then, so it is not
-   * read twice.
-   */
   srLabel?: string
-  /** Hover hint (mouse only: put anything essential in srLabel as well). */
   title?: string
-  /** Uppercase small caps, the app's badge style. Off for sentence-case chips. */
   caps?: boolean
   className?: string
 }
@@ -97,8 +73,6 @@ export default function Badge({
     <span
       title={title}
       className={clsx(
-        // relative: contains the sr-only text, which is absolutely positioned
-        // and would otherwise sit against the nearest positioned ancestor.
         'relative inline-flex items-center gap-1 shrink-0 max-w-full rounded border px-1.5 py-px text-2xs font-semibold whitespace-nowrap',
         caps && 'uppercase tracking-wider',
         BADGE_TONES[tone].className,

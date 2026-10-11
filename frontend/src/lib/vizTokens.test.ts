@@ -2,10 +2,6 @@ import {describe, it, expect} from 'vitest'
 import {readFileSync} from 'node:fs'
 import {THEME_REGISTRY} from './themeRegistry'
 
-// The chart palette lives in index.css as --viz-* tokens: the dark steps in
-// :root and the light steps in one rule that lists every light theme. This
-// keeps that rule honest — a light theme added to the registry without a
-// --viz entry would silently chart in the dark palette.
 const css = readFileSync('src/index.css', 'utf-8')
 
 function tokensIn(block: string): Record<string, string> {
@@ -45,7 +41,6 @@ describe('data-viz tokens', () => {
     for (let i = 1; i <= 8; i++) {
       expect(light[`--viz-${i}`]).toMatch(/^#[0-9a-f]{6}$/i)
     }
-    // The steps differ from the dark ones (same hues, stepped for a light surface).
     expect(light['--viz-1']).not.toBe(root['--viz-1'])
   })
 })

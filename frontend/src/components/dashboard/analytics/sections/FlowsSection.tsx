@@ -10,9 +10,6 @@ import {HealthDistributionCard} from '../../home/HealthDistributionCard'
 import {FlowComplexityCard} from '../../home/FlowComplexityCard'
 import {ChartSection} from '../ChartSection'
 
-// Which flows need attention: the score histogram, complexity against
-// findings, the worst flows as a table with an Open action, and — when
-// comparing — the flows whose health moved most.
 export function FlowsSection({
   data,
   refetching,

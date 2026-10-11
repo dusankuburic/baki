@@ -1,5 +1,3 @@
-// Canonical stores barrel — keep this complete so consumers can do
-// `import {useFooStore} from '@/stores'` consistently for any store.
 export {useAnalysisStore} from './analysisStore'
 export {useAuthStore} from './authStore'
 export {useAzureFoundryStore} from './azureFoundryStore'

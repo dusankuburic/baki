@@ -8,10 +8,6 @@ import type {TableSpec} from './chartTypes'
 
 export type ChartCardState = 'ready' | 'empty' | 'error' | 'loading'
 
-// The card every dashboard chart lives in: title, the window/scope it covers,
-// actions, a chart/table switch (the table is the chart's accessible twin), and
-// the loading / empty / error / refetching states. While data refetches the
-// previous render stays at reduced opacity — no skeleton flash, no layout jump.
 export function ChartCard<Row extends object>({
   id,
   title,
@@ -39,7 +35,6 @@ export function ChartCard<Row extends object>({
   errorMessage?: string
   onRetry?: () => void
   footnote?: string
-  /** Accessible name of the chart body; defaults to the title. */
   label?: string
   className?: string
   children?: ReactNode
@@ -120,7 +115,6 @@ export function ChartCard<Row extends object>({
   )
 }
 
-// An honest empty state inside a card instead of a zeroed chart.
 export function ChartPlaceholder({message, className}: {message: string; className?: string}) {
   return (
     <div className={clsx('flex h-full min-h-24 w-full items-center justify-center text-center', className)}>

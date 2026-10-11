@@ -5,9 +5,6 @@ import {useDebouncedSearch} from '@/hooks/useDebouncedSearch'
 import {flowApi} from '@/api'
 import type {SearchResult} from '@/types'
 
-// Module-scoped so the sidebar's debounced typing and runSearch (callers
-// outside the sidebar) share one staleness counter: whichever search started
-// last wins, regardless of which path started it.
 let searchVersion = 0
 
 async function searchCurrentFlow(q: string): Promise<void> {
@@ -38,10 +35,6 @@ async function searchCurrentFlow(q: string): Promise<void> {
   }
 }
 
-// runSearch puts q in the sidebar search box AND runs the search immediately.
-// BlockCard's "Find Usages" used to set searchStore.query alone: the box
-// showed the text but nothing ever queried the flow, so the sidebar sat on a
-// query with no results.
 export function runSearch(q: string): Promise<void> {
   useSearchStore.getState().setQuery(q)
   return searchCurrentFlow(q.trim())
@@ -67,7 +60,6 @@ export function useSidebarSearch() {
     [setQuery, debouncedSearch],
   )
 
-  // Navigate to the active search result in the flow tree
   useEffect(() => {
     if (searchResults.length === 0 || activeResultIndex < 0) return
     const result = searchResults[activeResultIndex]

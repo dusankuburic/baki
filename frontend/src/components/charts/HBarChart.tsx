@@ -28,9 +28,6 @@ export interface HBarSeries {
   color: string
 }
 
-// Horizontal bars for a ranked list of categories. One series is one hue with
-// the value at the tip; several series stack in status/categorical colours
-// with a legend. The height grows with the rows so every label renders.
 export function HBarChart<Row extends HBarRow>({
   rows,
   valueName,
@@ -45,17 +42,12 @@ export function HBarChart<Row extends HBarRow>({
   minHeight,
 }: {
   rows: Row[]
-  /** Series name of the single-series bar (tooltip). */
   valueName: string
-  /** Stacked series, each reading its own key off the row. */
   series?: HBarSeries[]
   valueFormatter?: (n: number) => string
-  /** Fractional axis ticks (currency). */
   allowDecimals?: boolean
   color?: string
-  /** Per-row colour for ordered categories (an ordinal ramp); overrides `color`. */
   rowColor?: (row: Row) => string
-  /** Dims every other bar (a bar that is the active filter). */
   activeKey?: string | null
   onBarClick?: (key: string) => void
   maxLabel?: number

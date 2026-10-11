@@ -21,22 +21,12 @@ import LibrarySkeleton from './LibrarySkeleton'
 import LibraryEmptyState from './LibraryEmptyState'
 import {useLibraryWriteErrorToast} from './useLibraryWriteErrorToast'
 
-// mergeTags folds the tags on newly loaded flows into the session's known set,
-// returning the previous array when nothing new appeared so the filter rail
-// does not re-render on every page load.
 function mergeTags(known: string[], flows: LibraryFlow[]): string[] {
   const next = new Set(known)
   for (const f of flows) for (const tag of f.tags ?? []) next.add(tag)
   return next.size === known.length ? known : [...next].sort()
 }
 
-// Cloud-library browse workspace. Three-pane layout:
-//   • filter rail (left)  — scope + per-org filter
-//   • results pane (mid)  — search/sort/view-toggle toolbar + grid|list + pager
-//   • detail panel (right) — populated when a flow is selected
-//
-// Opening a flow takes the same code path as LibraryTab: fetch content,
-// hydrate flowStore, switch the main pane to 'block'.
 export default function LibraryWorkspace() {
   const {t} = useTranslation('library')
   const view = useLibraryBrowseStore(s => s.view)
@@ -59,9 +49,6 @@ export default function LibraryWorkspace() {
   const reportWriteError = useLibraryWriteErrorToast()
   const {confirm, prompt} = useConfirm()
   const [knownTags, setKnownTags] = useState<string[]>([])
-  // Bumped after a write (or a conflict reload) so the detail panel re-reads
-  // the flow: it holds its own copy, and a stale version there turns the next
-  // rename into a 409.
   const [detailReload, setDetailReload] = useState(0)
 
   const [items, setItems] = useState<LibraryFlow[]>([])
@@ -77,24 +64,14 @@ export default function LibraryWorkspace() {
   }, [query])
 
   useEffect(() => {
-    // Ensure the org list is hydrated so the filter rail can show membership chips.
     loadOrgs().catch(() => {
-      /* surfaced by orgStore.error */
     })
   }, [loadOrgs])
 
-  // Resolve "all orgs the user belongs to" → request-level orgId filter. When
-  // exactly one org (or "personal" = empty string) is selected we can pass it
-  // server-side as `orgId`; for the "all" or multi-org cases the server's
-  // scope=all already widens to every membership, so we rely on that and
-  // post-filter locally for the multi-org chip subset. Keeps the request
-  // surface narrow without rebuilding the storage filter for chip toggles.
   const requestOrgId = useMemo(() => {
     if (!selectedOrgIds) return undefined
     if (selectedOrgIds.size !== 1) return undefined
     const only = [...selectedOrgIds][0]
-    // Empty-string id (the personal bucket) cannot be passed as orgId — the
-    // server would treat that as "no org filter". Fall back to client-side.
     return only ? only : undefined
   }, [selectedOrgIds])
 
@@ -116,13 +93,9 @@ export default function LibraryWorkspace() {
             limit: pageSize,
             offset: page * pageSize,
           },
-          // Real cancellation: rapid filter/search typing aborts the previous
-          // request in-flight instead of discarding its late result.
           ac.signal,
         )
         if (ac.signal.aborted) return
-        // Multi-org chip subset filtering happens client-side over the page —
-        // the server doesn't accept a list of orgIds, only a single one.
         let pageItems = res.items
         if (selectedOrgIds && selectedOrgIds.size > 1) {
           pageItems = pageItems.filter(f => selectedOrgIds.has(f.organizationId ?? ''))
@@ -131,7 +104,6 @@ export default function LibraryWorkspace() {
         setTotal(res.total)
         setKnownTags(prev => mergeTags(prev, res.items))
       } catch (e) {
-        // Abort (superseded fetch or unmount) is intentional, not an error.
         if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return
         const msg = getErrorMessage(e)
         logger.warn('Library: list failed', e)
@@ -144,7 +116,6 @@ export default function LibraryWorkspace() {
   )
 
   useEffect(() => {
-    // Kicks off the paged fetch (external system).
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchPage(false)
     return () => abortRef.current?.abort()
@@ -152,8 +123,6 @@ export default function LibraryWorkspace() {
 
   const handleOpen = useCallback(
     async (flow: LibraryFlow) => {
-      // Per-card loading (U4.5): the clicked card shows a spinner while the
-      // content fetch runs — the click used to feel ignored.
       setOpeningId(flow.id)
       try {
         const doc = await libraryApi.getContent(flow.id)
@@ -191,15 +160,11 @@ export default function LibraryWorkspace() {
     [selectedFlowId, setSelectedFlow, toast, confirm, t],
   )
 
-  // A conflict reload re-reads both the page and the detail panel, so the next
-  // write goes out with the version the server now holds.
   const reloadAfterConflict = useCallback(() => {
     setDetailReload(n => n + 1)
     void fetchPage(true)
   }, [fetchPage])
 
-  // R0-4: rename a library flow. The backend's update endpoint always
-  // accepted {name}; no UI ever sent it — renaming meant delete + re-upload.
   const handleRename = useCallback(
     async (flow: LibraryFlow) => {
       const name = await prompt({
@@ -222,7 +187,6 @@ export default function LibraryWorkspace() {
     [toast, prompt, reportWriteError, reloadAfterConflict, t],
   )
 
-  // R0-4: duplicate = load content, save as "<name> (copy)" (same org).
   const handleDuplicate = useCallback(
     async (flow: LibraryFlow) => {
       try {
@@ -242,7 +206,6 @@ export default function LibraryWorkspace() {
     [toast, t],
   )
 
-  // Tag editor state (R2-4b): inline chip editing in the detail panel.
   const [editingTags, setEditingTags] = useState(false)
   const handleSaveTags = useCallback(
     async (flow: LibraryFlow, tags: string[]) => {
@@ -265,13 +228,7 @@ export default function LibraryWorkspace() {
   const showSkeleton = isLoading && items.length === 0
 
   return (
-    // The main pane's toolbar (section switcher, title) sits above this, the
-    // same one every other system view has; the library used to draw its own
-    // header with a back link, which made switching sections look like
-    // leaving the app.
     <div className="library-workspace flex flex-col h-full bg-surface-1">
-      {/* relative: the detail panel slides over this box when there is no
-          room to dock it (see .library-detail). */}
       <div className="relative flex-1 flex overflow-hidden">
         <aside className="library-rail border-r border-border-subtle overflow-y-auto shrink-0">
           <LibraryFilterRail orgs={orgs} tags={knownTags} />

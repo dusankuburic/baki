@@ -6,8 +6,6 @@ type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
   hint?: string
 }
 
-// Mirrors shared/Input: error/hint linked via aria-describedby, invalid
-// fields carry aria-invalid (WCAG 3.3.1/3.3.2).
 export default function Textarea({error, hint, className, id, ...rest}: TextareaProps) {
   const fallbackId = useId()
   const describedBy = error || hint ? `${id ?? fallbackId}-desc` : undefined

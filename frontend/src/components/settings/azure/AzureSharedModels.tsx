@@ -10,21 +10,12 @@ import {orgAzureAnchor, type SharedOrgGroup} from './registryView'
 
 interface AzureSharedModelsProps {
   groups: SharedOrgGroup[]
-  /** The group heading's level (the resource cards' level). */
   headingLevel: 4 | 5
-  /** The effective "Default for new chats" — it may be a shared model (the server default). */
   defaultModelId: string | null
-  /** An Azure knowledge base exists here: the knowledge-base model is marked. */
   knowledgeEnabled: boolean
   labelOf: PurposeLabelOf
 }
 
-// "Shared with you by {org}": one read-only group per organisation where the
-// user is an admin or member (viewers and guests get none — the server lists
-// only what they may use). Every row wears the Shared badge (icon and text,
-// never colour alone), so an organisation's entry cannot pass for the user's
-// own. Changing them is an admin's job in Organizations: admins get a way
-// there, opened on that organisation's block.
 export default function AzureSharedModels({
   groups,
   headingLevel,
@@ -65,8 +56,6 @@ function SharedGroup({
   const {t} = useTranslation('settings')
   const headingId = useId()
   const userId = useAuthStore(s => s.user?.id)
-  // Role only, as the server decides (the owner who is no longer an admin
-  // manages nothing).
   const isAdmin = useOrgStore(
     s => s.organisations.find(o => o.id === group.orgId)?.members?.find(m => m.userId === userId)?.role === 'admin',
   )

@@ -55,10 +55,6 @@ describe('formatShortcutParts', () => {
 })
 
 describe('registry', () => {
-  // A combo may repeat across scopes that never listen together (escape clears
-  // the canvas selection in 'main' and stops a reply in 'chat'). Within one
-  // scope, or against a 'global' binding that is live everywhere, useKeyboard
-  // runs whichever id comes first and the other entry is dead.
   it('binds each key combo at most once per scope, counting global against every scope', () => {
     const conflicts: string[] = []
     allShortcuts.forEach((a, i) => {

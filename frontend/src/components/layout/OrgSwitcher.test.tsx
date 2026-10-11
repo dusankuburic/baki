@@ -7,14 +7,6 @@ vi.mock('@/platform/guards', () => ({
   isWeb: () => !isTauriMock(),
 }))
 
-// Partial mock (importOriginal) rather than a hand-written factory: the factory
-// form silently omits any export the module gains later, and vitest turns the
-// missing binding into a THROW at the call site. That is exactly what happened
-// here — orgStore.setActiveOrg calls clearRequestCache(), which the old factory
-// did not provide, so every org switch threw mid-action. The switching tests
-// still passed (activeOrgId is written before the throw) while the cross-store
-// reset that follows it never ran, and the run itself exited non-zero on the
-// unhandled errors. Only `request` needs stubbing; everything else is inert.
 vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
   return {
@@ -50,8 +42,6 @@ function makeDoc(): FlowDocument {
   } as unknown as FlowDocument
 }
 
-// Seeds the stores an org switch is contractually required to wipe, so the
-// tests below can prove the wipe happened rather than assuming it.
 function seedPreviousOrgState() {
   useFlowStore.setState({document: makeDoc()})
   useAnalysisStore.setState({reports: new Map([['flow1', {findings: []} as unknown as AnalysisReport]])})
@@ -73,9 +63,6 @@ function seedPreviousOrgState() {
   })
 }
 
-// Asserts the full cross-store teardown documented in orgStore.setActiveOrg:
-// analysis reports and chat threads are not org-scoped in frontend state, so an
-// org switch must clear them outright or the new org sees the old one's data.
 function expectPreviousOrgStateCleared() {
   expect(useFlowStore.getState().document).toBeNull()
   expect(useAnalysisStore.getState().reports.size).toBe(0)

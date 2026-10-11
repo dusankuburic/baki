@@ -10,6 +10,9 @@ type Props = {
   fallback: number
   integer?: boolean
   className?: string
+  error?: string
+  hint?: string
+  onBlur?: () => void
 }
 
 function clamp(n: number, min?: number, max?: number): number {
@@ -18,17 +21,21 @@ function clamp(n: number, min?: number, max?: number): number {
   return n
 }
 
-/**
- * Numeric input that commits a validated value on blur/Enter (not per-keystroke,
- * so a min>1 field doesn't fight you mid-type). Invalid input falls back to
- * `fallback`; out-of-range input is clamped to [min, max] — neither is silently
- * persisted. Wraps the shared Input.
- */
-export default function NumberField({value, onCommit, min, max, step, fallback, integer = true, className}: Props) {
+export default function NumberField({
+  value,
+  onCommit,
+  min,
+  max,
+  step,
+  fallback,
+  integer = true,
+  className,
+  error,
+  hint,
+  onBlur,
+}: Props) {
   const [draft, setDraft] = useState(String(value))
 
-  // Reflect external value changes (store reset, switching provider, etc.).
-  // Adjusted during render — see the same pattern in Avatar.
   const [lastValue, setLastValue] = useState(value)
   if (value !== lastValue) {
     setLastValue(value)
@@ -50,7 +57,10 @@ export default function NumberField({value, onCommit, min, max, step, fallback, 
       step={step}
       value={draft}
       onChange={e => setDraft(e.target.value)}
-      onBlur={commit}
+      onBlur={() => {
+        commit()
+        onBlur?.()
+      }}
       onKeyDown={e => {
         if (e.key === 'Enter') {
           e.preventDefault()
@@ -58,6 +68,8 @@ export default function NumberField({value, onCommit, min, max, step, fallback, 
         }
       }}
       className={className}
+      error={error}
+      hint={hint}
     />
   )
 }

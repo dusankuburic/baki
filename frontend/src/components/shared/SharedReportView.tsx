@@ -3,12 +3,8 @@ import clsx from 'clsx'
 import type {AnalysisReport, Severity} from '@/types'
 import {useAsync} from '@/hooks/useAsync'
 import {healthTier} from '@/lib/scoring'
+import {severityTone} from '@/lib/severityTone'
 
-// SharedReportView is an UNAUTHENTICATED standalone page that renders a
-// read-only findings report via a share token. It bypasses the normal app
-// shell (no sidebar, no auth, no stores) so a recipient can review findings
-// without an account. The token authorizes access; the backend returns the
-// current analysis report for the flow.
 interface SharedData {
   flowId: string
   flowName: string
@@ -16,9 +12,9 @@ interface SharedData {
 }
 
 const sevColor: Record<Severity, string> = {
-  error: 'text-red-400 border-red-500/30 bg-red-500/5',
-  warning: 'text-amber-400 border-amber-500/30 bg-amber-500/5',
-  info: 'text-blue-400 border-blue-500/30 bg-blue-500/5',
+  error: `${severityTone('error').text} ${severityTone('error').border} ${severityTone('error').bg}`,
+  warning: `${severityTone('warning').text} ${severityTone('warning').border} ${severityTone('warning').bg}`,
+  info: `${severityTone('info').text} ${severityTone('info').border} ${severityTone('info').bg}`,
 }
 
 const sevLabel: Record<Severity, string> = {
@@ -75,14 +71,11 @@ export default function SharedReportView() {
   }
   const sortedGroups = [...groups.entries()].sort((a, b) => {
     const order: Record<string, number> = {error: 0, warning: 1, info: 2}
-    // Group arrays are built by pushing ≥1 finding, so [0] always exists;
-    // the 'info' fallback mirrors the ?? 2 default below.
     return (order[a[1][0]?.severity ?? 'info'] ?? 2) - (order[b[1][0]?.severity ?? 'info'] ?? 2)
   })
 
   return (
     <div className="min-h-screen bg-surface-1 text-text-primary">
-      {/* Header */}
       <div className="border-b border-border-subtle px-6 py-4">
         <div className="max-w-4xl mx-auto">
           <div className="flex items-center gap-2 mb-1">
@@ -114,13 +107,11 @@ export default function SharedReportView() {
         </div>
       </div>
 
-      {/* Findings */}
       <div className="max-w-4xl mx-auto px-6 py-4 space-y-3">
         {sortedGroups.length === 0 ? (
           <div className="text-center py-12 text-text-tertiary">{t('sharedReport.empty')}</div>
         ) : (
           sortedGroups.map(([ruleId, groupFindings]) => {
-            // Every group was created with at least one finding.
             const first = groupFindings[0]
             if (!first) return null
             return (
@@ -167,7 +158,6 @@ export default function SharedReportView() {
         )}
       </div>
 
-      {/* Footer */}
       <div className="border-t border-border-subtle px-6 py-3 mt-8">
         <div className="max-w-4xl mx-auto text-center text-2xs text-text-disabled">
           Report generated {report.generatedAt ? new Date(report.generatedAt).toLocaleString() : ''} · Baki PAD Flow

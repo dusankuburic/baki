@@ -5,8 +5,6 @@ import {DetailsAction} from './DetailsAction'
 import {actionIcon, actionLabel} from './activity'
 import type {ActivityEntry} from '@/types'
 
-// The caller's latest audit events, each with a human label and, for flow
-// events, the flow's name (the server sends no label for other resources).
 export function ActivityFeedCard({
   data,
   onDetails,

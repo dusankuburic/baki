@@ -2,10 +2,6 @@ import {describe, it, expect, vi} from 'vitest'
 import {render, screen, fireEvent} from '@testing-library/react'
 import SlashCommandAutocomplete from './SlashCommandAutocomplete'
 
-// The menu listens for keys on window (capture phase). It used to act on keys
-// typed ANYWHERE while it had matches: after typing "/c" in the composer, a Tab
-// or Enter pressed in a search box ran /clear.
-
 function setup(opts: {canClear?: boolean} = {}) {
   const composer = document.createElement('textarea')
   const elsewhere = document.createElement('input')

@@ -15,15 +15,8 @@ import {
 } from '@/components/charts'
 import type {Finding, SubflowMetrics} from '@/types'
 
-// ComplexityScatter correlates each subflow's cyclomatic vs cognitive
-// complexity (bubble size = max nesting depth). The two metrics measure
-// different things — cyclomatic counts paths, cognitive counts how hard those
-// paths are to read — so an outlier in the top-left (low cyclomatic, high
-// cognitive) flags a deceptively simple-looking subflow that's a pain to
-// maintain. Pure report data: no extra fetch.
 export function ComplexityScatter({subflows}: {subflows: SubflowMetrics[]}) {
   const {t} = useTranslation('inspector')
-  // The chart theme (renamed away from `t`, which useTranslation owns).
   const theme = useChartTheme()
   const reduced = useReducedMotion()
   const data = subflows.map(s => ({
@@ -35,7 +28,6 @@ export function ComplexityScatter({subflows}: {subflows: SubflowMetrics[]}) {
 
   if (subflows.length === 0) return null
 
-  // Colour is state, not identity: cognitive load bands on the status tokens.
   const pointColor = (cog: number) =>
     cog > 30 ? theme.status.error : cog > 15 ? theme.status.warning : theme.status.success
   const legend = [
@@ -84,19 +76,15 @@ export function ComplexityScatter({subflows}: {subflows: SubflowMetrics[]}) {
   )
 }
 
-// ImpactEffortMatrix sorts the flow's findings into a 2×2 priority grid:
-// severity (error vs warning/info) × effort (one-click fix vs manual). This is
-// the "what should I fix first?" view — Quick Wins (auto-fixable errors) are
-// the highest-leverage work. Pure report data: no extra fetch.
 export function ImpactEffortMatrix({findings}: {findings: Finding[]}) {
   const {t} = useTranslation('inspector')
 
   if (findings.length === 0) return null
 
-  let quickWins = 0 // auto-fixable + error
-  let strategic = 0 // manual + error
-  let easyCleanup = 0 // auto-fixable + warning/info
-  let backlog = 0 // manual + warning/info
+  let quickWins = 0
+  let strategic = 0
+  let easyCleanup = 0
+  let backlog = 0
   for (const f of findings) {
     const isError = f.severity === 'error'
     const fixable = !!f.autoFix

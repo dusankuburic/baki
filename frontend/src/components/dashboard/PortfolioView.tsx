@@ -3,14 +3,15 @@ import {LayoutGrid, AlertCircle, RefreshCw, Download, ChevronDown, Check} from '
 import {libraryApi, type Portfolio, type PortfolioEntry, type PortfolioSort} from '@/api/library'
 import {analysisApi} from '@/api'
 import {Spinner, EmptyState, useToast} from '@/components/shared'
+import {useTranslation} from 'react-i18next'
 import {useUIStore} from '@/stores/uiStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {logger} from '@/lib/logger'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useAsync} from '@/hooks/useAsync'
 import {downloadBlob} from '@/lib/csv'
 import {healthTier} from '@/lib/scoring'
 
-// healthColor maps a 0–100 health score to the app-wide tier colour.
 function healthColor(score: number): string {
   return healthTier(score).text
 }
@@ -47,22 +48,14 @@ const SORT_OPTIONS: {value: PortfolioSort; label: string}[] = [
   {value: 'name', label: 'Name A → Z'},
 ]
 
-/**
- * Org-wide governance "fleet view": every flow the user can access, ranked
- * worst-health-first, with rollup totals. Backed by GET /api/library/portfolio
- * (cloud mode). Actionable: select flows for bulk re-analyze or CSV export.
- */
 export default function PortfolioView() {
+  const {t} = useTranslation('dashboard')
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
   const toast = useToast()
-  // Scoped to the org picked in the title bar, like the library; no active org
-  // means every flow the caller can reach across their orgs.
   const activeOrgId = useOrgStore(s => s.activeOrgId)
   const [sort, setSort] = useState<PortfolioSort>('risk')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [reanalyzing, setReanalyzing] = useState<Set<string>>(new Set())
-  // A selection made in one org must not ride along into another's list
-  // (the bulk bar would count flows that are no longer shown).
   const [selectionOrgId, setSelectionOrgId] = useState(activeOrgId)
   if (selectionOrgId !== activeOrgId) {
     setSelectionOrgId(activeOrgId)
@@ -81,8 +74,6 @@ export default function PortfolioView() {
     [activeOrgId, sort],
   )
 
-  // Memoize so the derived array identity is stable across renders when data
-  // is unchanged — the selection/re-analyze callbacks depend on it.
   const entries = useMemo(() => data?.entries ?? [], [data])
 
   const toggleSelect = useCallback((flowId: string) => {
@@ -103,9 +94,9 @@ export default function PortfolioView() {
       setReanalyzing(prev => new Set(prev).add(flowId))
       try {
         await analysisApi.analyzeFlowById(flowId)
-        toast.success(`Re-analyzed "${flowName}"`)
+        toast.success(t('portfolio.reanalyzed', {name: flowName}))
       } catch (e) {
-        toast.error(`Re-analyze failed for "${flowName}"`, {description: String(e)})
+        toast.error(t('portfolio.reanalyzeFailed', {name: flowName}), {description: getErrorMessage(e)})
       } finally {
         setReanalyzing(prev => {
           const next = new Set(prev)
@@ -114,12 +105,11 @@ export default function PortfolioView() {
         })
       }
     },
-    [toast],
+    [t, toast],
   )
 
   const reanalyzeSelected = useCallback(async () => {
     const ids = [...selected]
-    // Sequential to avoid hammering the analyzer / hitting per-user rate limits.
     for (const id of ids) {
       const entry = entries.find(e => e.flowId === id)
       if (entry) await reanalyzeOne(id, entry.flowName || id)
@@ -132,8 +122,6 @@ export default function PortfolioView() {
     exportPortfolioCSV(subset.length > 0 ? subset : entries)
   }, [entries, selected])
 
-  // Re-sorting or switching org keeps the current table on screen until the
-  // new ranking arrives; only the first load has nothing to show.
   if (loading && !data) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -216,8 +204,6 @@ export default function PortfolioView() {
           <Stat label="Open errors" value={data.errors} accent={data.errors > 0 ? 'text-semantic-error' : undefined} />
         </div>
 
-        {/* The server ranks a bounded number of flows. Saying so is the
-            difference between "the fleet averages 72" and "these 1000 do". */}
         {data.truncated && (
           <p className="text-xs text-text-tertiary">
             Ranking the {data.rankedFlows} flows loaded first of {data.totalFlows} accessible. The figures above cover
@@ -225,7 +211,6 @@ export default function PortfolioView() {
           </p>
         )}
 
-        {/* Bulk-action toolbar — appears when any rows are selected. */}
         {selected.size > 0 && (
           <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-brand-500/30 bg-brand-500/5">
             <span className="text-sm text-text-secondary">{selected.size} selected</span>

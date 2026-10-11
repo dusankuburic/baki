@@ -2,8 +2,6 @@ import {request, requestText, requestValidated} from './client'
 import {useFlowStore} from '@/stores/flowStore'
 import {getAnalysisReportSchema} from './schemas'
 
-// Folder-wide batch analysis can run rules over many flows, well beyond the
-// default request timeout.
 const BATCH_ANALYSIS_TIMEOUT_MS = 300_000
 import type {
   AnalysisReport,
@@ -30,7 +28,6 @@ import type {
   PolicyResult,
 } from '@/types'
 
-// Input for setFindingStatus. flowId defaults to the active flow.
 export interface SetFindingStatusInput {
   findingKey: string
   status: TriageStatus
@@ -40,7 +37,6 @@ export interface SetFindingStatusInput {
   flowId?: string
 }
 
-// One item of a batch finding-status update (flowId is shared across the batch).
 export interface BatchFindingStatusItem {
   findingKey: string
   status: TriageStatus
@@ -59,9 +55,6 @@ export const analysisApi = {
       body: {flowId: activeFlowId()},
     }),
 
-  // analyzeFlowById re-analyzes an arbitrary flow the caller can view, without
-  // requiring it to be the currently-open document. Used by the portfolio's bulk
-  // re-analyze action (which operates on flows that aren't loaded in the editor).
   analyzeFlowById: async (flowId: string): Promise<AnalysisReport> =>
     requestValidated('/api/analysis/analyze', await getAnalysisReportSchema(), {body: {flowId}}),
 
@@ -72,33 +65,15 @@ export const analysisApi = {
 
   getDataFlow: (): Promise<DataFlowAnalysis> => request('/api/analysis/dataflow', {body: {flowId: activeFlowId()}}),
 
-  // orgId scopes the catalog to that organisation's custom rules and
-  // enable/severity/threshold overrides — the rules that actually run on its
-  // flows. Without it the deployment catalog is returned.
   getRules: (orgId?: string): Promise<Rule[]> =>
     request(`/api/analysis/rules${orgId ? `?orgId=${encodeURIComponent(orgId)}` : ''}`, {method: 'GET'}),
 
   updateRuleConfig: (ruleId: string, config: RuleConfig): Promise<void> =>
     request('/api/analysis/rule/config', {body: {ruleId, config}}),
 
-  /**
-   * Validates custom-rule configs against the SERVER's analyzer — the same
-   * construction path the save endpoint and the analysis engine use, so the
-   * editor's verdict cannot disagree with either.
-   *
-   * Returns one entry per input rule, in order.
-   */
   validateCustomRules: (rules: unknown[]): Promise<CustomRuleValidation> =>
     request('/api/analysis/custom-rules/validate', {body: {rules}}),
 
-  /**
-   * Runs an UNSAVED rule against one of the caller's flows and reports what it
-   * would match.
-   *
-   * Distinct from validateCustomRules on purpose: that answers "does this
-   * compile", this answers "does it do anything". A regex that compiles and
-   * matches nothing is a policy the org believes is enforced and is not.
-   */
   testCustomRule: (rule: unknown, flowId: string): Promise<CustomRuleTestResult> =>
     request('/api/analysis/custom-rules/test', {body: {rule, flowId}}),
 
@@ -112,22 +87,12 @@ export const analysisApi = {
 
   getDiff: (): Promise<AnalysisDiff> => request('/api/analysis/diff', {body: {flowId: activeFlowId()}}),
 
-  // HTML export lives in exportApi (single dialog-aware implementation for
-  // PDF/Markdown/HTML
-  // that omitted the save-dialog path).
-
-  // Server-rendered SARIF 2.1.0 and JUnit XML, as text: the saved file is the
-  // server's bytes (request() would JSON-parse them, which fails for XML). CSV
-  // is built client-side from the visible findings, so there is no server CSV
-  // wrapper.
   exportSARIF: (flowId: string = activeFlowId() ?? ''): Promise<string> =>
     requestText('/api/analysis/export/sarif', {body: {flowId}}),
 
   exportJUnit: (flowId: string = activeFlowId() ?? ''): Promise<string> =>
     requestText('/api/analysis/export/junit', {body: {flowId}}),
 
-  // Inline pad-ignore directives in the flow, with stale ones flagged. The
-  // audit ran only in the CLI (`bakicli suppressions`) before this route.
   listSuppressions: (flowId: string = activeFlowId() ?? ''): Promise<SuppressionEntry[]> =>
     request('/api/analysis/suppressions', {body: {flowId}}),
 
@@ -143,15 +108,12 @@ export const analysisApi = {
   compareFlows: (flowAId: string, flowBId: string): Promise<FlowComparison> =>
     request('/api/analysis/compare', {body: {flowAId, flowBId}}),
 
-  // --- Finding triage & baselines (persistent, team-shared; cloud mode only) ---
-
   listFindingStatuses: (flowId: string = activeFlowId() ?? ''): Promise<FindingStatus[]> =>
     request('/api/analysis/triage/list', {body: {flowId}}),
 
   setFindingStatus: (input: SetFindingStatusInput): Promise<FindingStatus> =>
     request('/api/analysis/triage/set', {body: {flowId: activeFlowId(), ...input}}),
 
-  // Apply the same status to many findings of one flow in a single request.
   setFindingStatusBatch: (
     items: BatchFindingStatusItem[],
     flowId: string = activeFlowId() ?? '',
@@ -172,8 +134,6 @@ export const analysisApi = {
   baselineDrift: (flowId: string = activeFlowId() ?? ''): Promise<BaselineDrift> =>
     request('/api/analysis/baseline/drift', {body: {flowId}}),
 
-  // --- Finding comments (persistent, team-shared; cloud mode only) ---
-
   listComments: (flowId: string, findingKey: string): Promise<FindingComment[]> =>
     request('/api/analysis/comments/list', {body: {flowId, findingKey}}),
 
@@ -182,8 +142,6 @@ export const analysisApi = {
 
   deleteComment: (flowId: string, commentId: string): Promise<void> =>
     request('/api/analysis/comments/delete', {body: {flowId, commentId}}),
-
-  // --- Policy Gates (persistent, org-scoped; cloud mode only) ---
 
   savePolicy: (policy: Policy): Promise<Policy> => request('/api/analysis/policy/save', {body: policy}),
 
@@ -196,26 +154,20 @@ export const analysisApi = {
     request('/api/analysis/policy/evaluate-by-id', {body: {flowId, orgId, id}}),
 }
 
-/** One problem of a validated custom rule: an error, or a warning the rule still runs with. */
 export interface CustomRuleProblem {
-  /** The rule's JSON field (`severity`, `nameMatch`, an unknown key); absent for the rule as a whole. */
   field?: string
-  /** The analyzer's reason code, e.g. UNKNOWN_FIELD, RESERVED_ID, INVALID_PATTERN, NO_MATCHER. */
   reason: string
   message: string
   warning?: boolean
 }
 
-/** Per-entry result from POST /api/analysis/custom-rules/validate (checked strictly, as a save is). */
 export interface CustomRuleValidationEntry {
   index: number
   id: string
   valid: boolean
-  /** The first error, with its field and reason. */
   error?: string
   field?: string
   reason?: string
-  /** Every error and warning, in check order. */
   problems?: CustomRuleProblem[]
   loaded: boolean
 }
@@ -226,7 +178,6 @@ export interface CustomRuleValidation {
   invalid: number
 }
 
-/** Result of POST /api/analysis/custom-rules/test. */
 export interface CustomRuleTestResult {
   matches: number
   flowName: string

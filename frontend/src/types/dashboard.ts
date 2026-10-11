@@ -1,5 +1,3 @@
-// Welcome ("home") dashboard payload — GET /api/dashboard/home.
-// Distinct from the in-session analytics aggregates (see DashboardStats in analysis.ts).
 
 export interface DashboardHomeData {
   greeting: DashboardGreeting
@@ -8,21 +6,16 @@ export interface DashboardHomeData {
   recentFlows: RecentFlowStub[]
   findings: DashboardFindingsAgg
   isCloud: boolean
-  // Advanced sections (v2)
   healthTrend: DailyHealthPoint[]
   costByProvider: ProviderCost[]
   ruleFrequency: RuleFrequency[]
   activity: ActivityEntry[]
   complexity: FlowComplexityPoint[]
   security: DashboardSecurity
-  // Analytics sections (v3) — developer-facing metrics. severityTrend is
-  // cloud-only; confidenceDist/healthBuckets/fixability are populated in both
-  // modes (local derives them from the session cache).
   severityTrend: DailySeverityPoint[]
   confidenceDist: Record<string, number>
   healthBuckets: HealthBucket[]
   fixability: Fixability
-  // Team-triage workflow (cloud-only): status funnel, MTTR, stale findings.
   workflow: Workflow
 }
 
@@ -62,8 +55,6 @@ export interface FindingCategory {
   count: number
 }
 
-// ---- Advanced dashboard types (v2) ----
-
 export interface DailyHealthPoint {
   date: string
   avgHealth: number
@@ -80,7 +71,6 @@ export interface ProviderCost {
 export interface RuleFrequency {
   rule: string
   count: number
-  /** Worst severity this rule fires at across the owner's flows ("error"/"warning"/"info"). Cloud-only. */
   topSeverity?: string
 }
 
@@ -99,19 +89,13 @@ export interface FlowComplexityPoint {
 }
 
 export interface DashboardSecurity {
-  /** False when the posture could not be read: all-zero counts then mean "unknown", not "clean". */
   available: boolean
   failedLogins24h: number
   credentialFindings: number
-  /** Accounts currently locked by the brute-force defense. Cloud-only. */
   lockedAccounts: number
-  /** True when the caller may see instance-wide counts (lockedAccounts is zeroed otherwise). */
   admin: boolean
 }
 
-// ---- Analytics dashboard types (v3) ----
-
-/** One day of the org-wide severity trend (error/warning/info summed across all flows). */
 export interface DailySeverityPoint {
   date: string
   errors: number
@@ -119,7 +103,6 @@ export interface DailySeverityPoint {
   info: number
 }
 
-/** One 20-point slice of the health-score histogram. */
 export interface HealthBucket {
   label: string
   lo: number
@@ -127,23 +110,15 @@ export interface HealthBucket {
   count: number
 }
 
-/** How much of the current finding load is cheaply fixable. */
 export interface Fixability {
-  /** Findings carrying a one-click deterministic fix. */
   available: number
-  /** All findings. */
   total: number
-  /** Rules in the catalog that ship a deterministic fixer. */
   autoFixableRules: number
-  /** Total rules in the catalog. */
   totalRules: number
 }
 
-// ---- Analytics page payload — GET /api/dashboard/analytics ----
-
 export type AnalyticsScopeKey = 'personal' | 'org' | 'all'
 
-/** The filters the payload was computed for; flows the caller cannot see are dropped. */
 export interface AnalyticsApplied {
   scope: AnalyticsScopeKey
   orgId?: string
@@ -153,13 +128,11 @@ export interface AnalyticsApplied {
   rule: string[]
   compare: boolean
   tz: string
-  /** True when a severity/category/rule filter is active: counts then come from by_rule × catalog. */
   derived: boolean
 }
 
 export interface AnalyticsRange {
   preset: string
-  /** Inclusive local days, YYYY-MM-DD. */
   from: string
   to: string
   days: number
@@ -167,7 +140,6 @@ export interface AnalyticsRange {
   prevTo?: string
 }
 
-/** One headline number: now (or as of the window's last day), the previous period, a ≤12-point sparkline. */
 export interface StatValue {
   available: boolean
   value: number
@@ -191,7 +163,6 @@ export interface AnalyticsSummary {
   aiSpend: StatValue
 }
 
-/** The fleet as of one day; avgHealth is null until any flow has a snapshot. */
 export interface AnalyticsTrendPoint {
   date: string
   avgHealth: number | null
@@ -289,9 +260,7 @@ export interface AIDailyPoint {
 
 export interface ModelUsage {
   provider: string
-  /** What the caller asked for: a model id, or for Azure AI Foundry a deployment name / agent. */
   model: string
-  /** The model that actually answered, present only when it differs from `model` (deployment alias, model router, agent). */
   servedModel?: string
   tokensIn: number
   tokensOut: number
@@ -299,7 +268,6 @@ export interface ModelUsage {
   cost: number
 }
 
-/** AI usage for the caller and/or the scoped orgs; never tied to flows (flowScoped is always false). */
 export interface AnalyticsAI {
   scoped: 'user' | 'org' | 'user+orgs'
   flowScoped: boolean
@@ -337,7 +305,6 @@ export interface AnalyticsActivity {
   byAction: ActionCount[]
 }
 
-/** lockedAccounts is instance-wide and only present for instance admins. */
 export interface AnalyticsSecurity {
   available: boolean
   failedLogins24h: number
@@ -361,7 +328,6 @@ export interface FacetFlow {
   orgId?: string
 }
 
-/** Chip counts (each dimension counted under the other filters) and the flow picker's list. */
 export interface AnalyticsFacets {
   severity: FacetCount[]
   category: FacetCount[]
@@ -382,21 +348,14 @@ export interface DashboardAnalyticsData {
   activity: AnalyticsActivity
   security: AnalyticsSecurity
   facets: AnalyticsFacets
-  /** Section keys whose read failed; those sections are empty, not wrong. */
   partial: string[]
   generatedAt: string
 }
 
-/** Team-triage funnel + resolution health. Cloud-only (Available=false locally). */
 export interface Workflow {
-  /** True once any finding has been triaged; false ⇒ show a placeholder. */
   available: boolean
-  /** status ("open"/"acknowledged"/"in_progress"/"resolved"/"suppressed") → count. */
   funnel: Record<string, number>
-  /** Mean time to resolve, in hours; 0 if none resolved. */
   mttrHours: number
-  /** Findings contributing to mttrHours. */
   resolvedCount: number
-  /** Open/acknowledged findings untouched for > 14 days. */
   staleCount: number
 }

@@ -10,16 +10,11 @@ import {formatDateTime} from '@/lib/format'
 import {relativeTimeText} from '@/lib/time'
 import {actionTone} from './auditActions'
 
-// The action's icon is looked up here, outside the component, so no
-// component type is resolved during render.
 function renderActionIcon(action: string) {
   const Icon = actionIcon(action)
   return <Icon size={11} aria-hidden="true" />
 }
 
-// One audit event and, on request, its metadata. Pre-auth events (sign-in,
-// failed sign-in, lockout) carry no actor: the user they concern is the
-// subject in resourceType/resourceId, which is what the user cell filters by.
 export function AuditRow({
   event,
   labels,

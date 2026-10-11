@@ -24,16 +24,9 @@ import {severityTone, triageTone} from '@/lib/severityTone'
 import {useState} from 'react'
 import {relativeTime} from '@/lib/time'
 import {useTranslation} from 'react-i18next'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
-// FindingsToolbar is the filter + actions bar above the findings list: severity
-// and category filter chips, re-analyze, sort cycle, diff/dedup toggles, and
-// CSV/HTML export. Extracted from FindingsTab so the filter state and chip
-// rendering are isolated from orchestration.
-//
-// Filter state is read directly from the analysis store (it is the single source
-// of truth); the one-shot actions are passed in because they are composed with
-// toasts and sibling state in FindingsTab.
-export // Chip labels kept beside their tone consumers; counts render inline.
+export
 const SEVERITY_LABELS: Record<Severity, string> = {error: 'Errors', warning: 'Warnings', info: 'Info'}
 const STATUS_LABELS: Record<TriageStatus, string> = {
   open: 'Open',
@@ -61,17 +54,13 @@ interface FindingsToolbarProps {
   onExportSARIF: () => void
   onExportJUnit: () => void
   onShare: () => void
-  // Undo (R1-2): snapshots the server captured before every fix/batch/save.
   snapshots: {id: string; label: string; createdAt: string; bytes: number}[]
   snapshotsLoading: boolean
   onRestoreSnapshot: (snapshotId: string) => void
   onOpenSnapshots: () => void
   sortMode: 'default' | 'severity' | 'count'
   onSetSortMode: (mode: 'default' | 'severity' | 'count') => void
-  // Live per-severity counts of the CURRENT (non-severity-filtered) set —
-  // shown on the chips so toggling is an informed choice (U2.3).
   severityCounts?: Record<Severity, number>
-  // Category chips in order: the known categories, then any other the report carries.
   categories?: readonly string[]
   hasFindings: boolean
 }
@@ -120,8 +109,6 @@ export default function FindingsToolbar({
   const saveCurrentView = useAnalysisStore(s => s.saveCurrentView)
   const deleteSavedView = useAnalysisStore(s => s.deleteSavedView)
   const [showViews, setShowViews] = useState(false)
-  // Popover dismissal contract (U1.5): outside click + Escape close both
-  // toolbar popovers (they previously stuck open until re-clicked).
   const viewsRef = useDismissable(showViews, () => setShowViews(false))
   const [showSort, setShowSort] = useState(false)
   const sortRef = useDismissable(showSort, () => setShowSort(false))
@@ -129,13 +116,10 @@ export default function FindingsToolbar({
   const undoRef = useDismissable(showUndo, () => setShowUndo(false))
   const {prompt} = useConfirm()
   const toast = useToast()
-  // The store rethrows a failed set/clear; this click handler used to drop the
-  // promise, so a failure was an unhandled rejection with no toast and the
-  // shield icon silently unchanged.
   const toggleBaseline = () => {
     const run = baseline ? handleClearBaseline : handleSetBaseline
     const failTitle = baseline ? t('toasts.baselineClearFailed') : t('toasts.baselineSetFailed')
-    run().catch(err => toast.error(failTitle, {description: String(err)}))
+    run().catch(err => toast.error(failTitle, {description: getErrorMessage(err)}))
   }
 
   const handleSaveView = async () => {
@@ -151,8 +135,7 @@ export default function FindingsToolbar({
     setHiddenCategories(viewHiddenCategories(view))
   }
 
-  const handleDeleteView = (e: React.MouseEvent, name: string) => {
-    e.stopPropagation()
+  const handleDeleteView = (name: string) => {
     deleteSavedView(name)
   }
 
@@ -269,19 +252,21 @@ export default function FindingsToolbar({
               </button>
               {savedViews.length > 0 && <div className="border-t border-border-subtle my-0.5" />}
               {savedViews.map(view => (
-                <button
-                  key={view.name}
-                  onClick={() => handleApplyView(view)}
-                  className="flex items-center justify-between w-full text-left text-2xs px-2.5 py-1 hover:bg-surface-3 transition-colors group"
-                >
-                  <span className="text-text-secondary truncate">{view.name}</span>
-                  <span
-                    onClick={e => handleDeleteView(e, view.name)}
-                    className="opacity-0 group-hover:opacity-100 text-text-disabled hover:text-red-400 transition-all ml-2"
+                <div key={view.name} className="flex items-center group">
+                  <button
+                    onClick={() => handleApplyView(view)}
+                    className="flex-1 min-w-0 text-left text-2xs px-2.5 py-1 hover:bg-surface-3 transition-colors"
+                  >
+                    <span className="text-text-secondary truncate block">{view.name}</span>
+                  </button>
+                  <button
+                    onClick={() => handleDeleteView(view.name)}
+                    aria-label={t('toolbar.deleteViewAria', {name: view.name})}
+                    className="p-1 mr-1 rounded text-text-disabled hover:text-red-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-all"
                   >
                     <X size={10} />
-                  </span>
-                </button>
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -293,8 +278,6 @@ export default function FindingsToolbar({
       >
         Re-analyze
       </button>
-      {/* Sort: an explicit 3-option menu (U2.3) — the old cycle button hid
-          its state in a tooltip and silently changed meaning per click. */}
       <div className="relative" ref={sortRef}>
         <button
           onClick={() => setShowSort(o => !o)}
@@ -422,9 +405,6 @@ export default function FindingsToolbar({
           >
             <Share2 size={12} />
           </button>
-          {/* Undo (R1-2): restore a pre-fix/pre-save snapshot. The server
-              captures the source before every destructive mutation; this
-              lists this session's ring, newest last. */}
           <div className="relative" ref={undoRef}>
             <button
               onClick={() => {

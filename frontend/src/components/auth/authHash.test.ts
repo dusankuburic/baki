@@ -17,7 +17,6 @@ describe('parseRecoveryHash', () => {
   it('extracts the reset token without mutating the fragment', () => {
     setHash('resetPassword=RTOKEN')
     expect(parseRecoveryHash()).toEqual({resetToken: 'RTOKEN'})
-    // Pure: still present until explicitly cleared (StrictMode-safe).
     expect(window.location.hash).toBe('#resetPassword=RTOKEN')
   })
 
@@ -37,9 +36,6 @@ describe('parseRecoveryHash', () => {
     expect(window.location.hash).toBe('')
   })
 
-  // StrictMode double-invokes useState initializers. parseRecoveryHash must be
-  // pure so two back-to-back calls both see the token — the original bug stripped
-  // the hash in the initializer, so the 2nd invocation returned empty.
   it('is idempotent across repeated calls (StrictMode-safe)', () => {
     setHash('resetPassword=RTOKEN')
     const first = parseRecoveryHash()

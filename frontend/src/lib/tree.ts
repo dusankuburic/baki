@@ -1,7 +1,5 @@
 import type {Block, BlockType, FlowDocument, Subflow, Highlight} from '@/types'
 
-// ---- FlatBlock: used by useFlattenedBlocks / block detail view ----
-
 export interface FlatBlock {
   block: Block
   depth: number
@@ -14,20 +12,12 @@ const CONTAINER_TYPES = new Set(['LOOP', 'CONDITION', 'ERROR_HANDLER', 'BLOCK', 
 
 const STRUCTURAL_TYPES = new Set(['END', 'ELSE', 'CASE', 'DEFAULT'])
 
-/**
- * Recursively flattens a block tree into a depth-annotated list.
- * `collapsed` means the block's children are hidden (i.e. its id is in expandedBlockIds —
- * the set name is inverted: "expanded" ids are ones the user has collapsed in the UI).
- */
 export function flattenBlocks(blocks: Block[], expandedBlockIds: Set<string>, depth = 0): FlatBlock[] {
   const result: FlatBlock[] = []
   appendFlatBlocks(blocks, expandedBlockIds, depth, result)
   return result
 }
 
-// Appends into one shared output array: `push(...childRows)` spread every
-// child row onto the call stack and threw a RangeError past ~150k direct
-// children.
 function appendFlatBlocks(blocks: Block[], expandedBlockIds: Set<string>, depth: number, out: FlatBlock[]): void {
   const last = blocks.length - 1
   for (let i = 0; i <= last; i++) {
@@ -46,14 +36,11 @@ function appendFlatBlocks(blocks: Block[], expandedBlockIds: Set<string>, depth:
     })
 
     if (isContainer && !collapsed && block.children.length > 0) {
-      // ELSE/CASE/DEFAULT don't add a nesting level for their own children
       const depthIncrease = block.type === 'ELSE' || block.type === 'CASE' || block.type === 'DEFAULT' ? 0 : 1
       appendFlatBlocks(block.children, expandedBlockIds, depth + depthIncrease, out)
     }
   }
 }
-
-// ---- TreeRow: used by FlowTree / sidebar tree view ----
 
 export type TreeRow = {
   kind: 'subflow' | 'block'
@@ -91,13 +78,6 @@ function blockRow(block: Block, depth: number, subflowId: string): TreeRow {
   }
 }
 
-// Appends the rows for `blocks` (and their visible descendants) into `out`.
-// Without a search a collapsed block contributes only its own row, so its
-// subtree is not walked at all — the sidebar tree of a large flow is mostly
-// collapsed, and the walk used to visit every block of every subtree on
-// every render. With a search the subtree must be walked (a match inside
-// reveals its ancestors), but it is appended with a loop: `push(...rows)`
-// threw a RangeError past ~150k direct children.
 function appendTreeBlockRows(
   blocks: Block[],
   subflowId: string,
@@ -155,10 +135,6 @@ function appendTreeBlockRows(
   }
 }
 
-/**
- * Flattens a full FlowDocument into sidebar tree rows, including subflow headers,
- * with optional type-filtering and search/match propagation.
- */
 export function flattenTreeRows(doc: FlowDocument, options: FlattenTreeOptions): TreeRow[] {
   const {expandedSubflowIds, expandedBlockIds, visibleTypes, searchQuery, matchedBlockIds} = options
   const rows: TreeRow[] = []
@@ -217,13 +193,6 @@ export function flattenTreeRows(doc: FlowDocument, options: FlattenTreeOptions):
   return rows
 }
 
-// ---- Canonical tree-walking API ----
-// These consolidate the ~10 re-implementations that were spread across
-// flowStore, DetailsTab, FindingCard, Breadcrumbs, and BlockView.
-
-/** Find a block by id within a single block tree (recursive DFS). */
-// Internal recursive block lookup (used by findBlockInDoc below); not
-// exported — external callers use findBlockInDoc or buildBlockLookup.
 function findBlockInTree(blocks: Block[], id: string): Block | null {
   for (const block of blocks) {
     if (block.id === id) return block
@@ -235,7 +204,6 @@ function findBlockInTree(blocks: Block[], id: string): Block | null {
   return null
 }
 
-/** Find a block and its containing subflow info, searching all subflows. */
 export function findBlockInDoc(
   doc: FlowDocument,
   blockId: string,
@@ -247,16 +215,8 @@ export function findBlockInDoc(
   return null
 }
 
-/** A blockId → {name, subflowName} index for cheap label lookups. */
 export type BlockLookup = Map<string, {name: string; subflowName: string; rawType: string}>
 
-/**
- * Build a blockId → {name, subflowName} index for the whole document in a single
- * traversal. Callers that need labels for many block ids (e.g. the findings list,
- * which renders one row per finding) should build this once and reuse it instead
- * of calling findBlockInDoc per id — that re-walks the entire tree each time,
- * making the list O(findings × blocks).
- */
 export function buildBlockLookup(doc: FlowDocument): BlockLookup {
   const map: BlockLookup = new Map()
   const walk = (blocks: Block[], subflowName: string) => {
@@ -269,7 +229,6 @@ export function buildBlockLookup(doc: FlowDocument): BlockLookup {
   return map
 }
 
-/** Return the id of the subflow that contains blockId, or null. */
 export function findSubflowIdByBlock(doc: FlowDocument, blockId: string): string | null {
   for (const sf of doc.subflows) {
     if (findBlockInTree(sf.blocks, blockId)) return sf.id
@@ -277,7 +236,6 @@ export function findSubflowIdByBlock(doc: FlowDocument, blockId: string): string
   return null
 }
 
-/** Return the ancestor path (including the target block) as Block[], or null. */
 export function findBlockPath(blocks: Block[], targetId: string): Block[] | null {
   for (const block of blocks) {
     if (block.id === targetId) return [block]
@@ -289,7 +247,6 @@ export function findBlockPath(blocks: Block[], targetId: string): Block[] | null
   return null
 }
 
-/** Return the ancestor ids on the path to blockId (not including blockId itself). */
 export function findAncestorIds(doc: FlowDocument, blockId: string): string[] {
   for (const sf of doc.subflows) {
     const path = findBlockPath(sf.blocks, blockId)
@@ -298,7 +255,6 @@ export function findAncestorIds(doc: FlowDocument, blockId: string): string[] {
   return []
 }
 
-/** Find a LABEL block by name across all subflows. */
 export function findLabelBlock(doc: FlowDocument, labelName: string): Block | null {
   for (const sf of doc.subflows) {
     const found = findLabelInTree(sf.blocks, labelName)
@@ -316,24 +272,4 @@ function findLabelInTree(blocks: Block[], labelName: string): Block | null {
     }
   }
   return null
-}
-
-/** Walk every block in the document, calling visitor for each. */
-export function walkBlocks(doc: FlowDocument, visitor: (block: Block, subflowId: string) => void): void {
-  function walk(blocks: Block[], sfId: string) {
-    for (const block of blocks) {
-      visitor(block, sfId)
-      if (block.children.length > 0) walk(block.children, sfId)
-    }
-  }
-  for (const sf of doc.subflows) walk(sf.blocks, sf.id)
-}
-
-/** Count blocks matching a predicate across the entire document. */
-export function countBlocks(doc: FlowDocument, predicate: (block: Block) => boolean): number {
-  let n = 0
-  walkBlocks(doc, b => {
-    if (predicate(b)) n++
-  })
-  return n
 }

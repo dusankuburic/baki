@@ -1,15 +1,7 @@
 import type {ChartTheme} from './chartTypes'
 
-// The chart palette as CSS variable references (index.css, "DATA VIZ"). SVG
-// presentation attributes resolve `var()` like any other CSS value, so a chart
-// never re-renders for a theme or high-contrast change: the browser restyles
-// it together with the rest of the page. (The colours used to be read from the
-// computed style as hex once per theme, which re-rendered every chart on the
-// page on each switch — about 350ms on the analytics page.)
 const token = (name: string) => `var(${name})`
 
-// Typed to match ChartTheme's fixed-length tuples — the palette really is
-// exactly 8 categorical + 4 ramp slots (index.css, "DATA VIZ").
 const SERIES: ChartTheme['series'] = [
   token('--viz-1'),
   token('--viz-2'),

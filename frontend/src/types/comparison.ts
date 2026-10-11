@@ -1,4 +1,3 @@
-// Flow-vs-flow comparison types used by the Diff view and version compare flows.
 
 import type {Block} from './flow'
 

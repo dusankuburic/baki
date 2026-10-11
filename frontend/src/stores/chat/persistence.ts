@@ -4,39 +4,18 @@ import {isTauri} from '@/platform/guards'
 import {MAX_THREADS} from './types'
 import type {ChatThread, InFlightTurn, ThreadPinFields} from './types'
 
-// LEGACY_FLOW_SCOPE is the pre-thread conversation key. A flow whose threads
-// were never persisted (first open after upgrade, or a different browser)
-// restores its history from here once, then re-saves it under the new
-// thread's own key.
 export const LEGACY_FLOW_SCOPE = 'flow'
 
-// Thread lists persist per flow in localStorage so a reload restores the same
-// threads — and therefore the same conversation keys. Without this every
-// reload minted a fresh thread id and the previous thread's history became
-// unreachable. Conversations themselves stay server-side; only the thread
-// metadata is stored here.
-//
-// Keys are per USER in the web app: v2:<userId>:<flowId>. The v1 key was
-// per flow only, so on a shared browser the next account to open the same flow
-// hydrated the previous account's thread ids (and titles, i.e. the start of
-// each first prompt) — and the server lets any flow viewer read a
-// conversation by key. The desktop app is single-user and keeps its v1 key.
 const THREADS_KEY_V1 = 'baki:chatThreads:v1:'
 const THREADS_KEY_V2 = 'baki:chatThreads:v2:'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-// threadsStorageKey returns where a flow's thread list lives, or null when it
-// must not be stored at all (web app with no signed-in user).
 function threadsStorageKey(flowId: string): string | null {
   if (isTauri()) return THREADS_KEY_V1 + flowId
   const userId = currentUserId()
   return userId ? `${THREADS_KEY_V2}${userId}:${flowId}` : null
 }
 
-// purgeLegacyThreadKeys drops the unscoped v1 entries in the web app. They
-// record no owner, so they cannot be handed to whoever signs in next; their
-// conversations stay on the server. Runs on every thread-list read (a flow
-// open — a key scan is cheap) and on logout.
 export function purgeLegacyThreadKeys(): void {
   if (isTauri()) return
   try {
@@ -47,7 +26,6 @@ export function purgeLegacyThreadKeys(): void {
     }
     for (const k of stale) localStorage.removeItem(k)
   } catch {
-    // Storage unavailable: nothing to purge.
   }
 }
 
@@ -70,10 +48,6 @@ type StoredThread = Pick<
   | 'inFlight'
 >
 
-// A stored pin's strings are capped: a registry id is "m/" plus 10
-// characters and a display name at most 64 on the server, a catalogue id a
-// model name — anything longer did not come from this app. A provider id is
-// whatever the server names (a newer server's provider pins too), short.
 const MAX_PIN_PROVIDER_LENGTH = 64
 const MAX_PIN_MODEL_LENGTH = 256
 const MAX_PIN_LABEL_LENGTH = 200
@@ -82,11 +56,6 @@ function isPinProvider(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_PIN_PROVIDER_LENGTH
 }
 
-// readThreadPin validates a stored thread's model pin. Anything off — no
-// provider, a missing or oversized model — loads the thread unpinned (as
-// every thread from before per-thread memory loads), and lib/modelSelection
-// resolves it; a bad label alone is just dropped (as is one that is only an
-// id — see storableModelLabel).
 function readThreadPin(t: Record<string, unknown>): ThreadPinFields {
   const {provider, model, modelLabel} = t
   if (!isPinProvider(provider)) return {}
@@ -100,10 +69,6 @@ function readThreadPin(t: Record<string, unknown>): ThreadPinFields {
   return pin
 }
 
-// readInFlight validates a stored thread's in-flight turn record. Anything
-// off drops the record: a reload then re-attaches the stream unlabelled
-// rather than labelled with a guess. Stream and message ids are the
-// client's own uuids; the model may be '' (the server's default).
 function readInFlight(raw: unknown): InFlightTurn | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const r = raw as Record<string, unknown>
@@ -146,7 +111,6 @@ export function persistFlowThreads(flowId: string, threads: ChatThread[]): void 
     if (mine.length === 0) localStorage.removeItem(key)
     else localStorage.setItem(key, JSON.stringify(mine))
   } catch {
-    // Storage may be unavailable (private mode, quota); threads then last the session.
   }
 }
 
@@ -160,7 +124,6 @@ export function readStoredThreads(flowId: string): ChatThread[] {
     if (!raw) return []
     parsed = JSON.parse(raw)
   } catch {
-    // Storage unavailable or corrupt entry: start with no threads.
     return []
   }
   if (!Array.isArray(parsed)) return []

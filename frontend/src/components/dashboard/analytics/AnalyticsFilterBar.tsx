@@ -5,12 +5,14 @@ import {Building2, ChevronDown, RotateCcw} from 'lucide-react'
 import {Button, Dropdown, Input, SegmentedControl, Switch, type DropdownItem} from '@/components/shared'
 import {severityTone} from '@/lib/severityTone'
 import {formatDateLong} from '@/lib/format'
+import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
 import {useOrgStore} from '@/stores/orgStore'
 import {
   useAnalyticsStore,
   customRangeIssue,
   hasActiveFilters,
   todayISO,
+  type CustomRangeIssue,
   type RangePreset,
 } from '@/stores/analyticsStore'
 import type {AnalyticsApplied, AnalyticsFacets, AnalyticsRange} from '@/types'
@@ -20,9 +22,6 @@ import {FlowMultiSelect} from './FlowMultiSelect'
 const SEVERITIES = ['error', 'warning', 'info'] as const
 const RULE_CHIPS = 8
 
-// The filter row above the charts: the time range first, then scope, flows,
-// the comparison switch and reset; below it the severity / category / rule
-// chips with their facet counts. The applied summary is read out on change.
 export function AnalyticsFilterBar({
   facets,
   applied,
@@ -50,32 +49,40 @@ export function AnalyticsFilterBar({
   const [draftPreset, setDraftPreset] = useState<RangePreset>(filters.preset)
   const [draftFrom, setDraftFrom] = useState(filters.from)
   const [draftTo, setDraftTo] = useState(filters.to)
-  const [rangeError, setRangeError] = useState<string | null>(null)
   const [allRules, setAllRules] = useState(false)
   const today = todayISO()
 
+  const rangeIssueText = (issue: CustomRangeIssue): string =>
+    t(
+      issue === 'missing'
+        ? 'analytics.filters.rangeMissing'
+        : issue === 'order'
+          ? 'analytics.filters.rangeOrder'
+          : issue === 'future'
+            ? 'analytics.filters.rangeFuture'
+            : 'analytics.filters.rangeSpan',
+    )
+  const v = useFormValidation<'from' | 'to'>({
+    fields: ['from', 'to'],
+    validate: () => {
+      const errors: FieldErrors<'from' | 'to'> = {}
+      const issue = customRangeIssue(draftFrom, draftTo, today)
+      if (issue === 'missing') {
+        if (!draftFrom) errors.from = rangeIssueText(issue)
+        if (!draftTo) errors.to = rangeIssueText(issue)
+      } else if (issue) {
+        errors.to = rangeIssueText(issue)
+      }
+      return errors
+    },
+  })
+
   const onPreset = (p: RangePreset) => {
     setDraftPreset(p)
-    setRangeError(null)
     if (p !== 'custom') setPreset(p)
   }
   const applyCustom = () => {
-    const issue = customRangeIssue(draftFrom, draftTo, today)
-    if (issue) {
-      setRangeError(
-        t(
-          issue === 'missing'
-            ? 'analytics.filters.rangeMissing'
-            : issue === 'order'
-              ? 'analytics.filters.rangeOrder'
-              : issue === 'future'
-                ? 'analytics.filters.rangeFuture'
-                : 'analytics.filters.rangeSpan',
-        ),
-      )
-      return
-    }
-    setRangeError(null)
+    if (v.submitValidate()) return
     setCustomRange(draftFrom, draftTo)
   }
 
@@ -134,8 +141,6 @@ export function AnalyticsFilterBar({
   return (
     <div className="analytics-filters" aria-busy={busy || undefined}>
       <div className="analytics-filter-row">
-        {/* Manual activation: a preset refetches the analytics, so arrowing
-            across them only moves focus; Space or Enter picks one. */}
         <SegmentedControl<RangePreset>
           value={draftPreset}
           onChange={onPreset}
@@ -164,6 +169,7 @@ export function AnalyticsFilterBar({
               onChange={e => setDraftFrom(e.target.value)}
               aria-label={t('analytics.filters.from')}
               className="w-40"
+              {...v.fieldProps('from')}
             />
             <span className="text-xs text-text-tertiary" aria-hidden="true">
               –
@@ -175,15 +181,11 @@ export function AnalyticsFilterBar({
               onChange={e => setDraftTo(e.target.value)}
               aria-label={t('analytics.filters.to')}
               className="w-40"
+              {...v.fieldProps('to')}
             />
             <Button type="submit" size="sm" variant="primary">
               {t('analytics.filters.apply')}
             </Button>
-            {rangeError && (
-              <span role="alert" className="text-xs text-semantic-error">
-                {rangeError}
-              </span>
-            )}
           </form>
         )}
         <Dropdown
@@ -219,7 +221,7 @@ export function AnalyticsFilterBar({
               setDraftPreset('30d')
               setDraftFrom('')
               setDraftTo('')
-              setRangeError(null)
+              v.reset()
             }}
           >
             {t('analytics.filters.reset')}

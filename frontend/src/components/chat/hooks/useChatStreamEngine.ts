@@ -11,22 +11,6 @@ import type {StreamAcc, ToastApi} from './stream-engine/types'
 
 export type {StreamMeta, SendOptions, TurnModel} from './stream-engine/types'
 
-// useChatStreamEngine owns every chat stream: sending a turn, the per-stream
-// text accumulator, the SSE handler wiring (via useStreamingMessage), stop /
-// abandon, and the per-thread generation tokens used to discard stale sends.
-//
-// It is mounted ONCE, by ChatStreamProvider, at the app shell — never by the
-// chat panel. The panel mounts and unmounts (inspector collapse, mobile
-// drawer, pop-out, breakpoint change); owning the streams there meant every
-// unmount cancelled the replies in flight and left their threads stuck on
-// "Stop". Everything the engine needs therefore comes from the stores or from
-// the arguments of a send — nothing from the panel.
-//
-// The pieces live in ./stream-engine/: accumulator (the per-stream text
-// accumulation), commit (persist + commit of finished turns), events (done /
-// error handling), fixes (approval cards and the resume journal) and
-// lifecycle (send / resume / stop / abandon). This hook composes them and
-// wires the SSE handler.
 export function useChatStreamEngine() {
   const toast = useOptionalToast()
   const toastRef = useRef<ToastApi | null>(toast)
@@ -135,10 +119,6 @@ export function useChatStreamEngine() {
     updateThread,
   })
 
-  // A slot can disappear without going through stop/abandon: the logout
-  // reset, clearFlowThreads, or a thread closed through the store directly.
-  // Its accumulator must go too, and the backend stream be cancelled — else
-  // the provider keeps generating (and billing) for a listener that is gone.
   useEffect(
     () =>
       useChatStore.subscribe((state, prev) => {
@@ -150,9 +130,6 @@ export function useChatStreamEngine() {
             continue
           }
           if (!acc.linked) continue
-          // The stream went away from under an in-flight send (logout, the
-          // thread closed): invalidate that send too, or it goes on to create
-          // the backend stream for a slot that no longer exists.
           bumpGen(acc.threadId)
           dropAcc(sid)
           cancelStream(sid)
@@ -161,9 +138,6 @@ export function useChatStreamEngine() {
     [bumpGen, cancelStream, dropAcc],
   )
 
-  // The host unmounting (app teardown) must not leave slots claiming to
-  // stream: end every thread that still has an accumulator. The backend
-  // streams themselves are cancelled by useStreamingMessage's own cleanup.
   useEffect(() => {
     const accs = streamAccRef.current
     return () => {
@@ -184,7 +158,6 @@ export function useChatStreamEngine() {
       abandon,
       respondFixProposal,
       resumeAfterReload,
-      // Lower-level pieces, exposed for tests and the resend path.
       registerStream,
       cancelStream,
       beginAcc,

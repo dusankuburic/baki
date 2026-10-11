@@ -32,9 +32,6 @@ export default function OrgAzureSection({
       >
         {t('providers.azureOrgTitle')}
       </h4>
-      {/* Always mounted: the note is inserted into an
-          existing live region, which is what gets it
-          announced. */}
       <p role="status" className="text-xs text-amber-400 mb-2 empty:mb-0">
         {credentialDisabledNote?.orgId === org.id &&
           t('orgs.sharedCredentialDisabled', {name: credentialDisabledNote.name})}

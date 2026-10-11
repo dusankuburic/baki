@@ -21,32 +21,15 @@ import {runBlockEdit} from '@/lib/blockEdit'
 import {useBlockOperations} from '@/lib/blockOperations'
 import {useKeyboard} from '@/hooks/useKeyboard'
 import type {Severity, BlockType, Block} from '@/types'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
-// Block → occupants (remote users currently viewing it). Built once per
-// presence change in BlockView and compared by reference in the item memo, so a
-// presence update re-renders visible items the same way a findings-map change
-// does.
 type RemoteSelection = Map<string, PresenceUser[]>
 
-// The Virtuoso scroller element, published for the drag-over edge auto-scroll.
-// Module-scoped because exactly one BlockView owns the canvas at a
-// time and rows are memoized — a prop would defeat the memo.
-// One scroller PER SUBFLOW: split editor groups render two canvases,
-// and a single module slot meant the last-mounted instance won every
-// drag-autoscroll — scrolling the wrong pane. Keyed by subflowId (rows know
-// theirs via block.subflowId).
 const scrollerEls = new Map<string, HTMLElement>()
-// Exported for tests (drag-edge autoscroll needs a fake scroller element).
 export const blockCanvasScrollers = scrollerEls
 
-// DnD v2: rows identify themselves with a custom MIME type so
-// FOREIGN text/plain drags (selected text from this app or another) never
-// light up the drop targets or mint garbage moveBlockTo calls.
 const BLOCK_DND_MIME = 'application/x-baki-block'
 
-// Edge auto-scroll geometry: start scrolling within this band of the
-// scroller's top/bottom, this many px per dragover event (dragover fires
-// continuously while hovering, which paces the scroll).
 const AUTOSCROLL_EDGE_PX = 64
 const AUTOSCROLL_STEP_PX = 14
 
@@ -68,16 +51,9 @@ function BlockItemWrapperComponent({
   const selected = useFlowStore(s => s.selectedBlockId === block.id)
   const occupants = remoteSelection.get(block.id)
 
-  // Drag-to-reorder (R3.3): rows are draggable (structural markers are not);
-  // a drop maps to moveBlockTo before/after this row, computed from the
-  // cursor's half of the row. Cross-scope drops are refused server-side with
-  // a guidance error surfaced as a toast here.
   const [dropPos, setDropPos] = useState<'before' | 'after' | null>(null)
   const toast = useToast()
-  // View-only shares keep rows inert — no drag cursor, no drop handling.
   const readOnly = useFlowStore(s => s.readOnly)
-  // HTML5 DnD never fires on touch: mobile users get the keyboard/menu
-  // move paths instead of a dead drag affordance.
   const isDesktop = useIsDesktop()
   const draggable = block.type !== 'END' && block.type !== 'ELSE' && block.type !== 'CASE' && block.type !== 'DEFAULT'
   const dragEnabled = draggable && !readOnly && isDesktop
@@ -95,8 +71,6 @@ function BlockItemWrapperComponent({
         e.dataTransfer.dropEffect = 'move'
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
         setDropPos(e.clientY < rect.top + rect.height / 2 ? 'before' : 'after')
-        // Edge auto-scroll: dragging past the viewport edge used to be
-        // a dead end — the target rows weren't rendered yet. dragover paces us.
         const sc = scrollerEls.get(block.subflowId)
         if (sc) {
           const sr = sc.getBoundingClientRect()
@@ -108,16 +82,12 @@ function BlockItemWrapperComponent({
     [block.subflowId],
   )
   const handleDragLeave = useCallback((e: React.DragEvent) => {
-    // Child transitions fire dragleave on the row wrapper: clearing
-    // there made the indicator + gap animation flicker while crossing cards.
     const to = e.relatedTarget as Node | null
     if (to && (e.currentTarget as HTMLElement).contains(to)) return
     setDropPos(null)
   }, [])
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
-      // Guard the MIME too (dragOver's check doesn't cover a drop that lands
-      // without a prior dragOver on this row, e.g. foreign OS drags).
       if (!e.dataTransfer.types.includes(BLOCK_DND_MIME)) return
       e.preventDefault()
       setDropPos(null)
@@ -127,11 +97,8 @@ function BlockItemWrapperComponent({
       const position = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
       const doc = useFlowStore.getState().document
       if (!doc) return
-      // The lane applies the document (refreshAfterBlockEdit) and serialises
-      // this drop with any keyboard move still in flight.
       runBlockEdit(doc.id, () => flowApi.moveBlockTo(doc.id, draggedId, block.id, position)).catch(err => {
-        // Guards (not-a-sibling, stale-file) carry their own guidance.
-        toast.error(t('canvas.moveFailed'), {description: String(err)})
+        toast.error(t('canvas.moveFailed'), {description: getErrorMessage(err)})
       })
     },
     [block.id, toast, t],
@@ -182,10 +149,6 @@ function BlockItemWrapperComponent({
     )
   }, [block, selected, findingCounts, findingSeverities, collapsed, isLast, occupants, onShiftClick])
 
-  // Indentation guide rails: depth was invisible padding-only —
-  // nested flows read as a flat list. One 1px vertical rail per ancestor
-  // level, centered in each 20px gutter column, token-colored so themes
-  // carry them. Rails span the full row height (content + connector).
   const rails = useMemo(
     () =>
       Array.from({length: depth}, (_, i) => (
@@ -220,9 +183,6 @@ function BlockItemWrapperComponent({
           aria-hidden="true"
         />
       )}
-      {/* Gap-open drop affordance: the row's CONTENT slides away
-          from the drop edge instead of only a 2px line flashing — the space
-          the block will occupy opens up. */}
       <div
         data-testid="row-content"
         className="w-full flex flex-col items-center"
@@ -265,8 +225,6 @@ function areEqual(
   if (prev.findingCounts !== next.findingCounts) return false
   if (prev.findingSeverities !== next.findingSeverities) return false
   if (prev.remoteSelection !== next.remoteSelection) return false
-  // onShiftClick closes over the flattened order: without this check
-  // rows keep a stale range-select callback after add/delete/move.
   if (prev.onShiftClick !== next.onShiftClick) return false
   if (prev.item.block?.id !== next.item.block?.id) return false
   if (prev.item.depth !== next.item.depth) return false
@@ -290,7 +248,6 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
   const [searchActive, setSearchActive] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIdx, setSearchMatchIdx] = useState(0)
-  // Subscribe to live presence so remote block selections render in the canvas.
   const presenceUsers = usePresenceStore(s => s.users)
 
   const displayedFlattened = useMemo(() => {
@@ -299,8 +256,6 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     return flattened.filter(f => f.block.name.toLowerCase().includes(q))
   }, [flattened, searchActive, searchQuery])
 
-  // Shift-click range selection: anchor = current single selection,
-  // range computed in VISIBLE (flattened) order — what the user sees.
   const handleShiftClick = useCallback(
     (blockId: string) => {
       const st = useFlowStore.getState()
@@ -309,8 +264,6 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
         st.toggleBlockSelection(blockId)
         return
       }
-      // Range in VISIBLE order: while filtering, that's the searched
-      // list — selecting hidden blocks through an invisible gap surprised.
       const ids = (searchActive ? displayedFlattened : flattened).map(f => f.block.id)
       const a = ids.indexOf(anchor)
       const b = ids.indexOf(blockId)
@@ -324,9 +277,6 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     [flattened, displayedFlattened, searchActive],
   )
 
-  // Group move: a contiguous same-scope selection moves as a unit by
-  // relocating the BOUNDARY sibling around it — one moveBlockTo call, no new
-  // backend semantics. Returns the move args or a refusal reason.
   const groupMoveArgs = useCallback(
     (direction: 'up' | 'down'): {pivot: string; ref: string; position: 'before' | 'after'} | null => {
       const st = useFlowStore.getState()
@@ -334,10 +284,6 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
       const selected = [...st.selectedBlockIds]
       if (!doc || selected.length < 2) return null
       const editable = (b: Block) => !['END', 'ELSE', 'CASE', 'DEFAULT'].includes(b.type)
-      // Returning finder (TS can't narrow closure-assigned locals). Scoped
-      // per-subflow: flatMapping all subflows merged distinct scopes
-      // into one sibling list, letting cross-subflow selections pass the
-      // contiguity check and rely on the server's refusal.
       const findScope = (blocks: Block[]): Block[] | null => {
         for (let i = 0; i < blocks.length; i++) {
           const b = blocks[i]
@@ -358,7 +304,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
       if (idxs.some(i => i === -1)) return null
       const sorted = [...idxs].sort((x, y) => x - y)
       for (let i = 1; i < sorted.length; i++) {
-        if (sorted[i] !== (sorted[i - 1] ?? NaN) + 1) return null // non-contiguous
+        if (sorted[i] !== (sorted[i - 1] ?? NaN) + 1) return null
       }
       const first = sorted[0]
       const last = sorted[sorted.length - 1]
@@ -392,7 +338,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
         return
       }
       runBlockEdit(doc.id, () => flowApi.moveBlockTo(doc.id, args.pivot, args.ref, args.position)).catch(err =>
-        toast.error(t('canvas.groupMoveFailed'), {description: String(err)}),
+        toast.error(t('canvas.groupMoveFailed'), {description: getErrorMessage(err)}),
       )
     },
     [groupMoveArgs, toast, t],
@@ -430,9 +376,6 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     return {findingCounts: counts, findingSeverities: sevs}
   }, [report])
 
-  // Build block → occupants once per presence change. The map identity changes
-  // whenever a collaborator's selection changes, which is what the item memo
-  // compares — mirroring the findings-map pattern.
   const remoteSelection = useMemo<RemoteSelection>(() => {
     const map: RemoteSelection = new Map()
     for (const u of Object.values(presenceUsers)) {
@@ -498,8 +441,6 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
   useKeyboard({
     scope: 'main',
     handlers: {
-      // Edit shortcuts — the context-menu operations on the selected
-      // block. Read-only flows ignore them (same gating as the menu).
       'edit.move.up': () => {
         if (readOnly || !selectedBlockId) return
         void blockOps.moveBlock(selectedBlockId, 'up')
@@ -595,10 +536,7 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
   })
 
   useEffect(() => {
-    // mod+F routes here via useAppShortcuts' contextual dispatch —
-    // the raw window listener fired BESIDE the global shortcut, lacked the
-    // input guard, and never suppressed the browser's find bar.
-    const onSearchOpen = () => setSearchActive(true) // BlockSearchBar autofocuses
+    const onSearchOpen = () => setSearchActive(true)
     window.addEventListener('blockview:search-open', onSearchOpen)
     return () => window.removeEventListener('blockview:search-open', onSearchOpen)
   }, [])
@@ -609,7 +547,6 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
     setSearchMatchIdx(0)
   }, [subflowId])
 
-  // Auto-scroll to first match when query changes
   useEffect(() => {
     if (searchActive && searchQuery.trim() && displayedFlattened.length > 0) {
       virtuosoRef.current?.scrollToIndex({index: 0, behavior: 'smooth', align: 'center'})
@@ -629,8 +566,6 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
 
   return (
     <div className="block-view w-full h-full flex flex-col">
-      {/* Multi-select bulk bar — the same operations as the context
-          menu, applied to the selection set. */}
       {selectedCount > 1 && !readOnly && (
         <div
           className="flex items-center gap-2 px-3 py-1.5 border-b border-brand-500/30 bg-brand-500/5 text-2xs"
@@ -685,8 +620,6 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
         <Virtuoso
           ref={virtuosoRef}
           scrollerRef={el => {
-            // Virtuoso hands us the scroller element (or Window when using
-            // window scrolling — not this canvas's mode).
             const key = subflowId ?? '__main__'
             if (el instanceof HTMLElement) scrollerEls.set(key, el)
             else scrollerEls.delete(key)

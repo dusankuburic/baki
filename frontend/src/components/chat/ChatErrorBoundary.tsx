@@ -1,6 +1,4 @@
 import React from 'react'
-// Class component: no hooks, so translate through the i18next instance (see
-// the same note in shared/ErrorBoundary).
 import i18n from '@/i18n'
 import {AlertTriangle, RefreshCw} from 'lucide-react'
 import {isChunkLoadError, reloadForChunkError, reloadPage} from '@/lib/chunkLoad'
@@ -18,8 +16,6 @@ export default class ChatErrorBoundary extends React.Component<{children: React.
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    // A lazy chunk that failed to download (the help popover, the context
-    // preview) recovers only with a reload; see shared/ErrorBoundary.
     if (isChunkLoadError(error) && reloadForChunkError()) return
     logger.error('ChatErrorBoundary', {message: error.message, componentStack: info.componentStack})
   }

@@ -1,14 +1,6 @@
 import {test, expect, Page, Route} from '@playwright/test'
 import {mockDashboardHome, setupAuthenticatedPage} from './helpers'
 
-/**
- * Cloud Library layout E2E. The library lives in the main pane, whose width
- * the sidebar and inspector set, so the grid, the list and the detail panel
- * must answer to that width: cards used to shrink to ~105px with their
- * counts spilling out of the box, and the list's fixed pixel columns crushed
- * the name column to nothing while its heading still showed.
- */
-
 function flows() {
   const names = [
     ['Customer Data Sync (sample)', 10, 1],
@@ -68,7 +60,6 @@ async function openLibrary(page: Page) {
   await expect(page.getByText('padframework', {exact: true}).first()).toBeVisible({timeout: 10_000})
 }
 
-// Card boxes and their footers must contain their text at any width.
 function cardOverflow(page: Page) {
   return page.evaluate(() => {
     const cards = Array.from(document.querySelectorAll<HTMLElement>('.library-grid > button'))
@@ -107,8 +98,6 @@ test.describe('Cloud Library layout', () => {
     expect(grid.spilling).toBe(0)
     expect(grid.minWidth).toBeGreaterThanOrEqual(240)
 
-    // No room to dock the detail panel: it is hidden until a flow is
-    // selected, then slides over the results with its actions reachable.
     const details = page.getByRole('complementary', {name: 'Flow details'})
     await expect(details).toBeHidden()
     await page.locator('.library-grid > button').filter({hasText: 'padframework'}).first().click()
@@ -122,7 +111,6 @@ test.describe('Cloud Library layout', () => {
     const list = await listMetrics(page)
     expect(list.headerClip).toBe(0)
     expect(list.nameWidth).toBeGreaterThanOrEqual(120)
-    // The lowest-ranked column went first; its heading went with it.
     expect(list.ownerShown).toBe(false)
     await expect(page.getByText('Owner', {exact: true})).toBeHidden()
   })
@@ -132,8 +120,6 @@ test.describe('Cloud Library layout', () => {
     await stubLibrary(page)
     await openLibrary(page)
 
-    // The same section switcher as every other system view, not a private
-    // header with a back link.
     const sections = page.getByRole('radiogroup', {name: 'Workspace'})
     await expect(sections.getByRole('radio', {name: 'Library'})).toBeChecked()
     await expect(page.locator('.main-toolbar').getByText('Cloud Library')).toBeVisible()

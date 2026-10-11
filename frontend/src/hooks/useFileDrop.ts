@@ -1,22 +1,18 @@
 import {useCallback, useState, useEffect} from 'react'
+import {useTranslation} from 'react-i18next'
 import {useToast} from '@/components/shared'
 import {flowApi} from '@/api'
 import {getPlatformCapabilities} from '@/platform/guards'
 import {logger} from '@/lib/logger'
 import {useSettingsStore} from '@/stores/settingsStore'
 import type {FlowDocument as DomainFlowDocument} from '@/types'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
 export function useFileDrop(openDocument: (doc: DomainFlowDocument | null) => void) {
   const toast = useToast()
+  const {t} = useTranslation('shell')
   const [dragOver, setDragOver] = useState(false)
 
-  // Tauri v2 windows default to native OS drag-and-drop handling
-  // (dragDropEnabled: true in tauri.conf.json, unset here), which
-  // intercepts the drop at the OS/webview level — the browser's HTML5
-  // dragover/drop events below never fire on desktop. The native
-  // equivalent is the webview's onDragDropEvent stream, which this
-  // subscribes to only in Tauri; the HTML5 handlers still cover the web
-  // build, where no such native API exists.
   useEffect(() => {
     if (!getPlatformCapabilities().fileSystem) return
     let unlisten: (() => void) | undefined
@@ -43,7 +39,7 @@ export function useFileDrop(openDocument: (doc: DomainFlowDocument | null) => vo
                 })
                 .catch(err => {
                   logger.warn('Failed to open dropped file:', err)
-                  toast.error('Failed to open file', {description: String(err)})
+                  toast.error(t('toasts.openFileFailed'), {description: getErrorMessage(err)})
                 })
               break
             }
@@ -59,7 +55,7 @@ export function useFileDrop(openDocument: (doc: DomainFlowDocument | null) => vo
       cancelled = true
       unlisten?.()
     }
-  }, [openDocument, toast])
+  }, [openDocument, t, toast])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -92,8 +88,11 @@ export function useFileDrop(openDocument: (doc: DomainFlowDocument | null) => vo
           } else {
             const maxBytes = useSettingsStore.getState().settings.parser.maxFileSizeMB * 1024 * 1024
             if (file.size > maxBytes) {
-              toast.error('File too large', {
-                description: `${(file.size / 1024 / 1024).toFixed(1)}MB exceeds the ${useSettingsStore.getState().settings.parser.maxFileSizeMB}MB limit`,
+              toast.error(t('toasts.fileTooLarge'), {
+                description: t('toasts.fileTooLargeDetail', {
+                  size: (file.size / 1024 / 1024).toFixed(1),
+                  max: useSettingsStore.getState().settings.parser.maxFileSizeMB,
+                }),
               })
               return
             }
@@ -108,11 +107,11 @@ export function useFileDrop(openDocument: (doc: DomainFlowDocument | null) => vo
           }
         } catch (err) {
           logger.warn('Failed to open dropped file:', err)
-          toast.error('Failed to open file', {description: String(err)})
+          toast.error(t('toasts.openFileFailed'), {description: getErrorMessage(err)})
         }
       }
     },
-    [openDocument, toast],
+    [openDocument, t, toast],
   )
 
   return {dragOver, handleDragOver, handleDragLeave, handleDrop}

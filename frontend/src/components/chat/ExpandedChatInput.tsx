@@ -8,9 +8,6 @@ import {ComposerChip, ComposerHints, ContextToggle} from './ComposerControls'
 interface Props {
   value: string
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
-  // The composer's own handlers, so the expanded editor is a different SHELL
-  // around identical behaviour rather than a second implementation: @-mentions,
-  // /commands, Enter-to-send and ArrowUp history all keep working here.
   onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void
   onKeyDown: (e: React.KeyboardEvent) => void
   onBlur?: () => void
@@ -21,9 +18,7 @@ interface Props {
   onExcludeContextChange: (val: boolean) => void
   canSend: boolean
   menus: React.ReactNode
-  // The toolbar chips insert "@" / "/" at the caret through the composer.
   onInsertTrigger: (char: '@' | '/') => void
-  // The composer's live "~N tokens" estimate; empty while there is no text.
   tokenLabel?: string
   tokenClass?: string
 }
@@ -47,11 +42,6 @@ export default function ExpandedChatInput({
 }: Props) {
   const {t} = useTranslation('chat')
 
-  // The editor wants the caret in the textarea, at the end of the existing
-  // draft. The Modal is told to focus it too (initialFocusRef): its default
-  // is the first tabbable element — the title bar's Close button — and it
-  // focuses a frame AFTER this effect, so the editor used to open with focus
-  // on Close (typing went nowhere; Space or Enter closed it).
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
@@ -66,9 +56,6 @@ export default function ExpandedChatInput({
       title={t('compose.title')}
       size="xl"
       height="tall"
-      // The body is a fixed flex column that never scrolls itself: the editor
-      // well scrolls, and the @ / slash menus (positioned above the toolbar)
-      // are no longer clipped by a scrolling body.
       bodyScroll={false}
       initialFocusRef={textareaRef}
       footer={
@@ -84,9 +71,6 @@ export default function ExpandedChatInput({
             size="md"
             icon={ArrowUp}
             disabled={!canSend}
-            // The composer closes the editor itself once it has sent or
-            // queued; a refused send (concurrency cap) keeps the editor and
-            // its text.
             onClick={() => onSend()}
           >
             {t('compose.send')}
@@ -131,7 +115,6 @@ export default function ExpandedChatInput({
               label={t('compose.excludeContext')}
             />
             {tokenLabel && <span className={clsx('ml-auto text-2xs tabular-nums', tokenClass)}>{tokenLabel}</span>}
-            {/* The menus anchor above this toolbar, inside the editor well. */}
             {menus}
           </div>
         </div>

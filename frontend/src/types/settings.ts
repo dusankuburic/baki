@@ -1,5 +1,3 @@
-// App settings tree — what /api/system/settings round-trips between the
-// settings store and the backend.
 
 import type {KnownProviderID, ProviderID} from './providers'
 import type {RuleConfig} from './analysis'
@@ -66,12 +64,6 @@ export interface AIPromptsConfig {
   blockWithFindings: string[]
 }
 
-/**
- * Per-provider tuning. Every provider the catalogue knows has an entry (the
- * defaults seed them); one a newer server added has an entry only once it
- * was tuned — read through settingsStore's providerConfig, which fills in
- * the defaults. The settings JSON shape is unchanged.
- */
 export type AIProvidersConfig = Record<KnownProviderID, AIProviderConfig> & {
   [id: ProviderID]: AIProviderConfig | undefined
 }
@@ -79,7 +71,6 @@ export type AIProvidersConfig = Record<KnownProviderID, AIProviderConfig> & {
 export interface AISettings {
   activeProvider: ProviderID
   embeddingProvider: ProviderID
-  /** Override the embedding model name; empty keeps the provider default. */
   embeddingModel?: string
   providers: AIProvidersConfig
   showCostEstimates: boolean
@@ -89,7 +80,6 @@ export interface AISettings {
   prompts: AIPromptsConfig
 }
 
-// Reasoning depth for reasoning deployments.
 export type ReasoningEffort = 'low' | 'medium' | 'high'
 
 export interface AIProviderConfig {
@@ -98,12 +88,6 @@ export interface AIProviderConfig {
   temperature: number
   maxTokens: number
   contextTokenBudget: number
-  /**
-   * Reasoning depth for reasoning deployments: '' (or omitted) keeps the
-   * provider default; otherwise 'low' | 'medium' | 'high'. Sent with each
-   * chat turn next to temperature/maxTokens; models without
-   * reasoning ignore it (one repair round trip at worst).
-   */
   reasoningEffort?: '' | ReasoningEffort
 }
 

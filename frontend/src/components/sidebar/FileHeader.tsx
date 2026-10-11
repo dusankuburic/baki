@@ -31,8 +31,6 @@ export default function FileHeader({
 }: FileHeaderProps) {
   const {t} = useTranslation('shell')
   const [menuOpen, setMenuOpen] = useState(false)
-  // The recents menu is anchored to the whole header row (matching its
-  // previous left-0/right-0 width), not just the chevron that opens it.
   const headerRef = useRef<HTMLDivElement>(null)
 
   const handleRecentSelect = useCallback(

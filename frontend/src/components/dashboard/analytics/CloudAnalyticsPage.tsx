@@ -37,11 +37,6 @@ const SECTION_IDS = [
 type SectionKey = 'overview' | 'trend' | 'findings' | 'flows' | 'triage' | 'ai' | 'activity' | 'security'
 const SECTION_KEYS: SectionKey[] = ['overview', 'trend', 'findings', 'flows', 'triage', 'ai', 'activity', 'security']
 
-// The filterable Analytics page: one filter row, a section nav, and eight
-// sections computed for the same window and scope. Refetches keep the
-// previous charts on screen at reduced opacity; a failed refetch keeps them
-// too, with a notice. The layout answers to the main pane's width (the
-// `analytics` container in index.css).
 export default function CloudAnalyticsPage() {
   const {t} = useTranslation('dashboard')
   const {data, error, isLoading, isRefetching, retry} = useAnalyticsData()
@@ -60,14 +55,12 @@ export default function CloudAnalyticsPage() {
   })
   const {active, jumpTo} = useActiveSection(SECTION_IDS)
 
-  // An org the caller no longer belongs to falls back to every scope.
   useEffect(() => {
     if (filters.scope === 'org' && organisations.length > 0 && !organisations.some(o => o.id === filters.orgId)) {
       setScope('all')
     }
   }, [filters.scope, filters.orgId, organisations, setScope])
 
-  // Home's "Details" asked for a section: scroll there once the page exists.
   useEffect(() => {
     if (!data || !pendingSection) return
     const id = consumeSection()
@@ -179,8 +172,6 @@ export default function CloudAnalyticsPage() {
           <div className="analytics-body">
             <nav className="analytics-nav" aria-label={t('analytics.nav')}>
               {SECTION_IDS.map((id, i) => {
-                // SECTION_KEYS parallels SECTION_IDS (same order, same length,
-                // defined adjacently above); the id fallback is unreachable.
                 const key = SECTION_KEYS[i]
                 return (
                   <button

@@ -10,11 +10,6 @@ import {adminApi} from './admin'
 import {dashboardApi} from './dashboard'
 import {systemApi} from './system'
 
-// Runtime validation of the core read endpoints (schemas.lazy.ts): for every
-// NEW schema namespace, a well-formed payload passes through unchanged and a
-// drifted one (missing required field / wrong type / a closed enum's miss)
-// throws ResponseValidationError at the boundary instead of surfacing
-// downstream. Values a newer server may add are schemas.tolerant.test.ts's.
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
     getBackendConfig: vi.fn().mockResolvedValue({
@@ -28,12 +23,9 @@ vi.mock('@/platform/adapters', () => ({
 describe('api read validation (per schema namespace)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
-    // Same-path GETs are micro-cached for 5 s: without this the drifted
-    // payload of one test would be answered by the previous test's response.
     clearRequestCache()
   })
 
-  // ── Flow ────────────────────────────────────────────────────────────────
   describe('flow', () => {
     it('accepts a well-formed recent-files list', async () => {
       const row = {path: 'C:\\flows\\a.txt', name: 'a.txt', size: 12, lastOpen: '2026-01-01T00:00:00Z', isFolder: false}
@@ -58,12 +50,11 @@ describe('api read validation (per schema namespace)', () => {
     })
 
     it('throws ResponseValidationError when a loaded document misses parser-emitted fields', async () => {
-      mockFetch({id: 'f1', name: 'Flow', subflows: [{id: 's1', name: 'Main'}]}) // no filePath/metadata
+      mockFetch({id: 'f1', name: 'Flow', subflows: [{id: 's1', name: 'Main'}]})
       await expect(flowApi.loadFlowFromPath('C:\\flows\\a.txt')).rejects.toBeInstanceOf(ResponseValidationError)
     })
   })
 
-  // ── Library ─────────────────────────────────────────────────────────────
   describe('library', () => {
     const row = {
       id: 'f1',
@@ -98,7 +89,6 @@ describe('api read validation (per schema namespace)', () => {
     })
   })
 
-  // ── Governance ──────────────────────────────────────────────────────────
   describe('governance', () => {
     const alert = {
       id: 'a1',
@@ -116,15 +106,12 @@ describe('api read validation (per schema namespace)', () => {
       await expect(governanceApi.unreadCount()).resolves.toEqual({count: 3})
     })
 
-    // An unknown severity is kept as sent (schemas.tolerant.test.ts); a value
-    // that is not even a string is still drift.
     it('throws ResponseValidationError on a severity that is not a string', async () => {
       mockFetch([{...alert, severity: 2}])
       await expect(governanceApi.list()).rejects.toBeInstanceOf(ResponseValidationError)
     })
   })
 
-  // ── Providers ───────────────────────────────────────────────────────────
   describe('providers', () => {
     const provider = {
       id: 'claude',
@@ -177,7 +164,6 @@ describe('api read validation (per schema namespace)', () => {
     })
   })
 
-  // ── Chat ────────────────────────────────────────────────────────────────
   describe('chat', () => {
     it('accepts a suggested-prompts list and reads null as empty', async () => {
       mockFetch(['Explain this flow'])
@@ -192,7 +178,6 @@ describe('api read validation (per schema namespace)', () => {
     })
   })
 
-  // ── Admin ───────────────────────────────────────────────────────────────
   describe('admin', () => {
     const user = {
       id: 'u1',
@@ -241,10 +226,7 @@ describe('api read validation (per schema namespace)', () => {
     })
   })
 
-  // ── Dashboard ───────────────────────────────────────────────────────────
   describe('dashboard', () => {
-    // Sparse home payload: the sections the backend marshals unconditionally,
-    // with its nil slices/maps as null (read as empty by the schema).
     const home = {
       greeting: {userDisplayName: 'Dev'},
       overview: {avgHealthScore: 90, healthAvailable: true, totalFlows: 2, totalSubflows: 4},
@@ -305,7 +287,6 @@ describe('api read validation (per schema namespace)', () => {
     })
   })
 
-  // ── System ──────────────────────────────────────────────────────────────
   describe('system', () => {
     const info = {
       version: '1.2.3',

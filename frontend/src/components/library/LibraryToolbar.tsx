@@ -39,7 +39,6 @@ export default function LibraryToolbar({
   const setQuery = useLibraryBrowseStore(s => s.setQuery)
 
   return (
-    // Wraps rather than squeezing the search box to nothing in a narrow pane.
     <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-border-subtle shrink-0">
       <Input
         icon={Search}

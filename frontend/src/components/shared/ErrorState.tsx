@@ -10,11 +10,6 @@ type ErrorStateProps = {
   className?: string
 }
 
-/**
- * Error state with an optional Retry action. A thin wrapper over EmptyState so
- * load failures get a consistent, recoverable presentation instead of bare red
- * text. Pass `onRetry` (e.g. the panel's loader callback) to surface a button.
- */
 export default function ErrorState({title, message, onRetry, retryLabel, className}: ErrorStateProps) {
   const {t} = useTranslation()
   return (

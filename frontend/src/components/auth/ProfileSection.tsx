@@ -1,5 +1,4 @@
 import {getErrorMessage} from '@/lib/getErrorMessage'
-import {logger} from '@/lib/logger'
 import {useTranslation} from 'react-i18next'
 import React, {useState, useCallback} from 'react'
 import {Check, Copy, Pencil, User as UserIcon} from 'lucide-react'
@@ -7,22 +6,10 @@ import {useAuthStore} from '@/stores/authStore'
 import {authApi} from '@/api/auth'
 import {Avatar, Button, IconButton, Input, useToast} from '@/components/shared'
 import {useCopy} from '@/hooks/useCopy'
+import {httpUrlErrorKey} from '@/lib/validators'
+import {AVATAR_URL_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH} from '@/lib/constraints'
 import {SectionCard} from './SectionCard'
 
-// isHttpUrl mirrors the server's avatar check (a parseable http(s) URL) so a
-// typo is caught in the form instead of coming back as a 400.
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value)
-    return url.protocol === 'https:' || url.protocol === 'http:'
-  } catch (err) {
-    logger.warn('ProfileSection: avatar URL did not parse as http(s)', err)
-    return false
-  }
-}
-
-// ProfileSection shows the editable identity fields. Editing state belongs to
-// the page: the hero's "Edit profile" opens the same form.
 export const ProfileSection: React.FC<{editing: boolean; onEditingChange: (editing: boolean) => void}> = ({
   editing,
   onEditingChange,
@@ -36,8 +23,6 @@ export const ProfileSection: React.FC<{editing: boolean; onEditingChange: (editi
   const [avatarUrlInput, setAvatarUrlInput] = useState(user?.avatarUrl ?? '')
   const [isSaving, setIsSaving] = useState(false)
 
-  // The draft is re-seeded from the store whenever editing starts, whichever
-  // control started it. Adjusted during render so no stale-draft frame paints.
   const [wasEditing, setWasEditing] = useState(editing)
   if (editing !== wasEditing) {
     setWasEditing(editing)
@@ -49,7 +34,8 @@ export const ProfileSection: React.FC<{editing: boolean; onEditingChange: (editi
 
   const nextName = displayNameInput.trim()
   const nextAvatar = avatarUrlInput.trim()
-  const avatarError = nextAvatar && !isHttpUrl(nextAvatar) ? t('profile.avatarInvalid') : undefined
+  const avatarUrlKey = httpUrlErrorKey(nextAvatar)
+  const avatarError = avatarUrlKey ? t(avatarUrlKey, {ns: 'common', max: AVATAR_URL_MAX_LENGTH}) : undefined
   const dirty = nextName !== (user?.displayName ?? '') || nextAvatar !== (user?.avatarUrl ?? '')
 
   const handleSave = useCallback(
@@ -112,7 +98,7 @@ export const ProfileSection: React.FC<{editing: boolean; onEditingChange: (editi
                   value={displayNameInput}
                   onChange={e => setDisplayNameInput(e.target.value)}
                   placeholder={t('profile.displayNamePlaceholder')}
-                  maxLength={100}
+                  maxLength={DISPLAY_NAME_MAX_LENGTH}
                   autoFocus
                 />
               </div>
@@ -126,7 +112,7 @@ export const ProfileSection: React.FC<{editing: boolean; onEditingChange: (editi
                   value={avatarUrlInput}
                   onChange={e => setAvatarUrlInput(e.target.value)}
                   placeholder={t('profile.avatarPlaceholder')}
-                  maxLength={2048}
+                  maxLength={AVATAR_URL_MAX_LENGTH}
                   error={avatarError}
                   hint={avatarError ? undefined : t('profile.avatarHint')}
                 />

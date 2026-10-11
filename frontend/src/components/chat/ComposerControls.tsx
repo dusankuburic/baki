@@ -3,12 +3,6 @@ import clsx from 'clsx'
 import {ArrowUp, EyeOff, Square, type LucideIcon} from 'lucide-react'
 import {Kbd} from '@/components/shared'
 
-// The composer's controls, shared by the inline chat box and the Compose
-// dialog so the two shells look and behave the same.
-
-// Keeps the textarea focused (and its caret where it was) when a control is
-// clicked: the chips insert at the caret, Send lets the user keep typing, and
-// a blur would also close the @ / slash menus.
 const keepFocus = (e: React.MouseEvent) => e.preventDefault()
 
 const focusRing = 'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-500/40'
@@ -22,17 +16,12 @@ const roundButton = 'inline-flex items-center justify-center w-7 h-7 shrink-0 tr
 
 interface ChipProps {
   icon: LucideIcon
-  // The visible label is the accessible name; `hint` is the hover tooltip.
   label: string
   hint: string
   onClick: () => void
-  // Container-query hook that hides the label when the composer is narrow
-  // (visually hidden, so the name survives).
   labelClass?: string
 }
 
-// ComposerChip is a small action such as "Files" (inserts @) or "Commands"
-// (inserts /), so the two menus are discoverable without knowing the keys.
 export function ComposerChip({icon: Icon, label, hint, onClick, labelClass}: ChipProps) {
   return (
     <button
@@ -55,11 +44,6 @@ interface ToggleProps {
   labelClass?: string
 }
 
-// ContextToggle is an on/off chip with checkbox semantics (its text is the
-// accessible name, Space toggles it). It is a button rather than a native
-// checkbox for two reasons: the native box never took the app's styling (no
-// forms plugin) and rendered as the browser default, and activating a label
-// moves focus to its control — this one must leave the caret in the textarea.
 export function ContextToggle({checked, onChange, label, labelClass}: ToggleProps) {
   return (
     <button
@@ -86,7 +70,6 @@ interface IconButtonProps {
   onClick: () => void
 }
 
-// ComposerIconButton is a quiet 28px action (Preview, Expand).
 export function ComposerIconButton({icon: Icon, label, onClick}: IconButtonProps) {
   return (
     <button
@@ -109,14 +92,10 @@ export function ComposerIconButton({icon: Icon, label, onClick}: IconButtonProps
 interface SendButtonProps {
   mode: 'send' | 'stop'
   disabled?: boolean
-  // Replaces the default tooltip, e.g. the concurrency-cap explanation.
   title?: string
   onClick?: () => void
 }
 
-// SendButton is the composer's one accent: a round brand-filled arrow that
-// greys out (rather than fading) when there is nothing to send, and becomes a
-// Stop control while the active thread's reply streams.
 export function SendButton({mode, disabled = false, title, onClick}: SendButtonProps) {
   const {t} = useTranslation('chat')
   if (mode === 'stop') {
@@ -161,7 +140,6 @@ export function SendButton({mode, disabled = false, title, onClick}: SendButtonP
   )
 }
 
-// ComposerHints shows the two keys that matter while writing.
 export function ComposerHints({className}: {className?: string}) {
   const {t} = useTranslation('chat')
   return (

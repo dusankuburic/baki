@@ -16,10 +16,6 @@ vi.mock('@/api', () => ({
     setRuleEnabled: (...a: unknown[]) => setRuleEnabled(...a),
     updateRuleConfig: (...a: unknown[]) => updateRuleConfig(...a),
   },
-  // settingsApi is mocked even though the deployment-scope tests never reach it:
-  // RulesPanel imports it unconditionally, and a factory that omits an imported
-  // export throws at call time rather than at import — which is how a test can
-  // pass while the code path it claims to cover never runs.
   settingsApi: {
     getOrgSettings: (...a: unknown[]) => getOrgSettings(...a),
     updateOrgSettings: (...a: unknown[]) => updateOrgSettings(...a),
@@ -41,7 +37,6 @@ beforeEach(() => {
       id: 'deep-nesting',
       name: 'Deeply nested logic',
       description: 'Detects deep nesting.',
-      // Simulates a configured severity override surfaced by the backend (B1)
       defaultSeverity: 'error',
       category: 'Style',
       enabled: true,
@@ -53,7 +48,6 @@ describe('RulesPanel', () => {
   it('renders rules with the backend-provided (configured) severity selected', async () => {
     renderPanel()
     expect(await screen.findByText('Deeply nested logic')).toBeInTheDocument()
-    // The severity SegmentedControl reflects the configured override
     expect(screen.getAllByText('Error').length).toBeGreaterThan(0)
   })
 
@@ -62,14 +56,12 @@ describe('RulesPanel', () => {
     renderPanel()
     await screen.findByText('Deeply nested logic')
 
-    // The rule row Switch is the second switch (first is auto-analyze)
     const switches = screen.getAllByRole('switch')
     fireEvent.click(switches[switches.length - 1]!)
 
     await waitFor(() => {
       expect(setRuleEnabled).toHaveBeenCalledWith('deep-nesting', false)
     })
-    // Regression for the B1 wipe chain: toggle must NOT full-replace the config
     expect(updateRuleConfig).not.toHaveBeenCalled()
   })
 
@@ -85,12 +77,9 @@ describe('RulesPanel', () => {
   })
 })
 
-// --- R4: scoped rule configuration -----------------------------------------
-
 import {useAuthStore} from '@/stores/authStore'
 import {useOrgStore} from '@/stores/orgStore'
 
-/** Puts the app into cloud mode as `user`, a member/admin of `orgs`. */
 function signIn(user: {id: string; role: 'admin' | 'member'}, orgs: unknown[] = []) {
   useAuthStore.setState({
     user: {id: user.id, email: `${user.id}@x.io`, role: user.role} as never,
@@ -108,9 +97,6 @@ describe('RulesPanel scoping (R4)', () => {
   })
 
   it('stays editable in local/desktop mode, where there are no tenants', async () => {
-    // No authenticated user: the backend's RequireRole short-circuits when JWT
-    // auth is off, and the panel must match — otherwise every desktop user gets
-    // a read-only rules screen.
     renderPanel()
     const switches = await screen.findAllByRole('switch')
     fireEvent.click(switches[switches.length - 1]!)
@@ -137,17 +123,12 @@ describe('RulesPanel scoping (R4)', () => {
     const switches = await screen.findAllByRole('switch')
     fireEvent.click(switches[switches.length - 1]!)
 
-    // The org profile is written; the deployment endpoint is NOT touched. That
-    // separation is the whole point — before R4 this panel wrote the singleton
-    // that every tenant shares.
     await waitFor(() => expect(updateOrgSettings).toHaveBeenCalled())
     expect(setRuleEnabled).not.toHaveBeenCalled()
     expect(updateOrgSettings.mock.calls[0]![0]).toBe('org-1')
   })
 
   it('merges into the org profile rather than replacing it', async () => {
-    // An org that already overrides another rule must keep that override when a
-    // second one is set — a replace would silently drop it.
     getOrgSettings.mockResolvedValue({analysis: {rules: {'other-rule': {enabled: false, severity: 'info'}}}})
     signIn({id: 'u1', role: 'member'}, [
       {id: 'org-1', name: 'Acme', ownerId: 'u1', members: [{userId: 'u1', role: 'admin'}]},
@@ -166,15 +147,11 @@ describe('RulesPanel scoping (R4)', () => {
 })
 
 describe('RulesPanel thresholds', () => {
-  // Deployment scope: the scoping tests above leave an org admin signed in,
-  // which would route the write through the org endpoint instead.
   beforeEach(() => {
     useAuthStore.setState({user: null, isAuthenticated: false})
     useOrgStore.setState({organisations: []})
   })
 
-  // Thresholds were honoured by the analyzer but reachable only by hand-editing
-  // the settings JSON; the panel showed enable + severity and nothing else.
   it('renders a numeric input per threshold and writes it back merged with severity', async () => {
     getRules.mockResolvedValue([
       {
@@ -241,7 +218,6 @@ describe('RulesPanel thresholds', () => {
     expect(row).toHaveTextContent('Preview')
     expect(row).toHaveTextContent('Across flows')
 
-    // Switches: auto-analyze, deep-nesting, then the library rule.
     const switches = screen.getAllByRole('switch')
     fireEvent.click(switches[switches.length - 1]!)
     await waitFor(() => expect(setRuleEnabled).toHaveBeenCalledWith('duplicate-subflow-across-flows', false))

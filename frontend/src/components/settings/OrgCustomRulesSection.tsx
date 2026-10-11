@@ -10,17 +10,7 @@ import {useAsync} from '@/hooks/useAsync'
 import {logger} from '@/lib/logger'
 import {severityTone} from '@/lib/severityTone'
 import clsx from 'clsx'
-
-// OrgCustomRulesSection manages an org's OWN analyzer rules (R4). Before it,
-// custom rules came from a single deployment-wide JSON file that only someone
-// with server access could change, so a team could not express its own policy
-// ("flag any HTTP action without our approved retry") at all.
-//
-// Admin-only edits; members read — analysis configuration decides what a team is
-// told about its own flows. The server checks every save strictly and reads
-// stored rules tolerantly (docs/custom-rules.md): a stored rule it cannot run is
-// listed with its problem, can be paused without re-validation, and is edited
-// back into shape here.
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
 const SEVERITIES: OrgCustomRuleConfig['severity'][] = ['error', 'warning', 'info']
 
@@ -35,14 +25,11 @@ const emptyRule = (): OrgCustomRuleConfig => ({
   rawTypeMatch: '',
 })
 
-// The rule fields the form edits; a problem on any other field (autoFix,
-// propertyHas, an unknown key) is shown above the buttons instead.
 const FORM_FIELDS = ['id', 'name', 'description', 'rawTypeMatch', 'nameMatch', 'suggestion', 'severity'] as const
 type FormField = (typeof FORM_FIELDS)[number]
 const isFormField = (field?: string): field is FormField =>
   !!field && (FORM_FIELDS as readonly string[]).includes(field)
 
-/** What the server said about the draft: errors by form field, other errors, and warnings it still runs with. */
 interface Verdict {
   valid: boolean
   fieldErrors: Partial<Record<FormField, string>>
@@ -55,8 +42,6 @@ const invalidVerdict = (message: string, field?: string): Verdict =>
     ? {valid: false, fieldErrors: {[field]: message}, errors: [], warnings: []}
     : {valid: false, fieldErrors: {}, errors: [message], warnings: []}
 
-// verdictOf reads one validate entry. While editing a saved rule, a built-in
-// rule's id is a warning: the server accepts the id the stored rule already has.
 function verdictOf(entry: CustomRuleValidationEntry | undefined, editing: boolean): Verdict {
   const v: Verdict = {valid: !!entry, fieldErrors: {}, errors: [], warnings: []}
   if (!entry) return v
@@ -74,8 +59,6 @@ function verdictOf(entry: CustomRuleValidationEntry | undefined, editing: boolea
   return v
 }
 
-// fieldErrorOf maps a 400 whose details name a rule field ("config.severity",
-// "rule.nameMatch") to that field; anything else is null.
 function fieldErrorOf(e: unknown, prefix: 'config.' | 'rule.'): Verdict | null {
   if (!(e instanceof ApiError) || e.status !== 400) return null
   const field = e.details?.field
@@ -106,21 +89,19 @@ export default function OrgCustomRulesSection({orgId, isAdmin}: {orgId: string; 
         toast.success(t('customRules.deleted', {name: rule.config.name || rule.ruleId}))
         refetch()
       } catch (e) {
-        toast.error(t('customRules.deleteFailed'), {description: String(e)})
+        toast.error(t('customRules.deleteFailed'), {description: getErrorMessage(e)})
       }
     },
     [confirm, orgId, refetch, t, toast],
   )
 
-  // Pausing sends no config, so the server does not re-validate it: a stored
-  // rule that no longer compiles can still be paused.
   const handleToggle = useCallback(
     async (rule: OrgCustomRule) => {
       try {
         await orgRulesApi.setEnabled(orgId, rule.id, !rule.enabled, rule.config)
         refetch()
       } catch (e) {
-        toast.error(t('customRules.updateFailed'), {description: String(e)})
+        toast.error(t('customRules.updateFailed'), {description: getErrorMessage(e)})
       }
     },
     [orgId, refetch, t, toast],
@@ -231,7 +212,6 @@ export default function OrgCustomRulesSection({orgId, isAdmin}: {orgId: string; 
 
       {draft && (
         <RuleEditor
-          // A new key per rule: the editor's state starts from the rule it opened with.
           key={draft.rule?.id ?? 'new'}
           orgId={orgId}
           initial={draft.config}
@@ -248,12 +228,6 @@ export default function OrgCustomRulesSection({orgId, isAdmin}: {orgId: string; 
   )
 }
 
-// RuleEditor is a FORM over CustomRuleConfig, not a JSON textarea: the whole
-// point of the registry is that a team can author a rule without knowing the
-// wire format. Validation runs against the server's own analyzer
-// (POST /api/analysis/custom-rules/validate) so the preview, the save endpoint,
-// and the analysis engine cannot disagree about whether a rule is valid; the
-// server's field and reason codes put each error next to its input.
 function RuleEditor({
   orgId,
   initial,
@@ -264,9 +238,7 @@ function RuleEditor({
 }: {
   orgId: string
   initial: OrgCustomRuleConfig
-  /** The stored rule being edited; absent for a new rule. */
   saved?: OrgCustomRule
-  /** The org's rule IDs: a new rule under one would replace that rule (the save upserts by ID). */
   takenIds?: string[]
   onCancel: () => void
   onSaved: () => void
@@ -276,24 +248,17 @@ function RuleEditor({
   const uid = useId()
   const editing = !!saved
   const [cfg, setCfg] = useState<OrgCustomRuleConfig>(initial)
-  // A stored rule the analysis skips opens with its problem showing.
   const [verdict, setVerdict] = useState<Verdict | null>(saved?.problem ? invalidVerdict(saved.problem) : null)
   const [saving, setSaving] = useState(false)
-  // "Try it" state. Separate from validation because they answer different
-  // questions: validation is "does this compile", this is "does it match
-  // anything in a real flow".
   const [testFlowId, setTestFlowId] = useState('')
   const [testResult, setTestResult] = useState<{matches: number; flowName: string} | null>(null)
   const [testing, setTesting] = useState(false)
 
-  // The caller's own flows, to pick a target to try the rule against.
   const {data: flows} = useAsync(() => libraryApi.list({orgId, limit: 50}).then(r => r.items ?? []), [orgId])
 
   const set = <K extends keyof OrgCustomRuleConfig>(key: K, value: OrgCustomRuleConfig[K]) => {
     setCfg(prev => ({...prev, [key]: value}))
     setVerdict(null)
-    // Editing invalidates the previous try — a stale "matches 3" next to a
-    // changed regex is worse than no result at all.
     setTestResult(null)
   }
 
@@ -304,9 +269,6 @@ function RuleEditor({
       setVerdict(v)
       return v.valid
     } catch (e) {
-      // A validation-endpoint failure must not silently look like "valid" —
-      // that would let an unparseable rule reach the save and be rejected there
-      // with a less specific message.
       logger.error('custom rule validation failed', e)
       setVerdict(invalidVerdict(t('customRules.validatorUnreachable')))
       return false
@@ -320,9 +282,7 @@ function RuleEditor({
       const res = await analysisApi.testCustomRule(cfg, testFlowId)
       setTestResult({matches: res.matches, flowName: res.flowName})
     } catch (e) {
-      // Surface it as a validation failure: the usual cause is a rule that does
-      // not compile, and the author needs the reason, not a silent nothing.
-      setVerdict(fieldErrorOf(e, 'rule.') ?? invalidVerdict(String(e)))
+      setVerdict(fieldErrorOf(e, 'rule.') ?? invalidVerdict(getErrorMessage(e)))
       setTestResult(null)
     } finally {
       setTesting(false)
@@ -337,14 +297,13 @@ function RuleEditor({
     if (!(await validate())) return
     setSaving(true)
     try {
-      // Editing keeps a paused rule paused.
       await orgRulesApi.save(orgId, cfg, saved?.enabled ?? true, saved?.id)
       toast.success(t('customRules.saved', {name: cfg.name || cfg.id}))
       onSaved()
     } catch (e) {
       const fieldError = fieldErrorOf(e, 'config.')
       if (fieldError) setVerdict(fieldError)
-      toast.error(t('customRules.saveFailed'), {description: e instanceof ApiError ? e.message : String(e)})
+      toast.error(t('customRules.saveFailed'), {description: getErrorMessage(e)})
     } finally {
       setSaving(false)
     }
@@ -389,7 +348,6 @@ function RuleEditor({
   return (
     <div className="space-y-2.5 rounded border border-border-subtle bg-surface-2 p-3">
       <div className="grid gap-2.5 sm:grid-cols-2">
-        {/* The id is the rule's identity on findings, suppressions and settings: fixed once saved. */}
         {field(
           t('customRules.fieldId'),
           'id',
@@ -454,9 +412,6 @@ function RuleEditor({
         </p>
       ))}
 
-      {/* Try it against a real flow. The validate call above only proves the
-          rule COMPILES; a rule that compiles and matches nothing is the failure
-          an author cannot otherwise see. */}
       {(flows?.length ?? 0) > 0 && (
         <div className="flex flex-wrap items-end gap-2 border-t border-border-subtle pt-2.5">
           <label className="min-w-0 flex-1">

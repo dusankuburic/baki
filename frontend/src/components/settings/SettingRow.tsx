@@ -1,10 +1,6 @@
 import type {ReactNode} from 'react'
 import clsx from 'clsx'
 
-// One settings row: title and hint on the left, the control on the right.
-// The panels used to hand-roll this shape with slightly different spacing,
-// type and borders each time; this is the one version. It renders only the
-// copy its caller passes in.
 export default function SettingRow({
   title,
   hint,

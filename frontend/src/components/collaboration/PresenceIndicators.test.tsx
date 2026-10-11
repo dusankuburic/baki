@@ -34,7 +34,6 @@ describe('PresenceIndicators', () => {
       u2: {userId: 'u2', displayName: 'Bob'},
     })
     render(<PresenceIndicators maxVisible={5} />)
-    // Each user gets an avatar div with their initials
     expect(screen.getByText('AL')).toBeInTheDocument()
     expect(screen.getByText('BO')).toBeInTheDocument()
   })

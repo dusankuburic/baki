@@ -27,7 +27,6 @@ describe('parseChatMessage', () => {
     expect(m?.tokensIn).toBe(10)
     expect(m?.model).toBe('gpt-x')
     expect(m?.provider).toBe('openai')
-    // Served model + billed rates survive the reload (meta line, cost line).
     expect(m?.servedModel).toBe('gpt-x-2024-08-06')
     expect(m?.inputCostPerM).toBe(2.5)
     expect(m?.outputCostPerM).toBe(10)
@@ -78,8 +77,6 @@ describe('parseChatMessage', () => {
     expect(parseChatMessage({...base, modelLabel: ''})).not.toHaveProperty('modelLabel')
   })
 
-  // C6: a turn sent before the listing named its model was saved with the
-  // raw id as its label, which then beat the listing's name for good.
   it('drops a label that is only an id', () => {
     const base = {id: 'm1', role: 'assistant', content: 'a', timestamp: 't', provider: 'azure-foundry'}
     expect(parseChatMessage({...base, model: 'm/a1b2c3d4e5', modelLabel: 'm/a1b2c3d4e5'})).not.toHaveProperty(
@@ -90,10 +87,6 @@ describe('parseChatMessage', () => {
   })
 })
 
-// The client re-saves whole threads (full replace) and the server stores
-// them as sent, so a field the read boundary drops is lost for good after one
-// load → save cycle. Walk the wire: save body → stored → /api/chat/get → parse
-// → the next save body.
 describe('conversation round trip', () => {
   const thread: ChatMessage[] = [
     {id: 'u1', role: 'user', content: 'Document this flow', timestamp: '2026-09-30T10:00:00Z'},
@@ -112,7 +105,6 @@ describe('conversation round trip', () => {
     },
   ]
 
-  // What saveConversation puts on the wire, as the server reads it back.
   const wire = (messages: ChatMessage[]) => JSON.parse(JSON.stringify({messages})).messages as unknown
 
   it('keeps modelLabel through save → get → save', () => {
@@ -134,7 +126,7 @@ describe('parseChatMessages', () => {
     const valid: ChatMessage = {id: 'ok', role: 'user', content: 'a', timestamp: 't'}
     const result = parseChatMessages([
       valid,
-      {role: 'user', content: 'no id', timestamp: 't'}, // dropped
+      {role: 'user', content: 'no id', timestamp: 't'},
       {id: 'ok2', role: 'assistant', content: 'b', timestamp: 't2'},
     ])
     expect(result).toHaveLength(2)
@@ -153,7 +145,6 @@ describe('parseConversationPayload', () => {
   const m = {id: 'a', role: 'user', content: 'hi', timestamp: '2024-01-01T00:00:00Z'}
 
   it('reads the bare array the endpoint returns', () => {
-    // Reading `.messages` off this array is what restored nothing (H1).
     expect(parseConversationPayload([m])).toHaveLength(1)
   })
 

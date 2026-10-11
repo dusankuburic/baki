@@ -12,8 +12,6 @@ import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import type {ChatMessage, ProviderInfo} from '@/types'
 import type {ComponentProps, ReactNode} from 'react'
 
-// react-virtuoso renders nothing in jsdom (zero-height scroller); render every
-// row, like the ChatMessageList tests do.
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({
     data = [],
@@ -35,10 +33,6 @@ vi.mock('react-virtuoso', () => ({
   ),
 }))
 
-// A memoised wrapper around the real list: it renders only when the list's
-// props change identity, which is what the real `memo(ChatMessageList)` keys
-// on. Counting its renders measures what the panel hands the list, not how
-// often the panel itself renders.
 const listRenders = vi.fn()
 vi.mock('./ChatMessageList', async importOriginal => {
   const actual = await importOriginal<typeof import('./ChatMessageList')>()
@@ -51,10 +45,8 @@ vi.mock('./ChatMessageList', async importOriginal => {
   return {...actual, default: Counted}
 })
 
-// jsdom has no matchMedia; focus mode is desktop-only.
 vi.mock('@/hooks/useMediaQuery', () => ({useIsDesktop: () => true, useMediaQuery: () => true}))
 
-// Prevent real network calls from all API modules.
 vi.mock('@/api', () => ({
   ApiError: class ApiError extends Error {},
   chatApi: {
@@ -78,7 +70,6 @@ vi.mock('@/api', () => ({
   },
 }))
 
-// The app mounts the chat stream engine (ChatStreamProvider) above the panel.
 function ChatShell() {
   return (
     <ToastProvider>
@@ -91,7 +82,6 @@ function ChatShell() {
   )
 }
 
-// Capture initial store states for clean resets.
 const initialFlowState = useFlowStore.getState()
 const initialChatState = useChatStore.getState()
 
@@ -99,11 +89,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   useFlowStore.setState(initialFlowState, true)
   useChatStore.setState(initialChatState, true)
-  // Re-establish default return values; clearAllMocks preserves implementations
-  // so test-specific overrides from a previous test would otherwise leak.
   vi.mocked(providersApi.listProviders).mockResolvedValue([])
   vi.mocked(chatApi.getSuggestedPrompts).mockResolvedValue([])
-  // The real endpoint returns the message list (see api/chat.ts).
   vi.mocked(chatApi.getConversation).mockResolvedValue({messages: []})
   vi.mocked(flowApi.getSourceFiles).mockResolvedValue([])
   useUIStore.setState({chatFocus: false})
@@ -114,7 +101,6 @@ describe('AITab', () => {
     await act(async () => {
       render(<ChatShell />)
     })
-    // listProviders resolves [] → configured stays false → shows ApiKeyMissingState
     expect(screen.getByText('Add an API key to start')).toBeInTheDocument()
   })
 
@@ -132,9 +118,6 @@ describe('AITab', () => {
 
     render(<ChatShell />)
 
-    // After the listProviders effect resolves, configured becomes true and the flow document is null.
-    // (Wait for the end state itself: while providers are still being checked
-    // neither the setup prompt nor the chat is shown.)
     await waitFor(() => {
       expect(screen.getByText('No flow loaded')).toBeInTheDocument()
     })
@@ -149,20 +132,7 @@ describe('AITab', () => {
   })
 })
 
-// Regression: the AI tab must not clobber the thread's source-file selection.
-// ChatInput used to mirror its LOCAL @-mention array (`taggedFiles`) into the
-// thread via an `onFilesChange` effect. That array starts [] and is reset to []
-// after every send, so the effect wrote an empty selection on mount, after each
-// message, and again whenever the active thread changed (which changes the
-// callback's identity and re-fires the effect). The result: the AI silently lost
-// all source-file context from the second message onward, and the picker read
-// "No files selected" though the user never deselected anything.
-//
-// Per-message @-mention overrides already travel correctly as onSend's `files`
-// argument (→ buildRequest's `overrideFiles`); the thread's persistent selection
-// belongs to SourceFilePicker alone. These two concepts must not share a writer.
 describe('AITab source-file selection (B1)', () => {
-  // Source files are a desktop (Tauri) feature; the web build never fetches them.
   beforeEach(() => {
     ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
   })
@@ -226,8 +196,6 @@ describe('AITab source-file selection (B1)', () => {
   })
 })
 
-// The chat shortcuts listed in the help dialogs are bound while focus is
-// inside the chat panel, and only there.
 describe('AITab chat shortcuts', () => {
   function seedChat(streaming: boolean) {
     vi.mocked(providersApi.listProviders).mockResolvedValue([
@@ -288,7 +256,6 @@ describe('AITab chat shortcuts', () => {
 
     composer.focus()
     fireEvent.keyDown(composer, {key: 'l', ctrlKey: true})
-    // Destructive, so it asks first, like the header's Clear.
     const dialog = await screen.findByRole('dialog')
     expect(chatApi.clearConversation).not.toHaveBeenCalled()
     fireEvent.click(within(dialog).getByRole('button', {name: 'Clear'}))
@@ -301,7 +268,6 @@ describe('AITab chat shortcuts', () => {
     const composer = await renderTab()
     composer.focus()
 
-    // Something inside the panel (an open menu) claimed the key first.
     composer.addEventListener('keydown', e => e.preventDefault(), {once: true})
     fireEvent.keyDown(composer, {key: 'Escape'})
     expect(useChatStore.getState().streams.t1).toBeDefined()
@@ -337,9 +303,6 @@ describe('AITab chat shortcuts', () => {
     const composer = await renderTab()
     composer.focus()
 
-    // The card no longer takes focus while the user types, so a reflex Escape
-    // in the composer reaches the chat shortcut — it must mean "no" to the
-    // fix, not "stop everything".
     fireEvent.keyDown(composer, {key: 'Escape'})
 
     await waitFor(() => expect(useChatStore.getState().streams.t1?.approvals[0]!.status).toBe('declined'))
@@ -348,8 +311,6 @@ describe('AITab chat shortcuts', () => {
     expect(chatApi.cancelStream).not.toHaveBeenCalled()
   })
 
-  // F9: with cards stacked, Escape means "no" to the one the user is looking
-  // at — the newest — as the card's own Escape and a click on Dismiss do.
   it('Escape declines the newest pending card when several are stacked', async () => {
     seedChat(true)
     const card = (proposalId: string) => ({
@@ -374,8 +335,6 @@ describe('AITab chat shortcuts', () => {
     expect(chatApi.respondFixDecision).toHaveBeenCalledWith('pending', 'p2', false, undefined)
   })
 
-  // Focus mode is toggled from the composer with mod+. and left with Escape;
-  // a running reply takes Escape first.
   async function renderFocusTab() {
     await act(async () => {
       render(
@@ -435,7 +394,6 @@ describe('AITab provider check', () => {
     await act(async () => {
       render(<ChatShell />)
     })
-    // Starting at "not configured" flashed "Add an API key" on every mount.
     expect(screen.queryByText('Add an API key to start')).not.toBeInTheDocument()
   })
 
@@ -506,9 +464,6 @@ describe('AITab thread close', () => {
   })
 })
 
-// M1: Retry re-sends the LAST exchange (removing it first), so it may only
-// appear on the latest reply — on an older error bubble it deleted the newest
-// answer and re-sent the wrong question.
 describe('AITab retry placement', () => {
   const m = (id: string, role: ChatMessage['role'], content: string, error = false): ChatMessage => ({
     id,
@@ -578,9 +533,7 @@ describe('AITab retry placement', () => {
     await act(async () => {
       useFlowStore.getState().selectBlock('b2')
     })
-    // The bar follows the selection (it offers the block as the thread's scope)...
     expect(screen.getByRole('button', {name: 'Focus selected block'})).toBeInTheDocument()
-    // ...while the list got the same props as before and skipped the render.
     expect(listRenders).toHaveBeenCalledTimes(before)
 
     await act(async () => {

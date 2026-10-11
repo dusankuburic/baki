@@ -6,9 +6,6 @@ import {useConfirm, useToast} from '@/components/shared'
 import {useAdminStore} from '@/stores/adminStore'
 import {useAdminQuery} from './useAdminQuery'
 
-// The legacy-data migration: its status (polled every 5 s only while a run
-// is in progress, so an idle admin page costs nothing) and the confirmed
-// start action.
 export function useMigration() {
   const {t} = useTranslation('admin')
   const nonce = useAdminStore(s => s.nonce)

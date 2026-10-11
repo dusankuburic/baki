@@ -9,16 +9,10 @@ import {Meter} from './Meter'
 export interface StatDelta {
   current: number
   prev: number | null
-  /** Which direction is good news here: findings down, health up, spend neutral. */
   goodWhen: 'up' | 'down' | 'neutral'
-  /** "vs last 30 days" */
   periodLabel: string
 }
 
-// A single number as a figure: label, value (proportional figures, never
-// mono), an optional signed delta coloured by direction × whether up is good,
-// an optional 12-point sparkline, an optional meter. `hero` is the one number a
-// view leads with. When `unavailable` is set the tile says so instead of a 0.
 export function StatTile({
   label,
   value,
@@ -37,7 +31,6 @@ export function StatTile({
   label: string
   value: string
   sub?: string
-  /** text colour class for the value (e.g. healthTier(score).text) */
   tone?: string
   icon?: LucideIcon
   delta?: StatDelta

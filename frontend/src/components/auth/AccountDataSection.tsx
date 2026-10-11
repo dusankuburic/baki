@@ -1,4 +1,5 @@
 import {getErrorMessage} from '@/lib/getErrorMessage'
+import {triggerDownload} from '@/lib/download'
 import {useTranslation} from 'react-i18next'
 import React, {useState} from 'react'
 import {Download} from 'lucide-react'
@@ -8,11 +9,8 @@ import {logger} from '@/lib/logger'
 import {Button, useToast} from '@/components/shared'
 import {SectionCard} from './SectionCard'
 
-// What the bundle holds, as chips instead of a sixty-word sentence. Mirrors
-// the sections of UserDataExport in internal/storage/interfaces/storage.go.
 const INCLUDED = ['profile', 'flows', 'findings', 'chat', 'audit', 'tokens', 'orgs'] as const
 
-// AccountDataSection is the data-subject access / portability export.
 export const AccountDataSection: React.FC = () => {
   const {t} = useTranslation('auth')
   const user = useAuthStore(s => s.user)
@@ -25,14 +23,7 @@ export const AccountDataSection: React.FC = () => {
     setExporting(true)
     try {
       const blob = await authApi.exportAccount()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `baki-account-export-${user?.id ?? 'data'}.json`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
+      triggerDownload(blob, `baki-account-export-${user?.id ?? 'data'}.json`)
       toast.success(t('account.exportDone'))
     } catch (err) {
       logger.warn('data export failed', err)

@@ -5,10 +5,6 @@ import {ChevronDown, Check, Search} from 'lucide-react'
 import {healthTier} from '@/lib/scoring'
 import type {FacetFlow} from '@/types'
 
-// The flow filter: a button that opens a searchable, keyboard-navigable
-// multi-select listbox of every flow in scope, each with its health and its
-// finding count under the current filters. Focus returns to the button when
-// the list closes.
 export function FlowMultiSelect({
   flows,
   selected,
@@ -43,8 +39,6 @@ export function FlowMultiSelect({
     const onDown = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
     }
-    // Escape closes the list wherever focus went (a mouse click on an option
-    // keeps it in the search box, but it may also be nowhere).
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== 'Escape') return
       e.preventDefault()
@@ -154,7 +148,6 @@ export function FlowMultiSelect({
                   aria-selected={isSelected}
                   data-index={i}
                   onMouseEnter={() => setActive(i)}
-                  // Keep focus in the search box so the arrow keys keep working.
                   onMouseDown={e => e.preventDefault()}
                   onClick={() => toggle(f.id)}
                   className={clsx(

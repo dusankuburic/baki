@@ -7,12 +7,6 @@ function itemStatusLine(item: ApprovalItem, t: TFunction<'chat'>): string {
   return t(`approvalCard.itemStatus.${item.status}`, {defaultValue: item.status})
 }
 
-/**
- * The preview for a request of a kind this bundle does not know (a tool a
- * newer server added): the tool's name, the scope it needs, and each item's
- * label with its summary as plain text. Nothing is interpreted — the server
- * wrote the summaries for a reader — and the decision is the frame's.
- */
 export default function GenericPreview({
   approval,
   pending,
@@ -59,7 +53,6 @@ export default function GenericPreview({
               )}
               <span className="truncate text-xs text-text-secondary">{item.label}</span>
             </span>
-            {/* Bounded like the fix preview: the summary's length is the server's. */}
             {item.summary && (
               <p className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words text-2xs text-text-tertiary">
                 {item.summary}

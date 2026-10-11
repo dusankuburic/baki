@@ -33,31 +33,19 @@ export interface ConnectionActions {
 interface AzureConnectionGroupProps {
   scope: AzureScope
   connection: AzureConnection
-  /** The resource's models, in display order. */
   models: AzureModelEntry[]
-  /** The card heading's level (4 in AI Accounts, 5 in an organisation's block). */
   headingLevel: 4 | 5
-  /** The caller may change this registry (its owner, or an organisation's admin). */
   canEdit: boolean
-  /** The effective "Default for new chats" (user scope), for [DEFAULT]. */
   defaultModelId: string | null
   knowledgeEnabled: boolean
-  /** Open the discovery suggestions at once (the resource was just added). */
   expandDiscovery: boolean
-  /** Why no model can be added (the model limit), or undefined. */
   modelLimitReason?: string
-  /** The store's operations in flight for this scope (azureBusyKey). */
   busy: Record<string, true>
   actions: ConnectionActions
   rowActions: ModelRowActions
   labelOf: PurposeLabelOf
 }
 
-// One resource: its heading (h4, or h5 in an organisation's block) with the
-// auth badge, "host · N models · last test", [+ Add model] and a kebab (Test
-// / Edit / Remove resource); a callout when its credentials or settings need
-// attention; its models; and, for Entra ID with a project, the discovery
-// suggestions. "Needs credentials" sits next to the models it breaks.
 export default function AzureConnectionGroup({
   scope,
   connection,
@@ -78,13 +66,9 @@ export default function AzureConnectionGroup({
   const name = connection.name
   const testing = !!busy[azureBusyKey.test({connectionId: connection.id})]
   const mutating = !!busy[azureBusyKey.connection(connection.id)]
-  // Without a readable credential document (its lender was disabled, or it
-  // can't be decrypted) the server sends blank settings: no sign-in badge
-  // and no host then, rather than a made-up "API key" and an empty host.
   const host = azureHost(connection.config.endpoint) || connection.config.endpoint.trim()
   const last = connection.lastTest ?? null
   const needsCredentials = connection.status === 'needs_credentials' || connection.status === 'unreadable'
-  // A status or sign-in method a newer server added gets a neutral label.
   const unknownStatus = !isKnown(AZURE_STATUSES, connection.status)
   const authLabel =
     connection.config.authMode === 'entra'
@@ -161,8 +145,6 @@ export default function AzureConnectionGroup({
           >
             {t('azureModels.connection.enterCredentials')}
           </Button>
-          {/* F-12: the other way out of an unreadable credential — drop the
-              resource and start over. */}
           {connection.status === 'unreadable' && (
             <Button
               size="sm"
@@ -203,8 +185,6 @@ export default function AzureConnectionGroup({
     />
   ) : null
 
-  // Discovery signs in to the project: pointless (and a failure) until the
-  // resource's credentials and settings are in order — the callout says so.
   const discoverable = canEdit && connection.canDiscover && connection.status === 'ready'
 
   return (
@@ -286,8 +266,6 @@ export default function AzureConnectionGroup({
             readOnly={!canEdit}
             row={entry => ({
               isDefault: defaultModelId === entry.modelId,
-              // The [KB] badge and "Use for knowledge base" only where an
-              // Azure knowledge base exists.
               knowledgeEnabled,
               actions: canEdit ? rowActions : undefined,
               testing: !!busy[azureBusyKey.test({model: {id: entry.id}})],
@@ -320,7 +298,6 @@ export default function AzureConnectionGroup({
   )
 }
 
-// A warning about the resource, with what to do about it.
 function Callout({
   title,
   body,

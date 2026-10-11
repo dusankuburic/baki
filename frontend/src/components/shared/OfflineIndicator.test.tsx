@@ -19,11 +19,6 @@ describe('OfflineIndicator', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  // The sync queue holds cursor/presence updates only — SyncManager.enqueue
-  // has exactly one caller, presenceStore. The banner used to print "N
-  // changes queued" over it, telling a user on flaky wifi that their edits
-  // would sync on reconnect. They would not: a save while offline fails
-  // outright, and an edit made offline is gone when the tab closes.
   it('says saves are disabled and never promises queued changes will sync', () => {
     setOnline(false)
     useSyncStore.setState({queue: [], pendingCount: 3})

@@ -1,13 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
 
-// useActiveSection reports which of `ids` (in document order) the reader is
-// in, for the profile's section nav, and jumps to one on request.
-//
-// A section is current while it crosses a band a quarter of the way down the
-// viewport; the observer clips through the main pane's own scrollport, so no
-// root needs wiring. Jumping marks the target current at once and ignores the
-// observer until the scroll settles, so a short last section counts as
-// current even when it never reaches the band. `ids` must be a stable array.
 export function useActiveSection(ids: readonly string[]): {
   active: string
   jumpTo: (id: string) => void
@@ -42,10 +34,6 @@ export function useActiveSection(ids: readonly string[]): {
     const reduceMotion =
       typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
     const behavior: ScrollBehavior = reduceMotion ? 'auto' : 'smooth'
-    // Scroll the pane's own scroller only. scrollIntoView would also scroll
-    // every scrollable ancestor — the overflow-hidden <html> included, which
-    // it can move programmatically — and shift the whole shell up, leaving a
-    // blank band under it.
     const scroller = scrollParent(el)
     if (scroller && typeof scroller.scrollTo === 'function') {
       const margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0
@@ -54,15 +42,12 @@ export function useActiveSection(ids: readonly string[]): {
     } else {
       el.scrollIntoView({behavior, block: 'start'})
     }
-    // Land focus on the heading so the next Tab continues from the section
-    // the page scrolled to, not from the nav.
     el.querySelector<HTMLElement>('h2')?.focus({preventScroll: true})
   }, [])
 
   return {active, jumpTo}
 }
 
-// The nearest ancestor that actually scrolls vertically.
 function scrollParent(el: HTMLElement): HTMLElement | null {
   for (let node = el.parentElement; node; node = node.parentElement) {
     const {overflowY} = getComputedStyle(node)

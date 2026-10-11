@@ -9,16 +9,10 @@ export interface SlashCommand {
   id: string
   copyKey: 'explain' | 'fix' | 'test' | 'clear' | 'help'
   icon: React.ReactNode
-  // 'insert' commands drop their text into the composer for the user to
-  // extend and send; 'action' commands run a local handler (never sent to the
-  // model) — the action key routes to the matching callback in ChatInput.
   kind: 'insert' | 'action'
   action?: 'clear' | 'help'
 }
 
-// Copy lives in chat:commands.{labels,descriptions}.<key>; this table holds the
-// id, icon and behaviour. Keeping it a module constant (rather than a hook) means
-// ChatHelpPopover can keep importing it directly.
 const COMMANDS: SlashCommand[] = [
   {id: '/explain', copyKey: 'explain', icon: <Info size={14} />, kind: 'insert'},
   {id: '/fix', copyKey: 'fix', icon: <Zap size={14} />, kind: 'insert'},
@@ -33,14 +27,8 @@ interface Props {
   query: string
   onSelect: (command: SlashCommand) => void
   onClose: () => void
-  // Reports how many entries the menu is showing so the composer knows whether
-  // its keys belong to this menu — 0 means Enter must fall through and send.
   onMatchCount?: (n: number) => void
-  // Whether a keydown came from the composer this menu belongs to. The
-  // listener is window-level (capture): without this check, typing "/c" and
-  // then pressing Tab or Enter anywhere else in the app ran /clear.
   isOwnTarget?: (target: EventTarget | null) => boolean
-  // /clear is only offered where the thread can be cleared (not read-only).
   canClear?: boolean
 }
 
@@ -82,13 +70,10 @@ export default function SlashCommandAutocomplete({
     onMatchCount?.(filtered.length)
   }, [filtered.length, onMatchCount])
 
-  // Only claim the keyboard while there is something to pick. With no matches
-  // the menu renders nothing, so Enter belongs to the composer.
   useEffect(() => {
     if (filtered.length === 0) return
     const onKey = (e: KeyboardEvent) => {
       if (isOwnTarget && !isOwnTarget(e.target)) return
-      // Accepting an IME candidate must not pick an entry.
       if (isImeKeydown(e)) return
       handleKeyDown(e)
     }
@@ -101,8 +86,6 @@ export default function SlashCommandAutocomplete({
   return (
     <div
       className="absolute bottom-full left-0 mb-2 w-[min(16rem,100%)] bg-surface-2 border border-border-default rounded-lg shadow-xl overflow-hidden animate-slide-up"
-      // Keep focus in the composer (a blur there closes the menu) wherever
-      // the menu is clicked — heading and padding included, not only items.
       onMouseDown={e => e.preventDefault()}
     >
       <div className="px-3 py-2 bg-surface-3 border-b border-border-subtle">

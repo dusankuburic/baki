@@ -4,8 +4,6 @@ import {Download} from 'lucide-react'
 import {csvCell, downloadBlob} from '@/lib/csv'
 import type {TableColumn} from './chartTypes'
 
-// The table twin of a chart: every value a chart shows is reachable here
-// without hovering, and it downloads as CSV.
 export function DataTable<Row extends object>({
   caption,
   columns,
@@ -19,7 +17,6 @@ export function DataTable<Row extends object>({
   columns: TableColumn<Row>[]
   rows: Row[]
   filename?: string
-  /** Stable React key per row, derived from the row's own data (never the index). */
   rowKey: (row: Row, index: number) => string
   maxRows?: number
   className?: string

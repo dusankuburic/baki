@@ -4,18 +4,6 @@ import {describe, it, expect, vi} from 'vitest'
 import ChatMessageList from './ChatMessageList'
 import type {ChatMessage} from '@/types'
 
-// react-virtuoso renders nothing in jsdom (zero-height scroller); stub it
-// with a passthrough that renders every row AND the footer, mirroring the
-// FindingsTab test convention. The tests assert on wiring (data →
-// itemContent, footer rendering), not on windowing behavior.
-//
-// `context` is forwarded exactly as the real Virtuoso does: it is how the
-// per-render footer reaches a components object that must keep a stable
-// identity (rebuilding that object remounts the whole scroller).
-// The mock hands the list a scroll container (via scrollerRef) that reports a
-// tall scrollable area sitting away from the bottom, so the scroll-to-bottom
-// button renders and its scroll call can be checked. Virtuoso's handle keeps
-// a scrollToIndex spy for the search-jump path.
 const scrollToIndexSpy = vi.hoisted(() => vi.fn())
 const scrollToSpy = vi.hoisted(() => vi.fn())
 vi.mock('react-virtuoso', async () => {
@@ -79,7 +67,6 @@ describe('ChatMessageList', () => {
   it('renders the footer (thinking/streaming bubbles)', () => {
     renderList()
     expect(screen.getByTestId('streaming-bubble')).toBeInTheDocument()
-    // Footer follows the last message in DOM order.
     const last = screen.getByTestId('bubble-m2')
     const streaming = screen.getByTestId('streaming-bubble')
     expect(last.compareDocumentPosition(streaming) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

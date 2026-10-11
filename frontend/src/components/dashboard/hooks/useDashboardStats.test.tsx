@@ -12,7 +12,6 @@ vi.mock('@/api', () => ({
   },
 }))
 
-// useDashboardStats calls useToast for background-refresh-failure toasts.
 vi.mock('@/components/shared', async () => {
   const actual = await vi.importActual<typeof import('@/components/shared')>('@/components/shared')
   return {
@@ -65,8 +64,6 @@ describe('useDashboardStats', () => {
   })
 
   it('a stale response never overwrites a newer one (reqId race guard)', async () => {
-    // First (slow) response resolves AFTER the second (fast) one. Without the
-    // per-request id guard the stale data would clobber the fresh data.
     getDashboard
       .mockReturnValueOnce(new Promise(r => setTimeout(() => r({totalFlowsAnalyzed: 1}), 50)))
       .mockResolvedValueOnce({totalFlowsAnalyzed: 99})
@@ -76,14 +73,11 @@ describe('useDashboardStats', () => {
       {initialProps: {enabled: true, isLoaded: true}, wrapper},
     )
 
-    // Mount fired the slow refresh (#1); now fire a fast refresh (#2) that must
-    // win, then let the slow one resolve afterwards.
     await act(async () => {
       result.current.refresh()
     })
     await waitFor(() => expect(result.current.stats?.totalFlowsAnalyzed).toBe(99))
 
-    // Wait out the slow first response; it must not have overwritten 99.
     await new Promise(r => setTimeout(r, 80))
     expect(result.current.stats?.totalFlowsAnalyzed).toBe(99)
   })
@@ -98,8 +92,6 @@ describe('useDashboardStats', () => {
     await waitFor(() => expect(result.current.stats).toEqual(populated))
     expect(result.current.error).toBeNull()
 
-    // A background refresh that fails must NOT set error (wiping the good
-    // data) — it should toast instead.
     getDashboard.mockRejectedValueOnce(new Error('transient'))
     await act(async () => {
       result.current.refresh(true)

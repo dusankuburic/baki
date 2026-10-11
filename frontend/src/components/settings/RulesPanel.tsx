@@ -13,8 +13,6 @@ import {useAsync} from '@/hooks/useAsync'
 import PreviewBadge from '@/components/analyzer/PreviewBadge'
 import clsx from 'clsx'
 
-// SCOPE_DEPLOYMENT is the sentinel for "the whole deployment" in the scope
-// selector — distinct from an org id, which is a UUID.
 const SCOPE_DEPLOYMENT = '__deployment__'
 
 export default function RulesPanel() {
@@ -27,11 +25,6 @@ export default function RulesPanel() {
   const currentUser = useAuthStore(s => s.user)
   const organisations = useOrgStore(s => s.organisations)
 
-  // Rule configuration is now SCOPED (R4). Deployment settings apply to every
-  // tenant and are system-admin only; an org's profile applies to that org's
-  // flows and is editable by its admins. Before R4 this panel wrote the
-  // deployment singleton from any member's session, so one team's toggle
-  // silently changed analysis for everyone.
   const adminOrgs = useMemo(
     () =>
       organisations.filter(
@@ -45,11 +38,6 @@ export default function RulesPanel() {
   )
   const isOrgScope = scope !== SCOPE_DEPLOYMENT
 
-  // Mirrors the backend's gate exactly, including its local-mode carve-out:
-  // SecurityConfig.RequireRole returns true immediately when JWT auth is
-  // disabled, because desktop/local is a single user with no tenants. Without
-  // this first clause the panel would render read-only for every desktop user —
-  // a regression the multi-tenancy reasoning does not apply to at all.
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
   const canEdit = !isAuthenticated || (isOrgScope ? adminOrgs.some(o => o.id === scope) : isSystemAdmin)
 
@@ -61,21 +49,13 @@ export default function RulesPanel() {
   } = useAsync<Rule[]>(() => analysisApi.getRules().then(res => res || []), [])
   const rules = data ?? []
 
-  // The selected org's overrides, keyed by rule id. Absent = inherited from the
-  // deployment layer, which the resolver merges PER RULE — so showing which
-  // rules an org has actually changed is the difference between "we configured
-  // this" and "this is just the default".
   const {data: orgOverrides, refetch: refetchOverrides} = useAsync<Record<string, RuleConfig>>(async () => {
     if (!isOrgScope) return {}
     const s = await settingsApi.getOrgSettings(scope)
     return (s?.analysis?.rules as Record<string, RuleConfig> | undefined) ?? {}
   }, [scope, isOrgScope])
-  // Memoized: `orgOverrides ?? {}` mints a fresh object every render, which
-  // would change the identity of every callback depending on it.
   const overrides = useMemo(() => orgOverrides ?? {}, [orgOverrides])
 
-  // Effective config for a rule under the current scope: the org's override
-  // when it has one, otherwise what the server reported (the deployment layer).
   const effective = useCallback(
     (rule: Rule): {enabled: boolean; severity: Severity; overridden: boolean; options?: Record<string, number>} => {
       const ov = isOrgScope ? overrides[rule.id] : undefined
@@ -90,8 +70,6 @@ export default function RulesPanel() {
     [isOrgScope, overrides],
   )
 
-  // Writing an ORG profile is a merge, not a replace: sending only the changed
-  // rule would drop every other override the org has set.
   const writeOrgOverride = useCallback(
     async (ruleId: string, patch: RuleConfig) => {
       const merged = {...overrides, [ruleId]: patch}
@@ -109,8 +87,6 @@ export default function RulesPanel() {
         await writeOrgOverride(ruleId, {enabled, severity: cur.severity})
         return
       }
-      // Dedicated toggle endpoint: preserves the configured severity override
-      // and option thresholds, unlike a full-config replace.
       await analysisApi.setRuleEnabled(ruleId, enabled)
       setRules(rules.map(r => (r.id === ruleId ? {...r, enabled} : r)))
     } catch (err) {
@@ -138,10 +114,6 @@ export default function RulesPanel() {
     }
   }
 
-  // Thresholds (maxDepth, minRepeats, maxBlocks) were honoured by the rules
-  // and reachable only by hand-editing the settings JSON. The catalog now
-  // reports them per rule; this writes one back at the current scope, merged
-  // over the others so a single edit never drops a sibling threshold.
   const handleOptionChange = async (ruleId: string, key: string, n: number) => {
     const rule = rules.find(r => r.id === ruleId)
     if (!rule) return
@@ -247,9 +219,6 @@ export default function RulesPanel() {
                         {t('rules.libraryKind')}
                       </span>
                     )}
-                    {/* An org admin needs to tell "we decided this" from "this is
-                      just the default" — the resolver merges per rule, so most
-                      rules in an org scope are inherited. */}
                     {isOrgScope && eff.overridden && (
                       <span className="text-2xs font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-brand-500/15 text-brand-500">
                         {t('rules.overridden')}

@@ -3,19 +3,10 @@ import {renderHook, act} from '@testing-library/react'
 import {useChatStore} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 
-// Bind to the REAL StreamHandler contract. This test used to declare a private
-// copy of the shape, whose onFixDecision took a 5th `items` argument that the
-// production dispatcher never actually passed — so the batch-decision test below
-// drove a contract no code implemented and stayed green over a live bug.
-// Importing the real type turns any future drift into a typecheck failure.
 import type {StreamHandler} from '@/hooks/useStreamingMessage'
 
 let capturedHandler: StreamHandler | null = null
-// The engine's reload-reattach path calls resumeInto; tests capture
-// the call and replay what a resume would deliver through the handler.
 let capturedResume: {streamId: string; opts: {mode?: 'delta' | 'full'; onGone?: () => void} | undefined} | null = null
-// Resolves "registered" so paths that await it can proceed; a test swaps in a
-// rejecting one (the event connection never opened).
 let registerStreamImpl: () => Promise<boolean> = async () => true
 
 vi.mock('@/hooks/useStreamingMessage', () => ({
@@ -61,15 +52,12 @@ import {chatApi} from '@/api'
 import {useFlowStore} from '@/stores/flowStore'
 import type {FlowDocument} from '@/types'
 
-// What produced a stream: captured per stream at beginAcc (the engine no
-// longer reads the panel's provider/model, which can change mid-stream).
 const META = {provider: 'claude' as never, model: 'claude-sonnet-4'}
 
 function renderEngine() {
   return renderHook(() => useChatStreamEngine())
 }
 
-// Saves only happen for threads whose server history has loaded.
 const LOADED = {state: 'loaded' as const, token: 1}
 
 beforeEach(() => {
@@ -413,7 +401,6 @@ describe('useChatStreamEngine', () => {
           finishReason: 'interrupted',
         })
       })
-      // appendMessage writes to the conversations Map, not threads[].messages
       const msgs = useChatStore.getState().conversations.get('threadA')
       expect(msgs).toHaveLength(1)
       expect(msgs![0]!.content).toBe('hello world')
@@ -421,10 +408,6 @@ describe('useChatStreamEngine', () => {
     })
   })
 
-  // Regression: a stream's done event can land after the user has switched to a
-  // different flow. The conversation must be persisted under the thread's own
-  // flowId (immutable), NOT docRef.current (which now points at the new flow) —
-  // otherwise flow A's AI conversation is saved under flow B.
   describe('commitAssistantMessage doc-switch safety', () => {
     it('saves under the thread flowId, not the switched-to doc', () => {
       const docA = {id: 'flow-A', name: 'A', subflows: []} as unknown as FlowDocument
@@ -466,13 +449,10 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onChunk('hello from A', 'streamA')
       })
 
-      // User switches to doc B mid-stream.
       act(() => {
         useFlowStore.setState({document: docB})
       })
 
-      // Stream for threadA (flow-A) completes after the switch. The save must
-      // target flow-A, not the now-current flow-B.
       act(() => {
         capturedHandler!.onDone(5, 10, 'streamA')
       })
@@ -482,7 +462,6 @@ describe('useChatStreamEngine', () => {
         'threadA',
         expect.arrayContaining([expect.objectContaining({role: 'assistant', content: 'hello from A'})]),
       )
-      // Must NOT have saved under the switched-to doc.
       expect(chatApi.saveConversation).not.toHaveBeenCalledWith('flow-B', expect.anything(), expect.anything())
     })
   })
@@ -528,7 +507,6 @@ describe('useChatStreamEngine', () => {
           capturedHandler!.onDone(5, 10, 'streamA')
         })
 
-        // The answer still reaches the thread; it is only not stored.
         expect(useChatStore.getState().conversations.get('threadA')).toEqual(
           expect.arrayContaining([expect.objectContaining({role: 'assistant', content: 'not kept'})]),
         )
@@ -614,8 +592,6 @@ describe('useChatStreamEngine', () => {
       expect(slot.approvals[0]!.items[0]!).toMatchObject({ruleId: 'unhandled-error', status: 'pending'})
     })
 
-    // U2: sequential proposals STACK — the model can propose a second fix
-    // after the first resolves; the earlier outcome must survive.
     it('a second proposal appends instead of replacing the first card', () => {
       setupFixStream()
       act(() => {
@@ -655,8 +631,6 @@ describe('useChatStreamEngine', () => {
       expect(slot.approvals[1]!.proposalId).toBe('p2')
     })
 
-    // Replaying a proposalId already on the slot is a no-op (journal replay
-    // idempotence).
     it('replaying the same proposalId does not duplicate the card', () => {
       setupFixStream()
       const payload = {
@@ -676,7 +650,6 @@ describe('useChatStreamEngine', () => {
       expect(useChatStore.getState().streams.threadA!.approvals).toHaveLength(1)
     })
 
-    // Batch decisions patch per-item statuses.
     it('batch decision items patch per-item statuses', () => {
       setupFixStream()
       act(() => {
@@ -708,9 +681,6 @@ describe('useChatStreamEngine', () => {
       expect(card.items[1]!.message).toBe('still appears')
     })
 
-    // R1 frontend half: a resume journal rebuilds the slot's agentic state
-    // wholesale — reconnecting mid-approval restores the pending card instead
-    // of orphaning it into a 60s timeout.
     it('onResumeState rebuilds tool trail and pending proposals from the journal', () => {
       setupFixStream()
       act(() => {
@@ -744,7 +714,6 @@ describe('useChatStreamEngine', () => {
       expect(slot.approvals).toHaveLength(1)
       expect(slot.approvals[0]!.status).toBe('applied')
 
-      // Idempotent: replaying the same journal must not duplicate state.
       act(() => {
         capturedHandler!.onResumeState!(
           [
@@ -783,7 +752,6 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onFixDecision!('p1', 'applied', undefined, 'streamA')
       })
       expect(useChatStore.getState().streams.threadA!.approvals[0]?.status).toBe('applied')
-      // The refresh fires asynchronously; flush microtasks.
       await act(async () => {
         await Promise.resolve()
       })
@@ -812,7 +780,6 @@ describe('useChatStreamEngine', () => {
       expect(chatApi.respondFixDecision).toHaveBeenCalledWith('streamA', 'p1', true, undefined)
       expect(useChatStore.getState().streams.threadA!.approvals[0]?.status).toBe('applying')
 
-      // Second click while no longer pending must not re-send.
       await act(async () => {
         result.current.respondFixProposal('threadA', false)
       })
@@ -842,8 +809,6 @@ describe('useChatStreamEngine', () => {
       expect(useChatStore.getState().streams.threadA!.approvals[0]?.status).toBe('error')
     })
 
-    // Phase 4b: the card carries what the server said about the request; an
-    // older server's proposal (no tool, kind or scope) is a fix card.
     it('keeps tool, previewKind and requiredScope on the card; an older server defaults to fix-patch', () => {
       setupFixStream()
       act(() => {
@@ -934,8 +899,6 @@ describe('useChatStreamEngine', () => {
       expect(chatApi.respondApprovalDecision).toHaveBeenCalledTimes(1)
     })
 
-    // The stream ended before a decision (the server is restarting): the
-    // card reads as cancelled with the server's words — not as a failed fix.
     it('shows a cancelled decision as cancelled, with the server message', async () => {
       setupFixStream()
       act(() => {
@@ -964,9 +927,6 @@ describe('useChatStreamEngine', () => {
       expect(analysisApi.analyzeFlowById).not.toHaveBeenCalled()
     })
 
-    // A generic request's items are keyed by the id the server stamped on
-    // both the request and the decision, and its outcome never re-analyses
-    // the flow.
     it("patches a generic request's items by id", () => {
       setupFixStream()
       act(() => {
@@ -996,10 +956,6 @@ describe('useChatStreamEngine', () => {
       expect(card.items[1]).toMatchObject({status: 'error', message: 'skipped'})
     })
 
-    // F1: the same rule fixed on two blocks (the common apply_fixes case). A
-    // server that stamps ids (blockId:ruleId) is matched by id, in any
-    // order; one that sends ruleId alone is matched by position — never the
-    // first row with that rule, which showed A's outcome on B.
     it('matches a batch decision to rows sharing a rule by id, else by position', () => {
       setupFixStream()
       const sameRule = (id: string, label: string) => ({
@@ -1096,8 +1052,6 @@ describe('useChatStreamEngine', () => {
       expect(card.items[1]).toMatchObject({label: 'Call B', status: 'error', message: 'block changed'})
     })
 
-    // F4: only a fix changed the flow. Another tool's applied outcome is the
-    // model's to report; nothing re-analyses.
     it('does not refresh the flow when an approval of another kind is applied', async () => {
       setupFixStream()
       act(() => {
@@ -1125,9 +1079,6 @@ describe('useChatStreamEngine', () => {
       expect(analysisApi.analyzeFlowById).not.toHaveBeenCalled()
     })
 
-    // C8: a later server that emits approval_request while keeping
-    // /api/chat/fix-decision as its one decision route (ADR 0026, Open)
-    // answers 404 on the new route; the decision goes to the old one, once.
     it('falls back to /api/chat/fix-decision once when /api/chat/approval-decision is 404', async () => {
       const {result} = setupFixStream()
       const {ApiError} = await import('@/api')
@@ -1153,7 +1104,6 @@ describe('useChatStreamEngine', () => {
       expect(chatApi.respondFixDecision).toHaveBeenCalledWith('streamA', 'a1', true, [0])
       expect(useChatStore.getState().streams.threadA!.approvals[0]?.status).toBe('applying')
 
-      // Any other failure of the new route is a failed decision, not a retry.
       vi.mocked(chatApi.respondApprovalDecision).mockRejectedValueOnce(
         Object.assign(new ApiError('boom', 500), {status: 500}),
       )
@@ -1165,10 +1115,6 @@ describe('useChatStreamEngine', () => {
     })
   })
 
-  // The transparency trail: finished tool executions (tool_result events)
-  // accumulate on the live slot and are pinned onto the committed assistant
-  // message — together with the fix-proposal outcome snapshot — so they
-  // persist with the saved conversation instead of dying with the slot.
   describe('tool trail persistence', () => {
     function setupToolStream() {
       const hook = renderEngine()
@@ -1238,8 +1184,6 @@ describe('useChatStreamEngine', () => {
       ])
     })
 
-    // U1: answer text resuming after a tool phase clears the stale
-    // "Using tool…" pulse instead of keeping it lit under the final answer.
     it('a text chunk clears a stale toolStatus', () => {
       const {result} = renderEngine()
       act(() => {
@@ -1266,8 +1210,6 @@ describe('useChatStreamEngine', () => {
       expect(useChatStore.getState().streams.threadA!.text).toBe('the answer')
     })
 
-    // U3: an errored turn keeps its tool trail — 4 tools ran before the
-    // failure, and the error bubble should show them.
     it('onError pins the accumulated tool trail onto the error message', () => {
       setupToolStream()
       act(() => {
@@ -1366,7 +1308,6 @@ describe('useChatStreamEngine', () => {
       })
       expect(committed.fixProposals![0]!.items).toHaveLength(1)
       expect(committed.fixProposals![0]!.items![0]!.status).toBe('applied')
-      // The trail is persisted with the conversation save.
       expect(chatApi.saveConversation).toHaveBeenCalledWith(
         'flow-1',
         'threadA',
@@ -1374,12 +1315,9 @@ describe('useChatStreamEngine', () => {
           expect.objectContaining({toolCalls: committed.toolCalls, fixProposals: committed.fixProposals}),
         ]),
       )
-      // Slot is gone after done — the message carries the record now.
       expect(useChatStore.getState().streams.threadA).toBeUndefined()
     })
 
-    // F5: the persisted snapshot's exact shape, tool and previewKind
-    // included — the generic strip reads them back after a reload.
     it('done writes tool and previewKind onto the persisted fix snapshot', () => {
       setupToolStream()
       act(() => {
@@ -1437,7 +1375,6 @@ describe('useChatStreamEngine', () => {
       ])
     })
 
-    // F10: commit flags the thread as agentic so the tab shows badges.
     it('done flags the thread usedTools/appliedFixes for tab badges', () => {
       setupToolStream()
       act(() => {
@@ -1491,8 +1428,6 @@ describe('useChatStreamEngine', () => {
   describe('served model + billed rates on done', () => {
     const RATES = {inputCostPerM: 2.5, outputCostPerM: 10}
 
-    // Adds a thread with a live slot for `streamId` (alongside whatever is
-    // seeded) and returns the StreamMeta to begin its accumulator with.
     function seedThread(threadId: string, streamId: string, provider: string) {
       const st = useChatStore.getState()
       useChatStore.setState({
@@ -1574,7 +1509,6 @@ describe('useChatStreamEngine', () => {
       })
       expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
 
-      // A second turn on the same thread: the listing already names it.
       act(() => {
         useChatStore.setState({
           streams: {
@@ -1597,7 +1531,6 @@ describe('useChatStreamEngine', () => {
       })
       expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
 
-      // Another thread on the same provider: once more.
       act(() => {
         result.current.beginAcc('streamB', 'threadB', seedThread('threadB', 'streamB', 'azure-foundry'))
       })
@@ -1619,7 +1552,6 @@ describe('useChatStreamEngine', () => {
         capturedHandler!.onDone(1, 1, 'streamB', {...RATES})
       })
       expect(useChatStore.getState().providerEpoch).toBe(epoch0)
-      // The rates still land on the messages either way.
       expect(useChatStore.getState().conversations.get('threadB')![0]).toMatchObject(RATES)
     })
 
@@ -1636,7 +1568,6 @@ describe('useChatStreamEngine', () => {
       expect(msg.content).toBe('**This provider is not set up here** — no Azure credentials for this flow')
       expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
 
-      // A permission failure: same bubble shape, but the listing is not stale.
       act(() => {
         result.current.beginAcc('streamB', 'threadB', seedThread('threadB', 'streamB', 'azure-foundry'))
         capturedHandler!.onError('missing Foundry User role', 'streamB', 'PROVIDER_PERMISSION')
@@ -1658,8 +1589,6 @@ describe('useChatStreamEngine', () => {
   })
 })
 
-// Seeds a thread with a live slot for `streamId` and returns the StreamMeta
-// to begin its accumulator with.
 function seedSlotThread(threadId: string, streamId: string, provider: string) {
   const st = useChatStore.getState()
   useChatStore.setState({
@@ -1694,8 +1623,6 @@ function seedSlotThread(threadId: string, streamId: string, provider: string) {
   return {provider: provider as never, model: 'my-deployment'}
 }
 
-// A finished tool's "running" label must not pulse through the silent
-// reasoning phase that follows it.
 describe('useChatStreamEngine tool-result status clearing', () => {
   it('clears its own running label and re-arms thinking before any text', () => {
     const {result} = renderEngine()
@@ -1717,11 +1644,9 @@ describe('useChatStreamEngine tool-result status clearing', () => {
     })
     slot = useChatStore.getState().streams.threadA
     expect(slot?.toolStatus).toBeNull()
-    // No answer text yet: the post-tool reasoning phase shows the indicator.
     expect(slot?.isThinking).toBe(true)
     expect(slot?.toolCalls).toHaveLength(1)
 
-    // The next chunk must turn the re-armed indicator off again.
     act(() => {
       capturedHandler!.onChunk('answer', 'streamA')
     })
@@ -1743,7 +1668,6 @@ describe('useChatStreamEngine tool-result status clearing', () => {
     })
     const slot = useChatStore.getState().streams.threadA
     expect(slot?.toolStatus).toBeNull()
-    // The visible bubble is the liveness signal - no second indicator.
     expect(slot?.isThinking).toBe(false)
   })
 
@@ -1760,7 +1684,6 @@ describe('useChatStreamEngine tool-result status clearing', () => {
         'streamA',
       )
     })
-    // B is still running: its label stays lit.
     expect(useChatStore.getState().streams.threadA?.toolStatus).toBe('step B')
     act(() => {
       capturedHandler!.onToolResult!(
@@ -1772,8 +1695,6 @@ describe('useChatStreamEngine tool-result status clearing', () => {
   })
 })
 
-// A billed failure's usage reaches the error bubble and the thread
-// totals; the shared-credential flag rides the bubble.
 describe('useChatStreamEngine error usage', () => {
   it('counts a billed failure: usage and rates land on the bubble and the totals move', () => {
     const {result} = renderEngine()
@@ -1829,7 +1750,6 @@ describe('useChatStreamEngine error usage', () => {
   })
 })
 
-// Re-attaching a stream the conversation load reports as in-flight.
 describe('useChatStreamEngine resumeAfterReload', () => {
   function seedIdleThread(threadId: string) {
     const st = useChatStore.getState()
@@ -1861,15 +1781,12 @@ describe('useChatStreamEngine resumeAfterReload', () => {
       accepted = result.current.resumeAfterReload('threadA', 'live-1', gone)
     })
     expect(accepted).toBe(true)
-    // The slot exists and thinks; the SSE registration ran without the
-    // legacy /begin handshake; one authoritative FULL resume was requested.
     const slot = useChatStore.getState().streams.threadA
     expect(slot?.streamId).toBe('live-1')
     expect(slot?.isThinking).toBe(true)
     expect(capturedResume?.streamId).toBe('live-1')
     expect(capturedResume?.opts?.mode).toBe('full')
 
-    // What the resume delivers: the buffered text, then the done.
     await act(async () => {
       capturedHandler!.onReplace('the answer', 'live-1')
       capturedHandler!.onDone(7, 5, 'live-1', {servedModel: 'gpt-4o', inputCostPerM: 2.5, outputCostPerM: 10})
@@ -1897,7 +1814,6 @@ describe('useChatStreamEngine resumeAfterReload', () => {
     })
     expect(useChatStore.getState().streams.threadA?.streamId).toBe('live-2')
 
-    // The resume rejects (retention expired): the caller refetches history.
     act(() => {
       capturedResume?.opts?.onGone?.()
     })
@@ -1913,8 +1829,6 @@ describe('useChatStreamEngine resumeAfterReload', () => {
     await act(async () => {
       result.current.resumeAfterReload('threadA', 'live-4', gone)
     })
-    // No thinking slot is left behind (queued sends drain again), no resume
-    // was requested, and the caller refetches the history.
     expect(useChatStore.getState().streams.threadA).toBeUndefined()
     expect(capturedResume).toBeNull()
     expect(gone).toHaveBeenCalledTimes(1)
@@ -1933,9 +1847,6 @@ describe('useChatStreamEngine resumeAfterReload', () => {
   })
 })
 
-// The served-model listing refetch is keyed by thread AND deployment
-// AND served model, so a second deployment in the same thread is annotated
-// too.
 describe('useChatStreamEngine served-model refetch key', () => {
   it('refetches for a second deployment and for a router that changes served model', () => {
     const {result} = renderEngine()
@@ -1948,7 +1859,6 @@ describe('useChatStreamEngine served-model refetch key', () => {
     })
     expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
 
-    // Same thread, a DIFFERENT deployment: one more refetch.
     act(() => {
       useChatStore.setState({
         streams: {
@@ -1971,7 +1881,6 @@ describe('useChatStreamEngine served-model refetch key', () => {
     })
     expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 2)
 
-    // The model router re-points per turn: each new served model refetches.
     act(() => {
       useChatStore.setState({
         streams: {
@@ -2015,7 +1924,6 @@ describe('useChatStreamEngine served-model refetch key', () => {
     })
     expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 4)
 
-    // Repeating an already-seen triple never bumps again.
     act(() => {
       useChatStore.setState({
         streams: {
@@ -2040,9 +1948,6 @@ describe('useChatStreamEngine served-model refetch key', () => {
   })
 })
 
-// Per-thread model memory: a reply names the model it was sent with (an
-// Azure entry's display name — its "m/<id>" means nothing to a reader), and
-// a re-attached stream is labelled with ITS thread's pair.
 describe('useChatStreamEngine model labels', () => {
   const DOCS = {provider: 'azure-foundry' as never, model: 'm/docs000000', modelLabel: 'Docs writer'}
 
@@ -2107,9 +2012,6 @@ describe('useChatStreamEngine model labels', () => {
     })
   }
 
-  // A re-attached stream must not be labelled with the thread's pin —
-  // wrong for a turn that went to a stand-in — nor with the settings'
-  // default, and the save after done then overwrote the server's correct copy.
   it('labels a re-attached stream with its turn’s record: the model it went to, not the thread’s pin', async () => {
     const {result} = renderEngine()
     seedIdle('threadA', {
@@ -2130,7 +2032,6 @@ describe('useChatStreamEngine model labels', () => {
       capturedHandler!.onReplace('resumed', 'live-1')
       capturedHandler!.onDone(1, 1, 'live-1')
     })
-    // Under the id the server stores its copy with, so the two are one.
     expect(useChatStore.getState().conversations.get('threadA')!.at(-1)).toMatchObject({
       id: 'a-live-1',
       provider: 'azure-foundry',
@@ -2138,7 +2039,6 @@ describe('useChatStreamEngine model labels', () => {
       modelLabel: 'GPT-4.1',
     })
     expect(chatApi.saveConversation).toHaveBeenCalledTimes(1)
-    // The turn is over: its record goes, the thread keeps its own pin.
     const thread = useChatStore.getState().threads.find(t => t.id === 'threadA')!
     expect(thread.inFlight).toBeUndefined()
     expect(thread).toMatchObject(DOCS)
@@ -2150,7 +2050,6 @@ describe('useChatStreamEngine model labels', () => {
     const {result} = renderEngine()
     seedIdle(
       'threadA',
-      // A record of another turn is no record of this one.
       {inFlight: {streamId: 'older', provider: 'openai', model: 'gpt-5'}},
       [
         {id: 'u1', role: 'user', content: 'q', timestamp: 't'},
@@ -2171,7 +2070,6 @@ describe('useChatStreamEngine model labels', () => {
     expect(answer).not.toHaveProperty('provider')
     expect(answer).not.toHaveProperty('model')
     expect(answer).not.toHaveProperty('modelLabel')
-    // The server stored the finished turn itself, with the model it went to.
     expect(chatApi.saveConversation).not.toHaveBeenCalled()
   })
 })

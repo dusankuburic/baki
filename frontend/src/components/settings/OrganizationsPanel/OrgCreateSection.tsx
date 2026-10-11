@@ -6,8 +6,6 @@ import {Button} from '@/components/shared'
 import type {Organisation} from '@/stores/orgStore'
 
 interface OrgCreateSectionProps {
-  // The panel's error banner renders between the toggle button and the
-  // create form, exactly where the composition root places it.
   banner: ReactNode
   createOrg: (name: string) => Promise<Organisation>
   setActiveOrg: (id: string | null) => void
@@ -39,7 +37,6 @@ export default function OrgCreateSection({
       setCreating(false)
     } catch (err) {
       reportFailure(err)
-      // other errors surface via store.error
     } finally {
       setCreateBusy(false)
     }
@@ -57,8 +54,11 @@ export default function OrgCreateSection({
       {banner}
       {creating && (
         <div className="p-4 border border-border-default rounded-xl bg-surface-1 space-y-3">
-          <label className="block text-sm font-medium text-text-primary">{t('orgs.nameLabel')}</label>
+          <label htmlFor="new-org-name" className="block text-sm font-medium text-text-primary">
+            {t('orgs.nameLabel')}
+          </label>
           <input
+            id="new-org-name"
             autoFocus
             value={newName}
             onChange={e => setNewName(e.target.value)}

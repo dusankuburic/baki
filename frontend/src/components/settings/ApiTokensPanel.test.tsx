@@ -51,7 +51,6 @@ describe('ApiTokensPanel', () => {
     fireEvent.click(screen.getByRole('button', {name: /Create/i}))
 
     await waitFor(() => expect(createApiToken).toHaveBeenCalledWith('new', undefined, ['read', 'write']))
-    // The raw secret is shown in the one-time reveal banner.
     expect(await screen.findByText('pad_pat_secret123')).toBeInTheDocument()
   })
 

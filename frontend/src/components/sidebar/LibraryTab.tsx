@@ -1,4 +1,5 @@
 import {getErrorMessage} from '@/lib/getErrorMessage'
+import {SEARCH_DEBOUNCE_MS} from '@/lib/constants'
 import {useTranslation} from 'react-i18next'
 import React, {useState, useEffect} from 'react'
 import {Library, Search, Trash2, FolderOpen, Save, RefreshCw} from 'lucide-react'
@@ -28,10 +29,8 @@ export default function LibraryTab() {
   const reportWriteError = useLibraryWriteErrorToast()
   const {confirm, prompt} = useConfirm()
 
-  // Debounce search input to avoid firing an API call per keystroke (mirrors
-  // LibraryWorkspace's 250ms pattern).
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(search), 250)
+    const t = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [search])
 
@@ -208,7 +207,8 @@ export default function LibraryTab() {
                   {(f.canDelete ?? !f.isSharedWithMe) && (
                     <button
                       onClick={e => handleDelete(e, f.id)}
-                      className="p-1 text-text-tertiary hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      aria-label={t('libraryTab.deleteTitle')}
+                      className="p-1 text-text-tertiary hover:text-red-500 rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                     >
                       <Trash2 size={12} />
                     </button>

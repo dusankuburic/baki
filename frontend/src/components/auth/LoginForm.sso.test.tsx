@@ -63,7 +63,6 @@ describe('LoginForm SSO', () => {
     render(<LoginForm />)
 
     await waitFor(() => expect(ticketMock).toHaveBeenCalledWith('ticket-abc'))
-    // The single-use ticket must be stripped from the address bar.
     expect(window.location.hash).toBe('')
   })
 

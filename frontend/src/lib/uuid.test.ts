@@ -17,8 +17,6 @@ describe('uuid', () => {
     expect(spy).toHaveBeenCalled()
   })
 
-  // Regression: outside a secure context (plain-HTTP LAN deploy) randomUUID is
-  // undefined, and every chat id generation threw a TypeError.
   it('falls back to getRandomValues when randomUUID is unavailable', () => {
     Object.defineProperty(globalThis, 'crypto', {
       value: {getRandomValues: (a: Uint8Array) => realCrypto.getRandomValues(a)},

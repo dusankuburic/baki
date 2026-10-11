@@ -34,7 +34,6 @@ describe('ThinkingIndicator', () => {
       vi.advanceTimersByTime(62_000)
     })
     const counter = screen.getByText('1m 05s')
-    // Decorative for a screen reader: the status text itself never ticks.
     expect(counter.getAttribute('aria-hidden')).toBe('true')
     expect(screen.getByRole('status').textContent).toBe('Thinking...')
   })

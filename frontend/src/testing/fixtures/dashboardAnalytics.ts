@@ -1,7 +1,3 @@
-// A complete GET /api/dashboard/analytics payload for tests: thirty days ending
-// today, four flows, three rules in two categories, some triage, AI usage and
-// activity. Shared by the unit tests and the Playwright specs, so both render
-// the same page. Kept free of app imports so the e2e runner can load it.
 
 export interface AnalyticsFixtureOptions {
   days?: number

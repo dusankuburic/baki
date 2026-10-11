@@ -11,10 +11,6 @@ type TooltipProps = {
 
 export default function Tooltip({content, side = 'top', shortcut, delay = 600, children}: TooltipProps) {
   const [visible, setVisible] = useState(false)
-  // aria-describedby wiring (U5a.2): the tooltip's id is stamped on the
-  // trigger wrapper, so screen readers announce the tooltip content even
-  // though the bubble itself is hover-only. One change here, every consumer
-  // inherits.
   const tooltipId = useId()
   const [position, setPosition] = useState({top: 0, left: 0})
   const wrapperRef = useRef<HTMLSpanElement>(null)

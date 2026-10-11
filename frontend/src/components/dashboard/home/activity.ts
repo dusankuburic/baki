@@ -19,7 +19,6 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 
-// The icon for an audit action, by its first segment or exact id.
 const EXACT: Record<string, LucideIcon> = {
   'auth.login': LogIn,
   'auth.sso_login': LogIn,
@@ -43,7 +42,6 @@ const EXACT: Record<string, LucideIcon> = {
   'keys.save': Key,
   'token.create': Key,
   'token.revoke': Key,
-  // Azure AI Foundry resources hold credentials; models are what chats run on.
   'azure.connection_save': Key,
   'azure.connection_delete': Key,
 }
@@ -67,9 +65,6 @@ export function actionIcon(action: string): LucideIcon {
   return EXACT[action] ?? BY_PREFIX[prefix] ?? ActivityIcon
 }
 
-// actionLabel looks the action up in the translated table (keys are the id
-// with dots as underscores) and otherwise humanises the id: "flow.baseline_set"
-// → "Flow baseline set".
 export function actionLabel(table: Record<string, string>, action: string): string {
   const key = action.replace(/[.-]/g, '_')
   const hit = table[key]

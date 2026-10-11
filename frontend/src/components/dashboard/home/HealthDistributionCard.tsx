@@ -18,8 +18,6 @@ import {
 import {DetailsAction} from './DetailsAction'
 import type {HealthBucket} from '@/types'
 
-// How the analyzed flows spread across the five score bands: a single-hue
-// histogram (the bands are ordered, the bars are counts of flows).
 export function HealthDistributionCard({
   data,
   title,

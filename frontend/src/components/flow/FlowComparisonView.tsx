@@ -7,11 +7,8 @@ import {Spinner, EmptyState} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
 import {logger} from '@/lib/logger'
 import type {FlowComparison, SubflowComparison} from '@/types'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
-// changeAppearance maps a block-comparison change kind to the icon + color used
-// in the diff renderer. The backend's CompareFlows stamps `change` as a short
-// token ("same"/"added"/"removed"/"modified"); anything unrecognized reads as
-// "modified" so a new token never renders blank.
 type ChangeLabelKey = 'compare.changeAdded' | 'compare.changeRemoved' | 'compare.changeSame' | 'compare.changeModified'
 
 function changeAppearance(change: string): {Icon: typeof Plus; color: string; labelKey: ChangeLabelKey} {
@@ -28,9 +25,6 @@ function similarityPct(s?: number): string {
   return `${Math.round(s * 100)}%`
 }
 
-// FlowPicker is a labelled <select> over the user's library flows, with the
-// "compare against" flow filtered out of the second picker so the same flow
-// can't be picked twice.
 function FlowPicker({
   label,
   value,
@@ -107,20 +101,12 @@ function SubflowRow({sf}: {sf: SubflowComparison}) {
   )
 }
 
-/**
- * Flow-vs-flow comparison: pick two library flows and render the similarity-
- * scored diff (per-subflow block adds/removes/modifications + a headline
- * similarity). The backend compare endpoint (analysisApi.compareFlows) existed
- * but had no UI; this wires it up. Reached via the command palette
- * ("Compare Two Flows") in cloud mode.
- */
 export default function FlowComparisonView() {
   const {t} = useTranslation('flow')
   const [flowA, setFlowA] = useState('')
   const [flowB, setFlowB] = useState('')
   const [result, setResult] = useState<FlowComparison | null>(null)
 
-  // Load the user's library flows once for the pickers.
   const {data: page} = useAsync(() => libraryApi.list({limit: 200}), [])
   const flows = useMemo(() => page?.items ?? [], [page])
 
@@ -135,7 +121,7 @@ export default function FlowComparisonView() {
       const res = await analysisApi.compareFlows(flowA, flowB)
       setResult(res)
     } catch (e) {
-      setError(String(e))
+      setError(getErrorMessage(e))
       logger.warn('Flow comparison failed', e)
     } finally {
       setComparing(false)

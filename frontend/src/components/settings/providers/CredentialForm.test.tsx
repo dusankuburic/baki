@@ -47,7 +47,6 @@ describe('CredentialForm: api_key', () => {
     fireEvent.change(key, {target: {value: ' sk-1 '}})
     fireEvent.click(screen.getByRole('button', {name: 'Save'}))
     await waitFor(() => expect(api.saveApiKey).toHaveBeenCalledWith('mistral', 'sk-1'))
-    // Configured now: the stored-key row with Remove and Test.
     expect(await screen.findByText(/API key configured/)).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Remove'})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Test'})).toBeInTheDocument()
@@ -110,12 +109,10 @@ describe('CredentialForm: api_key', () => {
       'This server does not know this provider (PROVIDER_UNKNOWN)',
     )
 
-    // A code the bundle has no wording for: the server's message and the code.
     api.saveApiKey.mockRejectedValueOnce(new ApiError('keys are read-only here', 403, 'KEYS_READ_ONLY'))
     fireEvent.click(screen.getByRole('button', {name: 'Save'}))
     expect(await screen.findByRole('alert')).toHaveTextContent('keys are read-only here (KEYS_READ_ONLY)')
 
-    // No envelope at all: today's wording.
     api.saveApiKey.mockRejectedValueOnce(new TypeError('fetch failed'))
     fireEvent.click(screen.getByRole('button', {name: 'Save'}))
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to save')
@@ -148,10 +145,6 @@ describe('CredentialForm: api_key', () => {
     expect(onConfigured).toHaveBeenCalledTimes(1)
   })
 
-  // F7: the catalogue's `configured` covers an organisation's shared
-  // credential too; "Remove" is only offered once the user's own key store
-  // has answered, so a stale row never posts a delete for a key that is not
-  // there. When the store cannot be asked, the catalogue's word stands.
   it('offers Remove only once the key store has answered, and falls back to the catalogue when it cannot', async () => {
     let answer!: (has: boolean) => void
     api.hasApiKey.mockReturnValue(
@@ -175,8 +168,6 @@ describe('CredentialForm: api_key', () => {
     expect(screen.getByRole('button', {name: 'Remove'})).toBeInTheDocument()
   })
 
-  // C2 (component half): the key store's answer, not the catalogue's
-  // `configured`, decides the row — and `false` is false.
   it('shows the key form for a catalogue-configured provider whose key store answers false', async () => {
     api.hasApiKey.mockResolvedValue(false)
     render(<CredentialForm spec={spec({id: 'openai', configured: true})} onConfigured={vi.fn()} />)
@@ -185,9 +176,6 @@ describe('CredentialForm: api_key', () => {
     expect(screen.queryByRole('button', {name: 'Remove'})).toBeNull()
   })
 
-  // C9: the catalogue names the secret `key`, as the save route reads it;
-  // the first secret field is the key whatever its name, the rest ride
-  // along by name.
   it('posts the first secret field as the key whatever the catalogue calls it', async () => {
     render(
       <CredentialForm
@@ -210,9 +198,6 @@ describe('CredentialForm: api_key', () => {
     await waitFor(() => expect(api.saveApiKey).toHaveBeenCalledWith('acme', 'tok-1', {key: 'kid'}))
   })
 
-  // F2: a field name is a server string used as a key into the values
-  // object; a prototype member's name must read as "empty", not as a
-  // function.
   it('treats a field named after a prototype key as any other field', async () => {
     render(
       <CredentialForm

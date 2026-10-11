@@ -4,21 +4,11 @@ import {PROVIDER_OVERRIDES} from './overrides'
 
 export interface ProviderSectionProps {
   spec: ProviderSpec
-  /** A credential changed (saved, removed, signed in or out): the host re-checks the providers. */
   onConfigured: () => void
-  /**
-   * The provider became usable: a sign-in completed (`always` makes it the
-   * active provider) or its first model was added (`ifUnconfigured`: only
-   * when the current active provider cannot chat).
-   */
   onActivated: (id: string, when: 'always' | 'ifUnconfigured') => void
-  /** The server says the provider is not offered here (the local model on a cloud server): the host drops the section. */
   onUnavailable: (id: string) => void
 }
 
-// A provider's block under an h3 (the panel's title is the Settings h2).
-// The heading's id, provider-<id>, is a Settings deep-link anchor; it takes
-// focus programmatically only (tabIndex -1).
 export function ProviderHeading({
   id,
   name,
@@ -27,7 +17,6 @@ export function ProviderHeading({
 }: {
   id: string
   name: string
-  /** The dot's colour; the heading's own colour without one. */
   color?: string
   children: React.ReactNode
 }) {
@@ -44,8 +33,6 @@ export function ProviderHeading({
   )
 }
 
-// One catalogue entry: the heading, then the bespoke panel the bundle keeps
-// for the provider (overrides.tsx) or the credential form its schema asks for.
 export default function ProviderSection(props: ProviderSectionProps) {
   const {spec, onConfigured, onActivated} = props
   const Override = isKnownProviderId(spec.id) ? PROVIDER_OVERRIDES[spec.id] : undefined

@@ -36,10 +36,6 @@ export default function ShortcutsPanel() {
         className="mb-4"
       />
 
-      {/* As many 15rem columns as the panel fits (three at the full width).
-          Groups may continue in the next column so the columns stay level
-          (View and Navigation alone are taller than a column); a row never
-          splits and a heading never ends a column on its own. */}
       <div className="columns-[15rem] gap-x-8">
         {Array.from(grouped.entries()).map(([category, items]) => (
           <div key={category} className="mb-6">

@@ -16,8 +16,6 @@ describe('runSearch', () => {
     useFlowStore.setState({document: {id: 'flow-1'} as never})
   })
 
-  // "Find Usages" used to set searchStore.query only: the sidebar box showed
-  // the block name and no search ever ran, so results stayed empty.
   it('sets the query and actually searches the open flow', async () => {
     searchFlow.mockResolvedValue({
       results: [

@@ -1,8 +1,5 @@
 import clsx from 'clsx'
 
-// A ratio against a limit. The fill carries the state (a status token) and the
-// track is a lighter step of the same colour, so the state reads across the
-// whole bar. `token` is the CSS custom property that carries the colour.
 export function Meter({
   value,
   max,

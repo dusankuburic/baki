@@ -17,16 +17,6 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-// Regression: flattenItems assigned `_index` from a counter that advanced for a
-// `group` WRAPPER as well as for each of its children, so `_index` diverged from
-// the flattened array position as soon as a group was present. activeIndex holds
-// `_index` values, but the Enter branch used it as an ARRAY index — so Enter
-// either fired a DIFFERENT item's onSelect or silently did nothing.
-//
-//   items = [{group: [A, B]}, C, D]
-//     result   = [A, B, C, D]       (array positions 0,1,2,3)
-//     _index   =  0  1  3  4        ← C is at position 2 but carries _index 3
-//   focusing C sets activeIndex=3 → flattenedItems[3] is D.
 describe('Dropdown keyboard selection with groups', () => {
   it('Enter invokes the focused item, not its neighbour', () => {
     const onA = vi.fn()
@@ -48,7 +38,7 @@ describe('Dropdown keyboard selection with groups', () => {
     render(<Dropdown trigger={<button>Open</button>} items={items} />)
 
     const menu = open()
-    arrowDown(menu, 3) // A → B → C
+    arrowDown(menu, 3)
     fireEvent.keyDown(menu, {key: 'Enter'})
 
     expect(onC).toHaveBeenCalledTimes(1)
@@ -74,7 +64,7 @@ describe('Dropdown keyboard selection with groups', () => {
     render(<Dropdown trigger={<button>Open</button>} items={items} />)
 
     const menu = open()
-    arrowDown(menu, 4) // A → B → C → Last
+    arrowDown(menu, 4)
     fireEvent.keyDown(menu, {key: 'Enter'})
 
     expect(onLast).toHaveBeenCalledTimes(1)
@@ -114,9 +104,6 @@ describe('Dropdown keyboard selection with groups', () => {
   })
 })
 
-// Regression: the menu is position:fixed and was positioned ONCE on open, so any
-// scroll or resize left it floating away from its trigger. SourceFilePicker
-// already subscribed to both events; Dropdown did not.
 describe('Dropdown repositioning', () => {
   it('tracks scroll and resize while open, and unsubscribes on close', () => {
     const addSpy = vi.spyOn(window, 'addEventListener')
@@ -134,11 +121,6 @@ describe('Dropdown repositioning', () => {
   })
 })
 
-// Regression: renderItems was handed the ORIGINAL nested items array, whose
-// entries carry no `_index`, so `data-index` and the `menu-item-N` ids were
-// never emitted. The roving-focus effect looks items up by `dataset.index`, so
-// it matched nothing — arrow keys moved no real DOM focus and highlighted no
-// row, in EVERY dropdown. Screen readers had nothing to announce.
 describe('Dropdown roving focus', () => {
   function renderTwoItems() {
     const items: DropdownItem[] = [
@@ -186,14 +168,11 @@ describe('Dropdown Escape', () => {
     const items: DropdownItem[] = [{type: 'item', label: 'A', onSelect: vi.fn()}]
     render(<Dropdown trigger={<button>Open</button>} items={items} />)
     const menu = open()
-    // fireEvent returns false when preventDefault was called.
     expect(fireEvent.keyDown(menu, {key: 'Escape'})).toBe(false)
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 })
 
-// Regression: aria-haspopup/aria-expanded sat on the wrapper <div>, which no
-// screen reader focuses — the trigger button itself announced neither.
 describe('Dropdown trigger semantics', () => {
   const items: DropdownItem[] = [{type: 'item', label: 'A', onSelect: vi.fn()}]
 
@@ -236,8 +215,6 @@ describe('Dropdown trigger semantics', () => {
   })
 })
 
-// An unavailable action that explains itself ("Test" while the resource
-// needs credentials) instead of vanishing from the keyboard order.
 describe('Dropdown disabledReason', () => {
   function renderMenu() {
     const onEdit = vi.fn()
@@ -260,7 +237,7 @@ describe('Dropdown disabledReason', () => {
     expect(test).toHaveAccessibleDescription('Enter the credentials first')
     expect(screen.getByText('Enter the credentials first')).toBeVisible()
 
-    arrowDown(menu, 2) // Edit → Test
+    arrowDown(menu, 2)
     expect(document.activeElement).toBe(test)
   })
 
@@ -272,7 +249,7 @@ describe('Dropdown disabledReason', () => {
     expect(onTest).not.toHaveBeenCalled()
     expect(screen.getByRole('menu')).toBeInTheDocument()
 
-    arrowDown(menu, 1) // Test → Remove
+    arrowDown(menu, 1)
     fireEvent.keyDown(menu, {key: 'Enter'})
     expect(onRemove).toHaveBeenCalledTimes(1)
   })

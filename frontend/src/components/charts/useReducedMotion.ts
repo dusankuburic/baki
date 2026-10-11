@@ -1,9 +1,6 @@
 import {useEffect, useState} from 'react'
 import {useSettingsStore} from '@/stores/settingsStore'
 
-// Recharts animates in JavaScript, so the CSS reduced-motion rules never reach
-// it: charts read the preference themselves and pass it to isAnimationActive.
-// Both the OS setting and the app's own "reduce motion" switch count.
 const QUERY = '(prefers-reduced-motion: reduce)'
 
 function systemPrefers(): boolean {

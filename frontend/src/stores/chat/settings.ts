@@ -1,10 +1,6 @@
 import type {StateCreator} from 'zustand'
 import type {ChatState} from './state'
 
-// Provider/draft/notice state that belongs to the chat surface rather than to
-// a thread's lifecycle: the provider for new chats and its epoch, the model
-// picker request, per-thread model refusals, the staged (grounded) prompt and
-// the per-thread composer drafts.
 type SettingsSlice = Pick<
   ChatState,
   'setProvider' | 'bumpProviderEpoch' | 'openModelPicker' | 'setModelRefusal' | 'setStagedPrompt' | 'setDraft'
@@ -27,7 +23,6 @@ export const createSettingsSlice: StateCreator<ChatState, [], [], SettingsSlice>
 
   setDraft: (threadId, text) =>
     set(state => {
-      // Prune empty drafts so the map doesn't accumulate blank keys.
       if (!text) {
         if (!(threadId in state.drafts)) return state
         const drafts = {...state.drafts}

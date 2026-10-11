@@ -2,7 +2,6 @@ import {describe, it, expect, beforeEach, afterEach} from 'vitest'
 import {persistFlowThreads, readStoredThreads} from './persistence'
 import {threadModelOf, type ChatThread} from './types'
 
-// The desktop app's single-user key: no signed-in user to resolve.
 const host = window as unknown as Record<string, unknown>
 const V1_KEY = 'baki:chatThreads:v1:f1'
 
@@ -29,10 +28,6 @@ describe('readStoredThreads provider pins', () => {
     delete host.__TAURI_INTERNALS__
   })
 
-  // A provider the server names but this bundle has no catalogue entry for
-  // (Phase 4b): the thread pinned to it, and the turn in flight on it, must
-  // survive a reload — or every such thread fell back to the active
-  // assistant and the re-attached stream lost its label.
   it('keeps a thread pin whose provider the bundle does not know', () => {
     const turn = {streamId: '11111111-1111-4111-8111-111111111111', provider: 'mistral', model: 'mistral-large'}
     persistFlowThreads('f1', [
@@ -48,7 +43,6 @@ describe('readStoredThreads provider pins', () => {
     expect(restored!.inFlight).toEqual(turn)
   })
 
-  // What is still not a pin: no provider, or one that is not a string.
   it('loads a thread with no provider, or a non-string one, unpinned', () => {
     const base = {flowId: 'f1', title: 't', createdAt: '2026-10-10T00:00:00Z'}
     const turn = {streamId: '11111111-1111-4111-8111-111111111111', model: 'x'}

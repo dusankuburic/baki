@@ -1,11 +1,30 @@
-// Flow namespace — the block canvas and its editor surfaces
-// (src/components/flow): BlockView + BlockCard, the source editor, the
-// structured action/property editors, parse-error banner, graph views and
-// diff/comparison views. English values must match the pre-i18n strings
-// EXACTLY where a test asserts on them.
 export const enFlow = {
-  // BlockView: the virtualized canvas, its bulk-selection bar and the
-  // drag-to-reorder / group-move toasts.
+  blockOps: {
+    undo: 'Undo',
+    undoFailed: 'Undo failed',
+    movedUp: 'Block moved up',
+    movedDown: 'Block moved down',
+    moveFailed: 'Move failed',
+    duplicated: 'Block duplicated',
+    duplicateFailed: 'Duplicate failed',
+    deleted: 'Block deleted',
+    deleteFailed: 'Delete failed',
+    bulkDeleted_one: '{{count}} block deleted',
+    bulkDeleted_other: '{{count}} blocks deleted',
+    bulkDeleteFailed: 'Bulk delete failed',
+    deleteConfirmTitle: 'Delete block',
+    deleteConfirmNested_one: 'Delete "{{name}}" and its {{count}} nested block?',
+    deleteConfirmNested_other: 'Delete "{{name}}" and its {{count}} nested blocks?',
+    deleteConfirmMessage: 'Delete "{{name}}"? You can undo from the toast.',
+    deleteConfirmLabel: 'Delete',
+    bulkDeleteTitle: 'Delete {{count}} blocks',
+    bulkDeleteMessage:
+      'Delete {{count}} selected blocks? Nested blocks inside them go too. You can undo from the toast.',
+    renamed: 'Renamed',
+    renameRefsUpdated_one: '{{count}} GOTO reference updated',
+    renameRefsUpdated_other: '{{count}} GOTO references updated',
+    renameFailed: 'Rename failed',
+  },
   canvas: {
     moveFailed: 'Move failed',
     emptySubflowTitle: 'Empty subflow',
@@ -23,7 +42,6 @@ export const enFlow = {
     derivedNameTitle: 'Derived name',
     derivedNameBody: "This block's name comes from its action type and properties — use Edit properties instead.",
   },
-  // BlockCard: the canvas card and its context menu.
   card: {
     explainWithAi: 'Explain with AI',
     fixWithAi: 'Fix with AI',
@@ -54,7 +72,6 @@ export const enFlow = {
     renameInputAria: 'Rename block',
     renameHint: '{{name}} (double-click to rename)',
   },
-  // Case/Else branch separators.
   branches: {
     expand: 'Expand branch',
     collapse: 'Collapse branch',
@@ -64,7 +81,6 @@ export const enFlow = {
     collapsed: 'collapsed',
     itemsCount: '{{count}} items',
   },
-  // The dashed container-end marker ("End Loop", "End", …).
   end: {
     withType: 'End {{type}}',
     plain: 'End',
@@ -73,7 +89,6 @@ export const enFlow = {
     exit: 'Exit Loop',
     next: 'Next Loop',
   },
-  // BlockSearchBar: the canvas' mod+F find bar.
   search: {
     placeholder: 'Search blocks...',
     position: '{{current}} / {{total}}',
@@ -85,7 +100,6 @@ export const enFlow = {
     closeTitle: 'Close search (Escape)',
     closeAria: 'Close search',
   },
-  // ParseErrorsBanner: the per-line parser issues the load recovered from.
   parseBanner: {
     summary_one: '{{count}} parse issue in this flow',
     summary_other: '{{count}} parse issues in this flow',
@@ -97,7 +111,6 @@ export const enFlow = {
     dismissAria: 'Dismiss parse issues banner',
     more: '…and {{count}} more',
   },
-  // SourceEditor: the raw PAD text editor with the synced line gutter.
   source: {
     loadFailed: 'Failed to load source',
     saved: 'Source saved',
@@ -120,7 +133,6 @@ export const enFlow = {
     save: 'Save & Re-parse',
     blockView: 'Block view',
   },
-  // AddActionForm: the structured "add block" line composer.
   addAction: {
     ariaLabel: 'Add action',
     heading: 'Add action',
@@ -136,7 +148,6 @@ export const enFlow = {
     insert: 'Insert at end',
     invalidType: 'Action type must look like Module.Action (letters, digits, dots).',
   },
-  // BlockPropertiesModal: the structured property editor.
   props: {
     title: 'Edit properties',
     ariaLabel: 'Edit properties: {{name}}',
@@ -153,7 +164,6 @@ export const enFlow = {
     undoFailed: 'Undo failed',
     updateFailed: 'Update failed',
   },
-  // ExecutionGraphView: the cytoscape subflow map and its overlays.
   graph: {
     findPlaceholder: 'Find subflow...',
     noMatches: 'No matches',
@@ -167,7 +177,6 @@ export const enFlow = {
     subflowErrors: 'Subflow with Errors',
     subflowWarnings: 'Subflow with Warnings',
   },
-  // FlowComparisonView: flow-vs-flow similarity diff (library pickers).
   compare: {
     title: 'Compare Flows',
     body: 'Side-by-side similarity diff of two library flows — block adds, removals, and modifications per subflow.',
@@ -190,7 +199,6 @@ export const enFlow = {
     changeSame: 'Same',
     changeModified: 'Modified',
   },
-  // RegressionDiffView: the structural diff against a picked old version.
   diff: {
     emptyTitle: 'No comparison active',
     emptyBody: 'Select a file to compare with the current flow',
@@ -202,7 +210,6 @@ export const enFlow = {
     subflow: 'Subflow: {{name}}',
     modified: 'MODIFIED',
   },
-  // TokenRenderer: the variable/label/subflow token chips on a card's name.
   token: {
     jumpToSubflow: 'Jump to subflow: {{name}}',
     typeLabel: 'Type:',
@@ -210,8 +217,6 @@ export const enFlow = {
     usagesLabel: 'Usages:',
     clickToTrace: 'Click to trace lineage',
   },
-  // MainPaneToolbar: the view switcher's flow-side labels (the shared
-  // toolbar copy lives in the shell namespace).
   toolbar: {
     block: 'Block',
     graph: 'Graph',

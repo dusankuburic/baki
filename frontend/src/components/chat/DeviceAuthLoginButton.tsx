@@ -7,23 +7,15 @@ import {createAdapter} from '@/platform/adapters'
 import {logger} from '@/lib/logger'
 import type {DeviceAuthResponse, GitHubAuthResult, GitHubUser} from '@/types'
 
-/**
- * Provider-specific configuration for the OAuth device-flow login button.
- * GitHub and Copilot share the same device-flow UX and only differ in the
- * API calls they invoke, the button colour, and the provider label.
- */
+export const DEVICE_BUTTON_CLASS: Record<string, string> = {
+  'github-models': 'bg-[#24292e] hover:bg-[#2f363d]',
+  copilot: 'bg-[#6e40c9] hover:bg-[#5a32a3]',
+}
+
 export interface DeviceAuthProvider {
-  /** Provider label used in log messages (e.g. "GitHub", "Copilot"). */
   name: string
-  /** Button text shown in the unconfigured state. */
   label: string
-  /** Tailwind classes for the sign-in button background. */
   buttonClassName: string
-  /**
-   * The catalogue's glyph name (ProviderSpec.icon) for the sign-in button.
-   * Absent draws the GitHub mark, which every device-flow provider was
-   * before the catalogue; a name the bundle lacks draws a key.
-   */
   icon?: string
   getUser: () => Promise<GitHubUser | null>
   startAuth: () => Promise<DeviceAuthResponse | null>
@@ -38,8 +30,6 @@ interface Props {
 
 type State = 'unconfigured' | 'authorizing' | 'configured' | 'error'
 
-// The glyphs a catalogue entry may name, as the chat picker knows them, plus
-// the key a provider with no glyph of its own gets.
 const GLYPHS: Record<string, ComponentType<{size?: number}>> = {
   github: GithubMark,
   cloud: Cloud,
@@ -65,18 +55,11 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
   const [username, setUsername] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
   const [starting, setStarting] = useState(false)
-  // attemptRef identifies the current sign-in attempt; every await and timer
-  // checks it, so a cancelled or superseded attempt can never touch state
-  // again. A shared "polling" flag used to let Cancel → Sign in revive the old
-  // attempt's poll loop, which then killed the new sign-in when its abandoned
-  // code expired.
   const attemptRef = useRef(0)
   const startingRef = useRef(false)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
-    // The attempt counter (not a DOM node): bumping it on unmount/provider
-    // change invalidates any sign-in still in flight.
     const attempts = attemptRef
     provider
       .getUser()
@@ -96,8 +79,6 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
   }, [provider])
 
   const startAuth = useCallback(async () => {
-    // One sign-in at a time: a double-click started two device flows and
-    // opened two browser tabs.
     if (startingRef.current) return
     startingRef.current = true
     setStarting(true)
@@ -112,8 +93,6 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
       void createAdapter().openURL(resp.verification_uri)
 
       const interval = (resp.interval || 5) * 1000
-      // The device code is only valid for expires_in; polling past it can only
-      // fail, so stop and say so instead of spinning forever.
       const expiresAt = Date.now() + (resp.expires_in > 0 ? resp.expires_in * 1000 : 15 * 60 * 1000)
 
       const poll = async () => {
@@ -129,8 +108,6 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
           if (result.status === 'success') {
             attemptRef.current++
             setState('configured')
-            // The name is a courtesy; the completion is not — the host
-            // relists and switches on it, whatever the user route answered.
             try {
               const user = await provider.getUser()
               if (user?.login) setUsername(user.login)
@@ -146,7 +123,6 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
             return
           }
         } catch {
-          /* polling error — retry on next interval */
         }
         if (attempt === attemptRef.current) {
           timeoutRef.current = setTimeout(poll, interval)

@@ -11,8 +11,6 @@ import {Button, IconButton, useConfirm} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 
-// Labels resolve at render time so they follow language changes; the module
-// constant would freeze them at init.
 const GATE_VALUES: {key: 'reportOnly' | 'infoPlus' | 'warningPlus' | 'errorPlus'; value: Severity | ''}[] = [
   {key: 'reportOnly', value: ''},
   {key: 'infoPlus', value: 'info'},
@@ -34,8 +32,6 @@ export default function PolicyGatePanel() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const openFlowId = useFlowStore(s => s.document?.id ?? null)
-  // Keyed by policy id. A result is only meaningful for the policy as it was
-  // evaluated, so handleUpdate drops it whenever the policy changes.
   const [results, setResults] = useState<Record<string, PolicyResult>>({})
   const [evaluatingId, setEvaluatingId] = useState<string | null>(null)
 
@@ -46,14 +42,12 @@ export default function PolicyGatePanel() {
       const result = await analysisApi.listPolicies(activeOrgId)
       setPolicies(result || [])
     } catch {
-      // 503 in local mode is expected
     } finally {
       setLoading(false)
     }
   }, [activeOrgId])
 
   useEffect(() => {
-    // Kicks off the async policy load (external system).
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadPolicies()
   }, [loadPolicies])
@@ -113,8 +107,6 @@ export default function PolicyGatePanel() {
     }
   }
 
-  // Evaluates the persisted policy (the panel saves on every edit, so it matches
-  // what is shown) — the same path a CI gate takes, not an inline copy.
   const handleEvaluate = async (policy: Policy) => {
     if (!activeOrgId || !openFlowId) return
     setEvaluatingId(policy.id)
@@ -167,9 +159,6 @@ export default function PolicyGatePanel() {
           const result = results[policy.id]
           return (
             <div key={policy.id} className="border border-border-default rounded-lg overflow-hidden">
-              {/* The delete control is a SIBLING of the expand button: a
-                  button nested inside a button is invalid markup, and the
-                  click had to stop propagation to avoid toggling the row. */}
               <div className="flex items-center gap-2 pr-2 hover:bg-surface-2 transition-colors">
                 <button
                   type="button"
@@ -306,17 +295,19 @@ function PolicyResultView({result}: {result: PolicyResult}) {
     <div
       className={clsx(
         'rounded-md border p-3 space-y-2',
-        result.passed ? 'border-green-500/30 bg-green-500/5' : 'border-red-500/30 bg-red-500/5',
+        result.passed
+          ? 'border-semantic-success/30 bg-semantic-success/10'
+          : 'border-semantic-error/30 bg-semantic-error/10',
       )}
       role="status"
     >
       <div className="flex items-center gap-2 text-sm">
         {result.passed ? (
-          <ShieldCheck className="w-4 h-4 text-green-500" />
+          <ShieldCheck className="w-4 h-4 text-semantic-success" />
         ) : (
-          <ShieldAlert className="w-4 h-4 text-red-500" />
+          <ShieldAlert className="w-4 h-4 text-semantic-error" />
         )}
-        <span className={clsx('font-medium', result.passed ? 'text-green-500' : 'text-red-500')}>
+        <span className={clsx('font-medium', result.passed ? 'text-semantic-success' : 'text-semantic-error')}>
           {result.passed ? t('policy.resultPassed') : t('policy.resultFailed')}
         </span>
         <span className="text-xs text-text-secondary">
@@ -354,14 +345,14 @@ function GateBadge({severity}: {severity?: Severity}) {
   }
   if (severity === 'error') {
     return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-500">
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-semantic-error/10 text-semantic-error">
         <ShieldAlert className="w-3 h-3" /> {t('policy.gate.errorPlus')}
       </span>
     )
   }
   if (severity === 'warning') {
     return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-500">
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-semantic-warning/10 text-semantic-warning">
         <ShieldAlert className="w-3 h-3" /> {t('policy.gate.warningPlus')}
       </span>
     )

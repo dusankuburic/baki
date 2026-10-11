@@ -40,8 +40,6 @@ beforeEach(() => {
 })
 
 describe('PolicyGatePanel', () => {
-  // Regression: the delete button used to be nested INSIDE the expand button
-  // (invalid markup; the click had to stop propagation to avoid toggling).
   it('keeps the delete control outside the expand button', async () => {
     renderPanel()
     const expand = await screen.findByRole('button', {name: /Release gate/})

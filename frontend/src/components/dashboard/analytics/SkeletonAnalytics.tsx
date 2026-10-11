@@ -1,4 +1,3 @@
-// The page's shape while the first payload loads: filter row, tiles, cards.
 export function SkeletonAnalytics() {
   const cell = 'rounded-xl border border-border-subtle bg-surface-2 p-4 shadow-sm'
   const pulse = 'animate-pulse rounded-lg bg-surface-3'

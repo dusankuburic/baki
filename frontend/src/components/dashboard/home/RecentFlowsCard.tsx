@@ -7,8 +7,6 @@ import {relativeTimeText, absoluteTime} from '@/lib/time'
 import {useUIStore} from '@/stores/uiStore'
 import type {RecentFlowStub} from '@/types'
 
-// The most recently updated flows with their latest health; a row opens the
-// flow. The server already keeps one row per flow name.
 export function RecentFlowsCard({
   flows,
   onOpen,

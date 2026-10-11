@@ -55,9 +55,6 @@ export default function FindingsSummary({stats, durationMs, healthScore}: Props)
               </span>
             )}
           </div>
-          {/* The engine counted inline suppressions but nothing in the app
-              showed them, so "0 findings" gave no hint that pad-ignore
-              directives were hiding some. */}
           {(stats.suppressed ?? 0) > 0 && (
             <span className="text-2xs text-text-tertiary tabular-nums" title={t('summary.suppressedInlineTitle')}>
               {t('summary.suppressedInline', {count: stats.suppressed})}

@@ -13,7 +13,6 @@ vi.mock('@/api/governance', async importOriginal => ({
   ciCredentialsApi: {list: vi.fn(), create: vi.fn(), revoke: vi.fn()},
 }))
 
-// The command's endpoint is the API origin the app talks to.
 vi.mock('@/api/client', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api/client')>()),
   getBackendConfig: vi.fn().mockResolvedValue({apiUrl: 'https://baki.example.com/', token: ''}),
@@ -88,7 +87,6 @@ describe('OrgCICredentialsSection', () => {
     expect(within(fresh).getByText(/never used/)).toBeInTheDocument()
     expect(within(fresh).queryByText('Expired')).not.toBeInTheDocument()
 
-    // An erased creator, an expiry in the past and a recorded use.
     const old = screen.getByText('old-runner').closest('li')!
     expect(within(old).getByText(/Created by a former member/)).toBeInTheDocument()
     expect(within(old).getByText('Expired')).toBeInTheDocument()
@@ -111,7 +109,6 @@ describe('OrgCICredentialsSection', () => {
         `PAD_CI_WEBHOOK_SECRET=${SECRET} bakicli report -endpoint https://baki.example.com -flow-id <flow-id>`,
       ),
     ).toBeInTheDocument()
-    // The list is read again, so the new row appears behind the dialog.
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2))
 
     fireEvent.click(within(dialog).getByRole('button', {name: 'Copy credential'}))
@@ -119,7 +116,6 @@ describe('OrgCICredentialsSection', () => {
     fireEvent.click(within(dialog).getByRole('button', {name: 'Copy command'}))
     await waitFor(() => expect(writeClipboard).toHaveBeenLastCalledWith(expect.stringContaining('bakicli report')))
 
-    // Done drops the only copy of the secret.
     fireEvent.click(within(dialog).getByRole('button', {name: 'Done'}))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.queryByText(SECRET)).not.toBeInTheDocument()
@@ -152,12 +148,10 @@ describe('OrgCICredentialsSection', () => {
     expect(
       await screen.findByText('This organisation has reached its limit of active CI credentials'),
     ).toBeInTheDocument()
-    // The form stays, with what was typed.
     expect(within(dialog).getByLabelText('Name')).toHaveValue('one-too-many')
   })
 
   it('explains a server that cannot store credentials (field encryption off)', async () => {
-    // The server masks a 5xx message: the code tells the case.
     api.create.mockRejectedValue(new ApiError('internal server error', 503, 'CI_CREDENTIALS_UNAVAILABLE'))
     renderSection()
 

@@ -8,25 +8,14 @@ import type {ChatMessage} from '@/types'
 interface Props {
   promptTokens: number
   completionTokens: number
-  // The current model's listing price (USD per 1M tokens); 0 or undefined
-  // when unknown. Prices the tokens no message carries its own rates for.
   inputCostPerM?: number
   outputCostPerM?: number
 }
 
-// Token-count refresh cadence. The store updates the slot's token estimate at
-// ~60fps (RAF-coalesced with the streaming text), but a numeric counter only
-// needs ~4fps to feel live — so this polls the store on an interval instead of
-// subscribing reactively, keeping AITab off the per-frame path.
 const TOKEN_REFRESH_MS = 250
 
 const EMPTY_MESSAGES: readonly ChatMessage[] = []
 
-// threadCost estimates the thread's spend in USD. Turns whose done event
-// reported the rates they were billed at (an alias provider answering through
-// a deployment, model-router or agent) are priced at those; the rest of the
-// thread's totals at the current model's listing. Null when nothing can be
-// priced — an unknown or zero rate hides the figure rather than showing $0.
 export function threadCost(
   messages: readonly ChatMessage[],
   promptTokens: number,
@@ -37,14 +26,6 @@ export function threadCost(
   return threadCostEstimate(messages, promptTokens, completionTokens, listInputPerM, listOutputPerM)?.cost ?? null
 }
 
-// threadCostEstimate is threadCost plus whether the figure is only a lower
-// bound: some of the thread's tokens came from turns that reported no rates
-// and the current listing price is 0, so those tokens are not in the figure.
-//
-// Azure AI Foundry turns are never priced (baki does not price Azure): their
-// tokens are left out of the figure outright — a thread is keyed by id, not
-// provider, so pricing them as "the rest" would bill them at another model's
-// listing after a provider switch — and do not make it a lower bound.
 export function threadCostEstimate(
   messages: readonly ChatMessage[],
   promptTokens: number,
@@ -76,7 +57,6 @@ export function threadCostEstimate(
   const restIn = Math.max(0, promptTokens - ratedIn)
   const restOut = Math.max(0, completionTokens - ratedOut)
   if (listInputPerM > 0 || listOutputPerM > 0) {
-    // Only Azure turns so far: nothing is priced, so no figure at all.
     if (!priced && restIn + restOut === 0) return null
     cost += (restIn * listInputPerM + restOut * listOutputPerM) / 1_000_000
     return {cost, lowerBound: false}
@@ -84,16 +64,9 @@ export function threadCostEstimate(
   return priced ? {cost, lowerBound: restIn + restOut > 0} : null
 }
 
-// ChatUsageMeter is the composer's single always-present usage line. It merges
-// what used to be two components that swapped places above the composer
-// (StreamingProgress while generating, TokenCounter when idle) — each of which
-// also returned null at zero, so a row appeared and vanished at the start and
-// end of every stream and shoved the conversation up and down.
 export default function ChatUsageMeter({promptTokens, completionTokens, inputCostPerM, outputCostPerM}: Props) {
   const {t} = useTranslation('chat')
   const isStreaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
-  // The active thread's messages price the turns that carry their own billed
-  // rates. They change per turn, not per frame, so subscribing is cheap.
   const messages = useChatStore(
     s => (s.activeThreadId ? s.conversations.get(s.activeThreadId) : undefined) ?? EMPTY_MESSAGES,
   )
@@ -101,13 +74,7 @@ export default function ChatUsageMeter({promptTokens, completionTokens, inputCos
   const [live, setLive] = useState(0)
 
   useEffect(() => {
-    if (!isStreaming) {
-      // Clears a poll mirror when the stream ends.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLive(0)
-      return
-    }
-    // Seed immediately so the counter doesn't lag a tick on stream start.
+    if (!isStreaming) return
     const read = () => {
       const st = useChatStore.getState()
       setLive(st.activeThreadId ? st.streams[st.activeThreadId]?.tokens || 0 : 0)
@@ -124,8 +91,6 @@ export default function ChatUsageMeter({promptTokens, completionTokens, inputCos
         role="status"
         aria-label={t('tokens.streamingAria', {count: live})}
       >
-        {/* A real travelling bar. The old one was a static one-third-width div
-            with animate-pulse, which reads as a progress bar that is stuck. */}
         <span className="w-10 h-0.5 rounded-full bg-surface-4 overflow-hidden shrink-0" aria-hidden="true">
           <span className="block w-1/3 h-full rounded-full bg-brand-400 animate-indeterminate" />
         </span>
@@ -138,8 +103,6 @@ export default function ChatUsageMeter({promptTokens, completionTokens, inputCos
 
   const total = promptTokens + completionTokens
   if (total === 0) {
-    // Occupy the row's height without announcing anything, so the composer
-    // does not resize when the first answer lands.
     return <span className="block h-3.5" aria-hidden="true" />
   }
 
@@ -147,7 +110,6 @@ export default function ChatUsageMeter({promptTokens, completionTokens, inputCos
     ? threadCostEstimate(messages, promptTokens, completionTokens, inputCostPerM ?? 0, outputCostPerM ?? 0)
     : null
   const amount = estimate === null ? '' : estimate.cost < 0.001 ? '<$0.001' : `$${estimate.cost.toFixed(3)}`
-  // Some turns have no known price: the real spend is at least this much.
   const costStr = estimate?.lowerBound && estimate.cost >= 0.001 ? t('tokens.costAtLeast', {cost: amount}) : amount
 
   return (

@@ -1,9 +1,5 @@
 import type {ReactNode} from 'react'
 
-// One section of the Admin Dashboard: the h2 the section nav lands focus on
-// (useActiveSection.jumpTo focuses the section's h2), a one-line description,
-// an optional action slot, and whatever the section renders. Cards inside a
-// section use SectionCard, whose heading is an h3.
 export function AdminSection({
   id,
   title,
@@ -33,8 +29,6 @@ export function AdminSection({
   )
 }
 
-// Placeholder rows while a table loads its first page: the same row height
-// as the real rows, so the section does not jump when they land.
 export function SkeletonRows({rows, cols}: {rows: number; cols: number}) {
   return (
     <>

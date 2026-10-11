@@ -30,8 +30,6 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
   const selectBlock = useFlowStore(s => s.selectBlock)
   const selectSubflow = useFlowStore(s => s.selectSubflow)
   const doc = useFlowStore(s => s.document)
-  // View-only shares hide source-writing actions (apply fix / suppress in
-  // file); triage + AI suggestions stay available.
   const readOnly = useFlowStore(s => s.readOnly)
   const suppressFinding = useAnalysisStore(s => s.suppressFinding)
   const unsuppressFinding = useAnalysisStore(s => s.unsuppressFinding)
@@ -47,11 +45,6 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
     finding,
     doc,
   )
-  // Cloud apply-fix patches the flow's stored source, which the upload handler
-  // keeps for SINGLE-file flows only. A folder import — the normal PAD layout —
-  // has no stored source, so the button used to fail AFTER the click with
-  // "source not available". Disable it up front and say why; retaining
-  // per-file source is a storage-model change, an honest disabled button is not.
   const cloudNoSource = !isDesktop && !!doc && (doc.isFolder === true || (doc.files?.length ?? 0) > 1)
 
   const handleJump = () => {
@@ -133,8 +126,6 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
           Related
         </button>
 
-        {/* Comments need the cloud store: on desktop the list is always []
-            and add answers 503 — after the user has typed the comment. */}
         {!isDesktop && (
           <button
             onClick={handleComments}
@@ -248,7 +239,6 @@ function FindingCard({finding, blockLookup, onFixWithAI}: Props) {
         original={preview.original}
         patched={preview.patched}
         fixType={preview.fixType}
-        // The modal has shown the diff: this is the reviewed (unsafe-ok) path.
         onApply={() => doApplyFix(preview.fixType, true)}
         onCancel={closePreview}
       />

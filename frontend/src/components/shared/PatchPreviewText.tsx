@@ -1,13 +1,6 @@
 import clsx from 'clsx'
 import {useMemo} from 'react'
 
-// PatchPreviewText renders the SERVER's patch-op preview (the scrubbed
-// summary shipped on fix proposals — `insert N lines before line X` blocks
-// with `+`-prefixed added lines, `remove lines X-Y`, `on line N replace A
-// with B`) as a COLOR-CODED diff instead of a text blob (U4.1). A true LCS
-// diff isn't possible here: the card carries only the scrubbed preview, not
-// the original source, so this classifier honors the preview's own
-// line-level semantics.
 type Seg = {kind: 'header' | 'added' | 'removed' | 'context'; text: string}
 
 function classify(text: string): Seg[] {

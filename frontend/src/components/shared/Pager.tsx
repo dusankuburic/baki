@@ -4,27 +4,18 @@ import {ChevronLeft, ChevronRight} from 'lucide-react'
 import IconButton from './IconButton'
 
 type PagerProps = {
-  /** 0-based page index. */
   page: number
   pageSize: number
-  /** Rows on the current page. */
   count: number
-  /** The full match count when the server reports one. */
   total?: number
-  /** Whether a next page exists, for lists whose server reports no total. */
   hasMore?: boolean
   onPageChange: (page: number) => void
   pageSizeOptions?: number[]
   onPageSizeChange?: (size: number) => void
-  /** Names the pagination landmark ("Users pagination"). */
   label: string
   className?: string
 }
 
-// The pagination footer every server-paged table shares: a live "Showing
-// 1–10 of 17" (or "Showing 16–30" with `hasMore` when the total is unknown),
-// an optional rows-per-page select, and previous/next. Next is disabled on
-// the last page either way, so a full last page never leads to an empty one.
 export default function Pager({
   page,
   pageSize,

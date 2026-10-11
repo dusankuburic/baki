@@ -1,8 +1,6 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import type {PendingOp} from '@/services/sync/SyncManager'
 
-// vi.mock factories are hoisted before let declarations, so use vi.hoisted() to
-// share state between the factory and the test body.
 const capture = vi.hoisted(() => ({
   queueChangeHandler: null as ((queue: readonly PendingOp[]) => void) | null,
 }))
@@ -30,8 +28,6 @@ beforeEach(() => {
   useSyncStore.setState(initialState, true)
 })
 
-// ---- initial state ----
-
 describe('initial state', () => {
   it('starts with an empty queue', () => {
     expect(useSyncStore.getState().queue).toEqual([])
@@ -41,8 +37,6 @@ describe('initial state', () => {
     expect(useSyncStore.getState().pendingCount).toBe(0)
   })
 })
-
-// ---- queue synchronization ----
 
 describe('queue synchronization', () => {
   it('updates queue and pendingCount when syncManager fires a change', () => {

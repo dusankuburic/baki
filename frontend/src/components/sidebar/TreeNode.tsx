@@ -24,10 +24,6 @@ type TreeNodeProps = {
   isSelected: boolean
   isExpanded: boolean
   isViewportVisible?: boolean
-  // Row-carrying callbacks: FlowTree passes ONE stable handler per concern;
-  // per-row closures would change identity every render and defeat this
-  // component's React.memo (each of the ~30-40 visible rows re-rendering on
-  // every scroll event).
   onSelect: (row: TreeRow) => void
   onToggleExpand: (row: TreeRow) => void
   searchHighlight?: string

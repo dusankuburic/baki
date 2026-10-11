@@ -33,7 +33,6 @@ describe('orgRulesApi.list', () => {
     vi.resetModules()
   })
 
-  // The section re-reads the list right after a mutation: a cached answer would show the rule as it was.
   it('is never answered from the GET micro-cache', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
@@ -65,7 +64,6 @@ describe('orgRulesApi.setEnabled', () => {
     expect(JSON.parse(init.body as string)).toEqual({id: 'row-1', enabled: false})
   })
 
-  // A server rolled back to before rule schemas toggles only with the config.
   it('resends the config when an older server requires it', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
@@ -233,7 +231,6 @@ describe('channelsApi', () => {
     await expect(api.list('org-1')).rejects.toMatchObject({name: 'ResponseValidationError'})
   })
 
-  // A save is followed by a re-read: it must reach the server, not the 5 s GET micro-cache.
   it('reads the list from the server every time', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
@@ -379,7 +376,6 @@ describe('Jira and email channels, events, options', () => {
     await expect(channelsApi.options('org-1')).resolves.toEqual(options)
   })
 
-  // GET …/channels/options matches the previous server's DELETE …/channels/{channelId}: 405.
   it('reads null from a server without the options route', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(json({error: 'Method Not Allowed'}, 405))
     const {channelsApi} = await import('./governance')

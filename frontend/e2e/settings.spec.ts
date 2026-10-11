@@ -1,14 +1,10 @@
 import {test, expect, type Page} from '@playwright/test'
 import {setupAuthenticatedPage, mockDashboardHome} from './helpers'
 
-// The Settings dialog's frame, sidebar and keyboard contract. navigation.spec
-// keeps the older text-selector checks; this file pins the new shell.
-
 async function openSettings(page: Page) {
   await page.locator('button[aria-label="Settings"]').first().click()
   const dialog = page.locator('[role="dialog"][aria-label="Settings"]')
   await expect(dialog).toBeVisible({timeout: 5000})
-  // The dialog enters with a scale(0.96) animation; measure it at rest.
   await dialog.evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)))
   return dialog
 }
@@ -31,8 +27,6 @@ test.describe('Settings modal', () => {
     const rail = await dialog.locator('.settings-nav').boundingBox()
     expect(Math.abs(rail!.width - 240)).toBeLessThanOrEqual(2)
 
-    // One tablist holds the groups and the pinned About entry; the stub runs
-    // in cloud mode, so the Workspace group is present.
     const tabs = dialog.getByRole('tablist', {name: 'Settings sections'})
     await expect(tabs).toHaveAttribute('aria-orientation', 'vertical')
     await expect(dialog.getByRole('tab', {name: 'General'})).toHaveAttribute('aria-selected', 'true')
@@ -51,7 +45,6 @@ test.describe('Settings modal', () => {
   })
 
   test('switching sections resets the scroll, and arrow keys move the selection', async ({page}) => {
-    // Short enough that the Shortcuts panel has to scroll.
     await page.setViewportSize({width: 1366, height: 768})
     const dialog = await openSettings(page)
     await dialog.getByRole('tab', {name: 'Shortcuts'}).click()

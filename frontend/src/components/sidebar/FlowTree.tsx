@@ -56,8 +56,11 @@ export default function FlowTree({
     () => flattenTreeRows(document, {expandedSubflowIds, expandedBlockIds, visibleTypes, searchQuery, matchedBlockIds}),
     [document, expandedSubflowIds, expandedBlockIds, visibleTypes, searchQuery, matchedBlockIds],
   )
-  // rows snapshot for the stable select handler (focus-index lookup without
-  // re-creating the callback when rows change).
+  const [prevRows, setPrevRows] = useState(rows)
+  if (prevRows !== rows) {
+    setPrevRows(rows)
+    setFocusedIndex(-1)
+  }
   const rowsRef = useRef(rows)
   useEffect(() => {
     rowsRef.current = rows
@@ -85,11 +88,10 @@ export default function FlowTree({
     const targetScrollTop = index * ROW_HEIGHT
     const currentScrollTop = containerRef.current.scrollTop
 
-    // If block is outside or near the edges of the current viewport, scroll it in
     if (targetScrollTop < currentScrollTop || targetScrollTop > currentScrollTop + viewportHeight - ROW_HEIGHT * 2) {
       containerRef.current.scrollTo({
-        top: Math.max(0, targetScrollTop - ROW_HEIGHT * 3), // Show 3 rows above for context
-        behavior: 'auto', // Use auto for instant sync while scrolling
+        top: Math.max(0, targetScrollTop - ROW_HEIGHT * 3),
+        behavior: 'auto',
       })
     }
   }, [visibleBlockId, rows, viewportHeight])
@@ -99,8 +101,6 @@ export default function FlowTree({
   const visibleRows = rows.slice(startIndex, endIndex)
 
   const handleScroll = useCallback(() => {
-    // rAF-coalesced: scroll events fire at frame+ frequency, and each
-    // setScrollTop re-render re-renders every visible TreeNode.
     if (scrollRafRef.current !== null) return
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null
@@ -117,8 +117,6 @@ export default function FlowTree({
     [],
   )
 
-  // Stable row-carrying handlers (see TreeNode's props doc): identity never
-  // changes, so TreeNode's memo holds across scroll/selection renders.
   const handleRowSelect = useCallback(
     (row: TreeRow) => {
       setFocusedIndex(-1)
@@ -127,8 +125,6 @@ export default function FlowTree({
       } else {
         onSelectBlock(row.id, row.subflowId)
       }
-      // Also move keyboard focus to the clicked row (the previous inline
-      // closure set focusedIndex to the row's flat index).
       rowsRef.current.findIndex((r, i) => {
         if (r.id === row.id && r.kind === row.kind) {
           setFocusedIndex(i)
@@ -150,12 +146,6 @@ export default function FlowTree({
     },
     [onToggleSubflowExpand, onToggleBlockExpand],
   )
-
-  useEffect(() => {
-    // Resets the keyboard focus index when the row list changes underneath it.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void setFocusedIndex(-1)
-  }, [rows])
 
   useEffect(() => {
     if (!ctxMenu) return

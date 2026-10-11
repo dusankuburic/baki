@@ -42,8 +42,6 @@ import type {ChatMessage} from '@/types'
 
 const META = {provider: 'claude' as never, model: 'claude-sonnet-4'}
 
-// A thread whose server history has loaded: a save on done would happen if
-// the engine still asked for one.
 function seedThread(messages: ChatMessage[] = []) {
   useChatStore.setState({
     threads: [
@@ -63,8 +61,6 @@ function seedThread(messages: ChatMessage[] = []) {
   })
 }
 
-// sendAndFinish sends one turn, lets the create POST resolve, streams one
-// chunk and the done event, and returns the committed answer.
 async function sendAndFinish(
   result: {current: ReturnType<typeof useChatStreamEngine>},
   opts: Parameters<ReturnType<typeof useChatStreamEngine>['send']>[2],
@@ -98,23 +94,17 @@ beforeEach(() => {
 })
 
 describe('useChatStreamEngine save on done', () => {
-  // The server stores the question at stream start and the finished answer —
-  // trail, fix outcomes, finish reason, usage — at stream end; the client's
-  // own full-replace save after done was a third write per turn.
   it('does not save a turn the server owns (sent without history)', async () => {
     const {result} = renderHook(() => useChatStreamEngine())
     seedThread()
     const answer = await sendAndFinish(result, META)
     const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0]
     expect(req.messages).toBeUndefined()
-    // onDone's usage arguments are (tokensOut, tokensIn).
     expect(answer).toMatchObject({role: 'assistant', content: 'answer', finishReason: 'stop', tokensIn: 2, tokensOut: 3})
     expect(useChatStore.getState().streams.threadA).toBeUndefined()
     expect(chatApi.saveConversation).not.toHaveBeenCalled()
   })
 
-  // A resend carries the thread's (locally truncated) history: the server
-  // does not persist such a turn, so the client still saves it on done.
   it('still saves a turn that carried its own history', async () => {
     const {result} = renderHook(() => useChatStreamEngine())
     seedThread([{id: 'u0', role: 'user', content: 'earlier', timestamp: 't'}])
@@ -130,8 +120,6 @@ describe('useChatStreamEngine save on done', () => {
     )
   })
 
-  // Stop keeps the generated text as an interrupted answer the server never
-  // stores: that commit is saved whoever owns the turn.
   it('saves an interrupted server-owned turn', async () => {
     const {result} = renderHook(() => useChatStreamEngine())
     seedThread()

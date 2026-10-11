@@ -13,6 +13,11 @@ function MiniBar({value, max, color}: {value: number; max: number; color: string
   )
 }
 
+const CYCLO_AMBER = 10
+const CYCLO_RED = 20
+const COG_AMBER = 15
+const COG_RED = 30
+
 const SubflowMetricsRow = React.memo(function SubflowMetricsRow({
   m,
   onSelect,
@@ -22,9 +27,13 @@ const SubflowMetricsRow = React.memo(function SubflowMetricsRow({
 }) {
   const {t} = useTranslation('inspector')
   const cycloColor =
-    m.cyclomaticComplexity > 20 ? 'bg-red-500' : m.cyclomaticComplexity > 10 ? 'bg-amber-500' : 'bg-green-500'
+    m.cyclomaticComplexity > CYCLO_RED
+      ? 'bg-red-500'
+      : m.cyclomaticComplexity > CYCLO_AMBER
+        ? 'bg-amber-500'
+        : 'bg-green-500'
   const cogColor =
-    m.cognitiveComplexity > 30 ? 'bg-red-500' : m.cognitiveComplexity > 15 ? 'bg-amber-500' : 'bg-green-500'
+    m.cognitiveComplexity > COG_RED ? 'bg-red-500' : m.cognitiveComplexity > COG_AMBER ? 'bg-amber-500' : 'bg-green-500'
 
   return (
     <button

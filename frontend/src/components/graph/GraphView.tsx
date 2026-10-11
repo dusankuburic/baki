@@ -1,6 +1,5 @@
 import {useRef, useEffect, useState, useCallback} from 'react'
 import cytoscape from 'cytoscape'
-// @ts-expect-error cytoscape-dagre has no types
 import dagre from 'cytoscape-dagre'
 import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
@@ -23,7 +22,6 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
   const [cy, setCy] = useState<cytoscape.Core | null>(null)
   const [graphTokens, setGraphTokens] = useState<GraphTokenColors>(() => resolveGraphTokens())
 
-  // Renamed from `document` to avoid shadowing window.document.
   const flowDoc = useFlowStore(s => s.document)
   const selectedSubflowId = useFlowStore(s => s.selectedSubflowId)
   const selectedBlockId = useFlowStore(s => s.selectedBlockId)
@@ -48,7 +46,6 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     }
   }, [])
 
-  // Initialise Cytoscape once on mount.
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -73,7 +70,6 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
       }
     })
 
-    // Only propagate zoom events that the user initiated, not programmatic ones.
     instance.on('zoom', () => {
       if (!isProgrammaticZoom.current) setGraphZoom(instance.zoom())
     })
@@ -86,24 +82,13 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
       cyRef.current = null
       setCy(null)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectBlock, selectSubflow, setGraphZoom])
 
-  // Reload elements whenever the displayed subflow changes. The trigger is
-  // deliberately identity-keyed (subflow id + document id), not subflow
-  // CONTENT: the graph is a structure map, and re-running the dagre layout on
-  // every block edit would thrash it. Label/selection drift after in-place
-  // edits is resolved by switching subflows back and forth; key this on a
-  // content hash instead if that ever becomes a complaint. The disable is the
-  // mount-once/external-system exception: the closures read the latest render
-  // each time the listed ids change.
   useEffect(() => {
     if (!cyRef.current || !subflow) return
     const c = cyRef.current
 
     const elements = blocksToElements(subflow)
-    // Batch the remove+add so Cytoscape defers style recalculation and repaints
-    // once for the whole swap instead of per-element (a large subflow otherwise
-    // triggers N intermediate restyles).
     c.batch(() => {
       c.elements().remove()
       c.add(elements)
@@ -125,23 +110,18 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     if (selectedBlockId) syncSelectionToGraph(selectedBlockId)
   }, [subflow?.id, flowDoc?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keep graph selection in sync with the sidebar/inspector selection.
   useEffect(() => {
     syncSelectionToGraph(selectedBlockId)
   }, [selectedBlockId, syncSelectionToGraph])
 
-  // Re-style when the app theme changes and keep tokens in sync for Minimap.
   useEffect(() => {
     const tokens = resolveGraphTokens()
-    // Publishes theme tokens read off the DOM so Minimap can consume them.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setGraphTokens(tokens)
     if (!cyRef.current) return
     cyRef.current.style().fromJson(buildGraphStyle(tokens)).update()
   }, [resolvedTheme])
 
-  // Sync zoom from toolbar controls (±/fit buttons) to Cytoscape.
-  // isProgrammaticZoom prevents the 'zoom' event from echoing the change back.
   useEffect(() => {
     if (!cyRef.current) return
     const c = cyRef.current
@@ -153,23 +133,16 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     }
   }, [graphZoom])
 
-  // Fit-to-screen event dispatched by the toolbar's Maximize button.
   useEffect(() => {
     const handleFit = () => {
       if (!cyRef.current) return
       cyRef.current.fit(undefined, 40)
-      // Update the zoom indicator to the actual post-fit zoom, not a hardcoded 1.
       setGraphZoom(cyRef.current.zoom())
     }
     window.addEventListener('graph:fit', handleFit)
     return () => window.removeEventListener('graph:fit', handleFit)
   }, [setGraphZoom])
 
-  // Export-to-PNG event dispatched by the toolbar's Download button. Cytoscape's
-  // png() renders the current viewport (full:true = all elements, scale:2 = 2x
-  // for crisp output) to a base64 data URI, then a transient <a download> saves
-  // it. Mirrors the graph:fit event pattern so the toolbar stays decoupled from
-  // the Cytoscape instance (which is local to this component).
   useEffect(() => {
     const handleExportPNG = () => {
       if (!cyRef.current) return
@@ -185,7 +158,6 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     return () => window.removeEventListener('graph:export-png', handleExportPNG)
   }, [flowDoc])
 
-  // Highlight blocks containing the globally selected variable
   useEffect(() => {
     if (!cyRef.current) return
     const cy = cyRef.current
@@ -218,9 +190,6 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     })
   }, [selectedVariable, subflow?.id])
 
-  // Reflect remote collaborators' block selections: nodes a teammate is viewing
-  // get a dashed brand border so the local user can see where others are without
-  // confusing it with their own (solid) selection.
   useEffect(() => {
     if (!cyRef.current) return
     const cy = cyRef.current
@@ -245,8 +214,6 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     const cy = cyRef.current
 
     cy.batch(() => {
-      // Reset classes and restore the pristine label (stashed in scratch so
-      // repeated runs of this effect stay idempotent).
       cy.nodes().forEach(node => {
         node.removeClass('finding-error finding-warning finding-info')
         const base = node.scratch('_baseLabel') ?? node.data('fullLabel')
@@ -280,7 +247,6 @@ export default function GraphView({subflowId: subflowIdProp}: {subflowId?: strin
     )
   }
 
-  // Count all nodes recursively, not just root blocks.
   const totalNodes = subflow ? countSubflowNodes(subflow.blocks) : 0
   if (totalNodes > GRAPH_NODE_LIMIT) {
     return (

@@ -7,8 +7,6 @@ import {Button, useConfirm, useToast} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
 import {SectionCard, SectionNotice} from './SectionCard'
 
-// readLinkedHash consumes the `#ssoLinked=<provider>` fragment the SSO link
-// callback redirects to, and strips it so a reload does not re-announce it.
 function readLinkedHash(): string | null {
   const hash = window.location.hash.replace(/^#/, '')
   if (!hash.includes('ssoLinked=')) return null
@@ -17,9 +15,6 @@ function readLinkedHash(): string | null {
   return provider
 }
 
-// LinkedIdentitiesSection is the "link <provider> from your account settings"
-// surface the SSO login error has always pointed at. Until it existed, a user
-// who registered by email before SSO was enabled could never use SSO.
 export const LinkedIdentitiesSection: React.FC = () => {
   const {t} = useTranslation('auth')
   const {error: toastError, success: toastSuccess} = useToast()
@@ -36,9 +31,7 @@ export const LinkedIdentitiesSection: React.FC = () => {
       toastSuccess(t('linked.linkedToast', {provider}))
       refetch()
     }
-    // One-shot consumption of an external input on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [toastSuccess, t, refetch])
 
   if (!sso?.enabled) return null
   const provider = sso.provider || 'SSO'

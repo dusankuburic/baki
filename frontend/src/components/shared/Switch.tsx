@@ -4,8 +4,6 @@ type SwitchProps = {
   checked: boolean
   onChange: (checked: boolean) => void
   label?: string
-  // Keep the label for the accessible name only (a row that already shows the
-  // title next to the switch would otherwise read it twice).
   labelHidden?: boolean
   disabled?: boolean
   className?: string

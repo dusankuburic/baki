@@ -77,7 +77,7 @@ describe('runBlockEdit lane', () => {
     d1.resolve({document: doc('v1')})
     await flush()
     expect(edit).toHaveBeenCalledTimes(2)
-    expect(useFlowStore.getState().document?.name).toBe('v0') // superseded: not applied
+    expect(useFlowStore.getState().document?.name).toBe('v0')
 
     d2.resolve({document: doc('v2')})
     await flush()
@@ -130,8 +130,8 @@ describe('runBlockEdit lane', () => {
       .mockReturnValueOnce(d1.promise)
       .mockResolvedValue({document: doc('vN')})
 
-    const runs = [runBlockEdit('flow-1', edit)] // in flight
-    for (let i = 0; i < MAX_QUEUED_EDITS; i++) runs.push(runBlockEdit('flow-1', edit)) // fills the queue
+    const runs = [runBlockEdit('flow-1', edit)]
+    for (let i = 0; i < MAX_QUEUED_EDITS; i++) runs.push(runBlockEdit('flow-1', edit))
     const dropped = runBlockEdit('flow-1', edit)
     await expect(dropped).resolves.toBeUndefined()
     expect(edit).toHaveBeenCalledTimes(1)

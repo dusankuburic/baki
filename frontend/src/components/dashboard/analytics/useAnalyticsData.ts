@@ -9,17 +9,11 @@ import {useAnalyticsStore, toQuery} from '@/stores/analyticsStore'
 import type {DashboardAnalyticsData} from '@/types'
 
 interface Loaded {
-  /** The request key the data/error belong to. */
   key: string
   data: DashboardAnalyticsData | null
   error: string | null
 }
 
-// Fetches the analytics payload for the store's filters. A filter change
-// aborts the request it supersedes and keeps the previous payload on screen
-// (isRefetching) until the new one lands; an error after data was shown is a
-// toast plus an inline notice, never a blank page. Finishing an analysis
-// refreshes the current view, as Home does.
 export function useAnalyticsData(): {
   data: DashboardAnalyticsData | null
   error: string | null
@@ -42,8 +36,6 @@ export function useAnalyticsData(): {
   const query = useMemo(() => toQuery(filters), [filters])
   const key = `${query}#${nonce}`
   const [loaded, setLoaded] = useState<Loaded>({key: '', data: null, error: null})
-  // What is on screen, for the failure path of a later request (which decides
-  // between a blank page and a notice over the previous charts).
   const dataRef = useRef<DashboardAnalyticsData | null>(null)
   useEffect(() => {
     dataRef.current = loaded.data

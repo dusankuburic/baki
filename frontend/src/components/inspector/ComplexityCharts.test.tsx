@@ -1,7 +1,6 @@
 import {describe, it, expect, vi} from 'vitest'
 import {render, screen} from '@testing-library/react'
 
-// Mock recharts ResponsiveContainer to avoid jsdom sizing issues.
 vi.mock('recharts', async importOriginal => {
   const actual = await importOriginal<typeof import('recharts')>()
   return {
@@ -61,8 +60,6 @@ describe('ComplexityScatter', () => {
       />,
     )
     expect(screen.getByText('Complexity Map')).toBeTruthy()
-    // The wrapper is a labelled group (Recharts' own accessibility layer
-    // keeps the svg keyboard-navigable inside it), not a flat image.
     expect(screen.getByRole('group', {name: /scatter plot of subflows/i})).toBeTruthy()
   })
 })
@@ -75,24 +72,20 @@ describe('ImpactEffortMatrix', () => {
 
   it('sorts findings into the four priority quadrants', () => {
     const findings: Finding[] = [
-      finding({id: '1', severity: 'error', autoFix: 'set-timeout'}), // Quick Win
-      finding({id: '2', severity: 'error', autoFix: 'set-timeout'}), // Quick Win
-      finding({id: '3', severity: 'error'}), // Strategic (manual error)
-      finding({id: '4', severity: 'warning', autoFix: 'insert-close'}), // Easy Cleanup
-      finding({id: '5', severity: 'info'}), // Backlog (manual lower sev)
-      finding({id: '6', severity: 'warning'}), // Backlog
+      finding({id: '1', severity: 'error', autoFix: 'set-timeout'}),
+      finding({id: '2', severity: 'error', autoFix: 'set-timeout'}),
+      finding({id: '3', severity: 'error'}),
+      finding({id: '4', severity: 'warning', autoFix: 'insert-close'}),
+      finding({id: '5', severity: 'info'}),
+      finding({id: '6', severity: 'warning'}),
     ]
     const {container} = render(<ImpactEffortMatrix findings={findings} />)
 
-    // All four quadrant labels render (they're unique strings).
     expect(screen.getByText('Quick Wins')).toBeTruthy()
     expect(screen.getByText('Strategic')).toBeTruthy()
     expect(screen.getByText('Easy Cleanup')).toBeTruthy()
     expect(screen.getByText('Backlog')).toBeTruthy()
 
-    // Counts: Quick Wins=2, Strategic=1, Easy Cleanup=1, Backlog=2.
-    // Aggregate the quadrant count elements and assert the multiset, avoiding
-    // getByText collisions where two quadrants share a count.
     const counts = Array.from(container.querySelectorAll('.text-xl')).map(el => Number(el.textContent))
     expect(counts).toEqual(expect.arrayContaining([2, 2, 1, 1]))
     expect(counts.reduce((a, b) => a + b, 0)).toBe(6)
@@ -104,10 +97,8 @@ describe('ImpactEffortMatrix', () => {
       finding({id: '2', severity: 'info', autoFix: 'wrap-error-handler'}),
     ]
     const {container} = render(<ImpactEffortMatrix findings={findings} />)
-    // Both land in Easy Cleanup, none in Quick Wins.
     expect(screen.getByText('Easy Cleanup')).toBeTruthy()
     const counts = container.querySelectorAll('.text-xl')
-    // Two findings → Easy Cleanup quadrant shows 2.
     expect(Array.from(counts).some(el => el.textContent === '2')).toBe(true)
     expect(Array.from(counts).some(el => el.textContent === '0')).toBe(true)
   })

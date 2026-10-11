@@ -19,7 +19,6 @@ function msg(id: string, role: ChatMessage['role']): ChatMessage {
   return {id, role, content: id, timestamp: '2024-01-01T00:00:00Z'}
 }
 
-// Seeds a thread with `pairs` user/assistant exchanges and returns its id.
 function seedThread(pairs: number, contextBlockId: string | null = null): string {
   const id = useChatStore.getState().createThread('flow1')
   useChatStore.getState().updateThread(id, {contextBlockId})
@@ -40,10 +39,6 @@ beforeEach(() => {
   vi.mocked(chatApi.saveConversation).mockClear()
 })
 
-// buildRequest omits `messages` and the backend replays its OWN stored
-// conversation, so anything that changes the visible history must change the
-// server's copy too. Both of these used to touch only the local store, which
-// made them look like they worked while changing nothing that mattered.
 describe('useChatThreads server-side history', () => {
   it('clear deletes the backend conversation, not just the local one', async () => {
     const id = seedThread(2)
@@ -61,8 +56,6 @@ describe('useChatThreads server-side history', () => {
 
     await act(async () => result.current.handleClearContext())
 
-    // The conversation key is the thread id, not the (about to be reset)
-    // block scope — so resetting the scope cannot clear the wrong conversation.
     expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', id)
     expect(useChatStore.getState().threads.find(t => t.id === id)?.contextBlockId).toBeNull()
   })
@@ -89,14 +82,10 @@ describe('useChatThreads server-side history', () => {
     await act(async () => result.current.handleCompact())
 
     expect(useChatStore.getState().getMessages(id)).toHaveLength(2)
-    // Still writes the (unchanged) list rather than diverging from the server.
     expect(chatApi.saveConversation).toHaveBeenCalledTimes(1)
   })
 })
 
-// The server copy changes FIRST; the panel follows only if that worked. A
-// failed request used to leave an emptied/compacted panel over an untouched
-// stored conversation the model kept answering from.
 describe('useChatThreads failure paths', () => {
   it('a failed clear keeps the thread as it was', async () => {
     const id = seedThread(2)
@@ -125,8 +114,6 @@ describe('useChatThreads failure paths', () => {
 
     await act(async () => result.current.handleCompact())
 
-    // The kept slice would be cut from an incomplete view and REPLACE the
-    // stored conversation.
     expect(chatApi.saveConversation).not.toHaveBeenCalled()
     expect(useChatStore.getState().getMessages(id)).toHaveLength(12)
   })
@@ -145,9 +132,6 @@ describe('useChatThreads failure paths', () => {
   })
 })
 
-// Screen and server must hold the SAME compacted history, cut on a user turn:
-// trimming the two by different rules left the stored copy opening with an
-// answer to a question that was gone whenever an error bubble sat near the end.
 describe('compact keeps whole exchanges', () => {
   it('applies the exact list it persisted, error bubbles dropped', async () => {
     const id = seedThread(4)

@@ -3,13 +3,6 @@ import {setupAuthenticatedPage} from './helpers'
 import {chartLayoutMetrics, WIDTHS} from './chartChecks'
 import {mockDashboardAnalytics} from '../src/testing/fixtures/dashboardAnalytics'
 
-/**
- * Home dashboard E2E. Home is the cloud overview: headline tiles, one card
- * per theme, and a "Details" link from every card into the Analytics page.
- * The layout is keyed to the main pane's width, so every card must keep its
- * content at 1600, 1200, 1000 and 390px, and no axis tick may be clipped.
- */
-
 function day(offset: number): string {
   const d = new Date()
   d.setUTCHours(0, 0, 0, 0)
@@ -143,8 +136,6 @@ test.describe('Home dashboard', () => {
     await stubDashboards(page)
     await openHome(page)
 
-    // The hero tile leads with the score and its tier; nothing crashed into
-    // the error boundary.
     await expect(page.getByText('Fair · of 100')).toBeVisible()
     await expect(page.getByText('72', {exact: true}).first()).toBeVisible()
     await expect(page.getByText("Couldn't load your dashboard")).toHaveCount(0)
@@ -163,7 +154,6 @@ test.describe('Home dashboard', () => {
       await expect(card(page, title)).toBeVisible()
     }
 
-    // Every rule keeps its label: ten bars, ten axis labels, ten table rows.
     const rules = card(page, 'Top rules')
     await expect(rules.locator('.recharts-yAxis .recharts-cartesian-axis-tick')).toHaveCount(10)
     await rules.getByRole('radio', {name: 'Table'}).click()
@@ -171,13 +161,11 @@ test.describe('Home dashboard', () => {
     await expect(rules.getByText('Error', {exact: true}).first()).toBeVisible()
     await rules.getByRole('radio', {name: 'Chart'}).click()
 
-    // Activity labels are human, and non-flow events carry no raw id.
     const activity = card(page, 'Recent activity')
     await expect(activity.getByText('Analyzed flow')).toBeVisible()
     await expect(activity.getByText('Updated settings')).toBeVisible()
     await expect(activity.getByText(/setting-row|resource/)).toHaveCount(0)
 
-    // Admins see the instance-wide locked-account count.
     await expect(card(page, 'Security posture').getByText('Locked accounts')).toBeVisible()
   })
 
@@ -189,7 +177,6 @@ test.describe('Home dashboard', () => {
     await page.getByRole('button', {name: 'Open Health trend in analytics'}).click()
     await expect(page.getByRole('heading', {name: 'Analytics', level: 1})).toBeVisible()
     await expect(page.getByRole('heading', {name: 'Trends'})).toBeInViewport()
-    // The jump moved the page's scroller, never the shell.
     const doc = await page.evaluate(() => ({
       top: document.documentElement.scrollTop,
       height: document.documentElement.scrollHeight,
@@ -205,8 +192,6 @@ test.describe('Home dashboard', () => {
     for (const width of WIDTHS) {
       await page.setViewportSize({width, height: 900})
       if (width === WIDTHS[0]) await openHome(page)
-      // Recharts re-measures on resize.
-      // Recharts re-measures its axes after a resize; poll until it has.
       await expect
         .poll(() => chartLayoutMetrics(page, '.home-dashboard'), {message: `${width}px`, timeout: 5_000})
         .toMatchObject({pageOverflow: 0, spilling: 0, clipped: 0})

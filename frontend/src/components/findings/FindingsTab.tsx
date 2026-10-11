@@ -6,6 +6,8 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useAuthStore} from '@/stores/authStore'
 import {EmptyState, useToast} from '@/components/shared'
 import {stageFindingFix} from '@/lib/fixWithAI'
+import {getErrorMessage} from '@/lib/getErrorMessage'
+import {logger} from '@/lib/logger'
 import {refreshAfterBlockEdit} from '@/lib/blockEdit'
 import {SEARCH_DEBOUNCE_MS} from '@/lib/constants'
 import {writeClipboard} from '@/lib/clipboard'
@@ -18,8 +20,6 @@ import SuppressionsPanel from './SuppressionsPanel'
 import {saveFindingsCSV, exportFindingsHTML, exportFindingsSARIF, exportFindingsJUnit} from '@/lib/findingsExport'
 import {buildBlockLookup, type BlockLookup} from '@/lib/tree'
 
-// FindingsList pulls in react-virtuoso (~55KB); it only renders once a flow
-// has findings to show, so lazy-loading keeps it out of the entry chunk.
 const FindingsList = lazy(() => import('./FindingsList'))
 import {useTranslation} from 'react-i18next'
 import {TRIAGE_STATUSES, isKnown, type AnalysisDiff, type Finding, type AnalysisReport} from '@/types'
@@ -36,16 +36,12 @@ export default function FindingsTab() {
   const setProgress = useAnalysisStore(s => s.setProgress)
   const findingSearch = useAnalysisStore(s => s.findingSearch)
   const setFindingSearch = useAnalysisStore(s => s.setFindingSearch)
-  // Local input state keeps the field responsive; the store write (which
-  // drives the filter + regroup + reflatten of the whole report) is debounced
-  // so fast typing doesn't re-run the pipeline per keystroke. Mirrors the
-  // debouncedQuery pattern in LibraryWorkspace.
   const [searchInput, setSearchInput] = useState(findingSearch)
-  useEffect(() => {
-    // Two-way sync between the debounced store value and the local input.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+  const [prevFindingSearch, setPrevFindingSearch] = useState(findingSearch)
+  if (prevFindingSearch !== findingSearch) {
+    setPrevFindingSearch(findingSearch)
     setSearchInput(findingSearch)
-  }, [findingSearch])
+  }
   useEffect(() => {
     if (searchInput === findingSearch) return
     const t = setTimeout(() => setFindingSearch(searchInput), SEARCH_DEBOUNCE_MS)
@@ -67,16 +63,14 @@ export default function FindingsTab() {
   const [dedupLoading, setDedupLoading] = useState(false)
   const [sortMode, setSortMode] = useState<'default' | 'severity' | 'count'>('severity')
 
-  // Leave the diff view when switching documents or after a fresh analysis.
-  useEffect(() => {
-    // Leaves the diff view when the document or report identity changes.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+  const reportIdentity = `${doc?.id ?? ''}|${report?.generatedAt ?? ''}`
+  const [prevReportIdentity, setPrevReportIdentity] = useState(reportIdentity)
+  if (prevReportIdentity !== reportIdentity) {
+    setPrevReportIdentity(reportIdentity)
     setDiff(null)
     setDedupGroups(null)
-  }, [doc?.id, report?.generatedAt])
+  }
 
-  // Pull persisted, team-shared suppressions for the active flow (cloud mode;
-  // a no-op on desktop). Keeps suppressions in sync across users/sessions.
   useEffect(() => {
     if (doc?.id) {
       void loadSuppressions(doc.id)
@@ -84,28 +78,15 @@ export default function FindingsTab() {
     }
   }, [doc?.id, loadSuppressions, loadBaseline])
 
-  // Build a blockId → label index once per document so the findings list can
-  // resolve each row's block name in O(1), instead of walking the whole block
-  // tree per finding (which made a large report's render O(findings × blocks)).
   const blockLookup = useMemo<BlockLookup>(() => (doc ? buildBlockLookup(doc) : new Map()), [doc])
 
-  // baseFindings applies every filter EXCEPT severity, so the severity chips
-  // can show live counts of what toggling would reveal/hide (U2.3) — the
-  // severity predicate is applied on top for the rendered list.
   const baseFindings = useMemo(() => {
     if (!report) return []
     const q = findingSearch.toLowerCase()
     return report.findings.filter(f => {
       if (dedupGroups && !dedupGroups.has(f.id)) return false
-      // Only a category the user hid is filtered out: one no chip knows (Portability and Syntax used
-      // to vanish here, so does a custom rule's or a newer server's) shows.
       if (f.category && hiddenCategories.has(f.category)) return false
       if (suppressedKeys.has(findingKey(f))) return false
-      // Triage-queue filters (R0-3): status chips narrow to a working set
-      // (hide resolved/acknowledged while grinding through the backlog);
-      // "Mine" keeps only findings assigned to the signed-in user. An absent
-      // triage entry is 'open', and so is a status this bundle does not
-      // know, so that finding stays in view.
       const triage = triageMap.get(findingKey(f))
       const status = isKnown(TRIAGE_STATUSES, triage?.status) ? triage.status : 'open'
       if (statusFilter.size > 0 && !statusFilter.has(status)) return false
@@ -136,8 +117,6 @@ export default function FindingsTab() {
     [baseFindings, severityFilter],
   )
 
-  // A chip per known category, then one per other category the report carries or the user hid (sorted), so
-  // every category the list can show can also be hidden and shown again.
   const categoryChips = useMemo(() => {
     const known = new Set<string>(FINDING_CATEGORIES)
     const extra = new Set<string>()
@@ -163,8 +142,6 @@ export default function FindingsTab() {
 
   const handleAnalyze = useCallback(async () => {
     if (!doc) return
-    // One run at a time: the toolbar button stays visible while the stale
-    // list is mounted behind the progress strip, so guard re-entry here.
     if (useAnalysisStore.getState().isAnalyzing) return
     const gen = beginAnalyzing()
     setProgress({current: 0, total: 0, ruleName: ''})
@@ -175,15 +152,11 @@ export default function FindingsTab() {
         setReport(doc.id, r as AnalysisReport)
       }
     } catch (err) {
-      toast.error('Analysis failed', {description: String(err)})
+      toast.error(t('toasts.analysisFailed'), {description: getErrorMessage(err)})
     } finally {
-      // Read the latest gen from the store rather than a captured render-time
-      // copy: beginAnalyzing() bumps the gen during this same handler, so a
-      // closure-captured value is always stale and the equality check would
-      // never pass, leaving isAnalyzing stuck true.
       if (useAnalysisStore.getState().analyzingGen === gen) setAnalyzing(false)
     }
-  }, [doc, toast, setReport, setAnalyzing, beginAnalyzing, setProgress])
+  }, [doc, t, toast, setReport, setAnalyzing, beginAnalyzing, setProgress])
 
   const handleFixWithAI = useCallback(
     (finding: Finding) => {
@@ -199,11 +172,11 @@ export default function FindingsTab() {
       const d = await analysisApi.getDiff()
       setDiff(d)
     } catch (err) {
-      toast.error('Diff failed: ' + (err as Error).message)
+      toast.error(t('toasts.diffFailed'), {description: getErrorMessage(err)})
     } finally {
       setDiffLoading(false)
     }
-  }, [setDiffLoading, setDiff, toast])
+  }, [setDiffLoading, setDiff, t, toast])
 
   const handleToggleDedup = useCallback(async () => {
     if (dedupGroups) {
@@ -219,55 +192,48 @@ export default function FindingsTab() {
       }
       setDedupGroups(map)
     } catch (err) {
-      toast.error('Deduplicate failed: ' + (err as Error).message)
+      toast.error(t('toasts.deduplicateFailed'), {description: getErrorMessage(err)})
     } finally {
       setDedupLoading(false)
     }
-  }, [dedupGroups, toast, setDedupGroups, setDedupLoading])
+  }, [dedupGroups, t, toast, setDedupGroups, setDedupLoading])
 
   const handleExportCSV = useCallback(async () => {
     if (!report) return
-    // Export the actively-filtered view (severity/category/search/dedup), not
-    // the raw report — a triager who filters to "errors only" expects exactly
-    // that in the CSV. On desktop this saves through the native dialog, which
-    // can fail server-side, so it is awaited like the other exports.
     try {
       await saveFindingsCSV(findings, doc?.id ?? 'report')
     } catch (err) {
-      toast.error('CSV export failed', {description: String(err)})
+      toast.error(t('toasts.csvExportFailed'), {description: getErrorMessage(err)})
     }
-  }, [report, findings, doc, toast])
+  }, [report, findings, doc, t, toast])
 
   const handleExportHTML = useCallback(async () => {
     if (!doc) return
     try {
       await exportFindingsHTML(doc.id)
     } catch (err) {
-      toast.error('HTML export failed: ' + (err as Error).message)
+      toast.error(t('toasts.htmlExportFailed'), {description: getErrorMessage(err)})
     }
-  }, [doc, toast])
+  }, [doc, t, toast])
 
   const handleExportJUnit = useCallback(async () => {
     if (!doc) return
     try {
       await exportFindingsJUnit(doc.id)
     } catch (err) {
-      toast.error('JUnit export failed', {description: String(err)})
+      toast.error(t('toasts.junitExportFailed'), {description: getErrorMessage(err)})
     }
-  }, [doc, toast])
+  }, [doc, t, toast])
 
   const handleExportSARIF = useCallback(async () => {
     if (!doc) return
     try {
       await exportFindingsSARIF(doc.id)
     } catch (err) {
-      toast.error('SARIF export failed: ' + (err as Error).message)
+      toast.error(t('toasts.sarifExportFailed'), {description: getErrorMessage(err)})
     }
-  }, [doc, toast])
+  }, [doc, t, toast])
 
-  // Undo (R1-2): lazy-load the flow's snapshot ring when the undo menu
-  // opens, restore on selection, then refresh doc + analysis so the findings
-  // list reflects the rolled-back source.
   const [snapshots, setSnapshots] = useState<{id: string; label: string; createdAt: string; bytes: number}[]>([])
   const [snapshotsLoading, setSnapshotsLoading] = useState(false)
   const loadSnapshots = useCallback(async () => {
@@ -276,7 +242,8 @@ export default function FindingsTab() {
     try {
       const res = await flowApi.listSnapshots(doc.id)
       setSnapshots(res?.snapshots ?? [])
-    } catch {
+    } catch (err) {
+      logger.warn('Failed to load snapshots', err)
       setSnapshots([])
     } finally {
       setSnapshotsLoading(false)
@@ -288,13 +255,11 @@ export default function FindingsTab() {
       if (!doc) return
       try {
         const res = await flowApi.restoreSnapshot(doc.id, snapshotId)
-        // Refresh doc AND re-analyze (U1.4): a bare setDocument left the
-        // findings list stale after a restore until the user noticed.
         if (res?.document) refreshAfterBlockEdit(res.document)
         toast.success(t('toasts.snapshotRestored'))
         void loadSnapshots()
       } catch (err) {
-        toast.error('Restore failed', {description: String(err)})
+        toast.error(t('toasts.restoreFailed'), {description: getErrorMessage(err)})
       }
     },
     [doc, toast, loadSnapshots, t],
@@ -307,11 +272,11 @@ export default function FindingsTab() {
       const url = `${window.location.origin}/shared?token=${result.token}`
       await writeClipboard(url)
       const expires = result.expiresAt ? ` · expires ${new Date(result.expiresAt).toLocaleDateString()}` : ''
-      toast.success('Share link copied to clipboard', {description: `${url}${expires}`})
+      toast.success(t('toasts.shareLinkCopied'), {description: `${url}${expires}`})
     } catch (err) {
-      toast.error('Failed to create share link', {description: String(err)})
+      toast.error(t('toasts.shareLinkFailed'), {description: getErrorMessage(err)})
     }
-  }, [doc, toast])
+  }, [doc, t, toast])
 
   if (!doc) {
     return (
@@ -321,16 +286,10 @@ export default function FindingsTab() {
     )
   }
 
-  // Pre-report state: no report yet → the Run Analysis CTA (or the initial
-  // full-pane spinner). Once a report exists, re-analysis is NON-BLOCKING
-  // (U1.1): the stale list stays mounted and AnalysisProgressStrip runs
-  // above it, so scroll position, filters, and expanded groups survive.
   if (!report) {
     return <AnalysisRunner onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing} progress={progress} />
   }
 
-  // Unreachable given the guard above, but this narrows the type so the
-  // render below needs no non-null assertions.
   if (!report) return null
 
   return (

@@ -21,9 +21,6 @@ describe('chatApi.getConversation payload shapes', () => {
     vi.resetModules()
   })
 
-  // A server that serialised an empty (nil) Go slice answers
-  // {"messages": null}: that is an empty history, not a failed load — a
-  // failed load blocks every save of the thread.
   it('reads {"messages": null} as an empty history and keeps the stream id', async () => {
     mockFetch({messages: null, activeStreamId: 'live-1'})
     const chatApi = await getChatApi()
@@ -50,10 +47,6 @@ describe('chatApi.getConversation payload shapes', () => {
   })
 })
 
-// The wire contract of a create refused while the server drains for a
-// restart (agent F's side): a 503 envelope coded SERVER_RESTARTING, whose
-// retry hint rides in details (the client does not see the Retry-After
-// header). The engine retries such a create once (stream-engine/lifecycle).
 describe('chatApi.streamChatMessage refused while the server restarts', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -75,7 +68,6 @@ describe('chatApi.streamChatMessage refused while the server restarts', () => {
     expect(err).toMatchObject({status: 503, code: 'SERVER_RESTARTING'})
     expect(classifyChatFailure(err.message, err.code)).toBe('serverRestarting')
     expect(retryAfterHint(err)).toBe(2)
-    // A POST is never repeated below the engine: the one retry is the engine's.
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 })

@@ -17,7 +17,6 @@ function seed() {
   })
 }
 
-// The drag payload a row puts on the DataTransfer when a drag starts.
 function payload(list: string, from: number) {
   const data = JSON.stringify({list, from})
   return {getData: () => data, setData: () => {}, dropEffect: 'move', effectAllowed: 'move'}
@@ -34,7 +33,6 @@ describe('AIPromptsPanel reordering', () => {
 
   it('ignores a row dragged in from another list', () => {
     render(<AIPromptsPanel />)
-    // A bare index used to reorder the WRONG item of the target list.
     fireEvent.drop(screen.getByDisplayValue('block A'), {dataTransfer: payload('flow', 1)})
     expect(useSettingsStore.getState().settings.ai.prompts?.block).toEqual(['block A', 'block B'])
   })
@@ -58,8 +56,32 @@ describe('AIPromptsPanel drop position', () => {
       },
     })
     render(<AIPromptsPanel />)
-    // The indicator is C's top border: A lands between B and C.
     fireEvent.drop(screen.getByDisplayValue('C'), {dataTransfer: payload('block', 0)})
     expect(useSettingsStore.getState().settings.ai.prompts?.block).toEqual(['B', 'A', 'C'])
+  })
+})
+
+describe('AIPromptsPanel row editing', () => {
+  it('never saves a row edited to blank — the store keeps the last value and the row says why', () => {
+    render(<AIPromptsPanel />)
+    const row = screen.getByDisplayValue('flow A')
+    fireEvent.change(row, {target: {value: '   '}})
+    expect(useSettingsStore.getState().settings.ai.prompts?.flow).toEqual(['flow A', 'flow B'])
+    expect(screen.getByText('A prompt cannot be empty')).toBeInTheDocument()
+    expect(row).toHaveAttribute('aria-invalid', 'true')
+
+    fireEvent.change(row, {target: {value: 'flow A2'}})
+    expect(useSettingsStore.getState().settings.ai.prompts?.flow).toEqual(['flow A2', 'flow B'])
+    expect(screen.queryByText('A prompt cannot be empty')).not.toBeInTheDocument()
+  })
+
+  it('re-seeds a row from the store after a reorder, discarding a blank draft', () => {
+    render(<AIPromptsPanel />)
+    const row = screen.getByDisplayValue('block A')
+    fireEvent.change(row, {target: {value: ''}})
+    fireEvent.drop(row, {dataTransfer: payload('block', 1)})
+    expect(useSettingsStore.getState().settings.ai.prompts?.block).toEqual(['block B', 'block A'])
+    expect(screen.queryByText('A prompt cannot be empty')).not.toBeInTheDocument()
+    expect(screen.getByDisplayValue('block B')).toBeInTheDocument()
   })
 })

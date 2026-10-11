@@ -7,8 +7,6 @@ import {useChatStore} from './chatStore'
 import {usePresenceStore} from './presenceStore'
 import type {Block, FlowDocument, Subflow} from '@/types'
 
-// ---- helpers ----
-
 function makeBlock(id: string, subflowId = 'sf1'): Block {
   return {
     id,
@@ -32,17 +30,13 @@ function makeDoc(...subflows: Subflow[]): FlowDocument {
   return {id: 'doc1', name: 'Test', subflows, variables: [], findingsCount: 0, flows: []} as unknown as FlowDocument
 }
 
-// Reset store state before each test
 beforeEach(() => {
   useFlowStore.getState().reset()
   useEditorStore.setState({groups: [{tabs: [], activeTabId: null}], focusedGroupIndex: 0})
 })
 
-// ---- cross-store reset coordinator (F4) ----
-
 describe('resetDerivedStateForFlow', () => {
   it('clears search, analysis, chat thread, and opens first subflow in editor', () => {
-    // Seed stale derived state from a "previous" flow.
     useSearchStore.setState({query: 'stale', results: [{id: 'x'} as never]})
     useAnalysisStore.getState().setProtectedFlowId('old-flow')
     useAnalysisStore.getState().setFindingSearch('stale')
@@ -56,13 +50,10 @@ describe('resetDerivedStateForFlow', () => {
     expect(useAnalysisStore.getState().protectedFlowId).toBe('doc1')
     expect(useAnalysisStore.getState().findingSearch).toBe('')
     expect(useChatStore.getState().activeThreadId).toBeNull()
-    // First subflow opened in editor group 0.
     expect(useEditorStore.getState().groups[0]!.activeTabId).toBe('sf1')
   })
 
   it("keeps the flow's own thread active on a same-flow refresh", () => {
-    // A Findings fix, History restore or toolbar refresh re-sets the SAME
-    // document; the chat used to drop to its empty state mid-conversation.
     const t = useChatStore.getState().createThread('doc1')
     useChatStore.getState().createThread('doc1')
     useChatStore.getState().switchThread(t)
@@ -86,8 +77,6 @@ describe('resetDerivedStateForFlow', () => {
   })
 })
 
-// ---- setDocument ----
-
 describe('setDocument', () => {
   it('selects first subflow when document is loaded', () => {
     const doc = makeDoc(makeSubflow('sf1'), makeSubflow('sf2'))
@@ -107,20 +96,16 @@ describe('setDocument', () => {
   })
 })
 
-// ---- applyRemoteDocumentUpdate (same-flow remote change) ----
-
 describe('applyRemoteDocumentUpdate', () => {
   it('preserves the active chat thread (unlike setDocument)', () => {
     const doc = makeDoc(makeSubflow('sf1', [makeBlock('b1', 'sf1')]))
     useFlowStore.getState().setDocument(doc)
     useChatStore.setState({activeThreadId: 'my-thread'})
 
-    // A collaborator's save refreshes the same flow's content.
     const refreshed = makeDoc(makeSubflow('sf1', [makeBlock('b1', 'sf1'), makeBlock('b2', 'sf1')]))
     useFlowStore.getState().applyRemoteDocumentUpdate(refreshed)
 
     expect(useFlowStore.getState().document).toBe(refreshed)
-    // The crux of the fix: the chat thread must survive a remote refresh.
     expect(useChatStore.getState().activeThreadId).toBe('my-thread')
   })
 
@@ -130,11 +115,9 @@ describe('applyRemoteDocumentUpdate', () => {
     useFlowStore.getState().selectBlock('b1')
     useChatStore.setState({activeThreadId: 't1'})
 
-    // Remote edit kept b1 → selection preserved.
     useFlowStore.getState().applyRemoteDocumentUpdate(makeDoc(makeSubflow('sf1', [makeBlock('b1', 'sf1')])))
     expect(useFlowStore.getState().selectedBlockId).toBe('b1')
 
-    // Remote edit removed b1 → selection cleared, chat thread still preserved.
     useFlowStore.getState().applyRemoteDocumentUpdate(makeDoc(makeSubflow('sf1', [])))
     expect(useFlowStore.getState().selectedBlockId).toBeNull()
     expect(useChatStore.getState().activeThreadId).toBe('t1')
@@ -142,18 +125,14 @@ describe('applyRemoteDocumentUpdate', () => {
 
   it('prunes editor tabs for removed subflows but keeps the active tab', () => {
     const doc = makeDoc(makeSubflow('sf1'), makeSubflow('sf2'))
-    useFlowStore.getState().setDocument(doc) // opens sf1 in group 0
-    // Switch the active tab to sf2.
+    useFlowStore.getState().setDocument(doc)
     useEditorStore.getState().openInGroup('sf2')
 
-    // Remote edit removed sf2. The sf2 tab must be pruned.
     useFlowStore.getState().applyRemoteDocumentUpdate(makeDoc(makeSubflow('sf1')))
     const group = useEditorStore.getState().groups[0]!
     expect(group.tabs).not.toContain('sf2')
   })
 })
-
-// ---- navigation history ----
 
 describe('navigation history', () => {
   beforeEach(() => {
@@ -182,7 +161,6 @@ describe('navigation history', () => {
     const doc = makeDoc(makeSubflow('sf1', [makeBlock('b1', 'sf1')]))
     useFlowStore.getState().setDocument(doc)
 
-    // Spy on the presence broadcast (syncManager.enqueue is the vehicle).
     const enqueued: string[] = []
     const orig = usePresenceStore.getState().updateSelectedBlock
     usePresenceStore.getState().updateSelectedBlock = (blockId: string) => {
@@ -190,13 +168,12 @@ describe('navigation history', () => {
     }
 
     try {
-      useFlowStore.getState().selectBlock('b1') // select a real block
-      useFlowStore.getState().selectBlock(null) // deselect
+      useFlowStore.getState().selectBlock('b1')
+      useFlowStore.getState().selectBlock(null)
     } finally {
       usePresenceStore.getState().updateSelectedBlock = orig
     }
 
-    // The select broadcasts 'b1' and the deselect broadcasts '' (clear).
     expect(enqueued).toContain('b1')
     expect(enqueued).toContain('')
   })
@@ -234,7 +211,6 @@ describe('navigation history', () => {
     useFlowStore.getState().goBack()
     useFlowStore.getState().selectBlock('b2')
     const {navigationHistory} = useFlowStore.getState()
-    // sf1 (init) + b2 = 2 entries; sf2 was cut
     expect(navigationHistory).toHaveLength(2)
     expect(navigationHistory[1]!.blockId).toBe('b2')
   })
@@ -252,8 +228,6 @@ describe('navigation history', () => {
   })
 })
 
-// ---- jump-to-block expands collapsed ancestors (F1 regression) ----
-
 describe('selectBlock ancestor expansion', () => {
   it('removes collapsed ancestor containers so the target is visible', () => {
     const child = makeBlock('child', 'sf1')
@@ -261,11 +235,9 @@ describe('selectBlock ancestor expansion', () => {
     const doc = makeDoc(makeSubflow('sf1', [container]))
     useFlowStore.getState().setDocument(doc)
 
-    // User collapses the container (expandedBlockIds is inverted: in-set = collapsed)
     useFlowStore.getState().toggleBlockExpand('loop1')
     expect(useFlowStore.getState().expandedBlockIds.has('loop1')).toBe(true)
 
-    // Jumping to the nested child (e.g. from a finding) must un-collapse it
     useFlowStore.getState().selectBlock('child')
     const state = useFlowStore.getState()
     expect(state.selectedBlockId).toBe('child')
@@ -288,8 +260,6 @@ describe('selectBlock ancestor expansion', () => {
     expect(state.expandedBlockIds.has('loop2')).toBe(true)
   })
 })
-
-// ---- chat→app navigation (mention deep-links) ----
 
 describe('navigateToSourceFile', () => {
   function docWithSourceFiles(): FlowDocument {

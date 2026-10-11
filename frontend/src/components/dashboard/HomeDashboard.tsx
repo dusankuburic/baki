@@ -17,11 +17,6 @@ import {ActivityFeedCard} from './home/ActivityFeedCard'
 import {SecurityPostureCard} from './home/SecurityPostureCard'
 import {SkeletonCard, SkeletonDashboard} from './home/SkeletonDashboard'
 
-// The recharts-backed cards arrive with the charts chunk (~120 kB gz), one
-// hop after this one; the cards above (KPI tiles, recent flows, activity,
-// security) import only ChartCard/StatTile and paint with this chunk. Each
-// chart card sits in its own Suspense with a skeleton holding its grid slot,
-// so a slow charts chunk never blanks the content that is already here.
 const chartCards = () => import('./home/HomeChartCards')
 const HealthTrendCard = lazy(() => chartCards().then(m => ({default: m.HealthTrendCard})))
 const FindingsByCategoryCard = lazy(() => chartCards().then(m => ({default: m.FindingsByCategoryCard})))
@@ -31,16 +26,10 @@ const AiUsageCard = lazy(() => chartCards().then(m => ({default: m.AiUsageCard})
 const HealthDistributionCard = lazy(() => chartCards().then(m => ({default: m.HealthDistributionCard})))
 const FlowComplexityCard = lazy(() => chartCards().then(m => ({default: m.FlowComplexityCard})))
 
-// bodyHeight mirrors the front-end chart's height (see the card) so the grid
-// row keeps its size while the charts chunk loads.
 function ChartSlot({span, bodyHeight, children}: {span: string; bodyHeight?: number; children: ReactNode}) {
   return <Suspense fallback={<SkeletonCard className={span} bodyHeight={bodyHeight} />}>{children}</Suspense>
 }
 
-// Home is the at-a-glance overview: the headline numbers and one card per
-// theme, each with a "Details" link into the section of the Analytics page
-// that expands on it. The layout answers to the main pane's width (the
-// `home` container in index.css), not the viewport's.
 export default function HomeDashboard() {
   const {t} = useTranslation('dashboard')
   const [data, setData] = useState<DashboardHomeData | null>(null)
@@ -51,9 +40,6 @@ export default function HomeDashboard() {
   const setDocument = useFlowStore(s => s.setDocument)
   const activeOrg = useOrgStore(s => s.organisations.find(o => o.id === s.activeOrgId))
   const activeOrgId = useOrgStore(s => s.activeOrgId)
-  // Session analytics accumulate across single-file loads (only opening a base
-  // FOLDER resets them server-side); re-fetch when the open document changes so
-  // the dashboard reflects the latest state either way.
   const docId = useFlowStore(s => s.document?.id ?? null)
   const toast = useToast()
   const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
@@ -102,21 +88,16 @@ export default function HomeDashboard() {
 
   useEffect(() => {
     hasDataRef.current = false
-    // Enters the loading state for an async fetch (external system).
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     setError(null)
     load()
     return () => {
-      // Incrementing the LIVE ref is the point — this invalidates whatever
-      // request is in flight. The rule's suggested local copy would pin a
-      // stale id and stop cancelling anything.
       // eslint-disable-next-line react-hooks/exhaustive-deps
       loadIdRef.current++
     }
   }, [load, activeOrgId, docId])
 
-  // Re-fetch dashboard when analysis completes (isAnalyzing goes true→false).
   const wasAnalyzing = useRef(false)
   useEffect(() => {
     if (wasAnalyzing.current && !isAnalyzing) {
@@ -144,7 +125,6 @@ export default function HomeDashboard() {
     [setDocument, setMainPaneView, t],
   )
 
-  // "Details" on a cloud card lands on that section of the Analytics page.
   const details = useCallback(
     (section: string) => () => {
       requestSection(section)
@@ -238,9 +218,6 @@ export default function HomeDashboard() {
           severityTrend={isCloud ? severityTrend : []}
           fixability={fixability}
           costByProvider={isCloud ? costByProvider : []}
-          // The portfolio is an org-wide governance view (cloud only, the
-          // palette hides it the same way); on desktop the tile used to route
-          // to a view backed by GET /api/library/portfolio, which 500'd there.
           onViewFindings={isCloud ? () => setMainPaneView('portfolio') : undefined}
           onViewFlows={isCloud ? () => setMainPaneView('library') : undefined}
           className="mb-4"

@@ -8,20 +8,12 @@ interface DiffLine {
   text: string
 }
 
-// computeDiff produces a simple line-by-line diff between two texts. Uses a
-// basic LCS algorithm — adequate for small patches (typically <20 lines changed).
-// To avoid O(n*m) blowup on large files, both inputs are pre-trimmed to a
-// window around the first/last changed line before the LCS runs.
 export function computeDiff(original: string, patched: string): DiffLine[] {
   const aFull = original.split('\n')
   const bFull = patched.split('\n')
 
-  // Quick path: identical
   if (original === patched) return []
 
-  // Find the window of changed lines to avoid running LCS on the full file.
-  // Most patches change <20 lines; trimming to ±3 context lines around the
-  // change bounds the DP table to a manageable size even for 10000-line flows.
   const maxLen = Math.max(aFull.length, bFull.length)
   let firstDiff = 0
   while (firstDiff < maxLen && aFull[firstDiff] === bFull[firstDiff]) firstDiff++
@@ -42,7 +34,6 @@ export function computeDiff(original: string, patched: string): DiffLine[] {
   const m = a.length,
     n = b.length
 
-  // LCS DP table
   const dp: number[][] = Array.from({length: m + 1}, () => new Array(n + 1).fill(0))
   for (let i = m - 1; i >= 0; i--) {
     const row = dp[i]
@@ -53,9 +44,6 @@ export function computeDiff(original: string, patched: string): DiffLine[] {
     }
   }
 
-  // Backtrack to produce diff. The inputs are already pre-trimmed to the
-  // changed window, so no further trimming is needed — just add ellipsis
-  // markers if the source was truncated.
   const rawDiff: DiffLine[] = []
   let i = 0,
     j = 0
@@ -101,9 +89,6 @@ export default function PatchPreviewModal({open, original, patched, fixType, onA
   const {t} = useTranslation('findings')
   const [applying, setApplying] = useState(false)
 
-  // Reset applying state whenever the modal closes so re-opening doesn't
-  // leave the buttons permanently disabled. Keyed on the open TRANSITION and
-  // adjusted during render rather than in an effect.
   const [wasOpen, setWasOpen] = useState(open)
   if (open !== wasOpen) {
     setWasOpen(open)

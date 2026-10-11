@@ -20,11 +20,6 @@ vi.mock('@/api', () => ({
   },
 }))
 
-// react-virtuoso measures nothing in jsdom. This stand-in renders only the
-// first WINDOW rows — the way a real viewport shows a handful — and reports
-// the row count, so both the row model and the "only a window is mounted"
-// contract can be asserted. Before the row model, every finding was a
-// mounted FindingCard regardless of any virtualizer.
 const WINDOW = 30
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({
@@ -94,10 +89,8 @@ function renderDiff(diff: AnalysisDiff, onFixWithAI?: (f: Finding) => void) {
   )
 }
 
-// Every FindingCard renders exactly one "Jump" action.
 const mountedCards = () => screen.queryAllByText('Jump').length
 const rowCount = () => Number(screen.getByTestId('virtuoso').getAttribute('data-row-count'))
-// Section headers are the buttons that carry a count; locate one by its count.
 const headerWithCount = (count: number) => screen.getByText(String(count)).closest('button') as HTMLButtonElement
 
 beforeEach(() => {
@@ -115,13 +108,9 @@ describe('AnalysisDiffView virtualisation', () => {
   it('3,000 new findings: the header counts all of them while only a viewport of cards is mounted', () => {
     renderDiff(makeDiff(findings('new', 3000)))
 
-    // Exact count in the section header (and the summary strip).
     expect(headerWithCount(3000)).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('+3000 / −0 / =0')).toBeInTheDocument()
-    // Row model: 3 headers + 3,000 cards + the "none" row of the open, empty
-    // Fixed section (Persisted starts collapsed, so no row for it).
     expect(rowCount()).toBe(3004)
-    // Only the window is mounted, not one card per finding.
     expect(mountedCards()).toBeGreaterThan(0)
     expect(mountedCards()).toBeLessThanOrEqual(WINDOW)
   })
@@ -134,7 +123,7 @@ describe('AnalysisDiffView virtualisation', () => {
 
     expect(headerWithCount(3)).toHaveAttribute('aria-expanded', 'false')
     expect(mountedCards()).toBe(0)
-    expect(rowCount()).toBe(4) // 3 headers + the empty Fixed section's "none" row
+    expect(rowCount()).toBe(4)
   })
 
   it('persisted findings start collapsed and open on click', () => {

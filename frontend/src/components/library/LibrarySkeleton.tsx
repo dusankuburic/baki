@@ -1,7 +1,5 @@
 import type {LibraryViewMode} from '@/stores/libraryBrowseStore'
 
-// Placeholders use the same layout classes as the real grid and list, so the
-// page does not reflow when the data arrives.
 export default function LibrarySkeleton({view}: {view: LibraryViewMode}) {
   if (view === 'list') {
     return (

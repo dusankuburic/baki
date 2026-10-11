@@ -10,10 +10,6 @@ interface InviteAcceptViewProps {
   onDone: () => void
 }
 
-// InviteAcceptView consumes an #invite=<token> deep link for an authenticated
-// user: it redeems the token (POST /api/invites/{token}/accept via the org
-// store) on mount and shows the result. Acceptance requires a logged-in user,
-// so ProtectedRoute only renders this once authenticated.
 export default function InviteAcceptView({token, onDone}: InviteAcceptViewProps) {
   const {t} = useTranslation('auth')
   const acceptInvite = useOrgStore(s => s.acceptInvite)

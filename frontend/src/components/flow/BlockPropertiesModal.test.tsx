@@ -66,7 +66,6 @@ describe('BlockPropertiesModal (R3-2)', () => {
     fireEvent.change(screen.getByLabelText('Value for Url'), {target: {value: 'https://y'}})
     fireEvent.click(screen.getByRole('button', {name: 'Save 1 change'}))
     await waitFor(() => expect(updateBlockProperties).toHaveBeenCalledWith('flow-1', 'b1', {Url: 'https://y'}))
-    // Method was untouched — not in the payload.
   })
 
   it('shows an empty state for blocks without editable properties', () => {
@@ -80,7 +79,6 @@ describe('BlockPropertiesModal (R3-2)', () => {
     fireEvent.change(screen.getByLabelText('Value for Method'), {target: {value: 'POST'}})
     fireEvent.click(screen.getByRole('button', {name: 'Save 1 change'}))
     await waitFor(() => expect(updateBlockProperties).toHaveBeenCalled())
-    // Modal still open (failure path does not call onClose).
     expect(screen.getByLabelText('Value for Method')).toBeInTheDocument()
   })
 })

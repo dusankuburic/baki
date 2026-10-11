@@ -1,20 +1,14 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 
-// The Analytics page's filters. In-memory only: the page starts on the last
-// 30 days, every scope, no finding filters — the same view for everyone,
-// which is the one the numbers on Home summarise.
-
 export type RangePreset = '7d' | '30d' | '90d' | 'custom'
 export type AnalyticsScope = 'all' | 'personal' | 'org'
 
 export interface AnalyticsFilters {
   preset: RangePreset
-  /** Inclusive local days (YYYY-MM-DD); only read when preset is 'custom'. */
   from: string
   to: string
   scope: AnalyticsScope
-  /** The organisation when scope is 'org'. */
   orgId: string | null
   flows: string[]
   severity: string[]
@@ -40,9 +34,7 @@ export const MAX_CUSTOM_SPAN_DAYS = 366
 
 interface AnalyticsState {
   filters: AnalyticsFilters
-  /** A section Home asked the page to scroll to once it has rendered. */
   pendingSection: string | null
-  /** Bumped to refetch the current filters (retry, analysis finished). */
   nonce: number
   setPreset: (preset: Exclude<RangePreset, 'custom'>) => void
   setCustomRange: (from: string, to: string) => void
@@ -99,7 +91,6 @@ export function localTimeZone(): string {
   }
 }
 
-// Today's local calendar day as YYYY-MM-DD (the <input type="date"> format).
 export function todayISO(now = new Date()): string {
   const y = now.getFullYear()
   const m = String(now.getMonth() + 1).padStart(2, '0')
@@ -110,16 +101,12 @@ export function todayISO(now = new Date()): string {
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 
 function dayNumber(day: string): number {
-  // Callers validate day against DAY_RE (YYYY-MM-DD) first, so the three
-  // components always exist; the fallbacks only satisfy the index-access type.
   const [y = 0, m = 0, d = 0] = day.split('-').map(Number)
   return Date.UTC(y, m - 1, d) / 86_400_000
 }
 
 export type CustomRangeIssue = 'missing' | 'order' | 'future' | 'span'
 
-// The same rules the server applies to a custom range, so the form can say
-// what is wrong before the request is made.
 export function customRangeIssue(from: string, to: string, today = todayISO()): CustomRangeIssue | null {
   if (!DAY_RE.test(from) || !DAY_RE.test(to)) return 'missing'
   const a = dayNumber(from)
@@ -143,10 +130,6 @@ export function hasActiveFilters(f: AnalyticsFilters): boolean {
   )
 }
 
-// toQuery renders the filters as the canonical query string of
-// GET /api/dashboard/analytics: fixed parameter order, lists deduplicated and
-// sorted, so equal filters always produce the same URL (the request cache and
-// the store's change detection both key on it).
 export function toQuery(f: AnalyticsFilters, tz = localTimeZone()): string {
   const p = new URLSearchParams()
   p.set('range', f.preset)

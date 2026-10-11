@@ -5,8 +5,6 @@ import {isTauri, isWeb, getPlatformType, getPlatformCapabilities} from './guards
 describe('Platform guards', () => {
   afterEach(() => simulateWeb())
 
-  // ---- isTauri / isWeb ----
-
   describe('isTauri', () => {
     it('returns false in a plain browser environment', () => {
       simulateWeb()
@@ -33,8 +31,6 @@ describe('Platform guards', () => {
     })
   })
 
-  // ---- getPlatformType ----
-
   describe('getPlatformType', () => {
     it('returns "web" when not in Tauri', () => {
       simulateWeb()
@@ -47,8 +43,6 @@ describe('Platform guards', () => {
       cleanup()
     })
   })
-
-  // ---- getPlatformCapabilities ----
 
   describe('getPlatformCapabilities — web', () => {
     beforeEach(() => simulateWeb())

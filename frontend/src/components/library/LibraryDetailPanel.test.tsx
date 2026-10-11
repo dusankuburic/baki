@@ -55,10 +55,6 @@ describe('LibraryDetailPanel version history', () => {
     delete tauriWindow.__TAURI__
   })
 
-  // The versions call used to be `.catch(() => [])`, so a 503 ("versioning
-  // requires a storage backend") rendered "No saved versions yet." — an
-  // empty list where the feature does not exist. The user was told their
-  // history was empty, not that it was unavailable.
   it('shows an error state when the versions call fails, not an empty list', async () => {
     versions.mockRejectedValue(new Error('versioning requires a storage backend (cloud mode)'))
     renderPanel()
@@ -92,7 +88,6 @@ describe('LibraryDetailPanel actions', () => {
     await screen.findByText('Flow one')
     expect(screen.queryByRole('button', {name: /rename/i})).toBeNull()
     expect(screen.queryByRole('button', {name: /duplicate/i})).toBeNull()
-    // Viewers can still load the flow read-only.
     expect(screen.getByRole('button', {name: 'Load flow'})).toBeInTheDocument()
     unmount()
 

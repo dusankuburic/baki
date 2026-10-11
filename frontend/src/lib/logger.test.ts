@@ -21,7 +21,6 @@ describe('logger.warn', () => {
   it('forwards to console.warn in dev mode', () => {
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     logger.warn('careful')
-    // import.meta.env.DEV is true under vitest by default.
     expect(spy).toHaveBeenCalledWith('careful')
   })
 })

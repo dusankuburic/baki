@@ -1,8 +1,6 @@
 import clsx from 'clsx'
 import type {LegendItem} from './chartTypes'
 
-// An HTML legend rendered under the plot, in text tokens with a swatch that
-// mirrors the mark. A single series needs no legend — the card title names it.
 export function ChartLegend({items, className}: {items: LegendItem[]; className?: string}) {
   if (items.length < 2) return null
   return (

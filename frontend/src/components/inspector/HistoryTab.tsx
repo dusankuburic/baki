@@ -24,9 +24,6 @@ export const HistoryTab: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false)
   const [comment, setComment] = useState('')
   const [saveError, setSaveError] = useState<string | null>(null)
-  // busyVersion tracks which row is running a compare/restore so its buttons
-  // disable and show a pending state (and prevent concurrent actions on the
-  // same version).
   const [busyVersion, setBusyVersion] = useState<number | null>(null)
 
   const {
@@ -38,8 +35,6 @@ export const HistoryTab: React.FC = () => {
     () => (document?.id ? versionsApi.list(document.id, 50) : Promise.resolve([])),
     [document?.id],
   )
-  // Clear stale results on a fetch error (matches the previous behavior of
-  // resetting to [] on catch) rather than showing a stale list under an error.
   const versions = fetchError ? [] : (data ?? [])
   const error = saveError ?? (fetchError ? t('errors.loadVersionsFailed') : null)
 
@@ -59,9 +54,6 @@ export const HistoryTab: React.FC = () => {
     }
   }
 
-  // handleCompare fetches the structural diff between a historical version and
-  // the current flow, then switches the main pane to the diff view. + = added
-  // since the snapshot, - = removed since the snapshot.
   const handleCompare = async (v: FlowVersion) => {
     if (!document?.id || busyVersion !== null) return
     setBusyVersion(v.version)
@@ -78,10 +70,6 @@ export const HistoryTab: React.FC = () => {
     }
   }
 
-  // handleRestore reverts the current flow content to the historical version.
-  // The backend writes it as a NEW current version (version-bumped), so the
-  // restore is itself recoverable from history. We confirm first because it
-  // overwrites the current content.
   const handleRestore = async (v: FlowVersion) => {
     if (!document?.id || busyVersion !== null) return
     const ok = await confirm({
@@ -94,7 +82,6 @@ export const HistoryTab: React.FC = () => {
     setBusyVersion(v.version)
     try {
       await versionsApi.restore(document.id, v.version)
-      // Reload the restored content into the editor.
       const refreshed = await libraryApi.getContent(document.id)
       setDocument(refreshed)
       fetchVersions()
@@ -126,8 +113,11 @@ export const HistoryTab: React.FC = () => {
           <input
             type="text"
             placeholder={t('history.commentPlaceholder')}
+            aria-label={t('history.commentPlaceholder')}
             value={comment}
             onChange={e => setComment(e.target.value)}
+            aria-invalid={!!saveError || undefined}
+            aria-describedby={error ? 'history-save-error' : undefined}
             className="flex-1 bg-surface-0 border border-border-default rounded-md px-3 py-1.5 text-xs focus:outline-hidden focus:ring-2 focus:ring-brand-500/50"
           />
           <button
@@ -138,7 +128,11 @@ export const HistoryTab: React.FC = () => {
             {isSaving ? t('history.saving') : t('history.save')}
           </button>
         </form>
-        {error && <p className="text-2xs text-red-500 mt-1">{error}</p>}
+        {error && (
+          <p id="history-save-error" role="alert" className="text-2xs text-semantic-error mt-1">
+            {error}
+          </p>
+        )}
       </div>
 
       <div className="flex-1 p-4">
@@ -151,8 +145,6 @@ export const HistoryTab: React.FC = () => {
           error ? (
             <ErrorState message={error} onRetry={fetchVersions} />
           ) : (
-            // Versions are created by Save Snapshot above (and library saves) —
-            // not by analysis, as this copy used to claim.
             <EmptyState title={t('history.emptyTitle')} description={t('history.emptyDescription')} />
           )
         ) : (

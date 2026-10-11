@@ -19,7 +19,6 @@ describe('notifyIfBackground', () => {
 
   afterEach(() => {
     resetPlatformForTest()
-    // Restore the original visibilityState getter (jsdom defines it on the prototype).
     if (visibilityDescriptor) {
       Object.defineProperty(Document.prototype, 'visibilityState', visibilityDescriptor)
     }

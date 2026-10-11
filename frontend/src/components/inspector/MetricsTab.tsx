@@ -93,8 +93,6 @@ export default function MetricsTab() {
             <div
               className={clsx(
                 'h-full rounded-full transition-all duration-fast',
-                // A literal class: the old text-→bg- string replace produced
-                // names Tailwind never generated, so the bar had no fill.
                 healthTier(metrics.healthScore).fill,
               )}
               style={{width: `${metrics.healthScore}%`}}

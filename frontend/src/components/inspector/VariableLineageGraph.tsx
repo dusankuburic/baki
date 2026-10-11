@@ -1,7 +1,6 @@
 import {useEffect, useRef, useMemo} from 'react'
 import {useTranslation} from 'react-i18next'
 import cytoscape from 'cytoscape'
-// @ts-expect-error cytoscape-dagre has no types
 import dagre from 'cytoscape-dagre'
 import type {VariableEvent} from '@/types'
 import {useFlowStore} from '@/stores/flowStore'
@@ -9,16 +8,12 @@ import {Info} from 'lucide-react'
 
 cytoscape.use(dagre)
 
-// EVENT_COLOR maps an event type to a node accent color. The color matches the
-// timeline chips in VariableLineageInInspector so the graph + list agree.
 const EVENT_COLOR: Record<VariableEvent['type'], string> = {
-  init: '#22c55e', // green
-  mutate: '#f59e0b', // amber
-  read: '#3b82f6', // blue
+  init: '#22c55e',
+  mutate: '#f59e0b',
+  read: '#3b82f6',
 }
 
-// dominantType picks the strongest event type on a block that hosts several
-// events (init beats mutate beats read — an init is the defining touch).
 function dominantType(types: Set<VariableEvent['type']>): VariableEvent['type'] {
   if (types.has('init')) return 'init'
   if (types.has('mutate')) return 'mutate'
@@ -29,25 +24,12 @@ type Props = {
   events: VariableEvent[]
 }
 
-/**
- * Variable lineage rendered as a Cytoscape DAG. Each node is a distinct block
- * the variable passes through (collapsing repeated events on the same block),
- * colored by the dominant event type (init/mutate/read). Edges follow event
- * order, so the variable's journey across blocks/subflows reads left-to-right.
- *
- * Replaces the earlier linear SVG: that view laid every event in one row, so a
- * variable touched many times on a few blocks produced a long redundant strip
- * with no cross-subflow structure. This Cytoscape view mirrors GraphView's
- * mount/destroy lifecycle and supports pan/zoom + click-to-navigate.
- */
 export default function VariableLineageGraph({events}: Props) {
   const {t} = useTranslation('inspector')
   const navigateToBlock = useFlowStore(s => s.navigateToBlock)
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
 
-  // Build Cytoscape elements: one node per distinct blockId, edges in event
-  // order (skipping self-loops where consecutive events hit the same block).
   const elements = useMemo(() => {
     if (events.length === 0) return []
     const byBlock = new Map<string, {types: Set<VariableEvent['type']>; line: number; subflowId: string}>()
@@ -70,7 +52,6 @@ export default function VariableLineageGraph({events}: Props) {
         label: `L${info.line}`,
       },
     }))
-    // Edges: connect event[i].blockId → event[i+1].blockId, deduped + no self.
     const edges = []
     const seen = new Set<string>()
     let edgeIdx = 0

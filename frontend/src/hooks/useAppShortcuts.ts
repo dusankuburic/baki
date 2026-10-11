@@ -8,8 +8,10 @@ import {flowApi, analysisApi, exportApi} from '@/api'
 import {getPlatformCapabilities} from '@/platform/guards'
 import {exportFindingsCSV, exportFindingsHTML} from '@/lib/findingsExport'
 import {logger} from '@/lib/logger'
+import {useTranslation} from 'react-i18next'
 import type {FlowDocument as DomainFlowDocument, AnalysisReport} from '@/types'
 import type {useToast} from '@/components/shared'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
 export function useAppShortcuts(deps: {
   openDocument: (doc: DomainFlowDocument | null) => void
@@ -18,15 +20,13 @@ export function useAppShortcuts(deps: {
   setShortcutsHelpOpen: (v: boolean | ((prev: boolean) => boolean)) => void
 }) {
   const {openDocument, toggleTheme, toast, setShortcutsHelpOpen} = deps
+  const {t} = useTranslation('shell')
 
   useKeyboard({
     scope: 'global',
     handlers: {
       'nav.palette': () => useUIStore.getState().setCommandPaletteOpen(v => !v),
       'nav.search': () => {
-        // Contextual routing (F1.8): in the flow editor the CANVAS search is
-        // the target — this handler AND a raw window listener used to both
-        // fire, opening two search bars with one keypress.
         const view = useUIStore.getState().mainPaneView
         if (!isSystemView(view)) {
           window.dispatchEvent(new CustomEvent('blockview:search-open'))
@@ -69,7 +69,7 @@ export function useAppShortcuts(deps: {
           if (r && doc) setReport(doc.id, r as AnalysisReport)
         } catch (e) {
           logger.warn('analysis failed:', e)
-          toast.error('Analysis failed', {description: String(e)})
+          toast.error(t('toasts.analyzeFailed'), {description: getErrorMessage(e)})
         } finally {
           setAnalyzing(false)
         }
@@ -124,7 +124,7 @@ export function useAppShortcuts(deps: {
           if (doc) openDocument(doc as DomainFlowDocument)
         } catch (e) {
           logger.warn('Failed to open file:', e)
-          toast.error('Failed to open file', {description: String(e)})
+          toast.error(t('toasts.openFileFailed'), {description: getErrorMessage(e)})
         }
       },
       'file.open.folder': async () => {
@@ -133,7 +133,7 @@ export function useAppShortcuts(deps: {
           if (doc) openDocument(doc as DomainFlowDocument)
         } catch (e) {
           logger.warn('Failed to open folder:', e)
-          toast.error('Failed to open folder', {description: String(e)})
+          toast.error(t('toasts.openFolderFailed'), {description: getErrorMessage(e)})
         }
       },
       'file.export.pdf': async () => {
@@ -171,9 +171,6 @@ export function useAppShortcuts(deps: {
       'window.reload': () => {
         window.location.reload()
       },
-      // Native-window shortcuts (F11 fullscreen, mod+q quit) are registered
-      // only where a native window exists; lib/shortcuts.ts drops their
-      // bindings on web for the same reason, so a browser keeps its own F11.
       ...(getPlatformCapabilities().nativeWindow ? nativeWindowHandlers() : {}),
     },
   })

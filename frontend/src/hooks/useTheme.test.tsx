@@ -1,7 +1,6 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {render, renderHook, act} from '@testing-library/react'
 
-// Stub out the API layer so the settings store doesn't need a real backend.
 vi.mock('@/api', () => ({
   settingsApi: {
     getSettings: vi.fn().mockResolvedValue(null),
@@ -29,7 +28,6 @@ beforeEach(() => {
   useSettingsStore.setState(settingsInitialState, true)
   useUIStore.setState(uiInitialState, true)
   vi.resetAllMocks()
-  // resetAllMocks clears the factory implementations — re-establish them.
   mockUpdate.mockResolvedValue(undefined)
   document.documentElement.removeAttribute('data-theme')
   document.documentElement.removeAttribute('data-density')
@@ -38,7 +36,6 @@ beforeEach(() => {
   try {
     localStorage.clear()
   } catch {
-    /* jsdom guard */
   }
 })
 
@@ -105,7 +102,6 @@ describe('useTheme', () => {
   it('toggleTheme flips dark→light and back', async () => {
     const {result} = renderHook(() => useTheme())
 
-    // resolvedTheme defaults to 'dark' (uiStore initial)
     act(() => result.current.toggleTheme())
     await flushPersist()
     expect(useSettingsStore.getState().settings.appearance.theme).toBe('light')
@@ -174,7 +170,6 @@ describe('useTheme', () => {
   })
 
   it('stores the preference ("system") not the resolved value in localStorage', async () => {
-    // jsdom doesn't implement matchMedia — stub it so resolveTheme('system') works
     const mq = {matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn()}
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue(mq))
 
@@ -183,7 +178,6 @@ describe('useTheme', () => {
       void useSettingsStore.getState().updateAppearance({theme: 'system'})
     })
 
-    // localStorage stores the user's CHOICE ('system'), not the resolved OS value
     expect(localStorage.getItem('pad-theme')).toBe('system')
 
     vi.unstubAllGlobals()

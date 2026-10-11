@@ -32,7 +32,6 @@ describe('purpose presets', () => {
     expect(isPurposePreset(3)).toBe(false)
   })
 
-  // The labels are defined once, in the common namespace.
   it('has a label for every purpose and kind', () => {
     for (const p of [...PURPOSE_PRESETS, 'custom' as const]) {
       const key = purposeLabelKey(p)
@@ -53,7 +52,6 @@ describe('purpose presets', () => {
 
 describe('custom purpose text', () => {
   it('is NFC-normalised, trimmed and has inner whitespace collapsed', () => {
-    // "é" as e + combining acute becomes the single precomposed character.
     expect(cleanPurposeText('  Cafe\u0301 \t  docs\n ')).toBe('Caf\u00e9 docs')
     expect(cleanPurposeText('   ')).toBe('')
   })
@@ -98,7 +96,6 @@ describe('normalizePurposeInput', () => {
     const max = 'x'.repeat(PURPOSE_CUSTOM_MAX_LENGTH)
     expect(normalizePurposeInput('custom', max)).toEqual({ok: true, purpose: 'custom', purposeCustom: max})
     expect(normalizePurposeInput('custom', `${max}y`)).toEqual({ok: false, error: 'tooLong'})
-    // 32 emoji are 32 characters (64 UTF-16 units).
     expect(normalizePurposeInput('custom', '😀'.repeat(32)).ok).toBe(true)
   })
 })
@@ -115,7 +112,6 @@ describe('resolvePurpose and purposeGroupKey', () => {
 
   it('folds custom text naming a preset into it', () => {
     expect(resolvePurpose({purpose: 'custom', purposeCustom: 'Testing'})).toEqual({kind: 'preset', preset: 'testing'})
-    // …and so does a label in the UI language.
     expect(resolvePurpose({purpose: 'custom', purposeCustom: 'Tests'}, p => (p === 'testing' ? 'Tests' : ''))).toEqual({
       kind: 'preset',
       preset: 'testing',
@@ -145,7 +141,6 @@ describe('purposeLabel', () => {
   it('labels a preset in the UI language and a custom purpose by its text', () => {
     expect(purposeLabel({purpose: 'documentation'}, labelOf)).toBe('Documentation')
     expect(purposeLabel({purpose: 'custom', purposeCustom: 'Security'}, labelOf)).toBe('Security')
-    // Missing means General; custom text naming a preset is that preset.
     expect(purposeLabel({}, labelOf)).toBe('General')
     expect(purposeLabel({purpose: 'custom', purposeCustom: 'fixes & DEBUGGING'}, labelOf)).toBe('Fixes & debugging')
   })

@@ -69,7 +69,6 @@ function renderWorkspace() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // Reset stores between tests so leftover state doesn't bleed across cases.
   useLibraryBrowseStore.getState().reset()
   useOrgStore.setState({organisations: [], activeOrgId: null, isLoading: false, isBusy: false, error: null})
   useFlowStore.setState({document: null, libraryFlowId: null, libraryVersion: 0})
@@ -80,7 +79,6 @@ beforeEach(() => {
 describe('LibraryWorkspace', () => {
   it('shows skeleton while loading and the empty state when the list is empty', async () => {
     renderWorkspace()
-    // Skeleton renders synchronously before the awaited list resolves.
     expect(document.querySelector('.animate-pulse')).toBeTruthy()
     expect(await screen.findByText(/No flows yet/)).toBeInTheDocument()
   })
@@ -118,7 +116,6 @@ describe('LibraryWorkspace', () => {
     expect(await screen.findByText(/Last updated/)).toBeInTheDocument()
     expect(await screen.findByText('88%')).toBeInTheDocument()
 
-    // Double-click opens the flow (hydrates flowStore + switches to block view).
     await act(async () => {
       fireEvent.doubleClick(card)
     })
@@ -128,8 +125,6 @@ describe('LibraryWorkspace', () => {
     })
   })
 
-  // R0-4: rename + duplicate from the detail panel — the update endpoint
-  // always accepted {name}; no UI ever sent it.
   it('renames a flow through the update endpoint', async () => {
     list.mockResolvedValue({items: [flow('a', {name: 'Pipeline'})], total: 1, offset: 0, limit: 24})
     get.mockResolvedValue(flow('a', {name: 'Pipeline'}))
@@ -139,8 +134,6 @@ describe('LibraryWorkspace', () => {
 
     fireEvent.click(await screen.findByText('Pipeline'))
     fireEvent.click(await screen.findByRole('button', {name: /rename/i}))
-    // The prompt dialog: type a new name, confirm (the dialog's confirm
-    // button is scoped to the dialog to avoid matching the toolbar button).
     const input = await screen.findByDisplayValue('Pipeline')
     fireEvent.change(input, {target: {value: 'Renamed'}})
     const dialog = await screen.findByRole('dialog')
@@ -166,12 +159,9 @@ describe('LibraryWorkspace', () => {
         content: expect.objectContaining({id: 'doc-a'}),
       }),
     )
-    // The copy appears in the list without a refetch.
     expect(await screen.findByText('Pipeline (copy)')).toBeInTheDocument()
   })
 
-  // R2-4b: tag editing — chips render from the list payload; the inline
-  // editor saves through flowApi.setTags and updates the visible item.
   it('edits tags through the detail panel', async () => {
     list.mockResolvedValue({items: [flow('a', {name: 'Pipeline'})], total: 1, offset: 0, limit: 24})
     get.mockResolvedValue({...flow('a', {name: 'Pipeline'}), tags: ['prod']})
@@ -210,7 +200,6 @@ describe('LibraryWorkspace', () => {
     expect(list.mock.calls.at(-1)![0].tags).toEqual(['finance'])
     expect(await screen.findByRole('button', {name: 'finance'})).toHaveAttribute('aria-pressed', 'true')
 
-    // Clearing drops the filter from the request again.
     list.mockClear()
     fireEvent.click(screen.getByRole('button', {name: 'Clear'}))
     await waitFor(() => expect(list).toHaveBeenCalled())
@@ -261,7 +250,6 @@ describe('LibraryWorkspace', () => {
     expect(useLibraryBrowseStore.getState().view).toBe('grid')
     fireEvent.click(screen.getByLabelText('List view'))
     expect(useLibraryBrowseStore.getState().view).toBe('list')
-    // The list-view header shows "Updated" while the grid card doesn't.
     expect(await screen.findByText('Updated')).toBeInTheDocument()
   })
 })

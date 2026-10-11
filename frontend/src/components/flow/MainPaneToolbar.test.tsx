@@ -28,8 +28,6 @@ vi.mock('@/api', () => ({
   analysisApi: {analyzeFlow: (...a: unknown[]) => analyzeFlow(...a)},
 }))
 
-// Re-import needs a filesystem (desktop) and a file-backed flow; the toolbar
-// asks the platform guard, so the tests control it here.
 const capabilities = {fileSystem: true}
 vi.mock('@/platform/guards', async importOriginal => ({
   ...(await importOriginal<typeof import('@/platform/guards')>()),
@@ -46,9 +44,6 @@ function renderToolbar() {
   )
 }
 
-// jsdom has no Fullscreen API. installFullscreenApi adds one whose
-// request/exit calls flip `fullscreenElement` and fire `fullscreenchange`,
-// like a browser; the returned function removes it again.
 function installFullscreenApi() {
   let el: Element | null = null
   const request = vi.fn(() => {
@@ -130,7 +125,6 @@ describe('MainPaneToolbar', () => {
 
     fireEvent.click(screen.getByRole('button', {name: 'New Comparison'}))
 
-    // Early return happens BEFORE the "Comparing flows..." toast.
     await waitFor(() => expect(pickFile).toHaveBeenCalled())
     expect(compareCurrentWith).not.toHaveBeenCalled()
     expect(screen.queryByText('Comparing flows...')).not.toBeInTheDocument()
@@ -153,7 +147,6 @@ describe('MainPaneToolbar', () => {
 
     await waitFor(() => expect(reimport).toHaveBeenCalledWith('flow-1'))
     await waitFor(() => expect(analyzeFlow).toHaveBeenCalledTimes(1))
-    // setDocument rebuilds indexes/derived state, so assert identity not shape.
     await waitFor(() => expect(useFlowStore.getState().document?.name).toBe('F2'))
     await waitFor(() => expect(screen.getAllByText(/Flow re-imported and re-analyzed/).length).toBeGreaterThan(0))
   })
@@ -194,7 +187,6 @@ describe('MainPaneToolbar', () => {
       renderToolbar()
       fireEvent.click(screen.getByRole('button', {name: 'Fullscreen'}))
       expect(el.requestFullscreen).toHaveBeenCalledTimes(1)
-      // The rejection is handled on the returned promise itself.
       expect(caught).toHaveBeenCalledTimes(1)
       await expect(refusal.catch(() => 'handled')).resolves.toBe('handled')
     } finally {
@@ -210,14 +202,11 @@ describe('MainPaneToolbar', () => {
       expect(fs.request).toHaveBeenCalledTimes(1)
       expect(screen.queryByRole('button', {name: 'Fullscreen'})).not.toBeInTheDocument()
 
-      // The second click used to request fullscreen again (a no-op), leaving
-      // Escape as the only way back.
       fireEvent.click(screen.getByRole('button', {name: 'Exit fullscreen'}))
       expect(fs.exit).toHaveBeenCalledTimes(1)
       expect(fs.request).toHaveBeenCalledTimes(1)
       expect(screen.getByRole('button', {name: 'Fullscreen'})).toBeInTheDocument()
 
-      // Escape / the browser's own controls fire the same event.
       fireEvent.click(screen.getByRole('button', {name: 'Fullscreen'}))
       expect(screen.getByRole('button', {name: 'Exit fullscreen'})).toBeInTheDocument()
       act(() => {
@@ -266,7 +255,6 @@ describe('MainPaneToolbar', () => {
     useFlowStore.setState({document: {id: 'flow-1', name: 'F'} as never})
     useUIStore.setState({showSourceEditor: true})
     renderToolbar()
-    // The complexity map colours block cards; the source editor has none.
     expect(screen.queryByRole('button', {name: 'Complexity Map'})).not.toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Fullscreen'})).toBeInTheDocument()
   })

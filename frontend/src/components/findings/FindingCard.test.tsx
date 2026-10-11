@@ -24,15 +24,10 @@ vi.mock('@/api', () => ({
   },
 }))
 
-// Stub Portal so Modal renders in the test DOM tree (jsdom doesn't have
-// createPortal's document.body in the same way).
 vi.mock('@/components/shared/Portal', () => ({
   default: ({children}: {children: React.ReactNode}) => <>{children}</>,
 }))
 
-// Mock platform guards with a mutable flag — FindingCard guards Apply fix
-// (desktop OR cloud single-file) and Suppress in file (desktop only) behind
-// isTauri(); tests flip the flag to drive both modes.
 let tauriMode = true
 vi.mock('@/platform/guards', () => ({
   isTauri: () => tauriMode,
@@ -98,7 +93,6 @@ describe('FindingCard read-only gating (U1.2)', () => {
     )
     expect(screen.queryByText('Apply fix')).not.toBeInTheDocument()
     expect(screen.queryByText('Suppress in file')).not.toBeInTheDocument()
-    // Fix with AI is a suggestion, not a source write — stays available.
     expect(screen.getByText('Fix with AI')).toBeInTheDocument()
   })
 })
@@ -112,11 +106,9 @@ describe('FindingCard apply-fix chain', () => {
 
     renderCard()
 
-    // Click "Apply fix" button (the one tied to finding.autoFix, not the suppress one).
     const fixBtn = screen.getByText('Apply fix')
     fireEvent.click(fixBtn)
 
-    // Preview modal should open with the diff.
     await waitFor(() => {
       expect(previewFix).toHaveBeenCalledWith(
         'flow-1',
@@ -128,8 +120,6 @@ describe('FindingCard apply-fix chain', () => {
       )
     })
 
-    // Click "Apply fix" in the modal to confirm. There are now two "Apply fix"
-    // buttons (the card's + the modal's) — click the last one (the modal's).
     const buttons = await screen.findAllByText('Apply fix')
     fireEvent.click(buttons[buttons.length - 1]!)
 
@@ -141,11 +131,10 @@ describe('FindingCard apply-fix chain', () => {
         'unhandled-error',
         undefined,
         undefined,
-        true, // the preview diff was shown: this is the unsafe opt-in
+        true,
       )
     })
 
-    // The updated document is set and re-analysis runs.
     await waitFor(() => {
       expect(analyzeFlow).toHaveBeenCalled()
     })
@@ -206,7 +195,6 @@ describe('FindingCard apply-fix chain', () => {
 
     fireEvent.click(screen.getByText('Apply fix'))
 
-    // Preview failed → should call applyFix directly without opening the modal.
     await waitFor(() => {
       expect(applyFix).toHaveBeenCalledWith(
         'flow-1',
@@ -215,7 +203,7 @@ describe('FindingCard apply-fix chain', () => {
         'unhandled-error',
         undefined,
         undefined,
-        false, // no preview diff was shown: not the unsafe opt-in
+        false,
       )
     })
     expect(analyzeFlow).toHaveBeenCalled()
@@ -235,10 +223,6 @@ describe('FindingCard apply-fix chain', () => {
   })
 })
 
-// R0-2: single-finding Apply fix is available in cloud mode too (single-file
-// flows) — it was desktop-gated while the bulk bar's applyFixBatch already
-// worked in cloud, a pure inconsistency. Suppress-in-file stays desktop-only
-// (it writes the raw file path).
 describe('FindingCard apply-fix gating (R0-2)', () => {
   beforeEach(() => {
     tauriMode = false
@@ -290,10 +274,6 @@ describe('FindingCard cloud folder import (no stored source)', () => {
     tauriMode = true
   })
 
-  // The upload handler stores doc.Source for single-file uploads only, so a
-  // cloud folder import (the normal PAD layout) cannot be patched server-side.
-  // The button used to be enabled and fail after the click with "source not
-  // available"; now it is disabled up front with the reason in the tooltip.
   it('disables Apply fix with the reason on a cloud folder import', () => {
     tauriMode = false
     useFlowStore.setState({
@@ -328,9 +308,6 @@ describe('FindingCard cloud folder import (no stored source)', () => {
   })
 })
 
-// C2: sensitive-exposure's fixer needs the variable name. The card sent it for
-// init-variable only, so the server's fixer produced an empty patch and the
-// card reported success on an unchanged flow.
 describe('FindingCard mask-sensitive-variable', () => {
   it('passes metadata.variable to the preview', async () => {
     tauriMode = true
@@ -357,8 +334,6 @@ describe('FindingCard mask-sensitive-variable', () => {
   })
 })
 
-// C5: suppressing asks for a user-authored reason (it used to store the
-// hard-coded "Dismissed by user"); cancelling keeps the finding.
 describe('FindingCard suppress reason', () => {
   it('does not suppress when the reason prompt is cancelled', async () => {
     renderCard()
@@ -369,7 +344,7 @@ describe('FindingCard suppress reason', () => {
   })
 
   it('stores the entered reason', async () => {
-    tauriMode = true // desktop: no persistence call to mock
+    tauriMode = true
     renderCard()
     fireEvent.click(screen.getByRole('button', {name: 'Suppress this finding'}))
     const input = await screen.findByRole('textbox')
@@ -382,8 +357,6 @@ describe('FindingCard suppress reason', () => {
   })
 })
 
-// C10: the desktop "Suppress in file" action goes through the dedicated
-// suppress-in-source route (which had no caller) and re-analyzes.
 describe('FindingCard suppress in file', () => {
   it('writes the directive via flowApi.suppressInSource', async () => {
     tauriMode = true

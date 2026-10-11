@@ -18,8 +18,6 @@ interface Row {
   info: number
 }
 
-// Day-by-day series for the window: health (with the previous period aligned
-// day for day), how many analyses ran, and the open findings by severity.
 export function TrendSection({data, refetching}: {data: DashboardAnalyticsData; refetching: boolean}) {
   const {t} = useTranslation('dashboard')
   const theme = useChartTheme()

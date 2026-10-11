@@ -29,7 +29,6 @@ describe('threadCost', () => {
       assistant({id: 'a2', tokensIn: 1000, tokensOut: 1000}),
       {id: 'u1', role: 'user', content: 'q', timestamp: 't', tokensIn: 5, inputCostPerM: 99} as ChatMessage,
     ]
-    // a1: (1000*1 + 1000*4)/1M = 0.005; the other 1000/1000 at 2/10 = 0.012.
     expect(threadCost(msgs, 2000, 2000, 2, 10)).toBeCloseTo(0.017, 9)
   })
 
@@ -37,7 +36,6 @@ describe('threadCost', () => {
     const rated = [assistant({tokensIn: 2_000_000, tokensOut: 0, inputCostPerM: 1, outputCostPerM: 0})]
     expect(threadCost(rated, 2_000_000, 0, 0, 0)).toBe(2)
     expect(threadCost([assistant({tokensIn: 10, tokensOut: 10})], 10, 10, 0, 0)).toBeNull()
-    // A negative rate is not a price.
     expect(threadCost([assistant({tokensIn: 10, tokensOut: 10, inputCostPerM: -1})], 10, 10, 0, 0)).toBeNull()
   })
 
@@ -51,7 +49,6 @@ describe('threadCostEstimate', () => {
   const rated = assistant({id: 'a1', tokensIn: 1000, tokensOut: 0, inputCostPerM: 1, outputCostPerM: 1})
   it('is exact when every token is priced', () => {
     expect(threadCostEstimate([rated], 1000, 0, 0, 0)?.lowerBound).toBe(false)
-    // The listing prices the remainder.
     expect(threadCostEstimate([rated], 5000, 0, 1, 1)?.lowerBound).toBe(false)
   })
 
@@ -62,13 +59,10 @@ describe('threadCostEstimate', () => {
     })
   })
 
-  // Azure AI Foundry is not priced by baki: its turns are left out, never
-  // billed at another model's listing, and do not make the figure a bound.
   const azure = assistant({id: 'az', provider: 'azure-foundry', tokensIn: 3000, tokensOut: 1000})
   const openai = assistant({id: 'oa', provider: 'openai', tokensIn: 1000, tokensOut: 500})
 
   it('prices only the non-Azure tokens of a mixed thread at the current listing', () => {
-    // Current model OpenAI at 2/10: only its 1000/500 → 0.002 + 0.005.
     expect(threadCostEstimate([azure, openai], 4000, 1500, 2, 10)).toEqual({cost: 0.007, lowerBound: false})
   })
 
@@ -123,7 +117,6 @@ describe('ChatUsageMeter', () => {
       assistant({id: 'a2', provider: 'openai', tokensIn: 1000, tokensOut: 500}),
     ])
     render(<ChatUsageMeter promptTokens={101_000} completionTokens={50_500} inputCostPerM={2} outputCostPerM={10} />)
-    // 1000*2/1M + 500*10/1M; the Azure 100k/50k would add $0.700.
     expect(screen.getByText(/· \$0\.007/)).toBeInTheDocument()
   })
 

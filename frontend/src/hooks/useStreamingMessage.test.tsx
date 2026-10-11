@@ -4,11 +4,6 @@ import {useStreamingMessage, type StreamHandler} from './useStreamingMessage'
 import {chatApi} from '@/api'
 import type {ErrorUsage} from '@/lib/chatEvent'
 
-// Failure-path tests for useStreamingMessage: the bounded open-wait (a send
-// against an unreachable backend errors instead of hanging forever) and the
-// stall probe (a dropped done/error event — or a backend worker that died
-// without emitting anything — is recovered via resume or errored out).
-
 type EventCb = (ev: {name: string; data: unknown}) => void
 type StateCb = (state: string) => void
 
@@ -70,9 +65,6 @@ beforeEach(() => {
   capturedCb = null
   stateListeners.clear()
   vi.clearAllMocks()
-  // Default: resume finds a live stream with nothing buffered (individual
-  // tests override). The reconnect listener delta-resumes on any
-  // connecting→open transition, so this must always return a promise.
   vi.mocked(chatApi.resumeStream).mockResolvedValue({text: '', done: false, error: '', tokensOut: 0, tokensIn: 0})
   vi.mocked(chatApi.cancelStream).mockResolvedValue(undefined)
 })
@@ -92,10 +84,8 @@ describe('registerStream open-wait timeout', () => {
     await vi.advanceTimersByTimeAsync(15_000)
     await rejected
 
-    // The dead registration was torn down: its SSE listener is unsubscribed,
-    // so a late event can't reach the handlers.
     expect(capturedCb).toBeNull()
-    expect(handler.onError).not.toHaveBeenCalled() // caller owns error display
+    expect(handler.onError).not.toHaveBeenCalled()
   })
 
   it('resolves as soon as the connection opens', async () => {
@@ -121,7 +111,6 @@ describe('stall probe', () => {
     capturedCb!(chunkEvent('s1', 'lo'))
     expect(handler.onChunk).toHaveBeenCalledTimes(2)
 
-    // done was dropped; the probe fetches the authoritative buffer.
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
       text: 'hello world',
       done: true,
@@ -133,7 +122,6 @@ describe('stall probe', () => {
 
     expect(chatApi.resumeStream).toHaveBeenCalledWith('s1', 0)
     expect(handler.onReplace).toHaveBeenCalledWith('hello world', 's1')
-    // No served model on this resume: the meta argument is undefined.
     expect(handler.onDone).toHaveBeenCalledWith(5, 2, 's1', undefined)
   })
 
@@ -152,9 +140,6 @@ describe('stall probe', () => {
     })
     await vi.advanceTimersByTimeAsync(30_000)
 
-    // The failure's code travels with it, so a recovered error gets the same
-    // handling as a live one. The fourth usage argument travels even when
-    // the failure carried none (undefined = unbilled).
     expect(handler.onError).toHaveBeenCalledWith('provider exploded', 's1', 'PROVIDER_UNAVAILABLE', undefined)
   })
 
@@ -185,9 +170,6 @@ describe('stall probe', () => {
     const {result} = renderHook(() => useStreamingMessage(handler))
     await result.current.registerStream('s1', false)
 
-    // Five minutes of server-side silence (an approval wait, a slow
-    // re-analysis) with the backend's keepalive every 20s: never probed,
-    // never declared stalled, and a heartbeat is not text.
     for (let i = 0; i < 15; i++) {
       await vi.advanceTimersByTimeAsync(20_000)
       capturedCb!({name: 'chat:event', data: {streamId: 's1', type: 'heartbeat', data: {}}})
@@ -203,8 +185,6 @@ describe('stall probe', () => {
     const {result} = renderHook(() => useStreamingMessage(handler))
     await result.current.registerStream('s1', false)
 
-    // Backend has the stream but it never progresses and never terminates
-    // (e.g. the worker died without recording done or error).
     vi.mocked(chatApi.resumeStream).mockResolvedValue({text: '', done: false, error: '', tokensOut: 0, tokensIn: 0})
 
     await vi.advanceTimersByTimeAsync(30_000)
@@ -222,7 +202,6 @@ describe('stall probe', () => {
     const {result} = renderHook(() => useStreamingMessage(handler))
     await result.current.registerStream('s1', false)
 
-    // Text grew past what the client holds: not a stall, misses reset.
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
       text: 'partial',
       done: false,
@@ -266,11 +245,6 @@ describe('stall probe', () => {
   })
 })
 
-// A deploy without Redis: the SSE connection drops, re-dials the new
-// instance, and that instance does not know the stream the old one ran —
-// /api/chat/resume answers 403 (JWT: an unknown stream is "not yours") or 404.
-// That stream is lost for good: the user must see it at once, not after the
-// stall probe's three misses (90-120 s).
 describe('reconnect resume of a lost stream', () => {
   function goneError(status: number) {
     return Object.assign(new Error('forbidden'), {status})
@@ -299,8 +273,6 @@ describe('reconnect resume of a lost stream', () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
     await result.current.registerStream('s1', false)
-    // The create POST answered: the stream exists, though a reasoning model
-    // may stay silent for a while.
     result.current.confirmStream('s1')
 
     vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(403))
@@ -312,8 +284,6 @@ describe('reconnect resume of a lost stream', () => {
   it('does not report a stream whose create has not answered yet', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    // Registered, create POST still in flight: the server does not know the
-    // stream yet, so a resume miss says nothing about it.
     await result.current.registerStream('s1', false)
 
     vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(404))
@@ -328,8 +298,6 @@ describe('reconnect resume of a lost stream', () => {
     await result.current.registerStream('s1', false)
     capturedCb!(chunkEvent('s1', 'partial'))
 
-    // The new instance is still starting (a 503) or the network blipped: the
-    // stream may yet be resumable, and the stall probe stays in charge.
     vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(503))
     await reconnect()
     vi.mocked(chatApi.resumeStream).mockRejectedValue(new Error('network'))
@@ -344,7 +312,6 @@ describe('reconnect resume of a lost stream', () => {
     await result.current.registerStream('s1', false)
     capturedCb!(chunkEvent('s1', 'partial'))
 
-    // With Redis the new instance replays the old one's coded snapshot.
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
       text: '',
       done: false,
@@ -359,18 +326,6 @@ describe('reconnect resume of a lost stream', () => {
   })
 })
 
-// Regression: the live SSE dispatch must forward a fix_decision's per-item
-// outcomes. parseChatEvent has always produced `items[]` for batch decisions and
-// useChatStreamEngine.onFixDecision has always accepted them, but the
-// StreamHandler signature stopped at 4 parameters and the dispatch dropped
-// `parsed.items` on the floor. A batch where 3 of 5 fixes applied and 2 errored
-// therefore rendered all 5 rows identically — until an SSE reconnect, whose
-// separate onResumeState path DID honour the items, making the bug intermittent.
-//
-// These assertions run against the real dispatcher (not a hand-rolled handler
-// type), which is the whole point: the previous test for this behaviour declared
-// its own 5-arg interface and invoked it directly, so it exercised a contract no
-// production code implemented.
 describe('done meta (served model + billed rates)', () => {
   function doneEvent(streamId: string, data: Record<string, unknown>) {
     return {name: 'chat:event', data: {streamId, type: 'done', data}}
@@ -413,7 +368,6 @@ describe('done meta (served model + billed rates)', () => {
       servedModel: 'gpt-4o',
     })
 
-    // Two chunks announced, one received: the finish goes through resume.
     capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 2, ...RATES}))
     await vi.advanceTimersByTimeAsync(0)
 
@@ -459,7 +413,6 @@ describe('done meta (served model + billed rates)', () => {
     expect(handler.onDone).toHaveBeenCalledWith(2, 1, 's1', {servedModel: 'gpt-4o'})
   })
 
-  // R-3: resume and /begin now carry the billed rates like the done event.
   it('takes the billed rates a finished /begin reports', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
@@ -494,7 +447,6 @@ describe('done meta (served model + billed rates)', () => {
       outputCostPerM: 'x' as unknown as number,
     })
 
-    // The done event carried no rates; the resume that finishes it does.
     capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 2}))
     await vi.advanceTimersByTimeAsync(0)
 
@@ -502,8 +454,6 @@ describe('done meta (served model + billed rates)', () => {
   })
 })
 
-// One ErrorUsage shape (lib/chatEvent) for the parsed error event and the
-// handler's usage argument: separate copies could drift apart unnoticed.
 describe('error usage type', () => {
   it("types onError's usage as lib/chatEvent's ErrorUsage", () => {
     expectTypeOf<Parameters<StreamHandler['onError']>[3]>().toEqualTypeOf<ErrorUsage | undefined>()

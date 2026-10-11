@@ -5,8 +5,6 @@ import {formatCompactIntl, formatCurrency, formatDateLong} from '@/lib/format'
 import type {DashboardAnalyticsData, StatValue} from '@/types'
 import {ChartSection} from '../ChartSection'
 
-// The headline numbers, each against the previous period when comparing and
-// with a sparkline across the window.
 export function OverviewSection({data}: {data: DashboardAnalyticsData}) {
   const {t} = useTranslation('dashboard')
   const {summary, range, applied} = data

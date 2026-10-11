@@ -26,8 +26,6 @@ beforeEach(() => {
   vi.resetAllMocks()
 })
 
-// ---- loadOrgs ----
-
 describe('loadOrgs', () => {
   it('populates organisations on success', async () => {
     mockRequest.mockResolvedValue([fakeOrg])
@@ -92,8 +90,6 @@ describe('loadOrgs', () => {
   })
 })
 
-// ---- activeOrgId persistence ----
-
 describe('activeOrgId persistence', () => {
   it('persists activeOrgId to localStorage under baki-active-org', () => {
     useOrgStore.getState().setActiveOrg('org-1')
@@ -120,8 +116,6 @@ describe('activeOrgId persistence', () => {
   })
 })
 
-// ---- createOrg ----
-
 describe('createOrg', () => {
   it('appends the new org to the list', async () => {
     mockRequest.mockResolvedValue(fakeOrg)
@@ -132,8 +126,6 @@ describe('createOrg', () => {
     expect(useOrgStore.getState().organisations).toContainEqual(fakeOrg)
   })
 })
-
-// ---- setActiveOrg ----
 
 describe('setActiveOrg', () => {
   it('sets the activeOrgId', () => {
@@ -147,8 +139,6 @@ describe('setActiveOrg', () => {
     expect(useOrgStore.getState().activeOrgId).toBeNull()
   })
 })
-
-// ---- deleteOrg ----
 
 describe('deleteOrg', () => {
   it('removes the org from the list', async () => {
@@ -169,8 +159,6 @@ describe('deleteOrg', () => {
     expect(useOrgStore.getState().activeOrgId).toBeNull()
   })
 
-  // Same reason leaving resets: the deleted org's flow, findings and chat
-  // would otherwise stay on screen behind requests that now 404.
   it('closes the open flow when the active org is deleted', async () => {
     useOrgStore.setState({organisations: [fakeOrg], activeOrgId: 'org-1'})
     const {useFlowStore} = await import('./flowStore')
@@ -193,11 +181,7 @@ describe('deleteOrg', () => {
   })
 })
 
-// ---- inviteMember (token invite) ----
-
 describe('inviteMember', () => {
-  // Regression: must hit the invites endpoint (which emails a token), not the
-  // direct-add /members endpoint — otherwise the invite email never fires.
   it('POSTs to the org invites endpoint', async () => {
     mockRequest.mockResolvedValue(undefined)
 
@@ -209,12 +193,9 @@ describe('inviteMember', () => {
   })
 })
 
-// ---- acceptInvite ----
-
 describe('acceptInvite', () => {
   it('accepts the token, reloads orgs, and activates the joined org', async () => {
     const joined: Organisation = {...fakeOrg, id: 'org-9', name: 'Joined'}
-    // 1st call: accept -> returns the org; 2nd call: loadOrgs -> returns list.
     mockRequest.mockResolvedValueOnce(joined).mockResolvedValueOnce([joined])
 
     await useOrgStore.getState().acceptInvite('tok-abc')
@@ -231,11 +212,7 @@ describe('acceptInvite', () => {
   })
 })
 
-// ---- setMemberRole ----
-
 describe('setMemberRole', () => {
-  // Regression: the role route is registered PUT-only (routes_chi.go). Sending
-  // the default POST returned 405 and member-role changes silently failed.
   it('sends PUT to the member role endpoint', async () => {
     mockRequest.mockResolvedValue(undefined)
 
@@ -244,8 +221,6 @@ describe('setMemberRole', () => {
     expect(mockRequest).toHaveBeenCalledWith('/api/orgs/org-1/members/u2/role', {body: {role: 'admin'}, method: 'PUT'})
   })
 })
-
-// ---- renameOrg ----
 
 describe('renameOrg', () => {
   it('PUTs the new name and updates the org in place', async () => {
@@ -270,17 +245,11 @@ describe('renameOrg', () => {
   })
 })
 
-// ---- removeMember (incl. leaving) ----
-
 describe('removeMember', () => {
-  // Leaving the org you are working in must behave like switching away from
-  // it: loadOrgs' fallback alone reset activeOrgId but left the org's open
-  // flow on screen.
   it('leaving the active org drops it, falls back to Personal and closes its flow', async () => {
     useOrgStore.setState({organisations: [fakeOrg], activeOrgId: 'org-1'})
     const {useFlowStore} = await import('./flowStore')
     useFlowStore.setState({document: {id: 'f1'} as never})
-    // 1st call: DELETE member; 2nd call: loadOrgs -> the org is gone.
     mockRequest.mockResolvedValueOnce(undefined).mockResolvedValueOnce([])
 
     await useOrgStore.getState().removeMember('org-1', 'u2')
@@ -303,8 +272,6 @@ describe('removeMember', () => {
     expect(useFlowStore.getState().document).not.toBeNull()
   })
 })
-
-// ---- clearError ----
 
 describe('clearError', () => {
   it('resets the error field', () => {

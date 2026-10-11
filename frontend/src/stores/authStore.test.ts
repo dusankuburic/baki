@@ -12,13 +12,9 @@ vi.mock('@/api/auth', () => ({
   },
 }))
 
-// Web vs desktop auth flows are gated on isTauri(); tests default to web
-// (jsdom) and flip the mock for the desktop-semantics suite.
 const isTauriMock = vi.fn(() => false)
 vi.mock('@/platform/guards', () => ({isTauri: () => isTauriMock()}))
 
-// Also mock the platform adapter so the api/client module doesn't try to
-// invoke Tauri during tests.
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
     getBackendConfig: vi.fn().mockResolvedValue({
@@ -37,9 +33,6 @@ const mockMe = authApi.me as ReturnType<typeof vi.fn>
 
 const fakeUser: AuthUser = {id: 'u1', email: 'alice@example.com', role: 'member'}
 
-// Build a token whose middle segment decodes to a JWT payload with the given
-// `exp` (seconds) plus any extra claims. Desktop loadFromStorage decodes `exp`
-// to decide whether to skip a doomed refresh call. Default: 15 minutes ahead.
 function makeJwt(expMsFromNow = 900_000, extra: Record<string, unknown> = {}): string {
   const payload = btoa(JSON.stringify({exp: Math.floor((Date.now() + expMsFromNow) / 1000), ...extra}))
   return `header.${payload}.sig`
@@ -52,11 +45,6 @@ const fakeLoginResponse: LoginResponse = {
   user: fakeUser,
 }
 
-// jsdom's storage implementations in vitest 4 are incomplete — stub them.
-// WEB mode stores no refresh token at all (the HttpOnly cookie is the
-// carrier): only the non-sensitive `auth_session_active` marker lands in
-// localStorage. DESKTOP mode keeps the refresh token in sessionStorage /
-// localStorage (remember me) exactly as before.
 let _local: Record<string, string> = {}
 vi.stubGlobal('localStorage', {
   getItem: (key: string) => _local[key] ?? null,
@@ -90,15 +78,10 @@ beforeEach(() => {
   mockLogout.mockResolvedValue(undefined)
 })
 
-// ---- register ----
-
 describe('register', () => {
   const mockRegister = authApi.register as ReturnType<typeof vi.fn>
 
   it('returns verification-required and stays signed out when the server issues no session', async () => {
-    // The ordinary sign-up response: account created, verification link sent,
-    // no tokens. Treating this as a login used to throw a schema error and
-    // report "Registration failed" for an account that had just been created.
     mockRegister.mockResolvedValue({status: 'ok', user: fakeUser, verificationRequired: true})
 
     const outcome = await useAuthStore.getState().register({email: 'alice@example.com', password: 'secret'})
@@ -109,7 +92,6 @@ describe('register', () => {
     expect(s.accessToken).toBeNull()
     expect(s.error).toBeNull()
     expect(s.isLoading).toBe(false)
-    // Web: no refresh token may land in JS-readable storage.
     expect(_session['auth_refresh_token']).toBeUndefined()
     expect(_local['auth_refresh_token']).toBeUndefined()
   })
@@ -125,7 +107,6 @@ describe('register', () => {
     expect(s.isAuthenticated).toBe(true)
     expect(s.user).toEqual(fakeUser)
     expect(s.accessToken).toBe('access-abc')
-    // Web: persistent marker, no token in storage.
     expect(_local['auth_session_active']).toBe('p')
     expect(_local['auth_refresh_token']).toBeUndefined()
   })
@@ -140,8 +121,6 @@ describe('register', () => {
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
   })
 })
-
-// ---- login ----
 
 describe('login', () => {
   it('sets isAuthenticated and user on success', async () => {
@@ -161,15 +140,12 @@ describe('login', () => {
     mockLogin.mockResolvedValue(fakeLoginResponse)
     await useAuthStore.getState().login({email: 'a@b.com', password: 'p'})
 
-    // Access token lives in memory/state only; the refresh token never lands
-    // in JS-readable storage (the HttpOnly cookie is the carrier).
     expect(useAuthStore.getState().accessToken).toBe('access-abc')
     expect(localStorage.getItem('auth_access_token')).toBeNull()
     expect(localStorage.getItem('auth_refresh_token')).toBeNull()
     expect(sessionStorage.getItem('auth_refresh_token')).toBeNull()
     expect(localStorage.getItem('auth_session_active')).toBe('1')
 
-    // The wire body carries rememberMe so the backend shapes the cookie.
     expect(mockLogin).toHaveBeenCalledWith({email: 'a@b.com', password: 'p', rememberMe: false})
   })
 
@@ -205,11 +181,8 @@ describe('login', () => {
   })
 })
 
-// ---- logout ----
-
 describe('logout', () => {
   it('clears user and token after logout', async () => {
-    // Seed logged-in state
     useAuthStore.setState({user: fakeUser, accessToken: 'tok', isAuthenticated: true})
 
     await useAuthStore.getState().logout()
@@ -246,8 +219,6 @@ describe('logout', () => {
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
   })
 
-  // Regression: logout must ask the service worker to drop its caches so a
-  // shared device doesn't retain session artifacts in Cache Storage.
   it('tells the service worker to purge caches', async () => {
     const postMessage = vi.fn()
     vi.stubGlobal('navigator', {serviceWorker: {controller: {postMessage}}})
@@ -256,9 +227,6 @@ describe('logout', () => {
     await useAuthStore.getState().logout()
 
     expect(postMessage).toHaveBeenCalledWith({type: 'PURGE_CACHES'})
-    // NOTE: no vi.unstubAllGlobals() here — it would uninstall the
-    // localStorage/sessionStorage stubs for every later test in this file and
-    // leak writes into jsdom's real storage. The navigator stub is harmless.
   })
 
   it('logout still succeeds with no service worker registered', async () => {
@@ -270,8 +238,6 @@ describe('logout', () => {
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
   })
 })
-
-// ---- refresh ----
 
 describe('refresh (web: cookie-authenticated)', () => {
   it('rotates via the cookie — null token body, marker-shaped rememberMe', async () => {
@@ -373,8 +339,6 @@ describe('refresh (desktop: body token)', () => {
   })
 })
 
-// ---- loadFromStorage ----
-
 describe('loadFromStorage (web)', () => {
   it('restores the session from the marker via a cookie refresh', async () => {
     localStorage.setItem('auth_session_active', '1')
@@ -434,19 +398,16 @@ describe('loadFromStorage (desktop)', () => {
   })
 
   it('skips all network calls when the stored token is already expired', async () => {
-    sessionStorage.setItem('auth_refresh_token', makeJwt(-1000)) // exp in the past
+    sessionStorage.setItem('auth_refresh_token', makeJwt(-1000))
 
     await useAuthStore.getState().loadFromStorage()
 
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
     expect(mockRefresh).not.toHaveBeenCalled()
     expect(mockMe).not.toHaveBeenCalled()
-    // Stale token is cleared so it won't be retried on the next load.
     expect(sessionStorage.getItem('auth_refresh_token')).toBeNull()
   })
 })
-
-// ---- clearError ----
 
 describe('clearError', () => {
   it('resets the error field', () => {

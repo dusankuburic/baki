@@ -4,9 +4,6 @@ import {useTranslation} from 'react-i18next'
 import {AlertTriangle, ChevronDown, X} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
 
-// ParseErrorsBanner surfaces the per-line issues the parser recovered from
-// while loading the current flow. Previously these were silently dropped, so
-// a partially-parsed flow looked identical to a clean one.
 export default function ParseErrorsBanner() {
   const {t} = useTranslation('flow')
   const document = useFlowStore(s => s.document)
@@ -14,9 +11,6 @@ export default function ParseErrorsBanner() {
   const [dismissed, setDismissed] = useState(false)
   const [prevDocId, setPrevDocId] = useState(document?.id)
 
-  // Reset banner state when a different document is loaded.
-  // Uses the "store info from previous render" pattern recommended by React
-  // instead of useEffect+setState (which causes cascading renders).
   if (document?.id !== prevDocId) {
     setPrevDocId(document?.id)
     setDismissed(false)
@@ -30,8 +24,6 @@ export default function ParseErrorsBanner() {
   const warnCount = errors.length - errorCount
 
   return (
-    // .parse-banner: the hint, then the counts, drop out as the pane narrows
-    // (index.css) so the summary never wraps onto a second line.
     <div className="parse-banner border-b border-amber-500/20 bg-amber-500/5 shrink-0">
       <div className="px-3 h-8 flex items-center gap-2">
         <AlertTriangle size={13} className="text-amber-400 shrink-0" />

@@ -32,14 +32,9 @@ const variantIcons: Record<string, string> = {
 function Toast({id, variant = 'info', title, description, action, duration = 4000, onClose}: ToastProps) {
   const {t} = useTranslation()
   const [exiting, setExiting] = useState(false)
-  // Handle for the exit-animation timer. Without it the deferred onClose had no
-  // way to be cancelled and fired against a torn-down tree when the provider
-  // unmounted inside the 200ms window.
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleClose = useCallback(() => {
-    // Ignore a second dismiss (manual click racing the auto-dismiss timer);
-    // re-arming would schedule a duplicate onClose.
     if (exitTimerRef.current !== null) return
     setExiting(true)
     exitTimerRef.current = setTimeout(() => {
@@ -96,9 +91,6 @@ type ToastActions = {
   removeToast: (id: string) => void
 }
 
-// Split into two contexts so useToast() consumers don't re-render when
-// toasts are added/removed — only the actions are stable; the toast list
-// is consumed by ToastList below.
 const ToastActionsContext = React.createContext<ToastActions | null>(null)
 const ToastListContext = React.createContext<ToastData[]>([])
 
@@ -128,9 +120,6 @@ export function ToastProvider({children}: {children: React.ReactNode}) {
 
   const addToast = useCallback((toast: Omit<ToastData, 'id'>) => {
     const id = `toast-${++counterRef.current}`
-    // Duration policy (V1.2): toasts carrying an ACTION (Undo/Retry) and
-    // errors need time to be read and acted on — the 4s default fired the
-    // undo away before users reached it. Everything else keeps 4s.
     const duration = toast.duration ?? (toast.action || toast.variant === 'error' ? 8000 : 4000)
     setToasts(prev => [...prev, {...toast, duration, id}])
   }, [])
@@ -166,16 +155,10 @@ function buildToastApi(addToast: AddToast) {
 export function useToast() {
   const ctx = React.useContext(ToastActionsContext)
   if (!ctx) throw new Error('useToast must be used within ToastProvider')
-  // Extracted so the dependency is the function itself. `[ctx.addToast]` made
-  // exhaustive-deps ask for the whole `ctx` object, which would rebuild this
-  // façade — and every consumer memo keyed on it — on any context change.
   const {addToast} = ctx
   return useMemo(() => buildToastApi(addToast), [addToast])
 }
 
-// useOptionalToast is useToast for components that legitimately render outside
-// a ToastProvider (isolated component tests, portals mounted before the
-// provider). It returns null there instead of throwing; callers skip the toast.
 export function useOptionalToast() {
   const ctx = React.useContext(ToastActionsContext)
   const addToast = ctx?.addToast

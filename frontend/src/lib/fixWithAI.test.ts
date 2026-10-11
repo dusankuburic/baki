@@ -40,7 +40,6 @@ describe('stageFindingFix', () => {
     expect(thread.contextBlockId).toBe('blk-1')
     expect(thread.useTools).toBe(true)
     expect(st.activeThreadId).toBe(thread.id)
-    // Staged for review — the prompt is in stagedPrompt, NOT sent as a message.
     expect(st.stagedPrompt?.threadId).toBe(thread.id)
     expect(st.stagedPrompt?.text).toContain('Hardcoded password')
     expect(st.getMessages(thread.id)).toHaveLength(0)
@@ -68,9 +67,6 @@ describe('stageBlockPrompt', () => {
   })
 })
 
-// Per-thread model memory: a header pick pins only its own thread, so the
-// thread "Fix with AI" opens starts on the Default for new chats — not on the
-// docs model another thread was switched to.
 describe('Fix with AI and per-thread models', () => {
   it("starts its thread unpinned, never inheriting another thread's pick", () => {
     const docsThread = useChatStore.getState().createThread('flow1')

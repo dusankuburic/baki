@@ -3,8 +3,6 @@ import type {z} from 'zod'
 import {RULE_STAGES, isKnown, type RuleStage, type Tolerant} from '@/types'
 import {buildSchemas} from './schemas.lazy'
 
-// Finding.stage is a wire enum a newer server may extend (types/tolerant.ts):
-// a report must never fail validation over a finding's stage.
 const s = buildSchemas()
 
 const finding = (over: Record<string, unknown> = {}) => ({

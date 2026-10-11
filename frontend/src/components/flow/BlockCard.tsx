@@ -46,7 +46,6 @@ type BlockCardProps = {
   findingSeverity?: 'error' | 'warning' | 'info'
   remoteOccupants?: PresenceUser[]
   onClick?: () => void
-  // Shift-click range selection (U3b) — BlockView owns the visible order.
   onShiftClick?: (blockId: string) => void
   onDoubleClick?: () => void
 }
@@ -74,8 +73,6 @@ export default React.memo(function BlockCard({
   const collapsed = useFlowStore(s => isContainer && s.expandedBlockIds.has(block.id))
   const toggleBlockExpand = useFlowStore(s => s.toggleBlockExpand)
   const Chevron = collapsed ? ChevronRight : ChevronDown
-  // Multi-select membership (V1.5): group-selected cards carry a visible
-  // ring — before, only the bulk bar hinted that a selection existed.
   const inGroupSelection = useFlowStore(s => s.selectedBlockIds.has(block.id))
   const selectedVariable = useUIStore(s => s.selectedVariable)
   const complexityMode = useUIStore(s => s.complexityMode)
@@ -109,10 +106,6 @@ export default React.memo(function BlockCard({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      // Multi-select modifiers (U3b) outrank the CALL drill-through: plain
-      // cmd/ctrl-click toggles selection; shift-click range-selects from the
-      // current single-selection anchor (the range is computed by BlockView,
-      // which owns the visible order).
       if (e.shiftKey) {
         e.stopPropagation()
         onShiftClick?.(block.id)
@@ -142,13 +135,7 @@ export default React.memo(function BlockCard({
     setMenuPos({x: e.clientX, y: e.clientY})
   }
 
-  // editBlock applies a visual-editor mutation (duplicate/remove) through the
-  // server's block-edit endpoints and refreshes doc + findings — the edit is
-  // parse-gated server-side and lands in the undo ring (snapshot endpoints).
   const [editingProps, setEditingProps] = useState(false)
-  // Inline rename (U3b): only blocks whose name is user-controlled source
-  // text (LABEL / COMMENT). Action names are derived — the backend refuses
-  // with guidance, so the affordance never appears for them.
   const renaming = useFlowStore(st => st.renamingBlockId === block.id)
   const canRename = block.rawType === 'LABEL' || block.rawType === 'COMMENT'
   const [renameValue, setRenameValue] = useState(block.name)
@@ -156,8 +143,6 @@ export default React.memo(function BlockCard({
     if (renaming) setRenameValue(block.name)
   }, [renaming, block.name])
 
-  // Shared mutation implementation (U3b): the context menu, canvas keyboard
-  // shortcuts, and the bulk bar all run these exact code paths.
   const {moveBlock, duplicateBlock, removeBlock, renameBlock} = useBlockOperations()
   const ops = {moveBlock, duplicateBlock, removeBlock}
 
@@ -216,8 +201,6 @@ export default React.memo(function BlockCard({
           .catch(() => toast.error(t('card.copyFailed')))
       },
     },
-    // Read-only flows (view-only shares) hide direct mutations instead of
-    // letting them fail with a server error after the fact.
     ...(readOnly
       ? []
       : [
@@ -269,7 +252,6 @@ export default React.memo(function BlockCard({
   )
 
   if (block.properties?._output) {
-    // Hoisted so the guard's narrowing survives into the async handler below.
     const outputVar = block.properties._output
     contextItems.push({
       label: t('card.traceVariable', {name: outputVar}),
@@ -374,9 +356,6 @@ export default React.memo(function BlockCard({
           </span>
         )}
         {!collapsed && block.properties && Object.keys(block.properties).length > 0 && (
-          // V1.4: the count hints at config the card doesn't show — hovering
-          // lists the user-facing properties (structural _ keys excluded)
-          // instead of forcing a pane switch to the Details tab.
           <Tooltip
             side="bottom"
             content={

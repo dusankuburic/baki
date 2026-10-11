@@ -17,7 +17,6 @@ import InviteSection from './InviteSection'
 interface OrgListSectionProps {
   organisations: Organisation[]
   activeOrgId: string | null
-  // The expanded organisation: only its row renders the detail panel.
   selected: Organisation | null
   currentUser: AuthUser | null
   setActiveOrg: (id: string | null) => void
@@ -90,7 +89,6 @@ export default function OrgListSection({
 
   const handleRename = async (org: Organisation) => {
     const name = renameValue.trim()
-    // Blank or unchanged is a cancel, not a request the server would refuse.
     if (!name || name === org.name) {
       setRenamingId(null)
       return
@@ -102,7 +100,6 @@ export default function OrgListSection({
       setRenamingId(null)
     } catch (err) {
       reportFailure(err)
-      // other errors surface via store.error; keep the editor open with the typed name
     } finally {
       setRenameBusy(false)
     }
@@ -112,12 +109,7 @@ export default function OrgListSection({
     <div className="border border-border-default rounded-xl overflow-hidden bg-surface-1">
       {organisations.map(org => {
         const isOwner = currentUser?.id === org.ownerId
-        // The roster comes with the list, but a server that omits it must
-        // not take the whole panel down with a nil dereference.
         const members = org.members ?? []
-        // Role only, like the server (GetAndCheckAdmin): ownership grants
-        // nothing by itself, so an owner whose admin role was changed saw
-        // controls that could only answer 403.
         const canManageMembers = members.find(m => m.userId === currentUser?.id)?.role === 'admin'
         const isActive = org.id === activeOrgId
         const isRenaming = renamingId === org.id
@@ -211,11 +203,6 @@ export default function OrgListSection({
                 <OrgChannelsSection orgId={org.id} isAdmin={canManageMembers} members={members} />
                 {canManageMembers && <OrgCICredentialsSection orgId={org.id} members={members} />}
                 <OrgCustomRulesSection orgId={org.id} isAdmin={canManageMembers} />
-                {/* The org's shared Azure AI Foundry resources and models:
-                    members read, admins manage; they appear alongside
-                    members' own. Hidden entirely on a deployment without
-                    an org keystore. Viewers and guests cannot use them
-                    (the server refuses them), so they get a note. */}
                 {!orgAzureUnavailable && (
                   <OrgAzureSection
                     org={org}

@@ -1,6 +1,3 @@
-// Shared time formatting. `relativeTime` renders a compact age ("now", "3m",
-// "5h", "3d", "2w") for list/detail timestamps; pair it with `absoluteTime` in a
-// `title=` so the exact moment is available on hover.
 
 export function relativeTime(iso: string): string {
   const then = new Date(iso).getTime()
@@ -31,10 +28,6 @@ const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ['minute', 60],
 ]
 
-// relativeTimeText renders a sentence-ready distance in either direction
-// ("2 hours ago", "in 23 hours", "yesterday", "now") for prose such as
-// "Signed in 2 hours ago", where the compact "2h" of relativeTime reads as a
-// unit rather than a time. `now` and `locale` are parameters for tests.
 export function relativeTimeText(iso: string, now = Date.now(), locale?: string): string {
   const then = new Date(iso).getTime()
   if (Number.isNaN(then)) return ''

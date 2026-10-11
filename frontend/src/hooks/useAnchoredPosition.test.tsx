@@ -5,8 +5,6 @@ import {useAnchoredPosition, type AnchorAlign, type AnchorSide} from './useAncho
 
 type Box = {left: number; top: number; width: number; height: number}
 
-// jsdom has no layout: every rect is zero. The anchor and the floating
-// element report the boxes a test gives them.
 function mockBoxes(anchor: Box, floating: {width: number; height: number}) {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     const box = this.dataset.box === 'floating' ? {left: 0, top: 0, ...floating} : anchor
@@ -40,7 +38,6 @@ const placed = () => {
   return {top: parseFloat(style.top), left: parseFloat(style.left)}
 }
 
-// jsdom's viewport is 1024 × 768.
 describe('useAnchoredPosition', () => {
   afterEach(() => vi.restoreAllMocks())
 
@@ -77,7 +74,6 @@ describe('useAnchoredPosition', () => {
     mockBoxes({left: 100, top: 50, width: 100, height: 30}, {width: 150, height: 100})
     const {rerender} = render(<Harness open />)
     expect(add.mock.calls.some(([type]) => type === 'resize')).toBe(true)
-    // Capture phase: a scrolling container, not only the window.
     expect(add.mock.calls.some(([type, , options]) => type === 'scroll' && options === true)).toBe(true)
 
     mockBoxes({left: 120, top: 10, width: 100, height: 30}, {width: 150, height: 100})

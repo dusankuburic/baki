@@ -29,15 +29,12 @@ import {
 } from './connectionForm'
 import {isOwnItem} from './registryView'
 
-/** add: a new resource; edit: its settings; reauth: "Enter credentials" for one that needs them again. */
 export type ConnectionModalMode = 'add' | 'edit' | 'reauth'
 
 interface AzureConnectionModalProps {
   scope: AzureScope
   mode: ConnectionModalMode
-  /** The resource being edited; null when adding one. */
   connection: AzureConnection | null
-  /** Offer Azure CLI sign-in: a personal resource on a local backend (never an organisation's). */
   allowCli: boolean
   onClose: () => void
   onSaved: (connection: AzureConnection, created: boolean) => void
@@ -45,9 +42,6 @@ interface AzureConnectionModalProps {
 
 type FormAlert = {kind: 'message'; text: string} | {kind: 'conflict'} | {kind: 'forbidden'} | {kind: 'gone'}
 
-// An API key cannot use a project (discovery and agents need Microsoft Entra
-// ID), so for one the project endpoint is neither shown nor sent — nor
-// weighed by the secret-carry rule.
 function effective(form: ConnectionFormState): ConnectionFormState {
   return form.authMode === 'api_key' && form.projectEndpoint ? {...form, projectEndpoint: ''} : form
 }
@@ -56,14 +50,6 @@ function errorMessage(err: unknown): string {
   return getErrorMessage(err, '')
 }
 
-// The Resource modal (lg, full screen below 640 px): endpoint, name,
-// authentication, credentials and the project endpoint, in that order. It
-// validates on submit and focuses the first invalid field; format problems
-// show once a field is left. The "Leave blank to keep the stored secret"
-// placeholder appears only when the server would really keep it
-// (secretCarry); otherwise the field says why the secret must be entered
-// again. Server codes land on their field; a compare-and-swap conflict offers
-// Reload, and a 403 says the caller may not change it.
 export default function AzureConnectionModal({
   scope,
   mode,
@@ -79,7 +65,6 @@ export default function AzureConnectionModal({
   const runTest = useAzureFoundryStore(s => s.test)
   const load = useAzureFoundryStore(s => s.load)
 
-  // The resource as last read: Reload after a conflict replaces it.
   const [base, setBase] = useState<AzureConnection | null>(connection)
   const baseline = useMemo(() => (base ? connectionFormFromConnection(base) : EMPTY_CONNECTION_FORM), [base])
   const [form, setForm] = useState<ConnectionFormState>(baseline)
@@ -103,16 +88,10 @@ export default function AzureConnectionModal({
     projectEndpoint: `${uid}-project`,
     testHint: `${uid}-test-hint`,
   }
-  // The secret input the sign-in mode shows (none for the Azure CLI): the
-  // credential fields below render by it, so the field validated, focused
-  // and sent is the one on screen.
   const secret = secretField(form.authMode)
 
   const eff = effective(form)
   const carry = secretCarry(base, eff)
-  // An edit that leaves the settings alone (a new name) sends no settings,
-  // so it needs no secret — even for a resource whose credentials must be
-  // entered again. Entering them again is the reauth mode's job.
   const sendsSettings =
     !base || mode === 'reauth' || toConnectionUpdateInput(eff, effective(baseline), base).config !== undefined
   const validation = (() => {
@@ -123,7 +102,6 @@ export default function AzureConnectionModal({
     return {...v, errors, firstInvalid: CONNECTION_FIELD_ORDER.find(f => errors[f]) ?? null}
   })()
 
-  // The element a field's problem sends focus to.
   const fieldElement = (field: ConnectionFormField): HTMLElement | null => {
     switch (field) {
       case 'endpoint':
@@ -144,11 +122,6 @@ export default function AzureConnectionModal({
   }
   const focusField = (field: ConnectionFormField) => fieldElement(field)?.focus()
 
-  // Focus on open: the first field, or the secret when entering credentials
-  // again — unless the stored settings could not be read (the server sends
-  // them blank), when the endpoint comes first. Created once: a new ref
-  // identity would re-run the dialog's focus lifecycle (restore to the
-  // trigger, then focus again) mid-edit.
   const [initialFocusRef] = useState(() => {
     const stored = secretField(baseline.authMode)
     const target = mode !== 'reauth' || !baseline.endpoint.trim() ? ids.endpoint : stored ? ids[stored] : ids.tenantId
@@ -172,9 +145,6 @@ export default function AzureConnectionModal({
     }
   }
 
-  // A field's error as shown: the server's verdict first; the client's once
-  // the form was submitted — before that only a format problem of a field
-  // the user has left (a blank one is not flagged while filling in).
   const fieldError = (field: ConnectionFormField): string | undefined => {
     if (serverErrors[field]) return serverErrors[field]
     const e = validation.errors[field]
@@ -186,8 +156,6 @@ export default function AzureConnectionModal({
 
   const touch = (field: ConnectionFormField) => setTouched(prev => (prev.has(field) ? prev : new Set(prev).add(field)))
 
-  // Every edit clears the server's verdict on the fields it touches, and a
-  // test outcome, which was about other values.
   const change = (next: ConnectionFormState, ...fields: ConnectionFormField[]) => {
     setForm(next)
     if (fields.some(f => serverErrors[f])) {
@@ -200,23 +168,16 @@ export default function AzureConnectionModal({
     if (test.phase !== 'idle' && test.phase !== 'running') setTest(IDLE_TEST)
   }
 
-  // A failed save or test: the field the code names, the re-index confirm,
-  // the conflict or permission alert, or the form-level alert.
   const showServerError = (err: unknown): 'reindex' | 'shown' => {
     const target = connectionErrorTarget(err)
     if (target === 'reindex') return 'reindex'
     const fallback = t('azureModels.connectionModal.saveFailed')
     if (target === 'conflict' || err instanceof AzureConflictError) setFormAlert({kind: 'conflict'})
     else if (target === 'forbidden') setFormAlert({kind: 'forbidden'})
-    // A desktop list file written by a newer baki: nothing can be saved.
     else if (err instanceof ApiError && err.code === 'REGISTRY_READ_ONLY') {
       setFormAlert({kind: 'message', text: t('azureModels.registryState.readOnly')})
     } else if (target === 'form') setFormAlert({kind: 'message', text: errorMessage(err) || fallback})
     else {
-      // HOST_NOT_ALLOWED is the resource endpoint's allow-list verdict: the
-      // local copy names the accepted hosts. Every other code carries an
-      // actionable message of its own (MISSING_SECRET says why re-entry is
-      // needed).
       const text =
         err instanceof ApiError && err.code === 'HOST_NOT_ALLOWED'
           ? t('providers.azureHostRejected')
@@ -226,16 +187,12 @@ export default function AzureConnectionModal({
         setServerErrors({[target]: text})
         field.focus()
       } else {
-        // The field it names isn't on screen (another sign-in mode shows
-        // other credentials): the form-level alert says it instead.
         setFormAlert({kind: 'message', text})
       }
     }
     return 'shown'
   }
 
-  // The secret field's error: a blank secret the carry rules would not keep
-  // says why it is needed again rather than a bare "Required".
   const secretError = (): string | undefined => {
     const shown = fieldError('secret')
     return shown && !serverErrors.secret && carry === 'reenter' ? t('providers.azureSecretRequiredAfterChange') : shown
@@ -252,7 +209,6 @@ export default function AzureConnectionModal({
       } else {
         const input = toConnectionUpdateInput(eff, effective(baseline), base)
         if (input.name === undefined && input.config === undefined) {
-          // Nothing changed: nothing to send.
           setBusy(false)
           onClose()
           return
@@ -282,8 +238,6 @@ export default function AzureConnectionModal({
     void save(false)
   }
 
-  // Tests the draft — its settings, and the stored secret carried over when
-  // the carry rules allow — without saving it. The name is not part of it.
   const testDraft = async () => {
     const invalid = CONNECTION_FIELD_ORDER.find(f => f !== 'name' && validation.errors[f])
     if (invalid) {
@@ -299,7 +253,6 @@ export default function AzureConnectionModal({
       })
       setTest(result.ok ? {phase: 'passed', latencyMs: result.latencyMs} : {phase: 'failed', error: result.error})
     } catch (err) {
-      // A 4xx: the draft itself was refused. Its field says why as well.
       const target = connectionErrorTarget(err)
       if (target !== 'reindex' && target !== 'conflict' && target !== 'forbidden' && target !== 'form') {
         showServerError(err)
@@ -311,7 +264,6 @@ export default function AzureConnectionModal({
     }
   }
 
-  // Drops the edit and shows the resource as someone else saved it.
   const reload = useCallback(async () => {
     if (!base) return
     await load(scope, {force: true})
@@ -334,11 +286,6 @@ export default function AzureConnectionModal({
   const authOptions: {value: AzureFoundryAuthMode; label: string; disabled?: boolean}[] = [
     {value: 'api_key', label: t('providers.azureAuthApiKey')},
     {value: 'entra', label: t('providers.azureAuthEntra')},
-    // F-51: the Azure CLI's signed-in user is the credential — no app
-    // registration, no secret. Desktop only (a server-side `az login` would
-    // be the operator's identity), and never for an organisation's resource.
-    // A stored CLI resource shown where it is not allowed keeps its segment,
-    // disabled, so the selection stays visible.
     ...(allowCli || form.authMode === 'entra_cli'
       ? [{value: 'entra_cli' as const, label: t('providers.azureAuthEntraCli'), disabled: !allowCli}]
       : []),

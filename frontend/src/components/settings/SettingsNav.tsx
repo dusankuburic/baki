@@ -7,10 +7,6 @@ import {useSystemStore} from '@/stores/systemStore'
 import type {SettingsSection} from '@/stores/uiStore'
 import {SETTINGS_SECTIONS, matchesQuery, type SettingsGroup} from './sections'
 
-// The Settings sidebar: title, the section search, the grouped section tabs
-// and the pinned footer (About + version). One tablist holds every tab, so
-// arrow keys walk the whole list and the footer is simply its last entry;
-// the desktop/phone layouts are CSS only (index.css, "SETTINGS MODAL").
 export default function SettingsNav({
   groups,
   footer,
@@ -20,22 +16,18 @@ export default function SettingsNav({
   onQueryChange,
   selectedTabRef,
 }: {
-  // Already filtered for the platform (cloud-only groups and sections gone).
   groups: SettingsGroup[]
   footer: readonly SettingsSection[]
   active: SettingsSection
   onSelect: (id: SettingsSection) => void
   query: string
   onQueryChange: (query: string) => void
-  // Attached to the selected tab so the dialog can focus it on open.
   selectedTabRef: RefObject<HTMLButtonElement | null>
 }) {
   const {t} = useTranslation('settings')
   const version = useSystemStore(s => s.info?.version)
   const listRef = useRef<HTMLDivElement>(null)
 
-  // What the search box matches against, per section: its label, description
-  // and group, plus the keywords from en.settings.ts (never rendered).
   const haystack = useMemo(() => {
     const out = {} as Record<SettingsSection, string>
     const add = (id: SettingsSection, group: string) => {
@@ -57,13 +49,10 @@ export default function SettingsNav({
     .filter(group => group.sections.length > 0)
   const visibleFooter = footer.filter(isVisible)
   const visibleIds = [...visibleGroups.flatMap(group => group.sections), ...visibleFooter]
-  // Roving tabindex: the selected tab is the one tab stop, or the first
-  // visible tab when the search hides the selection.
   const tabbableId = visibleIds.includes(active) ? active : visibleIds[0]
 
   const focusTab = (id: SettingsSection) =>
     listRef.current?.querySelector<HTMLButtonElement>(`[data-tab="${id}"]`)?.focus()
-  // Selection follows focus, the shared Tabs contract.
   const go = (id: SettingsSection | undefined) => {
     if (!id) return
     onSelect(id)
@@ -99,8 +88,6 @@ export default function SettingsNav({
 
   const onSearchKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape' && query) {
-      // preventDefault is what keeps useDialogFocus from closing the dialog
-      // on the same keypress: one Escape clears the query, the next closes.
       e.preventDefault()
       onQueryChange('')
     } else if (e.key === 'Enter') {
@@ -173,8 +160,6 @@ export default function SettingsNav({
         className="settings-nav-scroll px-3 pb-3"
       >
         {visibleGroups.map(group => (
-          // Padding sits on the group, not the heading: every heading is the
-          // first child of its own group, so `first:` on it would hit all.
           <div key={group.id} role="presentation" className="settings-nav-group pt-4 first:pt-1">
             <div
               role="presentation"

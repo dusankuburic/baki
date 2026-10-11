@@ -8,11 +8,6 @@ const commands = [
   {id: 'c', label: 'Toggle sidebar', section: 'View', onSelect: vi.fn()},
 ]
 
-// Regression: the rows carried role="option" with no role="listbox" owner — an
-// invalid ARIA parent/child pairing that assistive tech discards outright — and
-// the panel announced neither dialog nor modal. Because focus stays on the input
-// while ArrowDown only moves a visual highlight, without aria-activedescendant a
-// screen reader user got no indication of which command was selected.
 describe('CommandPalette accessibility', () => {
   it('exposes the panel as a modal dialog', () => {
     render(<CommandPalette isOpen onClose={vi.fn()} commands={commands} />)
@@ -25,11 +20,10 @@ describe('CommandPalette accessibility', () => {
     render(<CommandPalette isOpen onClose={vi.fn()} commands={commands} />)
     const listbox = screen.getByRole('listbox')
     expect(listbox).toBeInTheDocument()
-    // Every option must resolve to that listbox, not float unowned.
     const options = screen.getAllByRole('option')
     expect(options).toHaveLength(3)
     for (const opt of options) expect(listbox).toContainElement(opt)
-    expect(screen.getAllByRole('group')).toHaveLength(2) // File, View
+    expect(screen.getAllByRole('group')).toHaveLength(2)
   })
 
   it('wires the input as a combobox tracking the active option', () => {

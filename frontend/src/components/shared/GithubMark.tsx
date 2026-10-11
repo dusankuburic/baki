@@ -1,7 +1,3 @@
-// Lucide v1 removed brand icons (Github/Slack/…), so the GitHub provider
-// surfaces carry the mark themselves. This is the exact glyph lucide shipped
-// as `Github`, rendered with the same stroke conventions so it sits
-// indistinguishably next to lucide icons at any size.
 export function GithubMark({size = 16, className}: {size?: number; className?: string}) {
   return (
     <svg

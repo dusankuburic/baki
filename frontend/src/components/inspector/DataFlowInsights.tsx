@@ -7,12 +7,6 @@ import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import type {DataFlowAnalysis, TaintPath} from '@/types'
 
-// TaintPathsPanel renders the input→sink HINTS the analyzer computes. The API
-// field is still called taintPaths for compatibility, but what it holds is a
-// name-based heuristic: a variable produced by a dialog/prompt block or named
-// Input_*/UserInput_* that is read DIRECTLY by a sink action — zero hops. One
-// intermediate SET breaks the trail. The label says so; calling this "taint
-// analysis" in a security tool overclaimed.
 function TaintPathsPanel({paths, onNavigate}: {paths: TaintPath[]; onNavigate: (id: string) => void}) {
   const {t} = useTranslation('inspector')
   const [showAll, setShowAll] = React.useState(false)
@@ -59,9 +53,6 @@ function TaintPathsPanel({paths, onNavigate}: {paths: TaintPath[]; onNavigate: (
   )
 }
 
-// DeadDataPanel lists each dead-data variable.
-// Each row shows the variable, why it's dead, and jumps to the block that sets
-// it so the developer can decide whether to remove the write.
 function DeadDataPanel({
   paths,
   onNavigate,
@@ -113,8 +104,6 @@ export default function DataFlowInsights() {
   const doc = useFlowStore(s => s.document)
   const navigateToBlock = useFlowStore(s => s.navigateToBlock)
   const [dataFlow, setDataFlow] = React.useState<DataFlowAnalysis | null>(null)
-  // Re-fetch when a new analysis lands, not just when the document changes —
-  // otherwise these insights show the previous run's data after re-analyze.
   const generatedAt = useAnalysisStore(s => (doc ? s.reports.get(doc.id)?.generatedAt : undefined))
 
   React.useEffect(() => {

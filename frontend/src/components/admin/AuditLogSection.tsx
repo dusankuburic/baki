@@ -14,9 +14,6 @@ import {groupActions} from './auditActions'
 import {useAuditActions} from './hooks/useAuditActions'
 import {useAuditLog} from './hooks/useAuditLog'
 
-// The audit log: the action filter grouped by area with human labels, a user
-// filter (also set by a row's user cell and by a user row's "View activity"),
-// fifteen rows a page, and a details row per event for its metadata.
 export function AuditLogSection() {
   const {t} = useTranslation(['admin', 'dashboard', 'common'])
   const filter = useAdminStore(s => s.audit)
@@ -33,8 +30,6 @@ export function AuditLogSection() {
     [actions.data, filter.action],
   )
 
-  // The user box is local until the debounce (or Enter) commits it; a filter
-  // set elsewhere lands in the box too, adjusted during render.
   const [userDraft, setUserDraft] = useState(filter.userId)
   const [lastUserId, setLastUserId] = useState(filter.userId)
   if (filter.userId !== lastUserId) {
@@ -113,7 +108,6 @@ export function AuditLogSection() {
           </div>
         )}
 
-        {/* relative: contains the absolutely positioned sr-only cells so the scroll wrapper clips them */}
         <div className="relative overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>

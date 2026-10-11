@@ -69,8 +69,6 @@ describe('exportFindingsHTML', () => {
     const {exportFindingsHTML} = await import('./findingsExport')
     await exportFindingsHTML('doc1')
 
-    // exportApi.exportHTML owns the save UX (native dialog on desktop, anchor
-    // download on web); the helper just routes the doc id through.
     expect(exportHTML).toHaveBeenCalledWith('doc1')
   })
 })
@@ -105,9 +103,6 @@ describe('exportFindingsJUnit', () => {
   })
 })
 
-// C14: on desktop the browser-rendered exports take the native save dialog
-// branch (PDF/Markdown/HTML already did) instead of an anchor download that
-// skipped the dialog.
 describe('desktop exports use the native save dialog', () => {
   it.each([
     ['CSV', async (m: typeof import('./findingsExport')) => m.saveFindingsCSV([finding()], 'doc1'), 'csv'],

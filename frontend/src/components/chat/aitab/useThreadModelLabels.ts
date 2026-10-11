@@ -22,10 +22,6 @@ interface ThreadModelLabelsDeps {
   listedModels: ModelNames['listedModels']
 }
 
-// Each tab's tooltip names its thread's model: the active thread's as
-// resolved by useProviderSetup, the others' from their pins, else — a thread
-// from before per-thread memory — from their own loaded history (an unpinned
-// one with none starts on the Default for new chats).
 export function useThreadModelLabels({
   flowThreads,
   activeThreadId,

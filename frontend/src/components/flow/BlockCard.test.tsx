@@ -174,8 +174,6 @@ describe('BlockCard', () => {
   })
 })
 
-// ── Block editing (R3-1b) ────────────────────────────────────────────────────
-
 const removeBlock = vi.fn()
 const duplicateBlock = vi.fn()
 const listSnapshots = vi.fn()
@@ -201,9 +199,6 @@ describe('BlockCard block editing', () => {
     })
   })
 
-  // The context menu itself is a shared component; the contract under test is
-  // the wiring: the menu items exist and invoke the right endpoint. The menu
-  // opens on right-click of the card header.
   const openMenu = (container: HTMLElement) => {
     const card = container.querySelector('[data-testid="block-card"], [role="button"]') ?? container.firstElementChild!
     fireEvent.contextMenu(card)
@@ -231,7 +226,6 @@ describe('BlockCard block editing', () => {
     fireEvent.click(await screen.findByText('Move up'))
     await waitFor(() => expect(moveBlock).toHaveBeenCalledWith('flow-1', 'b1', 'up'))
 
-    // Undo toast appears and restores THIS action's captured snapshot id.
     const undoBtn = await screen.findByText('Undo')
     fireEvent.click(undoBtn)
     await waitFor(() => expect(restoreSnapshot2).toHaveBeenCalledWith('flow-1', 'snap-move'))
@@ -247,8 +241,6 @@ describe('BlockCard block editing', () => {
     fireEvent.click(dup)
     await waitFor(() => expect(duplicateBlock).toHaveBeenCalledWith('flow-1', 'b1'), {timeout: 1500})
 
-    // Item clicks close the menu — reopen for the second action. Delete now
-    // confirms first (U1.3); accept the dialog.
     openMenu(container)
     const del = await screen.findByText('Delete block')
     fireEvent.click(del)
@@ -296,7 +288,6 @@ describe('BlockCard delete confirmation (U1.3)', () => {
     fireEvent.contextMenu(container.firstElementChild as HTMLElement)
     fireEvent.click(screen.getByText('Delete block'))
 
-    // The danger dialog is up with the block name; cancel must not call the API.
     expect(await screen.findByText('Delete block', {selector: 'h2, [role="heading"], .text-base'})).toBeTruthy()
     fireEvent.click(await screen.findByRole('button', {name: /cancel/i}))
     expect(removeBlock).not.toHaveBeenCalled()
@@ -316,7 +307,6 @@ describe('inline rename (U3b)', () => {
 
     const commentBlock = {...baseBlock, rawType: 'COMMENT', name: 'old text'}
     const {container} = renderCard({block: commentBlock as Block})
-    // Double-click the name area (the title div below the type row).
     const nameEl = Array.from(container.querySelectorAll('div')).find(d => d.textContent === 'old text')!
     fireEvent.doubleClick(nameEl)
     const input = await screen.findByTestId('rename-input')

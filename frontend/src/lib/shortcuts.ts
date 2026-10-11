@@ -10,14 +10,9 @@ export interface Shortcut {
   scope: ShortcutScope
   preventDefault?: boolean
   allowInInputs?: boolean
-  // desktopOnly shortcuts drive the native window (fullscreen, quit) and are
-  // registered only when the platform has one; in a browser tab they were
-  // matched, preventDefault'ed (eating the browser's own F11) and then no-op'd.
   desktopOnly?: boolean
 }
 
-// allShortcuts is the full catalogue; `shortcuts` (below) is what this
-// platform registers and lists in the help dialogs.
 export const allShortcuts: Shortcut[] = [
   {id: 'file.open', keys: 'mod+o', description: 'Open flow file', category: 'File', scope: 'global'},
   {id: 'file.open.folder', keys: 'mod+shift+o', description: 'Open flow folder', category: 'File', scope: 'global'},
@@ -39,7 +34,6 @@ export const allShortcuts: Shortcut[] = [
     scope: 'global',
   },
 
-  // Block editing (U3b) — active on the selected block in the canvas.
   {id: 'edit.move.up', keys: 'alt+up', description: 'Move selected block up', category: 'Edit', scope: 'main'},
   {id: 'edit.move.down', keys: 'alt+down', description: 'Move selected block down', category: 'Edit', scope: 'main'},
   {id: 'edit.duplicate', keys: 'mod+d', description: 'Duplicate selected block', category: 'Edit', scope: 'main'},
@@ -108,8 +102,6 @@ export const allShortcuts: Shortcut[] = [
     scope: 'global',
   },
   {id: 'nav.drill.subflow', keys: 'enter', description: 'Drill into subflow', category: 'Navigation', scope: 'main'},
-  // Same history as the toolbar's back/forward buttons. Not allowed in inputs,
-  // where alt+arrow is word-wise caret movement on macOS.
   {id: 'nav.back', keys: 'alt+left', description: 'Go back', category: 'Navigation', scope: 'global'},
   {id: 'nav.forward', keys: 'alt+right', description: 'Go forward', category: 'Navigation', scope: 'global'},
 
@@ -135,15 +127,6 @@ export const allShortcuts: Shortcut[] = [
     preventDefault: false,
   },
 
-  // Chat shortcuts are bound by AITab / ChatInput and only fire while focus is
-  // inside the chat panel. They are allowed in inputs because the composer is
-  // where focus sits. ai.send and ai.cancel.stream leave preventDefault to the
-  // handler: it only claims the key when it acts, so an open @/slash menu or
-  // the find bar keeps its own Enter/Escape.
-  //
-  // There is deliberately no Tab binding for "next suggested prompt": Tab is
-  // focus traversal, and taking it over would trap keyboard users in the panel
-  // (the prompts are ordinary buttons, already reachable with Tab).
   {
     id: 'ai.send',
     keys: 'mod+enter',
@@ -163,7 +146,6 @@ export const allShortcuts: Shortcut[] = [
     allowInInputs: true,
     preventDefault: false,
   },
-  // mod+. pairs with mod+, (settings); mod+shift+f is the global search.
   {
     id: 'ai.focus',
     keys: 'mod+.',
@@ -188,7 +170,6 @@ export const allShortcuts: Shortcut[] = [
     category: 'Analysis',
     scope: 'global',
   },
-  // mod+alt+e: mod+shift+e belongs to file.export.md (declared in App.tsx).
   {
     id: 'analysis.export.csv',
     keys: 'mod+alt+e',
@@ -231,9 +212,6 @@ export const allShortcuts: Shortcut[] = [
   {id: 'help.shortcuts', keys: '?', description: 'Show shortcuts help', category: 'Help', scope: 'global'},
 ]
 
-// shortcutsForPlatform filters the catalogue by capability. Exported for
-// tests; the module-level `shortcuts` is resolved once at load (the Tauri
-// globals are injected before any script runs, so the answer is stable).
 export function shortcutsForPlatform(all: Shortcut[], nativeWindow: boolean): Shortcut[] {
   return nativeWindow ? all : all.filter(s => !s.desktopOnly)
 }

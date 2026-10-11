@@ -16,10 +16,6 @@ import {useTranslation} from 'react-i18next'
 
 const USER_SCOPE: AzureScope = {kind: 'user'}
 
-// The built-in sections, for a server without GET /api/providers/catalog
-// (one older than this bundle): the nine providers the bundle knows, each
-// with its own widget, exactly as before the catalogue. Goes with the
-// catalogue's second release.
 export default function LegacyProvidersPanel() {
   const {t} = useTranslation('settings')
   const [githubUser, setGithubUser] = useState<string | null>(null)
@@ -27,18 +23,10 @@ export default function LegacyProvidersPanel() {
   const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
   const setProvider = useChatStore(s => s.setProvider)
   const updateAI = useSettingsStore(s => s.updateAI)
-  // A cloud server does not offer local models: the section is not rendered
-  // once /api/system/info says the backend is not local (the signal the rest
-  // of Settings uses: capabilities.sessionAnalytics), and before that info
-  // loads the section's own GET answers LOCAL_MODELS_UNAVAILABLE, which it
-  // reports so the heading goes with it.
   const [localUnavailable, setLocalUnavailable] = useState(false)
   const markLocalUnavailable = useCallback(() => setLocalUnavailable(true), [])
   const knownRemoteBackend = useSystemStore(s => (s.info ? !s.info.capabilities.sessionAnalytics : false))
 
-  // refreshLocal reloads the signed-in OAuth users without bumping the
-  // provider epoch. Used for the initial mount load (no config changed yet);
-  // the key inputs and the Azure section load their own state.
   const refreshLocal = useCallback(() => {
     providersApi
       .getGitHubUser()
@@ -50,16 +38,11 @@ export default function LegacyProvidersPanel() {
       .catch(() => setCopilotUser(null))
   }, [])
 
-  // refresh is refreshLocal + epoch bump. Used when a configuration actually
-  // changes (API key saved, OAuth completed, auth revoked) so AITab re-checks.
   const refresh = useCallback(() => {
     refreshLocal()
     bumpProviderEpoch()
   }, [refreshLocal, bumpProviderEpoch])
 
-  // handleCopilotAuthComplete / handleGithubAuthComplete: called by the device-
-  // flow login buttons when OAuth succeeds. Refreshes state + switches the
-  // active provider so the chat is immediately usable without manual selection.
   const handleCopilotAuthComplete = useCallback(() => {
     refresh()
     setProvider('copilot')
@@ -72,10 +55,6 @@ export default function LegacyProvidersPanel() {
     void updateAI({activeProvider: 'github-models'})
   }, [refresh, setProvider, updateAI])
 
-  // The first Azure AI Foundry chat model makes Azure the active provider —
-  // but only when the current one cannot chat (not configured), so a working
-  // setup is never switched away from. The registry store already relisted
-  // the chat picker. A failed lookup leaves the provider as it is.
   const handleFirstAzureChatModel = useCallback(async () => {
     const current = useSettingsStore.getState().settings.ai.activeProvider
     if (current === 'azure-foundry') return
@@ -118,9 +97,6 @@ export default function LegacyProvidersPanel() {
         <ApiKeyInput provider="glm" label={t('providers.zaiKey')} onConfigured={refresh} />
       </ProviderSection>
 
-      {/* Its heading is the "Manage models…" deep link's anchor
-          (AZURE_SECTION_ANCHOR = provider-azure-foundry): the panel focuses
-          it once its resources and models have loaded. */}
       <ProviderSection id="azure-foundry" name="Azure AI Foundry" color="#0078d4">
         <AzureFoundryPanel
           scope={USER_SCOPE}

@@ -20,8 +20,6 @@ interface BlockConfig {
   label: string
 }
 
-// blockConfig is internal to this module (read by the helpers below); there
-// is no valid reason for components to index it directly.
 const blockConfig: Record<string, BlockConfig> = {
   ACTION: {icon: Settings2, color: 'var(--block-action)', bg: 'var(--block-action-bg)', label: 'Action'},
   LOOP: {icon: Repeat, color: 'var(--block-loop)', bg: 'var(--block-loop-bg)', label: 'Loop'},
@@ -51,9 +49,6 @@ export function getBlockBg(type: string): string {
   return blockConfig[type]?.bg ?? 'var(--surface-2)'
 }
 
-// ---------- label helpers shared between block view and graph view ----------
-
-/** Returns the human-readable type badge label for a block. */
 export function resolveTypeLabel(type: string, name: string, rawType = ''): string {
   if (rawType === 'GOTO') return 'Goto'
   if (rawType === 'LABEL') return 'Label'
@@ -65,24 +60,17 @@ export function resolveTypeLabel(type: string, name: string, rawType = ''): stri
     if (n.startsWith('LOOP WHILE')) return 'While Loop'
     return 'Range Loop'
   }
-  // Variables.* list/math operations are reclassified as ACTION by the parser.
-  // Use the humanized action name as the badge label (e.g. "Create New List",
-  // "Add Item To List") so each block is self-describing without showing
-  // the raw module prefix or the generic "Action" catch-all.
   if (type === 'ACTION' && rawType.startsWith('Variables.')) {
     return name
   }
   return blockConfig[type]?.label ?? type
 }
 
-/** Returns true for loop-control flow statements (continue / break). */
 export function isLoopControl(rawType: string): boolean {
   return rawType === 'EXIT_LOOP' || rawType === 'NEXT_LOOP'
 }
 
-/** Strips redundant structural keywords from a block name so only the payload is visible. */
 export function stripBlockKeywords(type: string, name: string): string {
-  // Aggressively strip common keywords that might be in the Name field from the parser
   let stripped = name.replace(/^\s*(SWITCH|CASE|IF|ELSE|LOOP|SET|CALL|WAIT|SELECT)\s+/i, '').trim()
 
   if (type === 'CONDITION') {
@@ -94,6 +82,5 @@ export function stripBlockKeywords(type: string, name: string): string {
       .trim()
   }
 
-  // Remove surrounding % if it's a simple variable reference
   return stripped.replace(/^%|%$/g, '')
 }

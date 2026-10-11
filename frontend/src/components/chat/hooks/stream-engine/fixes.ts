@@ -12,8 +12,6 @@ import {useChatStore} from '@/stores/chatStore'
 import type {ChatStoreState, StreamAcc} from './types'
 import {pendingCard, asCardStatus, asItemStatus, decisionTargets} from './helpers'
 
-// The store actions and the accumulator map the fix/tool paths need. Stable
-// references, so the callbacks below keep their original identities.
 interface FixDeps {
   streamAccRef: MutableRefObject<Map<string, StreamAcc>>
   setFixProposal: ChatStoreState['setFixProposal']
@@ -22,9 +20,6 @@ interface FixDeps {
   replaceStreamFixes: ChatStoreState['replaceStreamFixes']
 }
 
-// useFixEvents drives the agentic side of a stream: the flow refresh after a
-// fix lands, the approval cards (live + optimistic respond), and the resume
-// journal replay that rebuilds the tool trail and the cards.
 export function useFixEvents({
   streamAccRef,
   setFixProposal,
@@ -32,11 +27,6 @@ export function useFixEvents({
   replaceStreamTools,
   replaceStreamFixes,
 }: FixDeps) {
-  // refreshAfterFix reloads the flow a chat-driven fix just changed: findings
-  // re-analyze by flow id, and when the fixed flow is the currently-open
-  // local document, the canvas refreshes via loadFlowFromPath (cloud canvases
-  // refresh through the websocket flow-change sync). Both are best-effort —
-  // the model's outcome text and the card state stand on their own.
   const refreshAfterFix = useCallback(
     (threadId: string) => {
       const thread = useChatStore.getState().threads.find(t => t.id === threadId)
@@ -60,8 +50,6 @@ export function useFixEvents({
     [],
   )
 
-  // onFixProposal shows an approval card (single or batch, a fix or any
-  // other kind) on the stream's thread.
   const onFixProposal = useCallback(
     (proposal: FixProposalPayload, streamId: string) => {
       const acc = streamAccRef.current.get(streamId)
@@ -71,10 +59,6 @@ export function useFixEvents({
     [streamAccRef, setFixProposal],
   )
 
-  // onFixDecision reflects the proposal's resolution (applying/applied/
-  // declined/timeout/error) onto the card — and on a successful apply,
-  // refreshes the affected flow's findings + canvas so the user sees the fix
-  // (the mutation happened server-side, invisible to the open document).
   const onFixDecision = useCallback(
     (
       proposalId: string,
@@ -88,9 +72,6 @@ export function useFixEvents({
       const cardStatus = asCardStatus(status)
       const slot = useChatStore.getState().streams[acc.threadId]
       const card = slot?.approvals.find(c => c.proposalId === proposalId)
-      // Per-item outcome patches (batch decisions carry items[], matched to
-      // the rows by decisionTargets). A single-fix decision carries none —
-      // its one item mirrors the card, so the card status propagates to it.
       const itemPatch = (index: number, status: string, message?: string) => ({
         index,
         patch: {status: asItemStatus(status), message},
@@ -118,8 +99,6 @@ export function useFixEvents({
         {status: cardStatus, message},
         itemPatches.length > 0 ? itemPatches : undefined,
       )
-      // Only a fix changed the flow; another tool's outcome is the model's
-      // to report.
       if (card?.source === 'fix' && (status === 'applied' || status === 'applied-unresolved')) {
         refreshAfterFix(acc.threadId)
       }
@@ -127,28 +106,17 @@ export function useFixEvents({
     [streamAccRef, patchFixProposal, refreshAfterFix],
   )
 
-  // respondFixProposal delivers the user's Approve/Dismiss for a thread's
-  // pending request — to the route of the event that carried it (source).
-  // Optimistically marks applying/declined so the buttons lock immediately;
-  // the backend's decision event is authoritative.
   const respondFixProposal = useCallback(
     (threadId: string, approved: boolean, proposalId?: string, excludedItemIndices?: number[]) => {
-      // View-only flows never dispatch an APPLY decision: approval
-      // writes source; declining is always allowed.
       if (approved && useFlowStore.getState().readOnly) return
       const slot = useChatStore.getState().streams[threadId]
       if (!slot) return
-      // Default to the newest pending card (the card the user just clicked);
-      // an explicit proposalId targets a specific stacked card.
       const card = proposalId
         ? slot.approvals.find(c => c.proposalId === proposalId)
         : [...slot.approvals].reverse().find(c => c.status === 'pending')
       if (!card || card.status !== 'pending') return
       patchFixProposal(threadId, card.proposalId, {status: approved ? 'applying' : 'declined'})
       const args = [slot.streamId, card.proposalId, approved, excludedItemIndices] as const
-      // An approval_request's own route — unless the server names the event
-      // so but keeps /api/chat/fix-decision as its one decision route (ADR
-      // 0026, Open): its 404 sends the decision to the old route, once.
       const respond =
         card.source === 'approval'
           ? chatApi.respondApprovalDecision(...args).catch((err: unknown) => {
@@ -164,9 +132,6 @@ export function useFixEvents({
     [patchFixProposal],
   )
 
-  // onResumeState rebuilds the slot's agentic state from a resume journal —
-  // the authoritative replay after a reconnect. Wholesale replace (never
-  // append) so a resume that races live SSE delivery stays idempotent.
   const onResumeState = useCallback(
     (events: ChatEvent[], streamId: string) => {
       const acc = streamAccRef.current.get(streamId)

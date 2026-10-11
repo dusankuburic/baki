@@ -5,37 +5,27 @@ import {ChevronDown, ChevronUp} from 'lucide-react'
 import {useChatStore} from '@/stores/chatStore'
 import type {ToolCallRecord} from '@/types'
 
-// Same throttled-polling pattern as StreamingProgress: the slot's toolCalls
-// array changes per tool execution (not per frame), but a store subscription
-// here would re-render AITab's whole tree on every finished tool; polling
-// keeps this leaf isolated and cheap.
-
-// LiveToolTrail is the streaming view of the slot's finished tool executions:
-// the current tool's pulsing label (from toolStatus) plus the last few
-// finished calls with ok/fail dots. Before this, a multi-iteration tool loop
-// showed ONE spinning label for its whole duration with zero history — the
-// full trail only appeared after the message committed.
 export default function LiveToolTrail() {
   const {t} = useTranslation('chat')
   const isStreaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
   const [toolStatus, setToolStatus] = useState<string | null>(null)
   const [calls, setCalls] = useState<ToolCallRecord[]>([])
   const [totalCalls, setTotalCalls] = useState(0)
-  // V1.3: the collapsed trail shows the last 3 finished calls; "Show all"
-  // expands the full history while still streaming (it used to land only on
-  // the committed message).
   const [expanded, setExpanded] = useState(false)
+  const [prevStreaming, setPrevStreaming] = useState(isStreaming)
 
-  useEffect(() => {
+  if (prevStreaming !== isStreaming) {
+    setPrevStreaming(isStreaming)
     if (!isStreaming) {
-      // Clears state mirroring an external poll when streaming stops.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setToolStatus(null)
       setCalls([])
       setTotalCalls(0)
       setExpanded(false)
-      return
     }
+  }
+
+  useEffect(() => {
+    if (!isStreaming) return
     const read = () => {
       const st = useChatStore.getState()
       const slot = st.activeThreadId ? st.streams[st.activeThreadId] : undefined

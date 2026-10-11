@@ -2,7 +2,6 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {render, screen, fireEvent} from '@testing-library/react'
 import CodeBlock from './CodeBlock'
 
-// Mock clipboard to avoid jsdom limitations
 vi.mock('@/lib/clipboard', () => ({
   writeClipboard: vi.fn().mockResolvedValue(undefined),
 }))
@@ -21,7 +20,6 @@ describe('CodeBlock', () => {
 
   it('renders the code content', () => {
     const {container} = render(<CodeBlock language="typescript" value="const x = 42" />)
-    // prism-react-renderer tokenizes code into spans, so check the <pre> text content
     const pre = container.querySelector('pre')
     expect(pre?.textContent).toContain('const')
     expect(pre?.textContent).toContain('42')
@@ -39,7 +37,6 @@ describe('CodeBlock', () => {
 
   it('strips trailing newline from display', () => {
     render(<CodeBlock value="line1\n" />)
-    // The component strips the trailing \n; the pre element should not show it
     const pre = document.querySelector('pre')
     expect(pre).toBeTruthy()
     expect(pre?.textContent).not.toContain('\n\n')
@@ -61,20 +58,14 @@ describe('CodeBlock', () => {
 
     fireEvent.click(screen.getByTitle('Copy code'))
 
-    // The copied state is set synchronously after writeClipboard resolves
     await screen.findByText('Copied')
     expect(screen.getByText('Copied')).toBeTruthy()
   })
 
-  // Prism names its token classes after the grammar ("token table"), and
-  // Tailwind ships a `table` utility (`display: table`): a markdown table in
-  // a code fence rendered one cell per line.
   it('keeps Prism token classes out of the Tailwind utility namespace', () => {
     const table = '| a | b |\n| --- | --- |\n| 1 | 2 |'
     const {container} = render(<CodeBlock language="markdown" value={table} />)
-    // The grammar did tokenize the table…
     expect(container.querySelector('pre .tok-table')).not.toBeNull()
-    // …and no span carries a bare grammar name.
     expect(container.querySelector('pre .table')).toBeNull()
     const spans = Array.from(container.querySelectorAll('pre span'))
     expect(spans.length).toBeGreaterThan(0)

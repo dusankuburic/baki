@@ -7,22 +7,12 @@ import type {SuppressionEntry} from '@/types'
 
 interface Props {
   flowId: string
-  // Changes whenever a new report lands (the report's generatedAt), so an open
-  // panel re-audits after re-analysis or a "Suppress in file".
   reportVersion?: string
 }
 
-// SuppressionsPanel lists the flow's inline `# pad-ignore` directives with a
-// stale marker. The app could write directives ("Suppress in file") but never
-// list them, so a directive left behind after its finding was fixed silently
-// hid any future finding of that rule on that block. Collapsed by default and
-// fetched only while open: the audit re-runs every rule over the flow.
 export default function SuppressionsPanel({flowId, reportVersion}: Props) {
   const {t} = useTranslation('findings')
   const [open, setOpen] = useState(false)
-  // Results are tagged with the request they answer, so loading is derived
-  // (no synchronous setState in the effect) and a late response for a
-  // previous flow/report is never shown.
   const requestKey = `${flowId}@${reportVersion ?? ''}`
   const [result, setResult] = useState<{key: string; entries?: SuppressionEntry[]; failed?: boolean} | null>(null)
 

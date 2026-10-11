@@ -114,7 +114,6 @@ function deferred<T>() {
 const scope = (s: typeof USER | typeof ORG = USER) => selectAzureScope(s)(useAzureFoundryStore.getState())
 const epoch = () => useChatStore.getState().providerEpoch
 
-// (Re)loads `scope` with the given registry.
 async function seed(
   connections: AzureConnection[],
   models: AzureModelEntry[],
@@ -128,8 +127,6 @@ async function seed(
 }
 
 beforeEach(async () => {
-  // Reset, not clear: an unconsumed mockResolvedValueOnce must not leak into
-  // the next case.
   vi.resetAllMocks()
   vi.restoreAllMocks()
   await resetAllStores()
@@ -173,7 +170,6 @@ describe('azureFoundryStore: loading', () => {
     expect(s.serverDefault).toBe('m/general000')
     expect(s.loadedAt).toBeGreaterThan(0)
 
-    // A later listing without a server default (or backup path) clears it.
     await seed([conn('default')], [])
     expect(scope()).toMatchObject({serverDefault: null, recoveredCopyPath: null})
   })
@@ -202,7 +198,6 @@ describe('azureFoundryStore: loading', () => {
     api.listAzureConnections.mockResolvedValueOnce(listing([conn('default')]))
     api.listAzureModels.mockReturnValueOnce(d.promise)
     const p = useAzureFoundryStore.getState().load(USER)
-    // The cached view stays on screen meanwhile.
     expect(scope().status).toBe('ready')
     expect(scope().models.map(m => m.id)).toEqual(['first00000'])
     d.resolve({models: [model('second0000')]})
@@ -225,7 +220,6 @@ describe('azureFoundryStore: loading', () => {
     useAzureFoundryStore.getState().invalidate()
     expect(scope(USER).loadedAt).toBe(0)
     expect(scope(ORG).loadedAt).toBe(0)
-    // Invalidating a scope never loaded creates nothing.
     useAzureFoundryStore.getState().invalidate({kind: 'org', orgId: 'other'})
     expect(Object.keys(useAzureFoundryStore.getState().scopes).sort()).toEqual(['org:org-1', 'user'])
   })
@@ -257,7 +251,6 @@ describe('azureFoundryStore: loading', () => {
     expect(scope()).toMatchObject({status: 'ready', errorKind: 'failed', error: 'offline'})
     expect(scope().models.map(m => m.id)).toEqual(['kept000000'])
 
-    // The next good load clears the error.
     await seed([conn('default')], [model('kept000000')])
     expect(scope()).toMatchObject({status: 'ready', errorKind: null, error: null})
   })
@@ -274,13 +267,11 @@ describe('azureFoundryStore: loading', () => {
     await useAzureFoundryStore
       .getState()
       .createModel(USER, {connectionId: 'default', kind: 'chat', deployment: 'added00000'})
-    // The add read the server default again at once (3rd call)…
     expect(api.listAzureModels).toHaveBeenCalledTimes(3)
     api.listAzureModels.mockResolvedValueOnce({models: [added]})
-    stale.resolve({models: []}) // predates the add
+    stale.resolve({models: []})
     await p
 
-    // …and the stale load read the whole view again (4th).
     expect(api.listAzureModels).toHaveBeenCalledTimes(4)
     expect(scope().models.map(m => m.id)).toEqual(['added00000'])
   })
@@ -316,7 +307,6 @@ describe('azureFoundryStore: mutations', () => {
     expect(scope().models.find(m => m.id === 'other00000')?.connectionName).toBe('res-default')
     expect(api.listAzureModels).toHaveBeenCalledOnce()
 
-    // Credentials entered again: the models' status follows the resource's.
     api.updateAzureConnection.mockResolvedValueOnce(conn('default', {name: 'renamed', status: 'needs_credentials'}))
     api.listAzureConnections.mockResolvedValueOnce(listing([conn('default', {status: 'needs_credentials'})]))
     api.listAzureModels.mockResolvedValueOnce({models: [model('gpt4100000', {status: 'needs_credentials'})]})
@@ -393,7 +383,6 @@ describe('azureFoundryStore: mutations', () => {
   })
 
   it('keeps one default and one knowledge-base model per owner', async () => {
-    // Org scope: every entry is the org's (shared, orgId optional there).
     const orgA = model('orga000000', {shared: true, isDefault: true})
     const orgB = model('orgb000000', {shared: true})
     const kbOld = model('kbold00000', {kind: 'embedding', isKnowledgeEmbedding: true, shared: true})
@@ -418,7 +407,6 @@ describe('azureFoundryStore: mutations', () => {
     await seed([conn('default', {shared: true})], [{...kb, shared: true}], ORG, {knowledgeEmbeddingEnabled: true})
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({})
 
-    // Without force nothing is suggested.
     api.updateAzureModel.mockResolvedValueOnce({...kb, isKnowledgeEmbedding: true})
     await useAzureFoundryStore.getState().updateModel(USER, 'kbnew00000', {isKnowledgeEmbedding: true})
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({})
@@ -429,7 +417,6 @@ describe('azureFoundryStore: mutations', () => {
     await useAzureFoundryStore.getState().deleteModel(USER, 'kbnew00000', {force: true})
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({user: true, 'org:org-1': true})
 
-    // A failed forced request suggests nothing new.
     useAzureFoundryStore.getState().clearKnowledgeReindex([USER])
     api.updateAzureConnection.mockRejectedValueOnce(new ApiError('nope', 500, 'INTERNAL'))
     await expect(
@@ -437,7 +424,6 @@ describe('azureFoundryStore: mutations', () => {
     ).rejects.toThrow('nope')
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({'org:org-1': true})
 
-    // A forced endpoint change and a forced resource removal both count.
     api.updateAzureConnection.mockResolvedValueOnce(conn('default'))
     await useAzureFoundryStore.getState().updateConnection(USER, 'default', {force: true, name: 'x'})
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({user: true, 'org:org-1': true})
@@ -447,17 +433,14 @@ describe('azureFoundryStore: mutations', () => {
     await useAzureFoundryStore.getState().deleteConnection(ORG, 'default', {cascade: true, force: true})
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({'org:org-1': true})
 
-    // Clearing a scope without a suggestion keeps the same object.
     const before = useAzureFoundryStore.getState().knowledgeReindex
     useAzureFoundryStore.getState().clearKnowledgeReindex([USER])
     expect(useAzureFoundryStore.getState().knowledgeReindex).toBe(before)
 
-    // Logout forgets it.
     await resetAllStores()
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({})
   })
 
-  // U8: without an Azure knowledge base (desktop) there is nothing to re-index.
   it('asks for no re-index where no Azure knowledge base exists', async () => {
     const kb = model('kbnew00000', {kind: 'embedding', isKnowledgeEmbedding: true})
     await seed([conn('default')], [kb], USER, {knowledgeEmbeddingEnabled: false})
@@ -498,12 +481,10 @@ describe('azureFoundryStore: mutations', () => {
     expect(scope().discovery.default).toBe(cached.default)
     expect(scope().discovery.second0000).toBe(cached.second0000)
 
-    // A resource without discovery is removed without touching the rest.
     api.deleteAzureConnection.mockResolvedValueOnce({status: 'ok', deletedModels: 1, clearedKnowledgeEmbedding: false})
     await useAzureFoundryStore.getState().deleteConnection(USER, 'third00000', {cascade: true})
     expect(scope().discovery).toBe(cached)
 
-    // A reload keeps the discovery of the resources still there.
     await seed([conn('second0000'), conn('default')], [])
     expect(Object.keys(scope().discovery).sort()).toEqual(['default', 'second0000'])
   })
@@ -536,7 +517,6 @@ describe('azureFoundryStore: mutations', () => {
     await seed([conn('default', {modelCount: 1})], [model('helper0000', {kind: 'agent', deployment: 'helper'})])
     api.discoverAzureConnection.mockResolvedValueOnce(discovery())
     const d = await useAzureFoundryStore.getState().discover(USER, 'default')
-    // Reconciled on arrival: the server's stale mark is corrected from the models.
     expect(d.agents[0]).toMatchObject({alreadyAdded: true, modelId: 'm/helper0000'})
 
     api.deleteAzureModel.mockResolvedValueOnce({status: 'ok'})
@@ -551,7 +531,6 @@ describe('azureFoundryStore: mutations', () => {
       alreadyAdded: false,
     })
 
-    // Removing a model the cache no longer has changes nothing else.
     api.deleteAzureModel.mockResolvedValueOnce({status: 'ok'})
     await useAzureFoundryStore.getState().deleteModel(USER, 'unknown000')
     expect(scope().connections[0]!.modelCount).toBe(0)
@@ -607,15 +586,11 @@ describe('azureFoundryStore: mutations', () => {
     const readOnly = new VersionConflictError('written by a newer version', 'REGISTRY_READ_ONLY')
     api.deleteAzureModel.mockRejectedValueOnce(readOnly)
     await expect(useAzureFoundryStore.getState().deleteModel(USER, 'gpt4100000')).rejects.toBe(readOnly)
-    // Passed through as is, but the next load reads the registry state again.
     expect(scope().loadedAt).toBe(0)
     expect(scope().models.map(m => m.id)).toEqual(['gpt4100000'])
   })
 })
 
-// U5: the user scope's serverDefault (what AI Accounts marks [Default] while
-// the user saved no default) follows the personal chat entries, and no
-// mutation's response carries it.
 describe('azureFoundryStore: the server default', () => {
   const reads = () => api.listAzureModels.mock.calls.length
 
@@ -629,7 +604,6 @@ describe('azureFoundryStore: the server default', () => {
     await useAzureFoundryStore.getState().deleteModel(USER, 'aaaaaaaaaa')
     await vi.waitFor(() => expect(scope().serverDefault).toBe('m/bbbbbbbbbb'))
     expect(reads()).toBe(2)
-    // The models are the ones patched from the change.
     expect(scope().models.map(m => m.id)).toEqual(['bbbbbbbbbb'])
   })
 
@@ -647,26 +621,22 @@ describe('azureFoundryStore: the server default', () => {
     await vi.waitFor(() => expect(scope().serverDefault).toBe('m/aaanew0000'))
     expect(reads()).toBe(++n)
 
-    // The default turned into an embedding model: no longer a chat entry.
     api.updateAzureModel.mockResolvedValueOnce(model('aaanew0000', {kind: 'embedding'}))
     api.listAzureModels.mockResolvedValueOnce({models: [], serverDefault: 'm/aaaaaaaaaa'})
     await useAzureFoundryStore.getState().updateModel(USER, 'aaanew0000', {kind: 'embedding'})
     await vi.waitFor(() => expect(scope().serverDefault).toBe('m/aaaaaaaaaa'))
     expect(reads()).toBe(++n)
 
-    // A designation alone moves nothing.
     api.updateAzureModel.mockResolvedValueOnce(model('embed00000', {kind: 'embedding', isKnowledgeEmbedding: true}))
     await useAzureFoundryStore.getState().updateModel(USER, 'embed00000', {isKnowledgeEmbedding: true})
     expect(reads()).toBe(n)
 
-    // The resource went with its models, the default among them.
     api.deleteAzureConnection.mockResolvedValueOnce({status: 'ok', deletedModels: 3, clearedKnowledgeEmbedding: true})
     api.listAzureModels.mockResolvedValueOnce({models: []})
     await useAzureFoundryStore.getState().deleteConnection(USER, 'default', {cascade: true})
     await vi.waitFor(() => expect(scope().serverDefault).toBeNull())
     expect(reads()).toBe(n + 1)
 
-    // An organisation's view has no server default.
     await seed([conn('default', {shared: true})], [], ORG)
     const seeded = reads()
     api.createAzureModel.mockResolvedValueOnce(model('orgmodel00', {shared: true}))
@@ -682,11 +652,10 @@ describe('azureFoundryStore: the server default', () => {
     api.deleteAzureModel.mockResolvedValue({status: 'ok'})
     await useAzureFoundryStore.getState().deleteModel(USER, 'aaaaaaaaaa')
     await useAzureFoundryStore.getState().deleteModel(USER, 'bbbbbbbbbb')
-    // One read at a time.
     expect(reads()).toBe(2)
 
     api.listAzureModels.mockResolvedValueOnce({models: [c], serverDefault: 'm/cccccccccc'})
-    first.resolve({models: [b, c], serverDefault: 'm/bbbbbbbbbb'}) // predates the second removal
+    first.resolve({models: [b, c], serverDefault: 'm/bbbbbbbbbb'})
     await vi.waitFor(() => expect(reads()).toBe(3))
     await vi.waitFor(() => expect(scope().serverDefault).toBe('m/cccccccccc'))
   })
@@ -699,8 +668,6 @@ describe('azureFoundryStore: the server default', () => {
     api.deleteAzureModel.mockResolvedValueOnce({status: 'ok'})
     await useAzureFoundryStore.getState().deleteModel(USER, 'aaaaaaaaaa')
 
-    // Meanwhile the whole view is read again (credentials entered again,
-    // say) and says where the default is now.
     await seed([conn('default')], [b, c], USER, {serverDefault: 'm/cccccccccc'})
     expect(scope().serverDefault).toBe('m/cccccccccc')
     late.resolve({models: [b, c], serverDefault: 'm/bbbbbbbbbb'})
@@ -734,7 +701,6 @@ describe('azureFoundryStore: the server default', () => {
     await Promise.resolve()
     expect(useAzureFoundryStore.getState().scopes).toEqual({})
 
-    // The next session reads afresh (nothing left in flight blocks it).
     await seed([conn('default')], [model('bbbbbbbbbb')], USER, {serverDefault: 'm/bbbbbbbbbb'})
     api.deleteAzureModel.mockResolvedValueOnce({status: 'ok'})
     api.listAzureModels.mockResolvedValueOnce({models: [], serverDefault: 'm/cccccccccc'})
@@ -813,8 +779,6 @@ describe('azureFoundryStore: discovery', () => {
     await seed(
       [conn('default')],
       [
-        // gpt-4.1 added as Claude, the embedding deployment added as chat,
-        // and a chat entry that happens to share the agent's name.
         model('claude0000', {kind: 'claude', deployment: 'GPT-4.1'}),
         model('embchat000', {kind: 'chat', deployment: 'text-embedding-3-large'}),
         model('helperchat', {kind: 'chat', deployment: 'helper'}),
@@ -859,7 +823,6 @@ describe('azureFoundryStore: tests', () => {
       error: 'bad key',
       at: '2026-09-30T12:00:00.000Z',
     })
-    // The organisation's resource with the same id is not the caller's.
     expect(scope().connections[1]).toBe(orgTwin)
 
     const before = scope()
@@ -876,7 +839,6 @@ describe('azureFoundryStore: tests', () => {
     expect(scope().models).toBe(before.models)
     expect(scope().connections).toBe(before.connections)
 
-    // A saved target the cache doesn't hold changes nothing.
     api.testAzure.mockResolvedValueOnce({ok: true, latencyMs: 5})
     await useAzureFoundryStore.getState().test(USER, {model: {id: 'unknown000'}})
     api.testAzure.mockResolvedValueOnce({ok: true, latencyMs: 5})
@@ -949,7 +911,6 @@ describe('azureFoundryStore: logout', () => {
     await loading
     await failingLoad
     await creating
-    // Still typed for the caller, but nothing is marked stale any more.
     await expect(updating).rejects.toBeInstanceOf(AzureConflictError)
     await discovering
     await expect(refusing).rejects.toThrow('offline')
@@ -957,7 +918,6 @@ describe('azureFoundryStore: logout', () => {
     expect(useAzureFoundryStore.getState().scopes).toEqual({})
     expect(epoch()).toBeLessThanOrEqual(before)
 
-    // A discovery after the reset is not deduped onto the forgotten one.
     api.discoverAzureConnection.mockResolvedValueOnce(discovery())
     await useAzureFoundryStore.getState().discover(USER, 'default')
     expect(api.discoverAzureConnection).toHaveBeenCalledTimes(3)

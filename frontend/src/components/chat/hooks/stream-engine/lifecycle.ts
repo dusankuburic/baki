@@ -24,14 +24,10 @@ import type {useCommit} from './commit'
 
 type StreamingApi = ReturnType<typeof useStreamingMessage>
 
-// The pieces of the engine a turn's lifecycle needs. Stable references, so
-// the callbacks below keep their original identities.
 interface LifecycleDeps {
   toastRef: MutableRefObject<ToastApi | null>
   streamAccRef: MutableRefObject<Map<string, StreamAcc>>
   teardownRef: MutableRefObject<(streamId: string) => void>
-  // Filled with scheduleAutoResend, for the error path (useStreamEvents)
-  // that is built before this hook.
   autoResendRef: MutableRefObject<(streamId: string) => string | null>
   registerStream: StreamingApi['registerStream']
   confirmStream: StreamingApi['confirmStream']
@@ -48,11 +44,6 @@ interface LifecycleDeps {
   updateThread: ChatStoreState['updateThread']
 }
 
-// useTurnLifecycle owns one turn's life: sending (send), sending it again
-// once after a server restart (scheduleAutoResend), re-attaching after a
-// reload (resumeAfterReload), and the user-driven exits (stop, abandon,
-// stopAndCommit) — plus the per-thread generation tokens used to discard
-// stale sends.
 export function useTurnLifecycle({
   toastRef,
   streamAccRef,
@@ -72,8 +63,6 @@ export function useTurnLifecycle({
   appendMessage,
   updateThread,
 }: LifecycleDeps) {
-  // Per-thread generation token: each send bumps it; a stale send detects
-  // it's no longer current after an await and self-cancels.
   const threadGenRef = useRef(new Map<string, number>())
   const bumpGen = useCallback(
     (threadId: string) => {
@@ -88,12 +77,6 @@ export function useTurnLifecycle({
     [threadGenRef],
   )
 
-  // endStreamIfOwn clears a thread's slot only while it still belongs to this
-  // send. A send that lost its generation (Stop, the thread closed, logout)
-  // must not end whatever stream replaced it: a queued follow-up drains the
-  // instant Stop frees the thread, and the stale send's late cleanup used to
-  // delete the follow-up's slot — the engine then cancelled it as orphaned
-  // while the backend generated (and billed) a reply nobody was listening to.
   const endStreamIfOwn = useCallback(
     (threadId: string, streamId: string) => {
       if (useChatStore.getState().streams[threadId]?.streamId === streamId) endStream(threadId)
@@ -101,9 +84,6 @@ export function useTurnLifecycle({
     [endStream],
   )
 
-  // stopAndCommit cancels a stream the user stopped mid-generation, keeping
-  // whatever text was already generated as a permanent 'interrupted' message
-  // instead of discarding it.
   const stopAndCommit = useCallback(
     (streamId: string, threadId: string, messageId: string) => {
       const acc = streamAccRef.current.get(streamId)
@@ -118,24 +98,12 @@ export function useTurnLifecycle({
     [streamAccRef, commitAssistantMessage, cancelStream, dropAcc],
   )
 
-  // send runs one turn on a thread: append the user message, open the
-  // stream's SSE listener, then create the backend stream. Reports
-  // SYNCHRONOUSLY whether the message was accepted (false = nothing was
-  // appended: unknown thread, already streaming, or the concurrency cap — the
-  // caller keeps its draft); the network work continues detached, so a caller
-  // can reset its composer the moment the message is on screen instead of
-  // after two round-trips.
   const send = useCallback(
     (threadId: string, text: string, opts: SendOptions): boolean => {
       const st = useChatStore.getState()
       const thread = st.threads.find(t => t.id === threadId)
       if (!thread) return false
-      // Per-thread guard: one stream per thread (enforced structurally by the
-      // store's streams map, but checked here to no-op a double-send race).
       if (st.streams[threadId]) return false
-      // Global cap (mirrors backend maxConcurrentStreamsPerScope): reject early
-      // with a toast so the user gets immediate feedback rather than a rejected
-      // POST after a round-trip.
       if (!st.canStartStream()) {
         toastRef.current?.warning(i18n.t('chat:errors.busyTitle'), {
           description: i18n.t('chat:errors.busyBody', {count: MAX_CONCURRENT_STREAMS}),
@@ -143,9 +111,6 @@ export function useTurnLifecycle({
         return false
       }
 
-      // A label is only ever a name: never the id itself or a registry id —
-      // it is stored with the reply, the pin and the in-flight record, and
-      // would then beat the listing's name for good.
       const modelLabel = storableModelLabel(opts.modelLabel, opts.model)
       const meta: StreamMeta = {provider: opts.provider, model: opts.model, ...(modelLabel ? {modelLabel} : {})}
       const userMsg: ChatMessage = {
@@ -156,8 +121,6 @@ export function useTurnLifecycle({
         contextBlockId: thread.contextBlockId ?? undefined,
       }
       const msgId = uuid()
-      // Built BEFORE the user message is appended: when history travels with
-      // the request, the backend appends userMessage itself.
       const req = buildChatRequest({
         thread,
         provider: opts.provider,
@@ -173,22 +136,12 @@ export function useTurnLifecycle({
       })
 
       const isFirstMessage = st.getMessages(threadId).length === 0
-      // The store titles an untitled thread from the first user message it
-      // sees; remembered so a withdrawn message takes its title back with it.
       const hadTitle = !!thread.title
       appendMessage(threadId, userMsg)
       if (isFirstMessage && !hadTitle && text.trim()) {
         updateThread(threadId, {title: text.replace(/\n+/g, ' ').trim().slice(0, 50)})
       }
-      // No save-on-send — the backend reconstructs history; save-on-done
-      // persists the full user+assistant pair.
 
-      // The accepted send pins the thread to the model it went to — a new
-      // thread keeps it from now on, whatever the Default for new chats
-      // becomes — unless it is a stand-in for the thread's own model (see
-      // SendOptions.pinThread). An empty model (the server's default) pins
-      // nothing. Pinned before the network, so a model the server then
-      // refuses is the one the thread's notice names.
       const repickedSince = opts.pinnedAs !== undefined && opts.pinnedAs !== threadPinKey(thread)
       if (opts.pinThread !== false && meta.model && !repickedSince) {
         st.setThreadModel(threadId, {provider: meta.provider, model: meta.model, modelLabel: meta.modelLabel})
@@ -206,12 +159,6 @@ export function useTurnLifecycle({
           ...(errorCode ? {errorCode} : {}),
         })
 
-      // withdrawUserMessage takes back a message the backend never accepted:
-      // it must not sit on screen as a question with no answer (and be saved
-      // as one), so it returns to the composer — the thread's draft, plus the
-      // one-shot staged prompt an open composer consumes at once. @-files and
-      // the exclude flag are not carried back. A resend puts the exchange it
-      // took off back instead (see SendOptions.restore).
       const withdrawUserMessage = () => {
         const now = useChatStore.getState()
         if (opts.restore) {
@@ -226,21 +173,12 @@ export function useTurnLifecycle({
 
       const myGen = bumpGen(threadId)
       const sid = uuid()
-      // The common teardown of a send that will not go (or stay) live: drop
-      // the accumulator, cancel any backend stream the create POST recorded,
-      // and free the slot only if it is still this send's.
       const abortSend = () => {
         dropAcc(sid)
         cancelStream(sid)
         endStreamIfOwn(threadId, sid)
       }
       startStream(threadId, sid, msgId)
-      // A turn sent without history is server-owned: the server stores the
-      // question as the stream starts and the finished answer — tool trail,
-      // fix outcomes, finish reason, usage and served model included — as
-      // it ends, so the save on done (a full-replace POST of the whole
-      // thread) is skipped. A turn that carried its history (resend, history
-      // off) owns persistence itself, as before.
       beginAcc(sid, threadId, {
         ...meta,
         serverOwned: req.messages === undefined,
@@ -251,32 +189,20 @@ export function useTurnLifecycle({
         },
         ...(opts.autoRetry ? {autoRetried: true} : {}),
       })
-      // Recorded with the thread (persisted) until the turn ends, so a reload
-      // mid-turn re-attaches it labelled with the model it went to.
       updateThread(threadId, {inFlight: {streamId: sid, messageId: msgId, ...meta}})
 
       const run = async () => {
         try {
-          // Subscribe + wait for the SSE connection to be 'open' BEFORE creating
-          // the stream so no chunk is lost; registerStream returns false if the
-          // engine was unmounted mid-registration — then do NOT create the stream.
-          const registered = await registerStream(sid, /*begin*/ false)
+          const registered = await registerStream(sid,  false)
           if (!registered || !isCurrentGen(threadId, myGen)) {
             abortSend()
             return
           }
-          // Create the stream with the client-generated ID. The backend stores it
-          // and — because clientStreamId is set — closes ctl.started immediately,
-          // so the worker emits over SSE to the already-subscribed listener.
           req.clientStreamId = sid
           let returnedId: string
           try {
             returnedId = await chatApi.streamChatMessage(req)
           } catch (e) {
-            // Refused while the server drains for a restart: nothing was
-            // created, so the same request may go again — once per turn,
-            // after the server's Retry-After, once the event connection is
-            // open again (it re-dials the new instance meanwhile).
             const acc = streamAccRef.current.get(sid)
             const restarting = e instanceof ApiError && classifyChatFailure(e.message, e.code) === 'serverRestarting'
             if (!restarting || !acc || acc.autoRetried) throw e
@@ -288,7 +214,7 @@ export function useTurnLifecycle({
               return
             }
             teardownRef.current(sid)
-            if (!(await registerStream(sid, /*begin*/ false)) || !isCurrentGen(threadId, myGen)) {
+            if (!(await registerStream(sid,  false)) || !isCurrentGen(threadId, myGen)) {
               abortSend()
               return
             }
@@ -296,9 +222,6 @@ export function useTurnLifecycle({
             returnedId = await chatApi.streamChatMessage(req)
           }
           if (!isCurrentGen(threadId, myGen)) {
-            // Cancelled while the create POST was in flight; tear down the
-            // stream the backend just recorded (abortSend frees the slot only
-            // if it is still this send's — a queued follow-up may own it).
             abortSend()
             return
           }
@@ -307,36 +230,18 @@ export function useTurnLifecycle({
             appendErrorBubble(i18n.t('chat:errors.noStream'))
             return
           }
-          // Stream is live; chunks (or a fail-fast error/done) arrive over SSE and
-          // are dispatched by the handlers above. A reconnect that cannot
-          // resume it from here on means it is lost (useStreamingMessage).
           confirmStream(sid)
         } catch (e: unknown) {
           if (!isCurrentGen(threadId, myGen)) return
           const errMsg = getErrorMessage(e) || i18n.t('chat:errors.sendFailed')
-          // Classify by the envelope's machine-readable code first, falling back
-          // to the message for older backends.
           const kind = classifyChatFailure(errMsg, e instanceof ApiError ? e.code : null)
-          // Tear down the SSE subscription we opened and cancel any backend
-          // stream that the create POST may have recorded before throwing.
           abortSend()
           if (kind === 'capacity') {
-            // The backend is at its per-caller cap — another tab or device, or
-            // a Stop it had not processed when a queued follow-up drained.
-            // Transient, so no *Error* bubble in history: the message goes back
-            // to the composer with the busy notice.
             withdrawUserMessage()
             toastRef.current?.warning(i18n.t('chat:errors.busyTitle'), {
               description: i18n.t('chat:errors.busyBody', {count: MAX_CONCURRENT_STREAMS}),
             })
           } else if (kind === 'modelNotAvailable') {
-            // The model was removed (or stopped being shared) after the
-            // picker listed it. Nothing was generated, so — like the
-            // capacity path — the message goes back to the composer instead
-            // of leaving an error in history; the listing is refetched, and
-            // the thread's notice (raised once that listing lands, or its
-            // refetch fails) offers "Choose model". Said at once here: the
-            // text moving back to the composer is no explanation.
             withdrawUserMessage()
             const store = useChatStore.getState()
             store.bumpProviderEpoch()
@@ -358,18 +263,12 @@ export function useTurnLifecycle({
             notifyBudget(detail)
             appendErrorBubble(i18n.t('chat:errors.budgetBubble', {detail}))
           } else if (kind === 'serverRestarting') {
-            // Refused again after the one retry (the 503's message is masked).
             appendErrorBubble(i18n.t('chat:errors.generic', {message: i18n.t('chat:errors.serverRestarted')}))
           } else if (e instanceof ApiError && providerErrorInfo(e.code)) {
-            // A provider failure the create POST already knew about (no
-            // credentials for this provider in the flow's scope): same
-            // bubble as the stream's error event.
             const info = providerErrorInfo(e.code)!
             if (info.refreshProviders) useChatStore.getState().bumpProviderEpoch()
             appendErrorBubble(providerErrorLine(info, errMsg), e.code ?? undefined)
           } else {
-            // Surface any other create failure as an error bubble so the user
-            // knows their message didn't go through.
             logger.warn('chat stream create failed', e)
             appendErrorBubble(i18n.t('chat:errors.generic', {message: errMsg}))
           }
@@ -398,7 +297,6 @@ export function useTurnLifecycle({
     ],
   )
 
-  // Automatic resends waiting out their delay, by the stream they replace.
   const autoResendTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   useEffect(() => {
     const timers = autoResendTimersRef.current
@@ -408,16 +306,6 @@ export function useTurnLifecycle({
     }
   }, [])
 
-  // scheduleAutoResend takes over a stream a server restart ended
-  // (SERVER_RESTARTING) and sends its turn again once, after a short delay,
-  // the way Retry does: the question comes off and goes again with the
-  // history before it, so the server's copy of the cut-short attempt is
-  // replaced by the save on done. Meanwhile the slot stays, its partial text
-  // under a status line, so Stop still keeps that text and a queued
-  // follow-up waits. Returns the thread, or null when the turn gets the
-  // error bubble instead: its retry is spent, it was re-attached (no record
-  // of its question), it asked for an approval (it may have changed the
-  // flow — the user decides), or the local history is not the server's yet.
   const scheduleAutoResend = useCallback(
     (streamId: string): string | null => {
       const acc = streamAccRef.current.get(streamId)
@@ -445,8 +333,6 @@ export function useTurnLifecycle({
       const gen = threadGenRef.current.get(threadId) ?? 0
       const timer = setTimeout(() => {
         autoResendTimersRef.current.delete(streamId)
-        // Stopped, abandoned, closed or logged out meanwhile: those paths
-        // bumped the generation and own the slot.
         if (!isCurrentGen(threadId, gen) || streamAccRef.current.get(streamId) !== acc) return
         dropAcc(streamId)
         endStreamIfOwn(threadId, streamId)
@@ -456,7 +342,6 @@ export function useTurnLifecycle({
         const accepted = send(threadId, resend.text, {
           ...resend.opts,
           includeHistory: true,
-          // The first send pinned what it should; a pick made since stays.
           pinThread: false,
           restore: before,
           autoRetry: true,
@@ -472,25 +357,6 @@ export function useTurnLifecycle({
     autoResendRef.current = scheduleAutoResend
   }, [autoResendRef, scheduleAutoResend])
 
-  // resumeAfterReload re-attaches a stream the server reports as still
-  // in-flight for a conversation the client just (re)loaded: a page
-  // reload, Tauri window reopen or crash mid-turn no longer loses the reply
-  // — the server keeps the stream resumable and persists the finished turn.
-  // Mirrors send(): slot + accumulator first, then the SSE subscription,
-  // then one authoritative full resume (the user turn is already in the
-  // loaded history — persistInitialUserTurn stored it at stream start). If
-  // the stream turns out to be gone (403/404 — retention expired or the
-  // stream finished and was evicted), drop the slot and let the caller
-  // refetch the history, where the server's persisted copy of the turn
-  // lands if it exists.
-  //
-  // The conversation payload does not say which model the in-flight turn
-  // used: the thread's record of it does (resumedTurn), and the answer is
-  // committed under the message id the server stores it under. Without a
-  // record nothing is guessed — neither the thread's pin (the turn may have
-  // gone to a stand-in) nor the settings: the answer is committed with no
-  // model, and not saved over the server's copy, which the server stored
-  // with the model the turn was sent to.
   const resumeAfterReload = useCallback(
     (threadId: string, streamId: string, onGone?: () => void): boolean => {
       const st = useChatStore.getState()
@@ -506,12 +372,9 @@ export function useTurnLifecycle({
         onGone?.()
       }
       void (async () => {
-        // registerStream rejects when the event connection does not open in
-        // time. Unhandled, that left the slot thinking with no stream behind
-        // it — queued sends never drained and only Stop recovered.
         let registered: boolean
         try {
-          registered = await registerStream(streamId, /*begin*/ false)
+          registered = await registerStream(streamId,  false)
         } catch (e) {
           logger.warn('chat stream reattach failed', e)
           gone()
@@ -528,19 +391,13 @@ export function useTurnLifecycle({
     [beginAcc, dropAcc, endStreamIfOwn, registerStream, resumeInto, startStream, teardownRef],
   )
 
-  // stop ends a thread's in-flight reply at the user's request, keeping the
-  // text generated so far as an 'interrupted' message.
   const stop = useCallback(
     (threadId: string) => {
       const slot = useChatStore.getState().streams[threadId]
       if (!slot) return
       const sid = slot.streamId
-      // Bump the per-thread gen so any in-flight send sees it's stale and
-      // self-cancels.
       bumpGen(threadId)
       if (sid && sid !== 'pending') {
-        // stopAndCommit cancels the SSE sub + backend stream, keeping whatever
-        // text had streamed before the stop instead of discarding it.
         stopAndCommit(sid, threadId, slot.messageId)
       }
       endStream(threadId)
@@ -548,8 +405,6 @@ export function useTurnLifecycle({
     [bumpGen, endStream, stopAndCommit],
   )
 
-  // abandon drops a thread's in-flight reply without committing it (the
-  // thread is being closed) and cancels it on the backend.
   const abandon = useCallback(
     (threadId: string) => {
       const slot = useChatStore.getState().streams[threadId]

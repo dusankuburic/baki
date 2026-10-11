@@ -39,10 +39,6 @@ import type {
 } from './governance'
 import type {LibraryFlow} from './library'
 
-// A Go server serialises a nil slice (or map) as null — an empty list on the
-// wire is `null`, not `[]` (providers.ts's list() helper guards the same case
-// at call sites). Accept null/undefined and read it as empty so a
-// legitimately-empty list validates instead of throwing ResponseValidationError.
 function nilAsEmpty<T extends z.ZodTypeAny>(item: T) {
   return z
     .array(item)
@@ -50,28 +46,14 @@ function nilAsEmpty<T extends z.ZodTypeAny>(item: T) {
     .transform(v => v ?? [])
 }
 
-// A wire enum the backend may grow (types/tolerant.ts): a known value keeps
-// its literal type, and any other string parses as itself, typed
-// UnknownEnumValue, instead of failing the whole response. z.enum stays only
-// where an unknown value must not be guessed at: the roles, which gate the UI,
-// and Finding.severity, which the backend closes itself and the client ranks.
 function tolerantEnum<T extends string>(values: readonly T[]) {
   return z.string().transform((v): Tolerant<T> => (isKnown(values, v) ? v : (v as UnknownEnumValue)))
 }
 
-// This module — and therefore zod — is ONLY reachable through the dynamic
-// import('./schemas.lazy') in ./schemas.ts. Keeping zod's `z` binding inside
-// one chunk lets rollup's deep tree-shaking prune unused members (passing `z`
-// across a chunk boundary, or as a function parameter, ships the entire
-// library ~4× larger).
-
 export function buildSchemas() {
-  // ── Auth ─────────────────────────────────────────────────────────────────
   const AuthUserSchema = z.object({
     id: z.string(),
     email: z.string(),
-    // Closed: a role this bundle does not know is refused, never guessed
-    // into a privilege; a new role ships with the bundle that knows it.
     role: z.enum(['admin', 'member', 'viewer', 'guest']),
     displayName: z.string().optional(),
     avatarUrl: z.string().optional(),
@@ -85,10 +67,6 @@ export function buildSchemas() {
     user: AuthUserSchema,
   })
 
-  // Register is NOT a login: unless the account was created already verified
-  // (the bootstrap admin), the server sends a verification link and returns
-  // no tokens. Validating it against LoginResponseSchema made every ordinary
-  // sign-up fail client-side after the account had been created.
   const RegisterResponseSchema = z.object({
     status: z.string().optional(),
     user: AuthUserSchema,
@@ -104,24 +82,6 @@ export function buildSchemas() {
     refreshToken: z.string().optional(),
   })
 
-  // ── Analysis ──────────────────────────────────────────────────────────────
-  // AnalysisReport is the core product output; an empty/missing findings array
-  // would silently render a "clean" flow when the backend actually errored.
-  //
-  // Both schemas use .passthrough() so backend fields NOT explicitly listed
-  // here (autoFix, fingerprint, confidence, autoFixHint, metadata on Finding;
-  // metrics, groups, ruleProfiles on AnalysisReport) survive validation.
-  // Without passthrough, zod's default .strip() would silently delete them and
-  // break the Apply-fix button, health-score badge, per-rule timing,
-  // confidence badges, and triage/suppression keying.
-
-  // Envelope check for the document a `flow:loaded` SSE event triggered a
-  // re-fetch of (useAppEvents). The event itself carries only a lightweight
-  // summary; the fetched document is validated here before it enters the
-  // editor store. Same philosophy as above: validate the top-level shape so
-  // a malformed payload (HTML error page, truncated JSON, a different
-  // event's data) is rejected before it can hijack the editor, while
-  // passthrough keeps the deep block tree untouched.
   const FlowDocumentEnvelopeSchema = z
     .object({
       id: z.string().min(1),
@@ -141,16 +101,10 @@ export function buildSchemas() {
       subflowId: z.string().optional(),
       suggestion: z.string().optional(),
       category: z.string().optional(),
-      // 'preview' from a preview rule; a stage a newer server adds parses as itself.
       stage: tolerantEnum<RuleStage>(RULE_STAGES).optional(),
     })
     .passthrough()
 
-  // The loads (load-path / load-folder / library content) answer a full
-  // parsed document, so unlike the lightweight flow:loaded envelope check
-  // above, require the parser-emitted filePath + metadata too (the Go struct
-  // marshals both unconditionally). Everything deeper passes through — the
-  // block tree is the editor's domain, not the boundary's.
   const LoadedFlowDocumentSchema = z
     .object({
       id: z.string().min(1),
@@ -167,9 +121,6 @@ export function buildSchemas() {
       generatedAt: z.string(),
       durationMs: z.number(),
       findings: z.array(FindingSchema),
-      // stats REQUIRED (F1.9): the analyzer unconditionally stamps it
-      // (core/analyzer/engine.go computeStats), and the TS type requires it —
-      // optionality here only hid the drift behind the cast below.
       stats: z
         .object({
           errors: z.number(),
@@ -182,13 +133,6 @@ export function buildSchemas() {
     })
     .passthrough() as unknown as z.ZodType<AnalysisReport>
 
-  // ── Settings ──────────────────────────────────────────────────────────────
-  // AppSettings is deeply nested; rather than duplicate the entire type tree
-  // in zod, validate the top-level shape (version + the known section keys)
-  // and let zod passthrough the rest. This still catches the real failure
-  // modes: an HTML proxy body, null, or a fundamentally wrong shape.
-  // Annotated as ZodType<AppSettings> so requestValidated<AppSettings>
-  // accepts it.
   const AppSettingsSchema = z
     .object({
       version: z.number(),
@@ -201,11 +145,6 @@ export function buildSchemas() {
     })
     .passthrough() as unknown as z.ZodType<AppSettings>
 
-  // ── Flow reads (recent files, search, source files/meta, snapshots) ──────
-  // The desktop list endpoints answer `null` for an empty set (Go nil slice,
-  // e.g. RecentFiles with no history), so the top-level arrays run through
-  // nilAsEmpty. Per-item fields mirror the Go structs in
-  // internal/storage/interfaces / core/models.
   const RecentFileSchema = z
     .object({
       path: z.string(),
@@ -227,9 +166,7 @@ export function buildSchemas() {
       matchedField: z.string(),
       matchedText: z.string(),
       score: z.number(),
-      // computeHighlights returns nil when a match has no highlights → null.
       highlights: nilAsEmpty(HighlightSchema),
-      // Stamped only by cross-library search (search-library).
       flowId: z.string().optional(),
       flowName: z.string().optional(),
     })
@@ -238,7 +175,6 @@ export function buildSchemas() {
   const SearchResultsSchema = z
     .object({
       query: z.object({text: z.string(), fuzzy: z.boolean(), maxResults: z.number()}).passthrough(),
-      // A search with no matches marshals the nil slice as null.
       results: nilAsEmpty(SearchResultSchema),
       totalCount: z.number(),
       durationMs: z.number(),
@@ -255,7 +191,6 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // GetSourceFiles answers nil (→ null) when no document is loaded.
   const SourceFilesSchema = nilAsEmpty(SourceFileInfoSchema)
 
   const SourceMetaSchema = z
@@ -277,15 +212,10 @@ export function buildSchemas() {
 
   const SnapshotsListSchema = z
     .object({
-      // ListSourceSnapshots answers nil before the first snapshot → null.
       snapshots: nilAsEmpty(SnapshotInfoSchema),
     })
     .passthrough()
 
-  // ── Library ───────────────────────────────────────────────────────────────
-  // Mirrors api.libraryFlow (internal/api/library.go): the permission flags
-  // and counts are always marshalled, the description/owner-name/tags and the
-  // health trio are omitempty (health only on the single-flow GET).
   const LibraryFlowSchema = z
     .object({
       id: z.string(),
@@ -309,7 +239,6 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // render.PagedResponse[libraryFlow]: {items, total, offset, limit}.
   const LibraryFlowsPageSchema = z
     .object({
       items: nilAsEmpty(LibraryFlowSchema),
@@ -330,14 +259,8 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // toFlowVersionViews builds a non-nil slice; metadata (block/subflow counts)
-  // rides along via passthrough.
   const LibraryFlowVersionsSchema = z.array(LibraryFlowVersionSchema)
 
-  // ── Governance alerts ─────────────────────────────────────────────────────
-  // Mirrors storageif.GovernanceAlert. `type`/`severity` are tolerant: the
-  // server writes the title and message, so an alert of a newer type still
-  // reads, and one such row must not empty the whole inbox.
   const GovernanceAlertSchema = z
     .object({
       id: z.string(),
@@ -359,8 +282,6 @@ export function buildSchemas() {
       healthScore: z.number().optional(),
       prevHealth: z.number().optional(),
       createdAt: z.string(),
-      // *time.Time pointers, omitempty on the backend; the hand-written type
-      // keeps `| null` for older payloads that marshalled them as null.
       readAt: z.string().nullish(),
       dismissedAt: z.string().nullish(),
       targetUser: z.string().optional(),
@@ -374,10 +295,6 @@ export function buildSchemas() {
 
   const UnreadCountSchema = z.object({count: z.number()}).passthrough()
 
-  // ── Org CI credentials ────────────────────────────────────────────────────
-  // The timestamps are *time.Time: null or absent for a credential that
-  // never expires or was never used. The display-only strings read as empty
-  // when absent, so an omitempty on the server cannot fail the whole list.
   const OrgCICredentialSchema = z
     .object({
       id: z.string(),
@@ -393,15 +310,8 @@ export function buildSchemas() {
 
   const OrgCICredentialsSchema = nilAsEmpty(OrgCICredentialSchema)
 
-  // The create answer carries the credential, shown once: without it the
-  // admin would have nothing to copy, so its absence is drift.
   const CreatedOrgCICredentialSchema = OrgCICredentialSchema.extend({credential: z.string().min(1)}).passthrough()
 
-  // ── Org notification channels ─────────────────────────────────────────────
-  // `kind` is tolerant: a channel of a kind a newer server added is listed,
-  // tested and removed. hasSecret is absent from a server before the channel
-  // rework (unknown, not "no secret"); the Jira, email, events and unreadable
-  // fields from a server before those.
   const channelKinds: ChannelKind[] = ['webhook', 'teams', 'teams-workflow', 'slack', 'jira', 'email']
   const channelEvents: ChannelEvent[] = ['drift', 'health_regression', 'new_rules']
   const OrgChannelSchema = z
@@ -424,8 +334,6 @@ export function buildSchemas() {
 
   const OrgChannelsSchema = nilAsEmpty(OrgChannelSchema)
 
-  // The channel form's choices: kinds and events tolerant (a newer server may
-  // offer more), the host list present only when the operator shows it.
   const ChannelOptionsSchema = z
     .object({
       kinds: z.array(tolerantEnum<ChannelKind>(channelKinds)).default([]),
@@ -436,12 +344,6 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // ── Providers ─────────────────────────────────────────────────────────────
-  // Mirrors models.ProviderInfo/ModelDetail (core/models/chat.go). The ids,
-  // kinds and statuses are tolerant: the backend may add a provider (or a
-  // model kind) before the client's PROVIDERS catalogue learns it, and that
-  // must degrade to one entry the chat leaves out — a strict enum would fail
-  // the whole list and blank the chat picker.
   const ModelPurposeSchema = tolerantEnum([...PURPOSE_PRESETS, 'custom'])
   const ModelDetailSchema = z
     .object({
@@ -468,10 +370,6 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // The credential form of GET /api/providers/catalog (Phase 4b). Kind, field
-  // type and mode are tolerant: an entry this bundle cannot form renders as
-  // a generic card, so nothing here may fail the whole catalogue. A nil
-  // slice or map is empty (Go null on the wire).
   const CredentialFieldSchema = z
     .object({
       name: z.string(),
@@ -505,8 +403,6 @@ export function buildSchemas() {
     .nullish()
     .transform(v => v ?? {})
 
-  // The descriptive fields the catalogue sends and /list repeats (optional
-  // there: a server before Phase 4b sends none).
   const providerDescription = {
     modes: nilAsEmpty(tolerantEnum(PROVIDER_MODES)),
     caps: nilAsEmpty(z.string()),
@@ -523,8 +419,6 @@ export function buildSchemas() {
       name: z.string(),
       authType: tolerantEnum(AUTH_TYPES),
       contextLimit: z.number(),
-      // Catalogue/live/registry listings all send a non-nil models slice, but
-      // the registry path assembles it lazily — tolerate null.
       models: nilAsEmpty(ModelDetailSchema),
       defaultModel: z.string(),
       configured: z.boolean(),
@@ -556,13 +450,9 @@ export function buildSchemas() {
     .object({providers: nilAsEmpty(ProviderSpecSchema)})
     .passthrough() as unknown as z.ZodType<ProviderCatalog>
 
-  // GET /api/providers/github/user (and the Copilot twin) answers null when
-  // not connected — "no stored token" is not an error.
   const GitHubUserSchema = z.object({login: z.string(), name: z.string()}).passthrough()
   const GitHubUserOrNullSchema = z.union([GitHubUserSchema, z.null()])
 
-  // A catalogue device-flow provider answers its `user` route in its own
-  // shape; whichever of these it has names the signed-in user.
   const DeviceAuthUserOrNullSchema = z.union([
     z
       .object({
@@ -597,7 +487,6 @@ export function buildSchemas() {
       config: z
         .object({
           endpoint: z.string(),
-          // '' when the stored credential document is missing/unreadable.
           authMode: tolerantEnum([...AZURE_AUTH_MODES, '']),
           hasSecret: z.boolean(),
           tenantId: z.string().optional(),
@@ -611,7 +500,6 @@ export function buildSchemas() {
       supportsAgents: z.boolean(),
       suggestDiscovery: z.boolean(),
       modelCount: z.number(),
-      // *AzureLastTestView (no omitempty): nil marshals as null.
       lastTest: AzureLastTestSchema.nullish(),
       updatedAt: z.string(),
       credentialUpdatedAt: z.string().optional(),
@@ -619,7 +507,6 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // GET /connections (internal/service/azure_models.go AzureConnectionsListing).
   const AzureConnectionsListingSchema = z
     .object({
       connections: nilAsEmpty(AzureConnectionSchema),
@@ -630,9 +517,6 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // GET /connections/{id}: the backend always wraps in {connection}, but the
-  // client has always accepted the bare resource too — keep both, lift the
-  // envelope. The transform output is the resource; the cast names it.
   const AzureConnectionResponseSchema = z
     .union([z.object({connection: AzureConnectionSchema}).passthrough(), AzureConnectionSchema])
     .transform(v => ('connection' in v && v.connection ? v.connection : v)) as unknown as z.ZodType<AzureConnection>
@@ -647,8 +531,6 @@ export function buildSchemas() {
       deployment: z.string(),
       target: z.string(),
       displayName: z.string(),
-      // Purpose is a preset key or 'custom'; the server may learn a new preset
-      // first — a strict enum would fail the whole listing.
       purpose: ModelPurposeSchema,
       purposeCustom: z.string().optional(),
       description: z.string().optional(),
@@ -667,7 +549,6 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // GET /models (AzureModelsListing).
   const AzureModelsListingSchema = z
     .object({
       models: nilAsEmpty(AzureModelEntrySchema),
@@ -675,9 +556,6 @@ export function buildSchemas() {
     })
     .passthrough() as unknown as z.ZodType<AzureModelsListing>
 
-  // POST /connections/{id}/discover (AzureDiscoveryView). Unlike the frontend
-  // types the backend always marshals kind/model/alreadyAdded on each item, so
-  // the client-side fill-in (discoveryItems) can go once this validates.
   const AzureDiscoveryItemSchema = z
     .object({
       name: z.string(),
@@ -691,9 +569,6 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // Suggestions to add: one of a kind this bundle does not know could not be
-  // added from here (the create request takes known kinds only), so it is
-  // left out rather than offered.
   const knownKind = <I extends {kind: Tolerant<AzureModelKind>}>(item: I): item is I & {kind: AzureModelKind} =>
     isKnown(AZURE_MODEL_KINDS, item.kind)
   const AzureDiscoveryItemsSchema = nilAsEmpty(AzureDiscoveryItemSchema).transform(items => items.filter(knownKind))
@@ -708,21 +583,11 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // ── Chat ──────────────────────────────────────────────────────────────────
-  // /api/chat/suggested-prompts: the prompts come from settings lists that are
-  // empty on a fresh install → nil slice → null. getConversation keeps its own
-  // validator (parseConversationLoad): the payload is a bare array OR an
-  // {messages, activeStreamId} object and per-message coercion lives in
-  // lib/chatMessage — a zod duplicate would only drift from it.
   const SuggestedPromptsSchema = z
     .array(z.string())
     .nullish()
     .transform(v => v ?? [])
 
-  // ── Admin ─────────────────────────────────────────────────────────────────
-  // Mirrors storageif.User as the admin list marshals it: every field is
-  // always present (no omitempty); `role` is '' for accounts written before
-  // the role check existed.
   const AdminUserSchema = z
     .object({
       id: z.string(),
@@ -745,7 +610,6 @@ export function buildSchemas() {
     })
     .passthrough() as unknown as z.ZodType<PagedResponse<AdminUser>>
 
-  // userStatsView: the five role buckets (incl. 'none') are always marshalled.
   const UserStatsSchema = z
     .object({
       total: z.number(),
@@ -757,7 +621,6 @@ export function buildSchemas() {
     })
     .passthrough()
 
-  // auditEventView: the meta map is nil → null when the event carried none.
   const AuditEventSchema = z
     .object({
       id: z.string(),
@@ -775,11 +638,6 @@ export function buildSchemas() {
   const AuditEventsSchema = z.array(AuditEventSchema)
   const AuditActionsSchema = z.array(z.string())
 
-  // ── Dashboard ─────────────────────────────────────────────────────────────
-  // models.DashboardHomeData marshals every section key (no omitempty), but a
-  // section with no data carries null slices/maps (Go nil). Same philosophy as
-  // AppSettingsSchema: validate the load-bearing scalars the UI reads first,
-  // passthrough the deep aggregations, read nil collections as empty.
   const DashboardHomeSchema = z
     .object({
       greeting: z.object({userDisplayName: z.string()}).passthrough(),
@@ -799,7 +657,6 @@ export function buildSchemas() {
       ),
       findings: z.object({available: z.boolean()}).passthrough(),
       isCloud: z.boolean(),
-      // Advanced sections (v2).
       healthTrend: nilAsEmpty(z.object({date: z.string(), avgHealth: z.number(), flowCount: z.number()}).passthrough()),
       costByProvider: nilAsEmpty(
         z.object({provider: z.string(), cost: z.number(), tokensIn: z.number(), tokensOut: z.number()}).passthrough(),
@@ -825,7 +682,6 @@ export function buildSchemas() {
           admin: z.boolean(),
         })
         .passthrough(),
-      // Analytics sections (v3).
       severityTrend: nilAsEmpty(
         z.object({date: z.string(), errors: z.number(), warnings: z.number(), info: z.number()}).passthrough(),
       ),
@@ -843,9 +699,6 @@ export function buildSchemas() {
     })
     .passthrough() as unknown as z.ZodType<DashboardHomeData>
 
-  // models.DashboardAnalyticsData: every section key is always marshalled and
-  // the trend/partial slices are built non-nil (dashboard_analytics.go).
-  // Sections are passthrough — their deep aggregations belong to the backend.
   const DashboardAnalyticsSchema = z
     .object({
       applied: z.object({scope: z.string(), compare: z.boolean(), derived: z.boolean()}).passthrough(),
@@ -869,8 +722,6 @@ export function buildSchemas() {
     })
     .passthrough() as unknown as z.ZodType<DashboardAnalyticsData>
 
-  // ── System ────────────────────────────────────────────────────────────────
-  // models.AppInfo: all fields always marshalled.
   const AppInfoSchema = z
     .object({
       version: z.string(),

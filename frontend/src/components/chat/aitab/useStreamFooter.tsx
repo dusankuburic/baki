@@ -5,10 +5,6 @@ import StreamingBubble from '../StreamingBubble'
 import type {ChatStreamEngine} from '../hooks/useChatStreamEngine'
 import type {ApprovalCard as ApprovalCardState} from '@/stores/chatStore'
 
-// The footer of the message list while a reply streams in: the thinking
-// bubble, the streaming indicator, the live tool trail and the approval
-// cards. Stable across renders that change none of its inputs, so the
-// memoised list (ChatMessageList) skips them.
 export function useStreamFooter(deps: {
   showThinking: boolean
   isCurrentThreadStreaming: boolean
@@ -27,9 +23,6 @@ export function useStreamFooter(deps: {
           />
         )}
         {isCurrentThreadStreaming && <StreamingBubble />}
-        {/* Agentic activity rides INSIDE the scroll region. Pinned below it,
-            the tool trail and approval cards grew row by row mid-stream and
-            squeezed the conversation as the answer arrived. */}
         {isCurrentThreadStreaming && <LiveToolTrail />}
         {isCurrentThreadStreaming &&
           activeThreadId &&

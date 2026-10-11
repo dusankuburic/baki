@@ -13,8 +13,6 @@ import {isTauri} from '@/platform/guards'
 
 interface Props {
   flowId: string | null
-  // Changing this re-reads the flow (after a rename, tag edit or conflict
-  // reload elsewhere in the workspace).
   reloadKey?: number
   onOpen: (flow: LibraryFlow) => void
   onDelete: (flow: LibraryFlow) => void
@@ -29,14 +27,9 @@ interface Props {
 interface DetailData {
   flow: LibraryFlow
   versions: LibraryFlowVersion[]
-  // Set when the versions call failed. Rendered as an error, never as an
-  // empty list: "No saved versions yet." over a 503 told the user their
-  // history was empty when the feature was unavailable.
   versionsError: string | null
 }
 
-// Local mode (desktop) has no version store — the server answers 503 — so
-// the section is not rendered at all rather than shown empty or erroring.
 const versioningAvailable = () => !isTauri()
 
 export default function LibraryDetailPanel({
@@ -181,8 +174,6 @@ export default function LibraryDetailPanel({
         )}
 
         <div className="flex items-center gap-2 pt-3 border-t border-border-subtle flex-wrap">
-          {/* Viewers get neither: the server refuses the rename, and a copy
-              lands in the same org, where a viewer cannot create flows. */}
           {flow.canEdit && (
             <>
               <Button variant="ghost" size="sm" icon={Pencil} onClick={() => onRename(flow)}>
@@ -226,9 +217,6 @@ function Row({icon: Icon, label, value}: {icon: typeof Activity; label: string; 
   )
 }
 
-// TagRow renders the flow's tags as chips with an inline editor
-// (comma-separated input → server-normalized set on save). Editing is
-// triggered by the pencil; empty input saves an empty set (untagged).
 function TagRow({
   flow,
   editing,
@@ -242,9 +230,6 @@ function TagRow({
 }) {
   const {t} = useTranslation('library')
   const [draft, setDraft] = useState('')
-  // Seed the draft when edit mode opens (or the underlying tags change), adjusted
-  // during render. The composite key reproduces the previous effect's [editing,
-  // flow.tags] trigger exactly.
   const tagsText = (flow.tags ?? []).join(', ')
   const seedKey = `${editing}|${tagsText}`
   const [lastSeedKey, setLastSeedKey] = useState<string | null>(null)
@@ -302,8 +287,6 @@ function TagRow({
   }
 
   return (
-    // `group` is what the edit button's hover reveal keys off; without it the
-    // button stayed at opacity 0 for mouse users.
     <div className="group flex items-start gap-2 pt-1 flex-wrap">
       {(flow.tags ?? []).length === 0 ? (
         <span className="text-xs text-text-tertiary/60">{t('detail.noTags')}</span>

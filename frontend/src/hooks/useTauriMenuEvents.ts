@@ -7,25 +7,14 @@ import {useEditorStore} from '@/stores/editorStore'
 import type {FlowDocument as DomainFlowDocument} from '@/types'
 
 interface Options {
-  /** Open a freshly loaded document (handles view switching). */
   openDocument: (doc: DomainFlowDocument | null) => void
-  /** Toggle the colour theme (from useTheme). */
   toggleTheme: () => void
-  /** Show the keyboard-shortcuts help dialog. */
   onShowShortcuts: () => void
 }
 
-/**
- * Wires the Tauri native menu ("menu-event") and OS file-open ("open-file")
- * events to app actions. No-op in web mode. Keeping this here isolates the
- * desktop-only platform wiring out of the App component.
- */
 export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}: Options): void {
-  // Native menu bar events.
   useEffect(() => {
     if (!getPlatformCapabilities().nativeWindow) return
-    // Sync cancel flag so cleanup is immediate — React does not await async cleanup
-    // functions, meaning the Promise.then pattern leaks the listener across re-runs.
     let unsub: (() => void) | null = null
     let cancelled = false
     void import('@tauri-apps/api/event')
@@ -100,7 +89,6 @@ export function useTauriMenuEvents({openDocument, toggleTheme, onShowShortcuts}:
     }
   }, [openDocument, toggleTheme, onShowShortcuts])
 
-  // OS "open with" / file-association events.
   useEffect(() => {
     if (!getPlatformCapabilities().nativeWindow) return
     let unsub: (() => void) | null = null

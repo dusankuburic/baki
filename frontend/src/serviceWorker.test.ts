@@ -1,5 +1,3 @@
-// Behaviour of the service worker in public/sw.js, run in a VM context that
-// provides only the worker globals it touches.
 import {readFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {runInNewContext} from 'node:vm'
@@ -31,7 +29,6 @@ function startWorker(network: Network) {
     fetch: network,
     Response,
     URL,
-    // Resolved per call so fake timers installed by a test apply.
     setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
   })
   const request = (path: string): Promise<Response> => {

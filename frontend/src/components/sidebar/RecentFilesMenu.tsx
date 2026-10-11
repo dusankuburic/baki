@@ -4,6 +4,7 @@ import {FileText, Folder, X, Trash2} from 'lucide-react'
 import clsx from 'clsx'
 import type {RecentFile} from '@/types'
 import {relativeTime, absoluteTime} from '@/lib/time'
+import {formatSize} from '@/lib/format'
 import {Portal} from '@/components/shared'
 
 type RecentFilesMenuProps = {
@@ -13,12 +14,6 @@ type RecentFilesMenuProps = {
   onRemove: (path: string) => void
   onClear: () => void
   onClose: () => void
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function RecentRow({
@@ -88,8 +83,6 @@ export default function RecentFilesMenu({
   const folders = useMemo(() => files.filter(f => f.isFolder), [files])
   const items = useMemo(() => files.filter(f => !f.isFolder), [files])
   const isEmpty = files.length === 0
-  // Keyboard nav walks folders-then-files in the same order they're
-  // rendered, so ArrowDown/ArrowUp step through the visual grouping.
   const flatOrder = useMemo(() => [...folders, ...items], [folders, items])
 
   const updatePosition = useCallback(() => {
@@ -108,8 +101,6 @@ export default function RecentFilesMenu({
     }
   }, [updatePosition])
 
-  // Focus the menu on mount so it accepts arrow-key navigation immediately.
-  // (React's autoFocus prop only takes effect on form controls, not divs.)
   useEffect(() => {
     menuRef.current?.focus()
   }, [])
@@ -118,9 +109,6 @@ export default function RecentFilesMenu({
     const handler = (e: MouseEvent) => {
       const target = e.target as Node
       if (!menuRef.current || menuRef.current.contains(target)) return
-      // Clicks on the anchor (the header row with the chevron) are the
-      // toggle's job — closing here too would make the chevron's click
-      // reopen the menu it just closed.
       if (anchorRef.current?.contains(target)) return
       onClose()
     }

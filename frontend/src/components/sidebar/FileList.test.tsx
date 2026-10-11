@@ -46,8 +46,6 @@ describe('FileList', () => {
     const onSelectFile = vi.fn()
     render(<FileList files={files} selectedFilePath={null} folderName="f" onSelectFile={onSelectFile} />)
     const list = screen.getByRole('listbox')
-    // The list starts focused on the first row (index 0: Alpha); two
-    // ArrowDowns move to index 2 (sorted by name: Alpha, Beta, Gamma, ...).
     fireEvent.keyDown(list, {key: 'ArrowDown'})
     fireEvent.keyDown(list, {key: 'ArrowDown'})
     fireEvent.keyDown(list, {key: 'Enter'})

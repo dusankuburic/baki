@@ -1,9 +1,6 @@
 import {test, expect} from '@playwright/test'
 import {setupAuthenticatedPage, mockDashboardHome} from './helpers'
 
-// Mobile smoke (U5b): the app is "desktop shrunk with drawers" below md —
-// this spec pins the contract that the shell, drawers, and command palette
-// stay USABLE at 375px. Run: npm run e2e -- mobile-shell.spec.ts
 test.describe('Mobile shell @375px', () => {
   test.beforeEach(async ({page}) => {
     await page.setViewportSize({width: 375, height: 667})
@@ -22,12 +19,10 @@ test.describe('Mobile shell @375px', () => {
     await expect(drawer).toBeVisible({timeout: 5000})
     await expect(page.locator('text=Explorer').first()).toBeVisible()
 
-    // Swipe the LEFT drawer right-to-left to close (pointer events).
     const box = await drawer.boundingBox()
     if (box) {
       await page.mouse.move(box.x + box.width - 10, box.y + 100)
       await page.mouse.down()
-      // Two-step drag keeps Chrome from treating it as a scroll.
       await page.mouse.move(box.x + box.width - 40, box.y + 100, {steps: 4})
       await page.mouse.move(box.x - 10, box.y + 100, {steps: 8})
       await page.mouse.up()
@@ -41,7 +36,6 @@ test.describe('Mobile shell @375px', () => {
     await expect(palette).toBeVisible({timeout: 5000})
     const box = await palette.boundingBox()
     expect(box).toBeTruthy()
-    // Full-bleed below md: within a few px of the viewport width.
     if (box) expect(Math.abs(box.width - 375)).toBeLessThanOrEqual(8)
     await page.keyboard.press('Escape')
   })
@@ -75,12 +69,10 @@ test.describe('Settings modal @375px', () => {
       expect(Math.abs(box.height - 667)).toBeLessThanOrEqual(8)
     }
 
-    // The tab strip scrolls sideways instead of wrapping…
     const strip = dialog.getByRole('tablist', {name: 'Settings sections'})
     expect(await strip.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true)
     await expect(dialog.getByRole('tab', {name: 'Appearance'})).toBeVisible()
 
-    // …and neither the page nor the content column gets wider than the phone.
     const overflow = await page.evaluate(() => {
       const body = document.getElementById('settings-panel')
       return {

@@ -1,20 +1,11 @@
 import type {ChatMessage} from '@/types'
 import {modelNameOf} from './modelIds'
+import {triggerDownload} from './download'
 
-// The name an assistant turn's model is printed with: the label it was sent
-// with (an Azure AI Foundry entry's display name — its "m/<id>" means nothing
-// to a reader), else the raw id. The chat passes its own resolver, which also
-// consults the provider listing and says "removed model" for an unlabelled
-// registry id nothing lists any more.
 export type ExportModelName = (message: ChatMessage) => string | undefined
 
 const defaultModelName: ExportModelName = m => modelNameOf(m.model, m.modelLabel) ?? undefined
 
-// conversationToMarkdown renders a chat thread as a portable Markdown
-// transcript. Works in every deployment (no backend/native dialog needed),
-// so cloud users can export history too — the server-side export endpoint is
-// desktop-only. Error turns are dropped so the transcript isn't littered with
-// transient failures.
 export function conversationToMarkdown(
   title: string,
   messages: ChatMessage[],
@@ -36,28 +27,12 @@ function formatWhen(ts: string): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString()
 }
 
-// downloadTextFile triggers a browser download of text content. Same pattern as
-// the account-data export — works in web and the Tauri webview alike.
 export function downloadTextFile(filename: string, content: string, mime = 'text/markdown'): void {
-  const blob = new Blob([content], {type: mime})
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
+  triggerDownload(new Blob([content], {type: mime}), filename)
 }
 
-// safeFilename sanitizes a thread title into a filesystem-safe basename.
-// Letters and digits of ANY script are kept (an ASCII-only class turned
-// "Šta radi ovaj flow" into "ta-radi-ovaj-flow"); everything else — path
-// separators and reserved characters included — collapses to "-".
 export function safeFilename(title: string): string {
   const base = (title || 'conversation')
-    // NFC first, and combining marks kept: a decomposed "Š" or a Devanagari
-    // vowel sign is part of a letter, not a separator.
     .normalize('NFC')
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '')

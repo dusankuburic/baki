@@ -1,8 +1,5 @@
 import {ShieldAlert} from 'lucide-react'
 
-// RuleBarChart renders the top-N rules by finding count as horizontal bars.
-// entries is pre-sorted+truncated by the caller; maxCount sizes the widest bar.
-// Extracted from AnalyticsDashboard; pure/presentational.
 export function RuleBarChart({entries, maxCount}: {entries: [string, number][]; maxCount: number}) {
   if (entries.length === 0) return null
   return (

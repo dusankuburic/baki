@@ -9,9 +9,6 @@ import type {enSearch} from './en.search'
 import type {enAnalyzer} from './en.analyzer'
 import type {enCollaboration} from './en.collaboration'
 
-// Module augmentation: `t('findings.search.placeholder')` and friends are
-// type-checked against the English source of truth — a typo'd key is a
-// compile error, not a runtime blank.
 declare module 'i18next' {
   interface CustomTypeOptions {
     defaultNS: 'common'

@@ -8,10 +8,6 @@ import type {ChatThread, HistoryStatus, ThreadPinFields} from './types'
 import {nextHistoryToken} from './history'
 import {persistFlowThreads, readStoredThreads} from './persistence'
 
-// nextThreadOfFlow picks the newest thread of a flow, or null when it has
-// none. The thread that replaces a closed active thread must come from the
-// SAME flow — falling back to any remaining thread showed another flow's
-// conversation under the open one.
 function nextThreadOfFlow(threads: readonly ChatThread[], flowId: string | undefined): string | null {
   if (!flowId) return null
   for (let i = threads.length - 1; i >= 0; i--) {
@@ -49,19 +45,13 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
       tokensOut: 0,
     }
     set(state => {
-      // Pre-populate with [] so the backend-restore effect treats this as
-      // already initialised. Without this, every new thread would re-load
-      // the previous thread's conversation from disk (same 'flow' scope).
       const nextConversations = new Map(state.conversations)
       nextConversations.set(id, [])
-      // A brand-new thread has no server history to wait for.
       const historyStatus: Record<string, HistoryStatus> = {
         ...state.historyStatus,
         [id]: {state: 'loaded', token: nextHistoryToken()},
       }
       let threads = [...state.threads, thread]
-      // Evict the oldest inactive, non-streaming thread when the cap is
-      // exceeded, so long sessions don't accumulate unbounded chat history.
       if (threads.length > MAX_THREADS) {
         const victim = threads.find(t => t.id !== id && t.id !== state.activeThreadId && !(t.id in state.streams))
         if (victim) {
@@ -136,8 +126,6 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
   },
 
   closeThread: threadId => {
-    // Cancel any in-flight backend stream before clearing the local slot, or
-    // the provider keeps generating for a stream with no listener.
     const slot = get().streams[threadId]
     if (slot?.streamId) {
       chatApi.cancelStream(slot.streamId).catch(() => {})
@@ -154,16 +142,12 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
       }
       const drafts = threadId in state.drafts ? {...state.drafts} : state.drafts
       if (threadId in drafts) delete drafts[threadId]
-      // The queued follow-up dies with its thread, same as the draft — leaving
-      // it behind kept an unsendable message in the store for the session.
       const queuedByThread = threadId in state.queuedByThread ? {...state.queuedByThread} : state.queuedByThread
       if (threadId in queuedByThread) delete queuedByThread[threadId]
       const modelRefusals = threadId in state.modelRefusals ? {...state.modelRefusals} : state.modelRefusals
       if (threadId in modelRefusals) delete modelRefusals[threadId]
       const historyStatus = {...state.historyStatus}
       delete historyStatus[threadId]
-      // The replacement is the flow's own newest thread; none left ⇒ null,
-      // and useChatConversations creates a fresh one for the flow.
       const activeThreadId =
         state.activeThreadId === threadId ? nextThreadOfFlow(remaining, closedFlowId) : state.activeThreadId
       return {
@@ -196,7 +180,6 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
       next = {provider: undefined, model: undefined, modelLabel: undefined}
     } else {
       if (!pin.provider || !pin.model) return
-      // Only a name is stored as the label, never an id (storableModelLabel).
       next = {provider: pin.provider, model: pin.model, modelLabel: storableModelLabel(pin.modelLabel, pin.model)}
     }
     if (thread.provider === next.provider && thread.model === next.model && thread.modelLabel === next.modelLabel) {
@@ -220,12 +203,7 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
       const remaining = state.threads.filter(t => t.flowId !== flowId)
       const next = new Map(state.conversations)
       for (const id of toRemove) next.delete(id)
-      // The flow keeps no thread to fall back to; another flow's must not be
-      // shown in its place.
       const activeThreadId = toRemove.includes(state.activeThreadId ?? '') ? null : state.activeThreadId
-      // Full per-thread cleanup (F1.7), mirroring closeThread: streams,
-      // drafts, and queued follow-ups for removed threads must not linger
-      // (a lingering stream would eat a concurrency-cap slot forever).
       const streams = {...state.streams}
       const drafts = {...state.drafts}
       const queuedByThread = {...state.queuedByThread}

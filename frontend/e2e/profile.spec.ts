@@ -1,19 +1,8 @@
 import {test, expect, Page, Route} from '@playwright/test'
 import {mockDashboardHome, setupAuthenticatedPage} from './helpers'
 
-/**
- * User Profile page E2E. The page lives in the main pane, whose width the
- * sidebar and inspector set, so its section nav, hero and rows must answer to
- * that width. It also pins the flows that used to be silent: the current
- * device pinned first, the long session list folded, the account-erasure
- * form armed only by the typed email, and a password change that explains
- * the server-side sign-out instead of letting the tab die later.
- */
-
 const CURRENT_JTI = 'sess-current'
 
-// A JWT-shaped refresh token whose jti marks "this device" in the list (the
-// helper's token is deliberately not a JWT).
 function fakeJwt(payload: Record<string, unknown>): string {
   const b64 = (s: string) => Buffer.from(s).toString('base64url')
   return `${b64('{"alg":"none"}')}.${b64(JSON.stringify(payload))}.sig`
@@ -68,6 +57,15 @@ async function stubProfile(page: Page) {
   await page.route('**/api/**', async (route: Route) => {
     const p = new URL(route.request().url()).pathname
     switch (p) {
+      case '/api/auth/refresh':
+        return route.fulfill({
+          status: 200,
+          json: {
+            accessToken: 'fake-access-token',
+            expiresAt: '2099-01-01T00:00:00Z',
+            refreshToken: fakeJwt({jti: CURRENT_JTI, exp: 4102444800}),
+          },
+        })
       case '/api/auth/sessions':
         return route.fulfill({status: 200, json: list})
       case '/api/auth/sso/info':
@@ -144,14 +142,12 @@ test.describe('User Profile', () => {
     expect(m.actionsFullWidth).toBe(false)
     expect(m.fieldColumns).toBe(2)
 
-    // Hero facts and actions.
     const hero = page.locator('.profile-hero')
     await expect(hero.getByText('tester@example.com')).toBeVisible()
     await expect(hero.getByText('admin', {exact: true})).toBeVisible()
     await expect(hero.getByText('1 organisation')).toBeVisible()
     await expect(hero.getByRole('button', {name: 'Sign out', exact: true})).toBeVisible()
 
-    // Sessions: this device first even though it is not the newest; five rows.
     const rows = page.locator('.profile-session')
     await expect(rows).toHaveCount(5)
     await expect(rows.first()).toContainText('Edge on Windows')
@@ -162,18 +158,15 @@ test.describe('User Profile', () => {
     await page.getByRole('button', {name: 'Show all 16 sessions'}).click()
     await expect(rows).toHaveCount(16)
 
-    // Organisations read from the store with the member count and role.
     await expect(page.getByText('RPA-org')).toBeVisible()
     await expect(page.getByText('2 members')).toBeVisible()
 
-    // The nav jumps and marks the target current; the group scrolls into view.
     const nav = page.getByRole('navigation', {name: 'Profile sections'})
     await nav.getByRole('button', {name: 'Data & privacy'}).click()
     await expect(nav.getByRole('button', {name: 'Data & privacy'})).toHaveAttribute('aria-current', 'true')
     await expect(page.locator('#profile-data')).toBeInViewport()
     await expect(page.getByRole('heading', {level: 2, name: 'Data & privacy'})).toBeFocused()
 
-    // Account erasure: folded, then armed only by the matching email.
     await expect(page.getByRole('button', {name: 'Permanently delete my account'})).toHaveCount(0)
     await page.getByRole('button', {name: 'Delete account…'}).click()
     const del = page.getByRole('button', {name: 'Permanently delete my account'})
@@ -207,7 +200,6 @@ test.describe('User Profile', () => {
     expect(m.actionsFullWidth).toBe(true)
     expect(m.fieldColumns).toBe(1)
 
-    // Phone width: the sidebar becomes a drawer; the pane is the viewport.
     await page.setViewportSize({width: 390, height: 800})
     await page.waitForTimeout(200)
     m = await layoutMetrics(page)
@@ -234,8 +226,6 @@ test.describe('User Profile', () => {
     await expect(submit).toBeEnabled()
 
     await submit.click()
-    // The server revoked every session, so the app is at the sign-in gate —
-    // with the reason on it, not in a toast that died with the shell.
     await expect(page.getByRole('button', {name: /^Sign in$/})).toBeVisible({timeout: 10_000})
     await expect(page.getByRole('status')).toHaveText('Password updated. Sign in again with your new password.')
     const stored = await page.evaluate(

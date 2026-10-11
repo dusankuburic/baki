@@ -3,7 +3,6 @@ import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import LoginForm from './LoginForm'
 import {useAuthStore} from '@/stores/authStore'
 
-// Snapshot the initial store state for full reset between tests
 const initialState = useAuthStore.getState()
 
 beforeEach(() => {
@@ -45,7 +44,7 @@ describe('LoginForm', () => {
           email: 'user@example.com',
           password: 'pass123',
         },
-        false, // rememberMe defaults to off
+        false,
       )
     })
   })

@@ -62,9 +62,6 @@ describe('useDialogFocus focus restoration', () => {
     return {trigger, container, inner}
   }
 
-  // Regression: restore used to live in an `else` branch on isOpen, so the
-  // `{open && <Dialog isOpen … />}` pattern — which unmounts while isOpen is
-  // still true — dropped focus onto <body>. WCAG 2.4.3.
   it('restores focus to the trigger when the dialog unmounts while still open', async () => {
     const {trigger, container, inner} = mountOpenDialog()
 
@@ -83,8 +80,6 @@ describe('useDialogFocus focus restoration', () => {
     container.remove()
   })
 
-  // The focus lifecycle must not be re-run by an onClose identity change, or a
-  // parent re-render yanks focus back out of an open dialog mid-interaction.
   it('keeps focus inside the dialog when onClose identity changes', async () => {
     const {trigger, container, inner} = mountOpenDialog()
 
@@ -106,10 +101,6 @@ describe('useDialogFocus focus restoration', () => {
     container.remove()
   })
 
-  // A Settings deep link: the panel inside focuses its anchored heading from
-  // a passive effect as the dialog mounts (children's effects run first).
-  // The dialog's deferred focus used to move it on, and its capture of "what
-  // had focus" ran after the child's — so close gave focus to the heading.
   function DialogFocusingInside({heading = true}: {heading?: boolean}) {
     const ref = useRef<HTMLDivElement>(null)
     const initial = useRef<HTMLButtonElement>(null)
@@ -156,8 +147,6 @@ describe('useDialogFocus focus restoration', () => {
   })
 })
 
-// ---- The dialog stack -------------------------------------------------------
-
 function Dialog({
   label,
   onClose,
@@ -178,8 +167,6 @@ function Dialog({
   )
 }
 
-// Settings with a confirm opened from it — the shape of the bug. Settings
-// stays mounted in place while the confirm comes and goes above it.
 function Nested({
   settingsClose,
   confirmClose,
@@ -197,13 +184,10 @@ function Nested({
   )
 }
 
-// fireEvent returns false when a listener prevented the default.
 const escape = (target: Element) => fireEvent.keyDown(target, {key: 'Escape'})
 const tab = (target: Element, shiftKey = false) => fireEvent.keyDown(target, {key: 'Tab', shiftKey})
 
 describe('useDialogFocus stack: Escape', () => {
-  // Regression: every open dialog closed on the same Escape, so dismissing a
-  // confirm opened from Settings closed Settings too.
   it('closes only the topmost dialog, and claims the key', () => {
     const settingsClose = vi.fn()
     const confirmClose = vi.fn()
@@ -220,9 +204,6 @@ describe('useDialogFocus stack: Escape', () => {
     expect(confirmClose).toHaveBeenCalledTimes(1)
   })
 
-  // Regression: the Escape listener re-subscribed whenever onClose changed
-  // identity, which put the re-rendered dialog LAST in the listener order: a
-  // Settings re-render under an open confirm moved Settings back on top.
   it('keeps the confirm on top when the dialog below re-renders with a new onClose', () => {
     const firstSettingsClose = vi.fn()
     const nextSettingsClose = vi.fn()
@@ -238,7 +219,6 @@ describe('useDialogFocus stack: Escape', () => {
     expect(firstSettingsClose).not.toHaveBeenCalled()
     expect(nextSettingsClose).not.toHaveBeenCalled()
 
-    // With the confirm gone, Settings closes through its LATEST onClose.
     rerender(<Nested settingsClose={nextSettingsClose} confirmClose={confirmClose} confirmOpen={false} />)
     escape(screen.getByRole('button', {name: 'Settings action'}))
     expect(nextSettingsClose).toHaveBeenCalledTimes(1)
@@ -322,18 +302,12 @@ describe('useDialogFocus stack: Tab trap', () => {
     expect(tab(c1, true)).toBe(false)
     expect(document.activeElement).toBe(c2)
 
-    // Focus somewhere other than the top dialog (the dialog below, a toast)
-    // is not the trap's to move: the key goes to the browser untouched.
     const s2 = screen.getByRole('button', {name: 'S2'})
     s2.focus()
     expect(tab(s2)).toBe(true)
     expect(document.activeElement).toBe(s2)
   })
 
-  // Focus sits on <body> after a click on text or on a backdrop that does not
-  // close the dialog. The browser tabs on from the click point — right while
-  // that stays inside; when it walks out to the page behind, focus comes back.
-  // jsdom has no default action for Tab, so the test plays the browser's part.
   describe('from <body>', () => {
     const nextTask = () => act(() => new Promise<void>(resolve => setTimeout(resolve)))
 
@@ -347,8 +321,6 @@ describe('useDialogFocus stack: Tab trap', () => {
           </Dialog>
         </>,
       )
-      // Let the open-time focus (a frame later) land first, or it would move
-      // focus to First in the middle of the test.
       await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
       expect(document.activeElement).toBe(screen.getByRole('button', {name: 'First'}))
       ;(document.activeElement as HTMLElement).blur()
@@ -378,10 +350,6 @@ describe('useDialogFocus stack: Tab trap', () => {
     })
   })
 
-  // Regression: the trap's "last" element was the input inside the collapsed
-  // Copilot <details> at the end of AI Accounts — never focusable — while the
-  // real last stop, its <summary>, matched no selector. Tab from the summary
-  // walked straight out of Settings.
   it('wraps from the <summary> of a collapsed <details> at the end', () => {
     render(
       <Dialog label="Settings" onClose={vi.fn()}>
@@ -437,7 +405,6 @@ describe('useDialogFocus stack: Tab trap', () => {
     expect(tab(top, true)).toBe(false)
     expect(document.activeElement).toBe(screen.getByRole('button', {name: 'Last'}))
 
-    // In between, the browser's own order already stays inside the dialog.
     const middle = screen.getByText('Middle')
     middle.focus()
     expect(tab(middle)).toBe(true)
@@ -542,8 +509,6 @@ describe('getTabbable', () => {
     expect(names(getTabbable(container))).toEqual(['shown', 'also shown'])
   })
 
-  // No layout engine (jsdom) reports no boxes at all; that must not read as
-  // "everything is hidden".
   it('keeps everything when nothing has a box (no layout)', () => {
     const container = mount(`<button>a</button><button>b</button>`)
     expect(getTabbable(container)).toHaveLength(2)

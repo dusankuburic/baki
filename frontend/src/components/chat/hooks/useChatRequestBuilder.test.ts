@@ -102,10 +102,6 @@ describe('useChatRequestBuilder', () => {
     expect(req).not.toHaveProperty('messages')
   })
 
-  // Per-thread model memory: the thread's resolved pair is sent as is. The
-  // saved "Default for new chats" may name a model this scope no longer
-  // offers, so an empty model is left for the server's own default rather
-  // than replaced with it; temperature and Max tokens stay per provider.
   it('sends an empty model as is (the server default), never the saved default', () => {
     const thread = makeThread()
     useChatStore.setState({threads: [thread]})
@@ -244,12 +240,10 @@ describe('useChatRequestBuilder reasoning effort', () => {
         getMessages: () => [],
       }),
     )
-    // ChatRequest types the field, with only the values the server accepts.
     expectTypeOf<ChatRequest['reasoningEffort']>().toEqualTypeOf<'low' | 'medium' | 'high' | undefined>()
     expectTypeOf<NonNullable<AISettings['providers']['openai']>['reasoningEffort']>().toEqualTypeOf<
       '' | 'low' | 'medium' | 'high' | undefined
     >()
-    // No effort configured: nothing on the wire (the provider default).
     const plain = result.current.buildRequest('hi')
     expect(plain && 'reasoningEffort' in plain).toBe(false)
 

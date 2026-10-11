@@ -1,8 +1,6 @@
 import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 
-// A toggle chip with its facet count: what choosing it would leave. Severity
-// chips wear their status tone when pressed; everything else the brand tint.
 export function FilterChip({
   label,
   count,
@@ -17,7 +15,6 @@ export function FilterChip({
   pressed: boolean
   tone?: {bg: string; text: string}
   disabled?: boolean
-  /** The accessible name when the count is not a number of findings. */
   ariaLabel?: string
   onClick: () => void
 }) {

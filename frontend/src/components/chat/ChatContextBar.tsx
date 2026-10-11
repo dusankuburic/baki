@@ -6,24 +6,17 @@ import {Dropdown, type DropdownItem} from '@/components/shared'
 import type {SourceFileInfo} from '@/types'
 
 interface Props {
-  // Block scope, when the thread is focused on one block.
   contextBlockId: string | null
   blockName?: string
   blockType?: string
   onClearBlock: () => void
-  // The block currently selected on the canvas, offered as a scope when the
-  // thread is still flow-wide.
   selectedBlockId: string | null
   onFocusBlock: (blockId: string) => void
-  // Per-thread source-file selection.
   files: SourceFileInfo[]
   selectedFiles: string[]
   onFilesChange: (filenames: string[]) => void
 }
 
-// ChatContextBar collapses three stacked full-width rows — the block-scope
-// chip, the "Scope: entire flow" line, and the source-file picker — into one
-// wrapping row of chips that renders only when it has something to say.
 export default function ChatContextBar({
   contextBlockId,
   blockName,

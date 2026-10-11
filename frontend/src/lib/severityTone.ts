@@ -1,20 +1,10 @@
 import {TRIAGE_STATUSES, isKnown, type Severity, type Tolerant, type TriageStatus} from '@/types'
 
-// severityTone is THE single source (U2.1) mapping finding severity → tone
-// classes, backed by SEMANTIC design tokens so findings follow the theme
-// (19 palettes redefine --error/--warning/--info). Before this, findings
-// colors were raw `red-400`/`amber-400`/`blue-400` redefined independently in
-// five components — they silently desynced from every theme.
 export interface Tone {
-  /** icon/label color */
   text: string
-  /** subtle chip fill */
   bg: string
-  /** chip outline */
   border: string
-  /** solid status dot */
   dot: string
-  /** list-row left accent */
   bar: string
 }
 
@@ -46,8 +36,6 @@ export function severityTone(severity: Severity): Tone {
   return severityTones[severity] ?? severityTones.info
 }
 
-// Triage statuses are a workflow, not a severity: resolved reads as success,
-// in-progress as "attention", acknowledged as info, suppressed as muted.
 const triageTones: Record<TriageStatus, Tone> = {
   open: {
     text: 'text-text-secondary',
@@ -86,13 +74,10 @@ const triageTones: Record<TriageStatus, Tone> = {
   },
 }
 
-// A status this bundle does not know takes the neutral 'open' tone.
 export function triageTone(status: Tolerant<TriageStatus>): Tone {
   return isKnown(TRIAGE_STATUSES, status) ? triageTones[status] : triageTones.open
 }
 
-// The shared "this action writes/changes something good" affordance
-// (Apply fix and friends) — previously raw emerald sprinkled per-component.
 export const successActionTone = {
   text: 'text-semantic-success',
   hoverText: 'hover:text-semantic-success',

@@ -6,12 +6,6 @@ import {useAuthStore} from '@/stores/authStore'
 import {useUIStore} from '@/stores/uiStore'
 import Dropdown, {type DropdownItem} from '@/components/shared/Dropdown'
 
-// OrgSwitcher selects the active organization context for org-scoped views
-// (library, knowledge base, org settings). Cloud/web only — the desktop app
-// is single-user with no org concept.
-//
-// Org loading is handled by ProtectedRoute so orgs are available before any
-// data-fetching components mount.
 export default function OrgSwitcher() {
   const {t} = useTranslation('shell')
   const organisations = useOrgStore(s => s.organisations)
@@ -39,8 +33,6 @@ export default function OrgSwitcher() {
     {
       type: 'item',
       label: t('org.manage'),
-      // Straight to the Organizations section, not to whatever Settings
-      // showed last.
       onSelect: () => openSettings('orgs'),
     },
   ]

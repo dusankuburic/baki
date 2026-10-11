@@ -9,27 +9,16 @@ import {Spinner, ErrorBoundary} from '@/components/shared'
 import ChatPanelShell from '@/components/chat/ChatPanelShell'
 import {isTauri} from '@/platform/guards'
 
-// AITab transitively pulls react-markdown + prism-react-renderer; lazy
-// loading keeps that chat-only weight out of the entry chunk.
 const AITab = lazy(() => import('@/components/chat/AITab'))
 
-// MetricsTab transitively pulls recharts (~100KB); lazy loading keeps the
-// charting library out of the entry chunk until the user opens the Metrics tab.
 const MetricsTab = lazy(() => import('@/components/inspector/MetricsTab'))
 
 export default function InspectorPanel() {
   const {t} = useTranslation('shell')
   const tab = useUIStore(s => s.inspectorTab)
   const chatFocus = useUIStore(s => s.chatFocus)
-  // Once the AI tab has been visited, keep it mounted (hidden when inactive)
-  // so switching tabs doesn't cancel in-flight streams or lose chat state.
   const [aiVisited, setAiVisited] = useState(false)
-  // Monotonic latch, flipped during render: an effect would paint one frame with
-  // the AI tab still unmounted before latching.
   if ((tab === 'ai' || chatFocus) && !aiVisited) setAiVisited(true)
-  // Sharing/History are hidden from the tab strip on desktop (InspectorTabs);
-  // never mount their panels there either, so a stale tab id cannot render a
-  // form that 503s.
   const cloudTabs = !isTauri()
 
   return (
@@ -47,9 +36,6 @@ export default function InspectorPanel() {
           </ErrorBoundary>
         )}
         {(tab === 'ai' || aiVisited) && (
-          // In focus mode the chat is a fixed overlay: keep it rendered while
-          // another tab is active (`contents` adds no box, so that tab keeps
-          // the whole panel) instead of hiding it.
           <div
             className={
               tab === 'ai' ? 'flex flex-col flex-1 min-h-0 overflow-hidden' : chatFocus ? 'contents' : 'hidden'

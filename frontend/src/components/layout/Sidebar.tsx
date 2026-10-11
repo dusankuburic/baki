@@ -42,11 +42,7 @@ export default function Sidebar() {
   const sidebarTab = useUIStore(s => s.sidebarTab)
   const setSidebarTab = useUIStore(s => s.setSidebarTab)
   const setInspectorTab = useUIStore(s => s.setInspectorTab)
-  // Reveal / reload act on the file's disk path; without a filesystem (web)
-  // they were still offered in the context menu and failed with a toast.
   const hasFileSystem = getPlatformCapabilities().fileSystem
-  // The cloud library is always empty on desktop (no storage backend), so the
-  // Library tab is dropped there together with the toolbar's Cloud Library nav.
   const showLibraryTab = !isTauri()
 
   const {
@@ -139,8 +135,6 @@ export default function Sidebar() {
   const isAnalyzing = useAnalysisStore(s => s.isAnalyzing)
   const setAnalysisProgress = useAnalysisStore(s => s.setProgress)
 
-  // Only THIS document's report: subscribing to the whole reports Map re-ran
-  // the count on every other flow's analysis (see FindingsTab).
   const analysisReport = useAnalysisStore(s => (document ? s.reports.get(document.id) : undefined))
   const findingCounts = useMemo(() => {
     if (!analysisReport) return undefined
@@ -175,7 +169,6 @@ export default function Sidebar() {
     for (const sf of document.subflows) countTypes(sf.blocks, counts)
     const chips = ALL_TYPES.map(type => ({
       type,
-      // Falls back to the raw enum for a type with no label key yet.
       label: t(`blockTypes.${type}`, {defaultValue: type}),
       count: counts.get(type) ?? 0,
     }))

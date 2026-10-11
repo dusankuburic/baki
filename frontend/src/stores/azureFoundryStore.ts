@@ -27,48 +27,17 @@ import type {
   Tolerant,
 } from '@/types'
 
-// The Azure AI Foundry model registry (resources — "connections" in the API
-// — and their models), cached per scope: the user's own (plus, in user
-// scope, the entries their organisations share with them) and each
-// organisation's.
-//
-// - Reads dedupe while in flight; a view older than 60 s revalidates in the
-//   background (the cached one stays on screen), and a failed load never
-//   empties a view that loaded before.
-// - Mutations patch the cache from the server's response, then bump the chat
-//   store's provider epoch so the chat picker relists. A 409 CONFLICT
-//   (compare-and-swap) rejects with AzureConflictError; every other failure
-//   rejects with the ApiError as is (branch on `.code`).
-// - In user scope a change of the models (or a resource removed with its
-//   models) reads the model list again for its `serverDefault`, which no
-//   mutation's response carries (see refreshServerDefault).
-// - Discovery is cached per resource for 5 minutes and kept consistent with
-//   the models, so `alreadyAdded` flips as models are added and removed.
-//
-// Ids are unique per owner only (a personal and an organisation's resource
-// may both be `default`), so an item is matched by owner too: in user scope
-// the scope's own items are the personal ones.
-
-/** A loaded scope revalidates in the background once older than this. */
 export const AZURE_REVALIDATE_MS = 60_000
-/** Discovery results are reused for this long. */
 export const AZURE_DISCOVERY_TTL_MS = 5 * 60_000
 
 const DEFAULT_LIMITS: AzureRegistryLimits = {connections: 10, models: 50}
 
 export type AzureLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
-/**
- * Why a load failed: `forbidden` — a 403 (the caller's org role may not
- * read it); `unavailable` — ORG_KEYSTORE_UNAVAILABLE (the deployment has no
- * org credentials; the host hides the section); `failed` — anything else.
- */
 export type AzureLoadErrorKind = 'failed' | 'forbidden' | 'unavailable'
 
 export interface AzureDiscoveryState {
   status: 'loading' | 'ready' | 'error'
-  /** The last result (also kept while a refresh loads or after it failed). */
   data: AzureDiscovery | null
-  /** When `data` arrived (ms epoch); 0 before the first result. */
   fetchedAt: number
   error: string | null
   errorCode: string | null
@@ -76,28 +45,20 @@ export interface AzureDiscoveryState {
 
 export interface AzureScopeState {
   status: AzureLoadStatus
-  /** Why the last load failed. With status 'ready' a background refresh failed and the view is the cached one. */
   errorKind: AzureLoadErrorKind | null
   error: string | null
   connections: AzureConnection[]
-  /** Sorted in the registry's display order (compareRegistryModels). */
   models: AzureModelEntry[]
   registryState: Tolerant<AzureRegistryState>
-  /** With registryState 'recovered': where the unreadable list file was kept, when the server says. */
   recoveredCopyPath: string | null
   limits: AzureRegistryLimits
   knowledgeEmbeddingEnabled: boolean
-  /** User scope: the server's default for new chats ("m/<id>") — what applies while the user saved none. */
   serverDefault: string | null
-  /** Per resource id (the scope's own resources). */
   discovery: Record<string, AzureDiscoveryState>
-  /** Operations in flight — see azureBusyKey. */
   busy: Record<string, true>
-  /** When the view last loaded (ms epoch); 0 = never, or invalidated. */
   loadedAt: number
 }
 
-/** The state of a scope nothing loaded yet — a stable reference for selectors. */
 export const EMPTY_AZURE_SCOPE: AzureScopeState = {
   status: 'idle',
   errorKind: null,
@@ -114,41 +75,30 @@ export const EMPTY_AZURE_SCOPE: AzureScopeState = {
   loadedAt: 0,
 }
 
-// A resource with no discovery result yet.
 const NO_DISCOVERY: AzureDiscoveryState = {status: 'loading', data: null, fetchedAt: 0, error: null, errorCode: null}
 
-/** The cache key of a scope. */
 export function azureScopeKey(scope: AzureScope): string {
   return scope.kind === 'org' ? `org:${scope.orgId}` : 'user'
 }
 
-// The saved resource or model a test is about; null for a draft (settings
-// sent along, or a model given by kind and deployment).
 function savedTestTarget(input: AzureTestInput): {kind: 'model' | 'connection'; id: string} | null {
   if (input.config) return null
   if (input.model) return 'id' in input.model ? {kind: 'model', id: input.model.id} : null
   return input.connectionId ? {kind: 'connection', id: input.connectionId} : null
 }
 
-/** Keys of `busy`, so a row can disable its own buttons. */
 export const azureBusyKey = {
   createConnection: 'connection:new',
   connection: (id: string) => `connection:${id}`,
   createModel: 'model:new',
   model: (id: string) => `model:${id}`,
   discover: (connectionId: string) => `discover:${connectionId}`,
-  /** A saved resource's ("test:connection:<id>") or model's ("test:model:<id>") test; drafts share "test:draft". */
   test: (input: AzureTestInput): string => {
     const target = savedTestTarget(input)
     return target ? `test:${target.kind}:${target.id}` : 'test:draft'
   },
 }
 
-/**
- * A 409 CONFLICT: someone changed the resource (or the organisation's
- * credential) since it was read. Offer a reload — the scope is already
- * marked stale.
- */
 export class AzureConflictError extends VersionConflictError {
   constructor(cause: ApiError) {
     super(cause.message, cause.code, cause.requestId, cause.details)
@@ -157,65 +107,35 @@ export class AzureConflictError extends VersionConflictError {
 }
 
 export interface AzureFoundryState {
-  /** Per azureScopeKey; read through selectAzureScope. */
   scopes: Record<string, AzureScopeState>
-  /**
-   * Scopes (azureScopeKey) where a confirmed re-index went through: a
-   * knowledge-base embedding change sent with `force` where an Azure
-   * knowledge base exists (knowledgeEmbeddingEnabled). The corpus it feeds
-   * refuses uploads until it is re-indexed, so the Knowledge Base panel asks
-   * for one. Cleared by clearKnowledgeReindex.
-   */
   knowledgeReindex: Record<string, true>
 
-  /** Loads the scope unless a fresh view is cached (see the header). `force` refetches regardless. Never rejects: the outcome is in the scope's state. */
   load: (scope: AzureScope, opts?: {force?: boolean}) => Promise<void>
-  /** Marks a scope (or, without one, every scope) stale: the next load refetches. */
   invalidate: (scope?: AzureScope) => void
   createConnection: (scope: AzureScope, input: AzureConnectionCreateInput) => Promise<AzureConnection>
   updateConnection: (scope: AzureScope, id: string, input: AzureConnectionUpdateInput) => Promise<AzureConnection>
-  /** Hides the resource's "Found in your project" prompt for good. */
   dismissDiscovery: (scope: AzureScope, id: string) => Promise<AzureConnection>
   deleteConnection: (
     scope: AzureScope,
     id: string,
     opts?: AzureConnectionDeleteOptions,
   ) => Promise<AzureConnectionDeleteResult>
-  /** The resource's discoverable deployments and agents; cached for 5 minutes unless `force`. Rejects on a failed request. */
   discover: (scope: AzureScope, connectionId: string, opts?: {force?: boolean}) => Promise<AzureDiscovery>
   createModel: (scope: AzureScope, input: AzureModelCreateInput) => Promise<AzureModelEntry>
   updateModel: (scope: AzureScope, id: string, input: AzureModelUpdateInput) => Promise<AzureModelEntry>
   deleteModel: (scope: AzureScope, id: string, opts?: AzureModelDeleteOptions) => Promise<void>
-  /** POST /test; a saved target's `lastTest` mirrors the result. */
   test: (scope: AzureScope, input: AzureTestInput) => Promise<AzureTestResult>
-  /** The knowledge base was re-indexed: drops the suggestion for these scopes (every scope without any). */
   clearKnowledgeReindex: (scopes?: AzureScope[]) => void
 }
 
-// Loads and discoveries in flight, per scope key (and resource). Module
-// state rather than store state: promises are not view state.
 const loadsInFlight = new Map<string, Promise<void>>()
 const discoveriesInFlight = new Map<string, Promise<AzureDiscovery>>()
-// Bumped per scope by every successful mutation: a load that started before
-// it may hold a pre-mutation view, so it reads again instead of applying.
 const mutationGen = new Map<string, number>()
-// Server-default reads in flight, per scope key (see refreshServerDefault):
-// `again` asks for one more read once the one in flight answers.
 const defaultReads = new Map<string, {again: boolean}>()
-// Bumped per scope whenever a load applies. A load that lands while a
-// server-default read is out started after every change before it (older
-// ones read again, see mutationGen), so it is at least as fresh: that read's
-// answer is dropped.
 const loadsApplied = new Map<string, number>()
 
-// The fields of a model the server default depends on: which entries are
-// chat entries, their display order, and the legacy chat deployment.
 const DEFAULT_FIELDS = ['connectionId', 'kind', 'deployment', 'displayName', 'purpose', 'purposeCustom'] as const
-// Bumped on reset (logout): work finishing afterwards must not write the old
-// session's data back.
 let sessionEpoch = 0
-
-// ---- pure cache patches ----
 
 type Owned = {shared?: boolean; orgId?: string}
 
@@ -223,8 +143,6 @@ function ownerKey(item: Owned): string {
   return item.shared ? `org:${item.orgId ?? ''}` : 'self'
 }
 
-// The items a scope's own routes act on: every item in org scope, the
-// personal ones in user scope (shared entries are read-only there).
 function ownedHere(scope: AzureScope, item: Owned): boolean {
   return scope.kind === 'org' || !item.shared
 }
@@ -245,8 +163,6 @@ function sortModels(models: AzureModelEntry[]): AzureModelEntry[] {
   return [...models].sort((a, b) => compareRegistryModels(a, b))
 }
 
-// The designations are one per owner: a new default / knowledge-base model
-// clears the owner's previous one.
 function applyDesignations(models: AzureModelEntry[], changed: AzureModelEntry): AzureModelEntry[] {
   if (!changed.isDefault && !changed.isKnowledgeEmbedding) return models
   return models.map(m => {
@@ -259,7 +175,6 @@ function applyDesignations(models: AzureModelEntry[], changed: AzureModelEntry):
   })
 }
 
-// Each connection's modelCount recounted from the cached models of its owner.
 function recount(connections: AzureConnection[], models: AzureModelEntry[]): AzureConnection[] {
   return connections.map(c => {
     const count = models.filter(m => m.connectionId === c.id && ownerKey(m) === ownerKey(c)).length
@@ -267,16 +182,10 @@ function recount(connections: AzureConnection[], models: AzureModelEntry[]): Azu
   })
 }
 
-// Discovery marks a deployment added when the resource holds an entry of any
-// non-agent kind with its name, and an agent when it holds an agent entry of
-// that name (names compared case-insensitively) — the server's rule.
 function discoveryKey(kind: Tolerant<AzureModelKind>, name: string): string {
   return `${kind === 'agent' ? 'agent' : 'deployment'}\u0000${name.toLowerCase()}`
 }
 
-// Sets `alreadyAdded` / `modelId` on a resource's discovery from the models
-// the scope holds for it, so a quick add or a removal shows at once and a
-// discovery that raced a mutation cannot bring back a stale mark.
 function reconcileDiscovery(
   scope: AzureScope,
   connectionId: string,
@@ -349,21 +258,10 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
   const setBusy = (key: string, op: string, on: boolean) =>
     patchScope(key, s => ({busy: on ? {...s.busy, [op]: true} : withoutKey(s.busy, op)}))
 
-  // A view older than now: the next load refetches (in the background when
-  // one is cached).
   const markStale = (key: string) => {
     if (get().scopes[key]) patchScope(key, () => ({loadedAt: 0}))
   }
 
-  // User scope: the model new chats start on while the user saved none
-  // (serverDefault) follows the personal chat entries — the first usable one
-  // in display order, else the organisation's default — so adding, removing
-  // or changing a model, or removing a resource with its models, can move
-  // it, and no mutation's response says where. The model list is read again
-  // for it, and only serverDefault is taken (the models are already patched
-  // from the response). One read in flight per scope: a change landing
-  // meanwhile reads once more after it, since the answer may predate it.
-  // A failed read keeps the last value.
   const refreshServerDefault = (scope: AzureScope) => {
     if (scope.kind !== 'user') return
     const key = azureScopeKey(scope)
@@ -379,19 +277,15 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
       const loadsBefore = loadsApplied.get(key) ?? 0
       let listing: AzureModelsListing | null = null
       try {
-        // (A promise executor, so even a synchronous throw only fails the read.)
         listing = await new Promise<AzureModelsListing>(resolve => resolve(providersApi.listAzureModels(scope)))
       } catch (err) {
         logger.warn('Failed to refresh the Azure AI Foundry server default', err)
       }
-      // A logout cleared the reads; the next session's are its own.
       if (epoch !== sessionEpoch) return
       if (read.again) {
         read.again = false
         return once()
       }
-      // Settled in the same step as that check, so a change from here on
-      // starts a read of its own rather than asking this one for another.
       defaultReads.delete(key)
       if (listing && (loadsApplied.get(key) ?? 0) === loadsBefore) {
         const serverDefault = listing.serverDefault ?? null
@@ -401,10 +295,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
     void once()
   }
 
-  // Runs a mutation: marks it busy, applies `patch` to the scope on success,
-  // relists the chat picker, and types a CONFLICT. `forced`: the request
-  // confirmed a re-index (`force`), so the knowledge base — where one exists
-  // — asks for one. `movesDefault`: the change may move the server default.
   const mutate = async <T>(
     scope: AzureScope,
     op: string,
@@ -423,7 +313,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
         if (opts.forced && scopeState(key).knowledgeEmbeddingEnabled) {
           set(state => ({knowledgeReindex: {...state.knowledgeReindex, [key]: true}}))
         }
-        // The user scope lists the organisations' shared entries too.
         if (scope.kind === 'org') markStale(azureScopeKey({kind: 'user'}))
         if (opts.movesDefault) refreshServerDefault(scope)
         useChatStore.getState().bumpProviderEpoch()
@@ -434,8 +323,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
         if (epoch === sessionEpoch) markStale(key)
         throw new AzureConflictError(err)
       }
-      // The desktop list file turned out to be a newer app version's: the
-      // view (registryState) is stale, and the next load shows it read-only.
       if (err instanceof ApiError && err.code === 'REGISTRY_READ_ONLY' && epoch === sessionEpoch) markStale(key)
       throw err
     } finally {
@@ -443,14 +330,12 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
     }
   }
 
-  // The scope's own resource `id` (see ownedHere).
   const findConnection = (scope: AzureScope, s: AzureScopeState, id: string) =>
     s.connections.find(c => c.id === id && ownedHere(scope, c))
 
   const findModelEntry = (scope: AzureScope, s: AzureScopeState, id: string) =>
     s.models.find(m => m.id === id && ownedHere(scope, m))
 
-  // After a model mutation: sort, recount and re-mark discovery.
   const withModels = (scope: AzureScope, s: AzureScopeState, models: AzureModelEntry[]): Partial<AzureScopeState> => {
     const sorted = sortModels(models)
     return {
@@ -472,7 +357,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
       if (!opts.force && cur.status === 'ready' && Date.now() - cur.loadedAt < AZURE_REVALIDATE_MS) {
         return Promise.resolve()
       }
-      // A loaded view stays on screen while it refreshes.
       const background = cur.status === 'ready'
       if (!background) patchScope(key, () => ({status: 'loading', errorKind: null, error: null}))
       const epoch = sessionEpoch
@@ -484,7 +368,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
         .then(([listing, modelsListing]) => {
           if (epoch !== sessionEpoch) return
           if ((mutationGen.get(key) ?? 0) !== gen) {
-            // A mutation landed meanwhile: this view may predate it.
             loadsInFlight.delete(key)
             return get().load(scope, {force: true})
           }
@@ -502,7 +385,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
             limits: listing.limits,
             knowledgeEmbeddingEnabled: listing.knowledgeEmbeddingEnabled,
             serverDefault: modelsListing.serverDefault ?? null,
-            // Drop the discovery of resources that are gone; re-mark the rest.
             discovery: reconcileAllDiscovery(
               scope,
               Object.fromEntries(Object.entries(s.discovery).filter(([id]) => kept(id))),
@@ -514,8 +396,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
         .catch(err => {
           if (epoch !== sessionEpoch) return
           logger.warn('Failed to load the Azure AI Foundry registry', err)
-          // Never replace a loaded view with an error screen: keep it and
-          // report the failure alongside.
           patchScope(key, s =>
             s.status === 'ready'
               ? {errorKind: loadErrorKind(err), error: errorMessage(err)}
@@ -559,13 +439,10 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
               ? {...m, connectionName: updated.name}
               : m,
           ),
-          // New settings may reach another project: discover afresh.
           discovery: input.config ? withoutKey(s.discovery, id) : s.discovery,
         }),
         {forced: input.force === true},
       )
-      // The models inherit the resource's status (and an agent's support
-      // depends on it): relist them when either changed.
       if (!before || before.status !== conn.status || before.supportsAgents !== conn.supportsAgents) {
         void get().load(scope, {force: true})
       }
@@ -587,7 +464,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
             discovery: withoutKey(s.discovery, id),
           }
         },
-        // Its models went with it.
         {forced: opts.force === true, movesDefault: true},
       ),
 
@@ -608,7 +484,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
       if (inFlight) return inFlight
       const epoch = sessionEpoch
       const op = azureBusyKey.discover(connectionId)
-      // The last result stays on screen while this one loads (and if it fails).
       patchScope(key, s => ({
         busy: {...s.busy, [op]: true},
         discovery: {
@@ -679,7 +554,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
         azureBusyKey.model(id),
         () => providersApi.updateAzureModel(scope, id, input),
         (s, model) => withModels(scope, s, applyDesignations(upsert(s.models, model, sameModel), model)),
-        // A designation alone (knowledge base, default for members) leaves it.
         {forced: input.force === true, movesDefault: DEFAULT_FIELDS.some(k => input[k] !== undefined)},
       ),
 
@@ -711,7 +585,6 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
       try {
         const result = await providersApi.testAzure(scope, input)
         if (epoch === sessionEpoch && target) {
-          // The server recorded it on the saved target; mirror it.
           const lastTest = {
             ok: result.ok,
             latencyMs: result.latencyMs,
@@ -741,13 +614,11 @@ export const useAzureFoundryStore = create<AzureFoundryState>((set, get) => {
   }
 })
 
-/** Selects a scope's state (EMPTY_AZURE_SCOPE before its first load): `useAzureFoundryStore(selectAzureScope(scope))`. */
 export function selectAzureScope(scope: AzureScope): (state: AzureFoundryState) => AzureScopeState {
   const key = azureScopeKey(scope)
   return state => state.scopes[key] ?? EMPTY_AZURE_SCOPE
 }
 
-// Logout: forget every scope, and let nothing in flight write back.
 registerStoreReset(() => {
   sessionEpoch++
   loadsInFlight.clear()

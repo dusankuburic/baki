@@ -51,15 +51,10 @@ import {findDisplayNameTwin, findDuplicateModel, isOwnItem, unaddedItems} from '
 
 interface AzureModelModalProps {
   scope: AzureScope
-  /** The model being edited; null when adding one. */
   entry: AzureModelEntry | null
-  /** The form it opens with: empty on a resource, pre-filled from discovery, or the entry's. */
   initial: ModelFormState
-  /** The context window Azure reports for it, shown as the field's placeholder. */
   reportedWindow?: number
-  /** The scope's own resources (the Resource choices). */
   connections: AzureConnection[]
-  /** The scope's own models (the duplicate checks). */
   models: AzureModelEntry[]
   onClose: () => void
   onSaved: (entry: AzureModelEntry, created: boolean) => void
@@ -67,28 +62,16 @@ interface AzureModelModalProps {
 
 type FormAlert = {kind: 'message'; text: string} | {kind: 'conflict'} | {kind: 'forbidden'} | {kind: 'gone'}
 
-// A client-side problem on top of validateModelForm's: the resource already
-// has a model with this name (the server would answer DUPLICATE_MODEL).
 type FieldProblem = ModelFieldError | 'duplicate'
 
 const KINDS: readonly AzureModelKind[] = ['chat', 'claude', 'agent', 'embedding']
 const ADVANCED_FIELDS: readonly ModelFormField[] = ['contextWindow', 'maxOutputTokens']
-// At most this many "Found in your project" chips.
 const MAX_CHIPS = 8
 
 function errorMessage(err: unknown): string {
   return getErrorMessage(err, '')
 }
 
-// The Model modal (md, full screen below 640 px): Resource, Kind, Deployment
-// (or Agent) name, Display name, Purpose, Description, and under Advanced
-// the context window and max output tokens. It validates on submit and
-// focuses the first invalid field (opening Advanced for one inside it);
-// format problems show once a field is left. [Test model] tests the draft
-// {resource, kind, name} — a chat, Claude or embedding test sends one tiny
-// billed request, an agent test only checks the agent exists. Server codes
-// land on their field; REINDEX_REQUIRED asks to confirm the re-index and
-// retries with force; a conflict offers Reload.
 export default function AzureModelModal({
   scope,
   entry,
@@ -106,7 +89,6 @@ export default function AzureModelModal({
   const runTest = useAzureFoundryStore(s => s.test)
   const load = useAzureFoundryStore(s => s.load)
 
-  // The entry as last read: Reload after a conflict replaces it.
   const [base, setBase] = useState<AzureModelEntry | null>(entry)
   const [baseline, setBaseline] = useState<ModelFormState>(initial)
   const [form, setForm] = useState<ModelFormState>(initial)
@@ -154,8 +136,6 @@ export default function AzureModelModal({
     if (field === 'purpose' && form.purpose === 'custom') return document.getElementById(ids.purposeCustom)
     return document.getElementById(ids[field])
   }
-  // Opens Advanced first for a field inside it (the element exists either
-  // way; a closed <details> only hides it).
   const focusField = (field: ModelFormField) => {
     if (ADVANCED_FIELDS.includes(field) && advancedRef.current && !advancedRef.current.open) {
       advancedRef.current.open = true
@@ -164,9 +144,6 @@ export default function AzureModelModal({
     fieldElement(field)?.focus()
   }
 
-  // Focus on open: the Resource choice when there is one, else the Kind.
-  // Created once — a new ref identity would re-run the dialog's focus
-  // lifecycle mid-edit.
   const [initialFocusRef] = useState(() => {
     const target = connections.length > 1 ? ids.connectionId : ids.deployment
     return {
@@ -212,9 +189,6 @@ export default function AzureModelModal({
     }
   }
 
-  // The server's verdict first; the client's once the form was submitted —
-  // before that, a format problem of a field the user has left (and the kind,
-  // which never goes stale silently).
   const fieldError = (field: ModelFormField): string | undefined => {
     if (serverErrors[field]) return serverErrors[field]
     const e = problems[field]
@@ -242,13 +216,10 @@ export default function AzureModelModal({
     if (target === 'reindex') return 'reindex'
     if (err instanceof AzureConflictError) setFormAlert({kind: 'conflict'})
     else if (target === 'forbidden') setFormAlert({kind: 'forbidden'})
-    // A desktop list file written by a newer baki: nothing can be saved.
     else if (err instanceof ApiError && err.code === 'REGISTRY_READ_ONLY') {
       setFormAlert({kind: 'message', text: t('azureModels.registryState.readOnly')})
     } else {
       const text = errorMessage(err) || t('azureModels.modelModal.saveFailed')
-      // A field only where one is on screen: with a single resource the
-      // Resource is plain text, so CONNECTION_NOT_FOUND goes to the alert.
       if (target !== 'form' && fieldElement(target)) {
         setServerErrors({[target]: text})
         focusField(target)
@@ -264,8 +235,6 @@ export default function AzureModelModal({
     setFormAlert(null)
     setServerErrors({})
     try {
-      // An edit carries the model's updatedAt as loaded (compare-and-swap):
-      // a change saved meanwhile is a conflict, offered as Reload.
       const saved = base
         ? await updateModel(scope, base.id, {
             ...toModelUpdateInput(form, labelOf, base.updatedAt),
@@ -299,7 +268,6 @@ export default function AzureModelModal({
     void save(false)
   }
 
-  // Tests the draft {resource, kind, name} without saving it.
   const testDraft = async () => {
     const invalid = (['connectionId', 'kind', 'deployment'] as const).find(f => validation.errors[f])
     if (invalid) {
@@ -316,8 +284,6 @@ export default function AzureModelModal({
       setTest(result.ok ? {phase: 'passed', latencyMs: result.latencyMs} : {phase: 'failed', error: result.error})
     } catch (err) {
       const target = modelErrorTarget(err)
-      // The test's status line says it in any case; the field too, where
-      // one is on screen.
       if (target !== 'reindex' && target !== 'forbidden' && target !== 'form' && fieldElement(target)) {
         setServerErrors({[target]: errorMessage(err) || t('azureModels.test.failedGeneric')})
       }
@@ -340,7 +306,6 @@ export default function AzureModelModal({
     }
     const next = modelFormFromEntry(fresh)
     if (!next) {
-      // Changed meanwhile to a kind this version of the app cannot edit.
       setFormAlert({kind: 'message', text: t('azureModels.model.editUnknownKind')})
       return
     }
@@ -354,9 +319,6 @@ export default function AzureModelModal({
     setFormAlert(null)
   }
 
-  // "Found in your project": what discovery found on this resource and the
-  // registry does not hold yet, of the kind being added (agents for an agent,
-  // deployments otherwise).
   const chips = useMemo(
     () =>
       base
@@ -565,7 +527,6 @@ export default function AzureModelModal({
         id={ids.description}
         label={t('azureModels.modelModal.descriptionLabel')}
         aside={t('azureModels.modelModal.counter', {
-          // What the server will store: runs of whitespace count once.
           count: cleanLength(form.description),
           max: DESCRIPTION_MAX_LENGTH,
         })}

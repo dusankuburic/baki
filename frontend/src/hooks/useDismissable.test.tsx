@@ -14,14 +14,12 @@ function Probe({active, onDismiss}: {active: boolean; onDismiss: () => void}) {
   )
 }
 
-// The shared popover dismissal contract (U1.5): outside mousedown and Escape
-// close; clicks inside never do.
 describe('useDismissable', () => {
   it('dismisses on outside mousedown while active', () => {
     const onDismiss = vi.fn()
     render(<Probe active onDismiss={onDismiss} />)
     fireEvent.click(screen.getByTestId('outside'))
-    expect(onDismiss).not.toHaveBeenCalled() // click isn't mousedown
+    expect(onDismiss).not.toHaveBeenCalled()
     fireEvent.mouseDown(screen.getByTestId('outside'))
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })

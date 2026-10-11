@@ -22,9 +22,6 @@ beforeEach(() => {
   featuresMock.mockReset()
 })
 
-// PAD_FEATURE_DISABLE_SIGNUP closes registration server-side. The login page
-// kept offering "Sign up" anyway, so users filled in the form only to be
-// rejected; GET /api/system/features exists precisely so the page can hide it.
 describe('LoginForm sign-up flag', () => {
   it('hides the register toggle when sign-up is disabled', async () => {
     featuresMock.mockResolvedValue({disableSignUp: true})

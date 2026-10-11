@@ -6,6 +6,7 @@ import type {Finding, Severity} from '@/types'
 import {severityTone} from '@/lib/severityTone'
 import {refreshAfterBlockEdit} from '@/lib/blockEdit'
 import {bulkFixMessage} from '@/lib/bulkFixMessage'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import type {BlockLookup} from '@/lib/tree'
 import {flowApi} from '@/api'
 import {useAnalysisStore, findingKey} from '@/stores/analysisStore'
@@ -32,11 +33,6 @@ interface RuleGroup {
   findings: Finding[]
 }
 
-// A flattened render row: each rule group contributes one header row, followed
-// by one row per finding when expanded. Flattening lets the whole list render
-// through a single virtualizer (react-virtuoso) so only the visible rows mount —
-// large flows can produce tens of thousands of findings, and mounting them all
-// froze the Findings tab on every open.
 type Row =
   | {kind: 'header'; group: RuleGroup; collapsed: boolean; groupEnd: boolean}
   | {kind: 'card'; group: RuleGroup; finding: Finding; groupEnd: boolean}
@@ -61,7 +57,6 @@ function groupByRule(findings: Finding[]): RuleGroup[] {
   return Array.from(map.values())
 }
 
-// Row accent from the shared severity tone map (semantic tokens).
 const rowBar = (sev: Severity) => severityTone(sev).bar
 
 export default function FindingsList({findings, blockLookup, onFixWithAI, sortMode = 'severity'}: Props) {
@@ -77,14 +72,8 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
   const selectAllFindings = useAnalysisStore(s => s.selectAllFindings)
   const clearFindingSelection = useAnalysisStore(s => s.clearFindingSelection)
   const readOnly = useFlowStore(s => s.readOnly)
-  // Subscribed (not read via getState during render) so the bulk-fix button
-  // re-evaluates when the report or selection changes — a render-time
-  // getState() could go stale if autoFix flags changed without a selection
-  // change.
   const docId = useFlowStore(s => s.document?.id)
   const reportFindings = useAnalysisStore(s => (docId ? s.reports.get(docId)?.findings : undefined))
-  // Selection resolved against the FULL report (not the filtered view) —
-  // selected items hidden by a filter change must not be silently skipped.
   const selectedFindings = useMemo(
     () => (reportFindings ?? []).filter(f => selectedFindingIds.has(f.id)),
     [reportFindings, selectedFindingIds],
@@ -95,10 +84,6 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
   )
   const toast = useToast()
 
-  // handleBulkFix applies every auto-fixable finding among the selection in one
-  // server-side pass. The selection determines WHICH rules to fix (distinct
-  // ruleIds of selected findings that carry an autoFix); the server then fixes
-  // all fixable findings of those rules, re-parsing between fixes.
   const handleBulkFix = async () => {
     const docId = useFlowStore.getState().document?.id
     if (!docId) return
@@ -110,14 +95,12 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
     setBatchFixing(true)
     try {
       const {document: updated, applied, partial} = await flowApi.applyFixBatch(docId, rules)
-      // Same-flow refresh: preserve subflow/chat/selection, guard the
-      // doc-switch race, and analyze the UPDATED flow by id.
       refreshAfterBlockEdit(updated)
       const msg = bulkFixMessage(applied, rules.length, partial === true)
       toast[msg.variant](msg.title, {description: msg.description})
       clearFindingSelection()
     } catch (err) {
-      toast.error('Bulk fix failed', {description: String(err)})
+      toast.error(t('toasts.bulkFixFailed'), {description: getErrorMessage(err)})
     } finally {
       setBatchFixing(false)
     }
@@ -135,9 +118,6 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
     return g
   }, [findings, sortMode])
 
-  // Flatten groups → header/card rows for the virtualizer. A collapsed group
-  // contributes only its header; groupEnd marks the last visible row of a group
-  // so it carries the bottom divider.
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = []
     for (const group of groups) {
@@ -161,9 +141,6 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
     })
   }
 
-  // Chat "finding:" deep-links set focusedFindingKey. Reveal that finding:
-  // expand its group if collapsed (which re-runs this effect once rows update),
-  // scroll it to center, then clear the focus after the highlight has shown.
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const focusedFindingKey = useAnalysisStore(s => s.focusedFindingKey)
   const setFocusedFinding = useAnalysisStore(s => s.setFocusedFinding)
@@ -175,11 +152,8 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
       const t = setTimeout(() => setFocusedFinding(null), 2500)
       return () => clearTimeout(t)
     }
-    // Not currently rendered — expand its (collapsed) group so it does, then
-    // let the effect re-run against the updated rows.
     const g = groups.find(group => group.findings.some(f => findingKey(f) === focusedFindingKey))
     if (g && collapsed.has(g.ruleId)) {
-      // Deliberately iterative: expands the collapsed group so the deep-linked finding renders, then re-runs against the updated rows.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setCollapsed(prev => {
         const n = new Set(prev)
@@ -188,7 +162,6 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
       })
       return
     }
-    // Filtered out of this view entirely — nothing to reveal; drop the request.
     setFocusedFinding(null)
   }, [focusedFindingKey, rows, groups, collapsed, setFocusedFinding])
 
@@ -291,7 +264,6 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
             {t('selection.selectedCount', {count: selectedFindingIds.size})}
           </span>
           <div className="flex items-center gap-3">
-            {/* Bulk apply-fix: shown only when at least one selected finding has an autoFix. */}
             {hasFixableSelection && (
               <button
                 onClick={handleBulkFix}
@@ -302,8 +274,6 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
                 {batchFixing ? t('selection.fixing') : t('selection.fixAll')}
               </button>
             )}
-            {/* Bulk triage: the high-frequency queue actions on the
-                whole selection — one optimistic update + one batch request. */}
             {currentUserId && (
               <button
                 onClick={() => {
@@ -328,9 +298,6 @@ export default function FindingsList({findings, blockLookup, onFixWithAI, sortMo
               onClick={async () => {
                 const reason = await promptSuppressReason(selectedFindingIds.size)
                 if (reason === null) return
-                // Suppress ALL selected findings from the full report, not
-                // just the filtered view — selected items hidden by a filter
-                // change must not be silently skipped.
                 const docId = useFlowStore.getState().document?.id
                 const report = docId ? useAnalysisStore.getState().reports.get(docId) : undefined
                 const allFindings = report?.findings ?? []

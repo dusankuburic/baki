@@ -1,6 +1,3 @@
-// Search namespace — the command palette, the global search overlay and the
-// keyboard-shortcuts help dialog (src/components/search). English values must
-// match the pre-i18n strings EXACTLY where a test asserts on them.
 export const enSearch = {
   palette: {
     dialogAria: 'Command palette',
@@ -29,7 +26,6 @@ export const enSearch = {
     navigate: 'Navigate',
     open: 'Open',
     close: 'Close',
-    // Block-type filter chips (order and set mirror the BlockType union).
     types: {
       action: 'Action',
       condition: 'If',

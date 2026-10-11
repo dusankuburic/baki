@@ -3,6 +3,7 @@ import {useTranslation} from 'react-i18next'
 import {Trash2} from 'lucide-react'
 import {analysisApi, libraryApi} from '@/api'
 import {useConfirm, useToast} from '@/components/shared'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useAsync} from '@/hooks/useAsync'
 import {useAuthStore} from '@/stores/authStore'
 import {useFlowStore} from '@/stores/flowStore'
@@ -28,18 +29,10 @@ export default function FindingCommentsPanel({
   const {confirm} = useConfirm()
   const flowId = useFlowStore(s => s.document?.id ?? null)
   const userId = useAuthStore(s => s.user?.id ?? null)
-  // Hidden locally once the server confirms the delete. The owning hook drops
-  // its cached list when the panel closes, so a reopen refetches instead of
-  // resurrecting these.
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => new Set())
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   const visible = (comments ?? []).filter(c => !deletedIds.has(c.id))
-  // The server lets flow admins (owner, org admin, admin-tier collaborator)
-  // moderate anyone's comment — the same set it grants sharing to, which the
-  // library record reports as canShare. Only ask when there is a comment the
-  // caller did not write; authors can always delete their own. No user means
-  // local mode, where comments (and this route) do not exist.
   const needsModeration = userId !== null && visible.some(c => c.authorId !== userId)
   const {data: canModerate} = useAsync<boolean>(
     () =>
@@ -61,7 +54,7 @@ export default function FindingCommentsPanel({
       await analysisApi.deleteComment(flowId, comment.id)
       setDeletedIds(prev => new Set(prev).add(comment.id))
     } catch (err) {
-      toast.error(t('toasts.commentDeleteFailed'), {description: String(err)})
+      toast.error(t('toasts.commentDeleteFailed'), {description: getErrorMessage(err)})
     } finally {
       setDeletingId(null)
     }

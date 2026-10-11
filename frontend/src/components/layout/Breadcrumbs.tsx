@@ -9,10 +9,6 @@ export interface Crumb {
   type: 'subflow' | 'block'
 }
 
-// useBreadcrumbPath is THE breadcrumb derivation (U5a.3): flow name +
-// subflow + selected block's ancestry. TitleBar's static display and this
-// interactive bar share it — they used to re-derive (and drift from) the
-// same three-store state independently.
 export function useBreadcrumbPath(): {flowName: string | null; path: Crumb[]} {
   const document = useFlowStore(s => s.document)
   const selectedBlockId = useFlowStore(s => s.selectedBlockId)

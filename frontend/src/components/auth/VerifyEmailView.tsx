@@ -10,8 +10,6 @@ interface VerifyEmailViewProps {
   onDone: () => void
 }
 
-// VerifyEmailView consumes a #verifyEmail=<token> deep link: it redeems the
-// token on mount and shows the result. The effect runs once for the given token.
 export default function VerifyEmailView({token, onDone}: VerifyEmailViewProps) {
   const {t} = useTranslation('auth')
   const [status, setStatus] = useState<'pending' | 'ok' | 'error'>('pending')

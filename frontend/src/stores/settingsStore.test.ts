@@ -1,7 +1,6 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {useSettingsStore, __resetPersistQueueForTest} from './settingsStore'
 
-// Stub out the API layer so tests don't need a real backend
 vi.mock('@/api', () => ({
   settingsApi: {
     getSettings: vi.fn().mockResolvedValue(null),
@@ -14,38 +13,25 @@ import {settingsApi} from '@/api'
 const mockGet = settingsApi.getSettings as ReturnType<typeof vi.fn>
 const mockUpdate = settingsApi.updateSettings as ReturnType<typeof vi.fn>
 
-// Snapshot of the store in its initial state — captured before any test mutates it.
-// Zustand keeps plain object state; using `setState(snapshot, true)` fully restores it.
 const initialState = useSettingsStore.getState()
 
 beforeEach(() => {
-  // Use fake timers so the 1-second persist debounce doesn't slow down the suite.
   vi.useFakeTimers()
-  // Full replacement so no settings bleed from previous test
   useSettingsStore.setState(initialState, true)
-  // Clear any debounce timer / in-flight promise a previous case left behind —
-  // without this the module-level persist queue leaks across cases.
   __resetPersistQueueForTest()
-  // Reset mock call history AND implementation back to defaults
   vi.resetAllMocks()
   mockGet.mockResolvedValue(null)
   mockUpdate.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
-  // Belt-and-braces: ensure no queue state escapes this case even if an
-  // assertion threw before the timer fired.
   __resetPersistQueueForTest()
   vi.useRealTimers()
 })
 
-// Advance fake clock past the 1-second debounce and flush the resulting
-// microtasks so the persist promise settles before assertions run.
 async function flushPersist() {
   await vi.advanceTimersByTimeAsync(1000)
 }
-
-// ---- loadFromBackend ----
 
 describe('loadFromBackend', () => {
   it('sets isLoaded to true on success', async () => {
@@ -70,7 +56,6 @@ describe('loadFromBackend', () => {
   })
 
   it('preserves defaults when backend returns Go zero-values (0/empty)', async () => {
-    // Simulate a first-time cloud user where Postgres returns zero-values
     mockGet.mockResolvedValue({
       version: 1,
       general: {firstRunCompleted: false},
@@ -83,7 +68,6 @@ describe('loadFromBackend', () => {
 
     await useSettingsStore.getState().loadFromBackend()
     const s = useSettingsStore.getState().settings
-    // Every field must fall back to its non-zero default
     expect(s.parser.maxFileSizeMB).toBe(50)
     expect(s.appearance.theme).toBe('dark')
     expect(s.appearance.density).toBe('comfortable')
@@ -96,8 +80,6 @@ describe('loadFromBackend', () => {
     expect(s.layout.lastViewMode).toBeTruthy()
   })
 })
-
-// ---- updateAppearance ----
 
 describe('updateAppearance', () => {
   it('updates the appearance theme optimistically', async () => {
@@ -125,8 +107,6 @@ describe('updateAppearance', () => {
   })
 })
 
-// ---- updateLayout ----
-
 describe('updateLayout', () => {
   it('updates sidebar width', async () => {
     const p = useSettingsStore.getState().updateLayout({sidebarWidth: 350})
@@ -144,8 +124,6 @@ describe('updateLayout', () => {
   })
 })
 
-// ---- updateProvider ----
-
 describe('updateProvider', () => {
   it('updates only the specified provider', async () => {
     const p = useSettingsStore.getState().updateProvider('openai', {enabled: true})
@@ -153,7 +131,6 @@ describe('updateProvider', () => {
     await p
     const ai = useSettingsStore.getState().settings.ai
     expect(ai.providers.openai.enabled).toBe(true)
-    // Other providers should be unchanged
     expect(ai.providers.claude.enabled).toBe(true)
   })
 
@@ -173,15 +150,11 @@ describe('updateProvider', () => {
     expect(mockUpdate).toHaveBeenCalledOnce()
   })
 
-  // Make default is optimistic: a failed save must say so and undo only its
-  // own field — not restore a whole-settings snapshot that would also undo
-  // whatever changed while the write was pending.
   it('reports a failed save and rolls back only the field it wrote', async () => {
     mockUpdate.mockRejectedValue(new Error('disk full'))
     const p = useSettingsStore.getState().updateProvider('azure-foundry', {defaultModel: 'm/a1b2c3d4e5'})
     expect(useSettingsStore.getState().settings.ai.providers['azure-foundry'].defaultModel).toBe('m/a1b2c3d4e5')
 
-    // Changes made while the write is pending, outside this call's fields.
     const s = useSettingsStore.getState().settings
     useSettingsStore.setState({
       settings: {
@@ -212,13 +185,11 @@ describe('updateProvider', () => {
     )
     const store = useSettingsStore.getState()
     const first = store.updateProvider('claude', {defaultModel: 'first'})
-    await flushPersist() // the first write is now in flight
+    await flushPersist()
 
-    // A newer pick of the same field, queued behind the in-flight write.
     const second = store.updateProvider('claude', {defaultModel: 'second'})
     failFirst(new Error('network'))
     await expect(first).resolves.toBe(false)
-    // The failed call must not undo the newer value.
     expect(useSettingsStore.getState().settings.ai.providers.claude.defaultModel).toBe('second')
 
     await flushPersist()
@@ -235,29 +206,21 @@ describe('updateProvider', () => {
     expect(useSettingsStore.getState().settings.ai.providers.claude).not.toHaveProperty('reasoningEffort')
   })
 
-  // A superseded persist used to resolve at once — a false success when the
-  // write that carried its change then failed.
   it('reports the failure of the write that carried a superseded change', async () => {
     mockUpdate.mockRejectedValue(new Error('disk full'))
     const store = useSettingsStore.getState()
     const origTheme = store.settings.appearance.theme
     const provider = store.updateProvider('openai', {enabled: true})
-    // Supersedes the provider write within the debounce window; its write
-    // carries both changes.
     const appearance = store.updateAppearance({theme: 'nord'})
 
     await flushPersist()
     await expect(provider).resolves.toBe(false)
     await appearance
     expect(mockUpdate).toHaveBeenCalledOnce()
-    // Both undone: the snapshot restore (newest first) cannot bring back the
-    // provider change it captured.
     expect(useSettingsStore.getState().settings.ai.providers.openai.enabled).toBe(false)
     expect(useSettingsStore.getState().settings.appearance.theme).toBe(origTheme)
   })
 })
-
-// ---- resetToDefaults ----
 
 describe('resetToDefaults', () => {
   it('restores the default theme', async () => {
@@ -279,13 +242,6 @@ describe('resetToDefaults', () => {
   })
 })
 
-// ---- persist queue semantics (debounce / supersede / in-flight guard) ----
-//
-// These were previously impossible to test because the debounce timer,
-// supersede resolver, and in-flight promise lived in unresettable module-level
-// vars. __resetPersistQueueForTest now clears them between cases, so the queue
-// contract is lockable.
-
 describe('persist queue', () => {
   it('coalesces rapid updates into one backend write (debounce)', async () => {
     const store = useSettingsStore.getState()
@@ -296,7 +252,6 @@ describe('persist queue', () => {
     await flushPersist()
     await Promise.all([p1, p2, p3])
 
-    // One debounced flush → one network write, carrying the latest value.
     expect(mockUpdate).toHaveBeenCalledOnce()
     expect(useSettingsStore.getState().settings.appearance.theme).toBe('tokyo-night')
   })
@@ -305,18 +260,15 @@ describe('persist queue', () => {
     const store = useSettingsStore.getState()
     const superseded = store.updateAppearance({theme: 'nord'})
 
-    // A second update supersedes the first; the first must settle (not hang).
     const winner = store.updateAppearance({theme: 'dracula'})
 
     await flushPersist()
     await Promise.all([superseded, winner])
 
-    // Both settled without throwing — the supersede path resolved the first.
     expect(useSettingsStore.getState().settings.appearance.theme).toBe('dracula')
   })
 
   it('queues a follow-up write behind an in-flight one', async () => {
-    // Make the first write slow so a second persist arrives while it's airborne.
     let releaseFirst: () => void = () => {}
     mockUpdate.mockImplementationOnce(
       () =>
@@ -327,18 +279,16 @@ describe('persist queue', () => {
 
     const store = useSettingsStore.getState()
     const first = store.updateAppearance({theme: 'nord'})
-    await flushPersist() // fires the debounced first write (now pending)
+    await flushPersist()
 
-    // While the first is in flight, issue a second update.
     const second = store.updateAppearance({theme: 'dracula'})
-    await flushPersist() // queues behind the in-flight guard
+    await flushPersist()
 
-    // Nothing new has been written yet — the in-flight guard holds it.
     expect(mockUpdate).toHaveBeenCalledTimes(1)
 
     releaseFirst()
     await first
-    await flushPersist() // second write now flushes
+    await flushPersist()
     await second
 
     expect(mockUpdate).toHaveBeenCalledTimes(2)

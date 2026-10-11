@@ -12,10 +12,6 @@ import type {
   ProviderCost,
 } from '@/types'
 
-// The headline row: average health leads (the hero), then the open findings,
-// the fleet size, how much of the finding load is one click from fixed, and
-// — when anything was spent — AI spend. Sparklines come from the 30-day
-// series the payload already carries.
 export function HomeKpiRow({
   overview,
   findings,

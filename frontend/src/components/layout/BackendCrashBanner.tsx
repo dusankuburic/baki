@@ -4,17 +4,10 @@ import {AlertOctagon, RefreshCw} from 'lucide-react'
 import {usePlatform} from '@/hooks/usePlatform'
 import {logger} from '@/lib/logger'
 import type {BackendEvent} from '@/platform/types'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
 type Phase = 'terminated' | 'error' | 'restarting'
 
-// BackendCrashBanner is the desktop-only surface for a dead sidecar. The Rust
-// host auto-respawns a crashed backend up to three times and then emits
-// `backend-error`; before this banner nothing listened, so the window stayed
-// up with every request failing and no way out but killing the app. The
-// `restart_backend` command it calls was registered but never invoked.
-//
-// Blocking on purpose: while the backend is down every action fails, and a
-// modal overlay says so once instead of a toast per failed request.
 export default function BackendCrashBanner() {
   const {t} = useTranslation('shell')
   const platform = usePlatform()
@@ -25,7 +18,6 @@ export default function BackendCrashBanner() {
     return platform.onBackendEvent((event: BackendEvent) => {
       switch (event.kind) {
         case 'ready':
-          // A respawn (automatic or ours) came up: the condition is over.
           setPhase(null)
           setDetail('')
           break
@@ -34,8 +26,6 @@ export default function BackendCrashBanner() {
           setDetail(event.message)
           break
         case 'terminated':
-          // The host is (probably) auto-restarting; show that rather than a
-          // dead-end error, and keep the manual restart available regardless.
           setPhase(p => (p === 'error' || p === 'restarting' ? p : 'terminated'))
           setDetail(event.message)
           break
@@ -47,14 +37,11 @@ export default function BackendCrashBanner() {
     setPhase('restarting')
     try {
       await platform.restartBackend()
-      // A fresh sidecar publishes a NEW port + session secret; the API client
-      // caches the config it booted with, so the shell must reload to pick
-      // the new one up. The reload path waits for backend-ready itself.
       window.location.reload()
     } catch (err) {
       logger.error('restart_backend failed:', err)
       setPhase('error')
-      setDetail(String(err))
+      setDetail(getErrorMessage(err))
     }
   }
 

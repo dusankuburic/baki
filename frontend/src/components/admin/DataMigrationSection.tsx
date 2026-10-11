@@ -8,8 +8,6 @@ import {SectionCard, SectionNotice} from '@/components/auth/SectionCard'
 
 type Phase = 'not configured' | 'running' | 'failed' | 'completed' | 'idle'
 
-// migrationPhase derives the badge from the server's status. The panel used to
-// read a `status` field the server never sends, so no state was ever shown.
 export function migrationPhase(status: MigrationStatus | null): Phase | null {
   if (!status) return null
   if (!status.configured) return 'not configured'

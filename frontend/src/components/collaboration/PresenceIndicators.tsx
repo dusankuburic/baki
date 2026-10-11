@@ -18,10 +18,6 @@ export default function PresenceIndicators({className, maxVisible = 5}: Presence
   const lastError = usePresenceStore(s => s.lastError)
   const toast = useOptionalToast()
 
-  // Server-side refusals (a viewer's edit, an unknown event) arrive as `error`
-  // envelopes on the socket. Without this they were silently dropped and the
-  // user saw "nothing happens". Keyed on the whole object (its `at` changes)
-  // so the same code twice still toasts twice.
   useEffect(() => {
     if (!lastError || !toast) return
     toast.error(lastError.message, {description: lastError.code})

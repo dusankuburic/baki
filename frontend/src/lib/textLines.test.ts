@@ -19,22 +19,21 @@ describe('countLines / countNewlines', () => {
 })
 
 describe('lineCountAfterEdit', () => {
-  // Reference: the full recount the editor used to do on every keystroke.
   const expectIncremental = (prev: string, next: string) => {
     expect(lineCountAfterEdit(prev, next, countLines(prev))).toBe(countLines(next))
   }
 
   it('tracks inserts, deletes and replacements anywhere in the buffer', () => {
-    expectIncremental('a\nb\nc', 'a\nb\nX\nc') // insert a line in the middle
-    expectIncremental('a\nb\nc', 'a\nc') // delete a line
-    expectIncremental('a\nb\nc', '\n\na\nb\nc') // insert at the start
-    expectIncremental('a\nb\nc', 'a\nb\nc\n\n') // append at the end
-    expectIncremental('a\nb\nc', 'a\nb\nc') // no-op
-    expectIncremental('a\nb\nc', '') // clear
-    expectIncremental('', 'x\ny') // fill
-    expectIncremental('one\ntwo\nthree', 'uno\ndos\ntres\ncuatro') // replace everything
-    expectIncremental('abc', 'a\nb\nc') // split a line
-    expectIncremental('a\nb\nc', 'abc') // join lines
+    expectIncremental('a\nb\nc', 'a\nb\nX\nc')
+    expectIncremental('a\nb\nc', 'a\nc')
+    expectIncremental('a\nb\nc', '\n\na\nb\nc')
+    expectIncremental('a\nb\nc', 'a\nb\nc\n\n')
+    expectIncremental('a\nb\nc', 'a\nb\nc')
+    expectIncremental('a\nb\nc', '')
+    expectIncremental('', 'x\ny')
+    expectIncremental('one\ntwo\nthree', 'uno\ndos\ntres\ncuatro')
+    expectIncremental('abc', 'a\nb\nc')
+    expectIncremental('a\nb\nc', 'abc')
   })
 
   it('does not double-count when the inserted text repeats its surroundings', () => {
@@ -48,11 +47,11 @@ describe('lineCountAfterEdit', () => {
   it('handles buffers larger than the comparison chunk (a 30k-line source)', () => {
     const lines = Array.from({length: 30_000}, (_, i) => `SET Var${i} TO ${i}`)
     const prev = lines.join('\n')
-    expectIncremental(prev, prev.slice(0, 500_000) + '\nNEW LINE\n' + prev.slice(500_000)) // mid-buffer insert
-    expectIncremental(prev, prev + '\n') // keystroke at the very end
-    expectIncremental(prev, '\n' + prev) // keystroke at the very start
-    expectIncremental(prev, prev.replace('SET Var20000', 'SET\nVar20000')) // edit deep inside
-    expectIncremental(prev, lines.slice(0, 10_000).join('\n')) // large cut
+    expectIncremental(prev, prev.slice(0, 500_000) + '\nNEW LINE\n' + prev.slice(500_000))
+    expectIncremental(prev, prev + '\n')
+    expectIncremental(prev, '\n' + prev)
+    expectIncremental(prev, prev.replace('SET Var20000', 'SET\nVar20000'))
+    expectIncremental(prev, lines.slice(0, 10_000).join('\n'))
   })
 })
 

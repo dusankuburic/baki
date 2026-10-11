@@ -65,12 +65,12 @@ describe('useFileWatcher', () => {
 
   it('reimports after a settled external change (two changed polls)', async () => {
     renderHook(() => useFileWatcher(localDoc))
-    await advance(5000) // seed
+    await advance(5000)
 
     getSourceMeta.mockResolvedValue(meta({size: 200, modTime: '2026-01-02T00:00:00Z'}))
-    await advance(4500) // first changed poll → settling
+    await advance(4500)
     expect(reimport).not.toHaveBeenCalled()
-    await advance(4500) // second changed poll → reload
+    await advance(4500)
     expect(reimport).toHaveBeenCalledWith('f1')
     expect(analyzeFlow).toHaveBeenCalled()
     expect(useFlowStore.getState().document).toEqual(localDoc)
@@ -81,7 +81,7 @@ describe('useFileWatcher', () => {
     await advance(5000)
     getSourceMeta.mockResolvedValueOnce(meta({size: 999}))
     await advance(4500)
-    getSourceMeta.mockResolvedValue(meta()) // back to baseline
+    getSourceMeta.mockResolvedValue(meta())
     await advance(9000)
     expect(reimport).not.toHaveBeenCalled()
   })
@@ -103,11 +103,10 @@ describe('useFileWatcher', () => {
       initialProps: {d: localDoc},
     })
     await advance(5000)
-    // The app itself replaced the doc (fix/save) AND the file changed.
     getSourceMeta.mockResolvedValue(meta({size: 300}))
     rerender({d: {...localDoc} as FlowDocument})
     await advance(4500)
-    expect(reimport).not.toHaveBeenCalled() // re-seeded, not treated as external
+    expect(reimport).not.toHaveBeenCalled()
   })
 
   it('keeps polling through a failed reimport without looping', async () => {
@@ -118,7 +117,6 @@ describe('useFileWatcher', () => {
     await advance(4500)
     await advance(4500)
     expect(reimport).toHaveBeenCalledTimes(1)
-    // Re-seeded baseline: the next unchanged poll is quiet.
     getSourceMeta.mockResolvedValue(meta({size: 200, modTime: 'x'}))
     await advance(4500)
     expect(reimport).toHaveBeenCalledTimes(1)
@@ -130,9 +128,6 @@ describe('useFileWatcher', () => {
     getSourceMeta.mockResolvedValue(meta({size: 200, modTime: 'x2'}))
     await advance(4500)
     await advance(4500)
-    // The reload's finally-clause runs on microtasks chained after mocked
-    // promises — advanceTimersByTimeAsync(0) flushes them under fake timers
-    // (a real setTimeout would never fire while they're mocked).
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)
     })

@@ -37,32 +37,16 @@ interface OrgState {
   setActiveOrg: (id: string | null) => void
   createOrg: (name: string) => Promise<Organisation>
   renameOrg: (orgId: string, name: string) => Promise<void>
-  // Resolves to the raw invite token so the UI can show a copyable link
-  // when the invite email cannot be delivered (no SMTP configured).
   inviteMember: (orgId: string, email: string, role: OrgRole) => Promise<string | undefined>
   acceptInvite: (token: string) => Promise<void>
-  // Also how a member leaves: the server lets a non-admin remove their own
-  // row. Both membership actions resolve the server's reply, whose
-  // sharedCredentialDisabled says the departure disabled the org's shared
-  // Azure AI Foundry credential (the member was its lender) — the panel
-  // explains the disappearance instead of leaving a support ticket.
   removeMember: (orgId: string, userId: string) => Promise<{sharedCredentialDisabled: boolean}>
   setMemberRole: (orgId: string, userId: string, role: OrgRole) => Promise<{sharedCredentialDisabled: boolean}>
   deleteOrg: (orgId: string) => Promise<void>
   clearError: () => void
 }
 
-// Flow, analysis and chat state is loaded under the active org but not keyed by
-// it, so leaving that org context must wipe it in full.
 function resetOrgScopedState() {
-  // Drop any 5s-TTL GET cache from the previous org context: safe today
-  // because org-scoped endpoints are path-parameterized, but a future
-  // org-scoped-by-header GET would otherwise leak across the switch within the
-  // TTL window (same rationale as logout's clear).
   clearRequestCache()
-  // Deliberately broader than resetDerivedStateForFlow: analysis reports and
-  // chat threads aren't org-scoped in frontend state, so an org switch must
-  // wipe them in full.
   useFlowStore.getState().reset()
   useAnalysisStore.getState().reset()
   useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map(), streams: {}, drafts: {}})
@@ -85,8 +69,6 @@ export const useOrgStore = create<OrgState>()(
           set(s => ({
             organisations: orgs ?? [],
             isLoading: false,
-            // The persisted active org may have been deleted, or the user removed
-            // from it (or this is a different account) — fall back to Personal.
             activeOrgId: s.activeOrgId && (orgs ?? []).some(o => o.id === s.activeOrgId) ? s.activeOrgId : null,
           }))
         } catch (err) {
@@ -132,9 +114,6 @@ export const useOrgStore = create<OrgState>()(
         if (get().isBusy) return Promise.reject(new Error('Another operation is in progress'))
         set({isBusy: true, error: null})
         try {
-          // Create a token invite — the backend emails the invitee a link they
-          // accept via acceptInvite (POST /api/invites/{token}/accept). The member
-          // list only changes once they accept, so no loadOrgs() here.
           const res = await request<{token?: string} | undefined>(`/api/orgs/${orgId}/invites`, {body: {email, role}})
           set({isBusy: false})
           return res?.token
@@ -168,10 +147,6 @@ export const useOrgStore = create<OrgState>()(
             {method: 'DELETE'},
           )
           await get().loadOrgs()
-          // The caller left (or was otherwise dropped from) the org they were
-          // working in: loadOrgs already fell back to Personal, but that only
-          // rewrites activeOrgId — the org's open flow and findings would stay
-          // on screen behind requests that now 403.
           if (wasActive && get().activeOrgId === null) resetOrgScopedState()
           set({isBusy: false})
           return {sharedCredentialDisabled: reply?.sharedCredentialDisabled === true}
@@ -209,9 +184,6 @@ export const useOrgStore = create<OrgState>()(
             activeOrgId: s.activeOrgId === orgId ? null : s.activeOrgId,
             isBusy: false,
           }))
-          // Deleting the org you are working in leaves its flow, findings and
-          // chat on screen behind requests that now 404 — same reason the
-          // leave path resets, and the org is gone for good here.
           if (wasActive) resetOrgScopedState()
         } catch (err) {
           set({isBusy: false, error: getErrorMessage(err, 'Failed to delete organisation')})
@@ -228,7 +200,6 @@ export const useOrgStore = create<OrgState>()(
   ),
 )
 
-// Reset on logout (see storeRegistry).
 registerStoreReset(() => {
   useOrgStore.setState({organisations: [], activeOrgId: null, isLoading: false, isBusy: false, error: null})
 })

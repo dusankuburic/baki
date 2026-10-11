@@ -31,7 +31,6 @@ function user(i: number, role: AdminUser['role'] = 'member'): AdminUser {
   }
 }
 
-// 17 users: one admin, fifteen members, one account without a valid role.
 const ALL: AdminUser[] = [user(1, 'admin'), ...Array.from({length: 15}, (_, i) => user(i + 2)), user(17, '')]
 const STATS: UserStats = {
   total: 17,
@@ -78,7 +77,7 @@ describe('UsersSection', () => {
     expect(listUsers).toHaveBeenLastCalledWith(expect.objectContaining({limit: 10, offset: 0}), expect.anything())
     const nav = screen.getByRole('navigation', {name: 'Users pagination'})
     expect(nav).toHaveTextContent('Showing 1–10 of 17')
-    expect(screen.getAllByRole('row')).toHaveLength(11) // the header row and ten users
+    expect(screen.getAllByRole('row')).toHaveLength(11)
 
     fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
     await waitFor(() =>
@@ -127,7 +126,6 @@ describe('UsersSection', () => {
       ),
     )
     expect(members).toHaveAttribute('aria-pressed', 'true')
-    // A role nobody has cannot be chosen.
     expect(screen.getByRole('button', {name: 'Viewer, 0 users'})).toBeDisabled()
     expect(screen.getByRole('button', {name: 'Admin, 1 user'})).toBeEnabled()
   })

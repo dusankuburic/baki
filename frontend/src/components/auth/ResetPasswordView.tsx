@@ -5,16 +5,18 @@ import {Lock, KeyRound, CheckCircle2} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import Input from '@/components/shared/Input'
 import {authApi} from '@/api/auth'
+import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
+import {checkPassword, PASSWORD_MAX_LENGTH} from '@/lib/password'
+import {PasswordRuleList} from './PasswordRuleList'
 
 interface ResetPasswordViewProps {
   token: string
-  // onDone returns the user to the login screen (clears the recovery view).
   onDone: () => void
 }
 
-// ResetPasswordView consumes a #resetPassword=<token> deep link: it collects a
-// new password and submits it with the single-use token. The backend enforces
-// the full password policy and returns a message on failure.
+type ResetField = 'password' | 'confirm'
+const RESET_FIELDS = ['password', 'confirm'] as const satisfies readonly ResetField[]
+
 export default function ResetPasswordView({token, onDone}: ResetPasswordViewProps) {
   const {t} = useTranslation('auth')
   const [password, setPassword] = useState('')
@@ -23,15 +25,23 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
   const [loading, setLoading] = useState(false)
   const [done, setDone] = useState(false)
 
+  const check = checkPassword(password)
+  const v = useFormValidation<ResetField>({
+    fields: RESET_FIELDS,
+    validate: () => {
+      const errors: FieldErrors<ResetField> = {}
+      if (check.tooLong) errors.password = t('password.tooLong', {count: PASSWORD_MAX_LENGTH})
+      if (confirm && password !== confirm) errors.confirm = t('reset.mismatch')
+      return errors
+    },
+  })
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
-    if (password !== confirm) {
-      setError(t('reset.mismatch'))
-      return
-    }
-    if (password.length < 12) {
-      setError('Password must be at least 12 characters')
+    const invalid = v.submitValidate()
+    if (invalid) {
+      document.getElementById(invalid === 'password' ? 'new-password' : 'confirm-password')?.focus()
       return
     }
     setLoading(true)
@@ -60,7 +70,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
             </Button>
           </>
         ) : (
-          <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+          <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-5">
             <div className="flex flex-col gap-1 mb-2">
               <h1 className="text-xl font-semibold text-text-primary">{t('reset.formTitle')}</h1>
               <p className="text-sm text-text-tertiary">{t('reset.formSubtitle')}</p>
@@ -88,7 +98,11 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
               required
               autoComplete="new-password"
               autoFocus
+              error={v.errorFor('password')}
+              aria-describedby={v.errorFor('password') ? undefined : 'reset-password-rules'}
+              onBlur={() => v.touch('password')}
             />
+            <PasswordRuleList id="reset-password-rules" check={check} />
             <label htmlFor="confirm-password" className="text-xs font-medium text-text-secondary">
               {t('reset.confirmPasswordLabel')}
             </label>
@@ -101,6 +115,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
               onChange={e => setConfirm(e.target.value)}
               required
               autoComplete="new-password"
+              {...v.fieldProps('confirm')}
             />
 
             <Button
@@ -109,7 +124,7 @@ export default function ResetPasswordView({token, onDone}: ResetPasswordViewProp
               fullWidth
               loading={loading}
               icon={KeyRound}
-              disabled={loading || !password || !confirm}
+              disabled={loading || !password || !confirm || !check.valid}
             >
               {t('reset.submit')}
             </Button>

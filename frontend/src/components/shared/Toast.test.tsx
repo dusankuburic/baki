@@ -22,8 +22,6 @@ function Probe() {
   )
 }
 
-// Duration policy (V1.2): action-bearing and error toasts persist 8s — the
-// 4s default dismissed undo windows before users could reach them.
 describe('Toast duration policy', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
@@ -41,7 +39,6 @@ describe('Toast duration policy', () => {
     act(() => {
       vi.advanceTimersByTime(4500)
     })
-    // Plain (4s) is gone; action + error (8s) remain.
     expect(screen.queryByText('Plain')).not.toBeInTheDocument()
     expect(screen.getByText('With undo')).toBeInTheDocument()
     expect(screen.getByText('Bad')).toBeInTheDocument()
@@ -54,14 +51,6 @@ describe('Toast duration policy', () => {
   })
 })
 
-// Regression: the manual-dismiss path scheduled `setTimeout(() => onClose(id), 200)`
-// for the exit animation without keeping the handle, so nothing cancelled it.
-// Unmounting the provider (route change, logout teardown) inside that window left
-// a live timer holding a closure over a torn-down tree.
-//
-// Asserted via the pending-timer count rather than "does it throw": React 18
-// dropped the setState-after-unmount warning, so a leaked timer is otherwise
-// completely silent.
 describe('Toast dismiss timer cleanup', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
@@ -78,7 +67,6 @@ describe('Toast dismiss timer cleanup', () => {
     act(() => {
       fireEvent.click(screen.getByLabelText('Dismiss'))
     })
-    // In-flight: the 200ms exit timer is armed.
     expect(vi.getTimerCount()).toBeGreaterThan(0)
 
     unmount()

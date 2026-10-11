@@ -11,7 +11,6 @@ export const useSyncStore = create<SyncState>(() => ({
   pendingCount: 0,
 }))
 
-// Wire up the sync manager's queue changes to the store.
 syncManager.onQueueChange(queue => {
   useSyncStore.setState({queue, pendingCount: queue.length})
 })

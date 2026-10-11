@@ -1,34 +1,18 @@
-// Analyzer outputs — findings, metrics, batch results, diffs, rule definitions.
 
 import type {Tolerant} from './tolerant'
 
-// Closed on purpose, unlike the tolerant wire enums: the backend validates it
-// at its boundary (core/models Severity.Valid), consumers rank over it, and
-// the client sends it back (rule configs, policy gates, custom rules).
 export type Severity = 'error' | 'warning' | 'info'
 
-// Rule certainty about a finding: 'high' (deterministic, e.g. a regex secret
-// match), 'medium' (default), 'low' (heuristic/noisy, e.g. an entropy guess).
-// Drives severity×confidence triage ordering.
 export type Confidence = 'high' | 'medium' | 'low'
 
-// A rule's release stage (core/analyzer Stage). A preview rule runs and reports,
-// but its findings never gate (CI, policies) and stay out of the health score.
 export const RULE_STAGES = ['stable', 'preview'] as const
 export type RuleStage = (typeof RULE_STAGES)[number]
 
-// What a rule checks (core/analyzer RuleKind): each block, the whole flow once,
-// or summaries of many flows ('library': desktop folder analysis only).
 export const RULE_KINDS = ['block', 'flow', 'library'] as const
 export type RuleKind = (typeof RULE_KINDS)[number]
 
 export interface Finding {
   id: string
-  // Stable, content-derived identity from the backend (rule + subflow/name/line/
-  // subject). Unlike `id` (a per-run index like "F-001" that shifts as findings
-  // come and go), `fingerprint` survives re-analysis AND re-imports/re-parses —
-  // use it to key triage state, suppressions, and baselines. Optional for
-  // backward compatibility with older payloads.
   fingerprint?: string
   ruleId: string
   severity: Severity
@@ -39,31 +23,19 @@ export interface Finding {
   subflowId: string
   suggestion?: string
   autoFixHint?: string
-  // Names a deterministic one-click fix the user can apply from the findings UI
-  // (desktop: edits the source file, re-parses, re-analyzes). Empty = no auto
-  // fix (only the autoFixHint prose or "Fix with AI"). Values: 'wrap-error-handler', 'suppress'.
   autoFix?: string
   category?: string
   metadata?: Record<string, unknown>
-  /** 'preview' when a preview rule found it; absent for stable rules (and from servers before Phase 4a). */
   stage?: Tolerant<RuleStage>
 }
 
-// Triage lifecycle for a finding. Mirrors the backend's validTriageStatuses.
 export const TRIAGE_STATUSES = ['open', 'acknowledged', 'in_progress', 'resolved', 'suppressed'] as const
 export type TriageStatus = (typeof TRIAGE_STATUSES)[number]
 
-// Persisted, team-shared triage state for one finding, keyed by its stable
-// fingerprint (findingKey == Finding.fingerprint == ruleId:blockId).
 export interface FindingStatus {
   flowId: string
   findingKey: string
   ruleId?: string
-  /**
-   * A status this bundle does not know shows under a neutral label, filters
-   * as open, and the finding cannot be reassigned here (the request repeats
-   * the status, and requests send only known values).
-   */
   status: Tolerant<TriageStatus>
   justification?: string
   assigneeId?: string
@@ -71,15 +43,9 @@ export interface FindingStatus {
   updatedAt: string
 }
 
-// The accepted set of finding keys for a flow. Findings whose fingerprint is not
-// in `keys` are "new since baseline".
-// One inline `# pad-ignore` directive in the flow source, audited by
-// POST /api/analysis/suppressions (core/analyzer/suppress_inventory.go).
-// stale: the rule no longer fires on the target block, so the directive masks
-// nothing today but would silently hide a future finding there.
 export interface SuppressionEntry {
   line: number
-  rule: string // "*" = all rules
+  rule: string
   blockLabel: string
   blockType?: string
   subflow?: string
@@ -92,18 +58,9 @@ export interface FlowBaseline {
   keys: string[]
   createdBy?: string
   createdAt: string
-  // The digest ("rs1:<sha256>") of the rule set the keys were taken under;
-  // absent for a baseline set before rule sets were recorded (findings of
-  // newer rules then count as a notice, not drift). The set itself stays on
-  // the server.
   ruleSetDigest?: string
 }
 
-// Drift report: findings introduced since the accepted baseline. When
-// hasBaseline is false, every finding is "new" by construction. With a
-// baseline, newFromNewRules of the new findings come from rules newer than the
-// baseline's rule set (newRuleIds) and preview from preview rules; `new` and
-// its counts include both.
 export interface BaselineDrift {
   flowId: string
   hasBaseline: boolean
@@ -116,7 +73,6 @@ export interface BaselineDrift {
   preview?: number
 }
 
-// A team-shared review comment on a finding, keyed by the finding's stable key.
 export interface FindingComment {
   id: string
   flowId: string
@@ -163,8 +119,6 @@ export interface AnalysisStats {
   info: number
   blocksAnalyzed: number
   rulesRun: number
-  // Findings hidden by inline `# pad-ignore` directives. The engine always
-  // emits it; optional because reports stored before the field existed lack it.
   suppressed?: number
 }
 
@@ -250,7 +204,6 @@ export interface AnalysisDiff {
   addedCount: number
   removedCount: number
   persistedCount: number
-  /** False when there is no earlier run to compare against. */
   hasPrevious: boolean
 }
 
@@ -266,13 +219,6 @@ export interface DependencyAnalysis {
   topoOrder: string[]
 }
 
-export interface SubflowHash {
-  subflowId: string
-  hash: string
-}
-
-// In-session analytics aggregates (powers AnalyticsDashboard.tsx).
-// Distinct from the welcome dashboard's payload, which lives in dashboard.ts.
 export interface DashboardStats {
   totalFlowsAnalyzed: number
   totalFindings: number
@@ -304,8 +250,6 @@ export interface DeduplicateResult {
   dedupedCount: number
 }
 
-// Rule definition + per-flow override config. RuleConfig is consumed by
-// AppSettings.analysis (see settings.ts).
 export interface Rule {
   id: string
   name: string
@@ -313,15 +257,10 @@ export interface Rule {
   defaultSeverity: Severity
   category: string
   enabled: boolean
-  /** Built-in default certainty for this rule's findings. */
   confidence?: Confidence
-  /** Deterministic fixType a user can apply in one click (e.g. "set-timeout"), or empty if none. */
   autoFix?: string
-  /** Numeric thresholds the rule honours (maxDepth, minRepeats, maxBlocks), as currently configured. */
   options?: Record<string, number>
-  /** Release stage; absent from servers before Phase 4a (read as stable). */
   stage?: Tolerant<RuleStage>
-  /** The rule-set version that shipped the rule; absent for custom rules. */
   introducedIn?: number
   kind?: Tolerant<RuleKind>
 }
@@ -331,8 +270,6 @@ export interface RuleConfig {
   severity: Severity
   options?: Record<string, unknown>
 }
-
-// --- Policy Gates ---
 
 export interface PolicyRule {
   ruleId: string
@@ -346,7 +283,6 @@ export interface Policy {
   name: string
   description?: string
   rules: PolicyRule[]
-  /** Lowest severity that fails evaluation: 'error' | 'warning' | 'info'. Empty = report-only. */
   gateSeverity?: Severity
   createdAt?: string
   updatedAt?: string
@@ -361,7 +297,5 @@ export interface PolicyResult {
   warnings: number
   info: number
   evaluated: number
-  // Findings of the policy's rules set aside because a preview rule produced
-  // them: never evaluated, waived or violating.
   preview?: number
 }

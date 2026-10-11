@@ -4,20 +4,13 @@ import clsx from 'clsx'
 export type SelectOption = {value: string; label: string; disabled?: boolean}
 
 type SelectProps = Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'children'> & {
-  /** The choices; or pass <option>/<optgroup> elements as children. */
   options?: readonly SelectOption[]
   children?: React.ReactNode
-  /** A first, unselectable option shown while the value is ''. */
   placeholder?: string
   error?: string
   hint?: string
 }
 
-// The native <select>: the platform's own picker, keyboard and screen-reader
-// support, styled like shared/Input. Like Input it links its error or hint
-// through aria-describedby and marks an error with aria-invalid (WCAG
-// 3.3.1/3.3.2); a caller's own aria-describedby is kept alongside. The label
-// is the caller's: wrap it in FormField, or pass aria-label.
 const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
   {options, children, placeholder, error, hint, className, id, 'aria-describedby': describedBy, ...rest},
   ref,

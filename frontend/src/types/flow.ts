@@ -1,4 +1,3 @@
-// Core flow document model — what the parser produces and the editor renders.
 
 export type BlockType =
   | 'ACTION'
@@ -41,7 +40,7 @@ export interface Block {
 export interface Subflow {
   id: string
   name: string
-  sourceFile?: string // file name (with .txt) the subflow was parsed from, only set for folder loads
+  sourceFile?: string
   blocks: Block[]
   variables: VariableDecl[]
 }
@@ -73,13 +72,7 @@ export interface FlowDocument {
   metadata: FlowMetadata
   files?: FlowFileInfo[]
   isFolder?: boolean
-  /** Per-line issues the parser recovered from (backend: parseErrors,omitempty). */
   parseErrors?: ParseError[]
-  /**
-   * The organisation that owns a cloud flow (backend: orgId,omitempty); absent
-   * for a personal or local flow. Chat turns on the flow resolve shared
-   * provider credentials through this org, not the active one.
-   */
   orgId?: string
 }
 

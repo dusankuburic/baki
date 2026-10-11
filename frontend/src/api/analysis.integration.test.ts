@@ -1,13 +1,3 @@
-// Integration test: feeds a FULL-FIDELITY backend AnalysisReport JSON (all
-// fields populated, matching the Go struct in core/models/analysis.go) through
-// the real requestValidated(AnalysisReportSchema) → analysisStore.setReport
-// pipeline. Guards against:
-//  1. zod .strip() silently deleting backend fields (the round-1 regression)
-//  2. API mapping regressions (switching back from requestValidated to request)
-//  3. Store-level field loss (setReport not preserving all fields)
-//
-// Unlike the unit tests in client.test.ts which use hand-crafted minimal
-// payloads, this uses a payload that matches the ACTUAL backend shape.
 
 import {describe, it, expect, vi} from 'vitest'
 import {useAnalysisStore} from '@/stores/analysisStore'
@@ -18,8 +8,6 @@ vi.mock('@/platform/adapters', () => ({
   }),
 }))
 
-// A full-fidelity AnalysisReport matching the Go backend's JSON output.
-// Every field the UI reads is populated — if zod strips any, the assertions fail.
 const fullReport = {
   flowId: 'flow-abc-123',
   flowName: 'Customer Sync Flow',
@@ -97,7 +85,6 @@ const fullReport = {
 
 describe('AnalysisReport integration: requestValidated → store', () => {
   it('preserves ALL backend fields through the schema → store pipeline', async () => {
-    // Mock fetch to return the full report
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(fullReport), {status: 200, headers: {'Content-Type': 'application/json'}}),
     )
@@ -105,15 +92,12 @@ describe('AnalysisReport integration: requestValidated → store', () => {
     const {requestValidated} = await import('@/api/client')
     const {getAnalysisReportSchema} = await import('@/api/schemas')
 
-    // Run through the real validated API layer (no vi.mock on @/api)
     const report = await requestValidated('/api/analysis/analyze', await getAnalysisReportSchema())
 
-    // Core required fields
     expect(report.flowId).toBe('flow-abc-123')
     expect(report.generatedAt).toBe('2024-07-12T10:30:00Z')
     expect(report.durationMs).toBe(42)
 
-    // Previously-stripped fields (the round-1 regression) — must survive passthrough
     expect(report.flowName).toBe('Customer Sync Flow')
     expect(report.metrics).toBeDefined()
     expect((report as {metrics?: {healthScore?: number}}).metrics?.healthScore).toBe(73)
@@ -122,7 +106,6 @@ describe('AnalysisReport integration: requestValidated → store', () => {
     expect((report as {ruleProfiles?: unknown[]}).ruleProfiles).toBeDefined()
     expect((report as {ruleProfiles?: unknown[]}).ruleProfiles).toHaveLength(2)
 
-    // Findings preserve all fields (the FindingSchema also uses passthrough)
     const f0 = report.findings[0]!
     expect(f0.fingerprint).toBe('hardcoded-credential:b1:ApiKey')
     expect(f0.confidence).toBe('high')
@@ -133,11 +116,9 @@ describe('AnalysisReport integration: requestValidated → store', () => {
     const f1 = report.findings[1]!
     expect(f1.autoFix).toBe('wrap-error-handler')
 
-    // Stats preserves all fields (including 'suppressed' via inner passthrough)
     expect((report.stats as {suppressed?: number}).suppressed).toBe(0)
     expect(report.stats.blocksAnalyzed).toBe(15)
 
-    // Store-level: setReport preserves the report
     useAnalysisStore.getState().setReport('flow-abc-123', report)
     const stored = useAnalysisStore.getState().reports.get('flow-abc-123')
     expect(stored).toBeDefined()

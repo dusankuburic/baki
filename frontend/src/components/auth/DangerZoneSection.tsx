@@ -8,10 +8,6 @@ import {Button, Input} from '@/components/shared'
 import {SectionCard} from './SectionCard'
 import {setPostLogoutNotice} from './authNotice'
 
-// DangerZoneSection is the self-service account-erasure flow. The
-// confirmation form stays folded behind "Delete account…" so the destructive
-// control is never one stray click away, and the delete button only arms
-// once the typed email matches — the same check the server makes.
 export const DangerZoneSection: React.FC = () => {
   const {t} = useTranslation('auth')
   const user = useAuthStore(s => s.user)
@@ -38,8 +34,6 @@ export const DangerZoneSection: React.FC = () => {
     setDeleting(true)
     try {
       await authApi.deleteAccount(confirmEmail.trim())
-      // Account erased server-side; tear down the local session. The auth
-      // gate then shows the sign-in screen, with the confirmation on it.
       setPostLogoutNotice('account-deleted')
       await logout()
     } catch (err) {

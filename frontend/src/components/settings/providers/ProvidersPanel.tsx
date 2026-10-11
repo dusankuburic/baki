@@ -15,27 +15,17 @@ import ProviderSection from './ProviderSection'
 type CatalogState =
   | {kind: 'loading'}
   | {kind: 'ready'; specs: ProviderSpec[]}
-  // A server without the route (404): the built-in sections.
   | {kind: 'legacy'}
   | {kind: 'error'; message: string}
 
-// AI Accounts: one section per entry of GET /api/providers/catalog, in the
-// server's order, each rendering the credential form its schema asks for
-// (ProviderSection). The catalogue lists unconfigured providers too, so a
-// form shows before anything is saved. A server older than this bundle has
-// no catalogue: the panel renders the sections it always had.
 export default function ProvidersPanel() {
   const {t} = useTranslation('settings')
   const [state, setState] = useState<CatalogState>({kind: 'loading'})
-  // Sections the server declined after the fact (the local model on a cloud
-  // server answers LOCAL_MODELS_UNAVAILABLE to its own GET).
   const [hidden, setHidden] = useState<string[]>([])
   const alive = useRef(true)
   const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
   const setProvider = useChatStore(s => s.setProvider)
   const updateAI = useSettingsStore(s => s.updateAI)
-  // The server's catalogue is already filtered by mode; this keeps the local
-  // section from flashing before its own GET is refused on a cloud server.
   const knownRemoteBackend = useSystemStore(s => (s.info ? !s.info.capabilities.sessionAnalytics : false))
 
   useEffect(() => {
@@ -45,7 +35,6 @@ export default function ProvidersPanel() {
     }
   }, [])
 
-  // noDedup: a reopen right after a save must not read the 5 s GET micro-cache's pre-change view.
   const fetchCatalog = useCallback(() => {
     providersApi
       .getProviderCatalog({noDedup: true})
@@ -72,14 +61,8 @@ export default function ProvidersPanel() {
     fetchCatalog()
   }, [fetchCatalog])
 
-  // A configuration changed (key saved or removed, sign-in completed or
-  // revoked): AITab re-checks the providers.
   const onConfigured = useCallback(() => bumpProviderEpoch(), [bumpProviderEpoch])
 
-  // A sign-in makes the provider the active one, so the chat is usable
-  // without a manual switch. A first model (Azure) does so only when the
-  // current active provider cannot chat, so a working setup is never
-  // switched away from; a failed lookup leaves the provider as it is.
   const onActivated = useCallback(
     async (id: string, when: 'always' | 'ifUnconfigured') => {
       if (when === 'ifUnconfigured') {

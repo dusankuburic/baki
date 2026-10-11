@@ -12,7 +12,6 @@ describe('classifyChatFailure', () => {
   it('trusts the machine-readable code first', () => {
     expect(classifyChatFailure('anything', 'AI_BUDGET_EXCEEDED')).toBe('budget')
     expect(classifyChatFailure('anything', 'CHAT_CAPACITY_REACHED')).toBe('capacity')
-    // A coded non-budget failure is not second-guessed from its wording.
     expect(classifyChatFailure('budget exceeded', 'PROVIDER_UNAVAILABLE')).toBe('generic')
   })
 
@@ -26,15 +25,11 @@ describe('classifyChatFailure', () => {
     expect(classifyChatFailure("couldn't verify today's AI budget — try again in a moment")).toBe('generic')
   })
 
-  // The create request refuses a model the picker listed but the server no
-  // longer offers: the engine returns the message to the composer for it.
   it('classifies MODEL_NOT_AVAILABLE by its code', () => {
     expect(classifyChatFailure('model not available', 'MODEL_NOT_AVAILABLE')).toBe('modelNotAvailable')
     expect(classifyChatFailure('model not available')).toBe('generic')
   })
 
-  // A deploy: the draining server ends the stream (or refuses its create)
-  // with SERVER_RESTARTING, and the engine sends the turn again once.
   it('classifies SERVER_RESTARTING by its code', () => {
     expect(classifyChatFailure('the server is restarting', 'SERVER_RESTARTING')).toBe('serverRestarting')
     expect(classifyChatFailure('the server is restarting')).toBe('generic')
@@ -43,8 +38,6 @@ describe('classifyChatFailure', () => {
 })
 
 describe('isStreamGone', () => {
-  // What /api/chat/resume answers for a stream this server does not know:
-  // 403 under JWT (an unknown stream is "not yours"), 404 without.
   it('is true for 403, 404 and 410', () => {
     for (const status of [403, 404, 410]) expect(isStreamGone({status})).toBe(true)
   })
@@ -105,7 +98,6 @@ describe('providerErrorInfo', () => {
     })
     expect(providerErrorInfo('PROVIDER_NOT_CONFIGURED')?.refreshProviders).toBe(true)
     expect(providerErrorInfo('PROVIDER_PERMISSION')?.refreshProviders).toBe(false)
-    // The Max tokens fix lives in AI Behavior.
     expect(providerErrorInfo('PROVIDER_OUTPUT_LIMIT')?.settingsSection).toBe('behavior')
     for (const code of ['PROVIDER_UNAVAILABLE', 'PROVIDER_CONTENT_FILTERED', 'PROVIDER_BALANCE']) {
       expect(providerErrorInfo(code)).not.toBeNull()
@@ -119,7 +111,6 @@ describe('providerErrorInfo', () => {
       refreshProviders: true,
       action: 'chooseModel',
     })
-    // The settings-fixable codes keep "Open settings" (no action).
     expect(providerErrorInfo('PROVIDER_AUTH')?.action).toBeUndefined()
   })
 
@@ -141,8 +132,6 @@ describe('providerErrorInfo', () => {
   })
 })
 
-// PROVIDER_UNKNOWN (Phase 4b): the thread's provider is not in this server's
-// registry — a newer bundle's pin, or a provider the deployment dropped.
 describe('providerErrorInfo: PROVIDER_UNKNOWN', () => {
   it('maps it to a title, a listing refresh and "Choose another model"', () => {
     expect(providerErrorInfo('PROVIDER_UNKNOWN')).toEqual({

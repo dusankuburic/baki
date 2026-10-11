@@ -58,7 +58,6 @@ describe('ordering', () => {
     expect(compareModelsInGroup(a, b)).toBeLessThan(0)
     expect(compareModelsInGroup(b, a)).toBeGreaterThan(0)
     expect(compareModelsInGroup(a, a)).toBe(0)
-    // No display name: the id stands in.
     expect(compareModelsInGroup({id: 'm/bbbbbbbbbb'}, {id: 'm/aaaaaaaaaa', displayName: 'zzz'})).toBeLessThan(0)
     expect(compareModelsInGroup({id: 'm/bbbbbbbbbb', displayName: 'aaa'}, {id: 'm/aaaaaaaaaa'})).toBeLessThan(0)
   })
@@ -73,7 +72,6 @@ describe('ordering', () => {
     expect(sorted).toEqual([general, docs, audit, auditShared, security])
     expect(compareRegistryModels(general, entry('general2'))).toBeLessThan(0)
     expect(compareRegistryModels(security, audit)).toBeGreaterThan(0)
-    // A UI-language label counts: custom text naming a preset sorts with it.
     const pruebas = entry('pruebas', {purpose: 'custom', purposeCustom: 'Pruebas'})
     expect(compareRegistryModels(pruebas, docs, p => (p === 'testing' ? 'Pruebas' : ''))).toBeGreaterThan(0)
     expect(compareRegistryModels(pruebas, security, p => (p === 'testing' ? 'Pruebas' : ''))).toBeLessThan(0)
@@ -109,8 +107,6 @@ describe('groupModels', () => {
     const shared = entry('b-shared', {purpose: 'custom', purposeCustom: 'SECURITY', shared: true})
     const own = entry('z-own', {purpose: 'custom', purposeCustom: 'Security '})
     const [group] = groupModels([shared, own])
-    // The personal entry sorts first, so its spelling names the group —
-    // whatever order the server listed them in.
     expect(group).toEqual({kind: 'custom', key: 'custom:security', label: 'Security', models: [own, shared]})
     expect(groupModels([own, shared])[0]).toEqual(group)
   })

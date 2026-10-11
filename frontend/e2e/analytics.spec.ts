@@ -3,13 +3,6 @@ import {setupAuthenticatedPage} from './helpers'
 import {chartLayoutMetrics, WIDTHS} from './chartChecks'
 import {mockDashboardAnalytics} from '../src/testing/fixtures/dashboardAnalytics'
 
-/**
- * Analytics page E2E. The page sends the filters as one canonical query,
- * every chip changes it, refetches keep the previous charts on screen, each
- * chart has a table twin, and — the layout being keyed to the main pane's
- * width — nothing overflows and no axis tick is clipped at any width.
- */
-
 async function stubAnalytics(page: Page) {
   await setupAuthenticatedPage(page)
   const queries: URLSearchParams[] = []
@@ -42,9 +35,6 @@ async function settled(page: Page) {
   await expect(page.locator('.analytics-progress.is-active')).toHaveCount(0)
 }
 
-// The shell never moves: the document has no scroll offset and no hidden
-// scroll range (an absolutely positioned descendant used to give <html> a
-// few thousand pixels of overflow, which the section jump then scrolled).
 async function shellStill(page: Page) {
   const doc = await page.evaluate(() => ({
     top: document.documentElement.scrollTop,
@@ -104,7 +94,8 @@ test.describe('Analytics page', () => {
     await page.getByLabel('From', {exact: true}).fill('2026-09-10')
     await page.getByLabel('To', {exact: true}).fill('2026-09-01')
     await page.getByRole('button', {name: 'Apply'}).click()
-    await expect(page.getByRole('alert')).toHaveText('The start must not be after the end.')
+    await expect(page.getByText('The start must not be after the end.')).toBeVisible()
+    await expect(page.getByLabel('To', {exact: true})).toHaveAttribute('aria-invalid', 'true')
     expect(queries.length).toBe(1)
 
     await page.getByLabel('To', {exact: true}).fill('2026-09-12')
@@ -141,7 +132,6 @@ test.describe('Analytics page', () => {
     await page.getByRole('button', {name: 'Security', exact: true}).click()
     await expect(page.getByRole('heading', {name: 'Security', exact: true, level: 2})).toBeInViewport()
     await shellStill(page)
-    // The status bar at the bottom of the shell is still where it belongs.
     const bar = page.getByText('Ready', {exact: true}).first()
     const box = await bar.boundingBox()
     expect(box && box.y).toBeGreaterThan(850)
@@ -173,7 +163,6 @@ test.describe('Analytics page', () => {
         await openAnalytics(page)
         await settled(page)
       }
-      // Recharts re-measures its axes after a resize; poll until it has.
       await expect
         .poll(() => chartLayoutMetrics(page, '.analytics-page'), {message: `${width}px`, timeout: 5_000})
         .toMatchObject({pageOverflow: 0, spilling: 0, clipped: 0})

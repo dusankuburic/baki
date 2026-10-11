@@ -1,6 +1,3 @@
-// The findings panel's SARIF and JUnit exports through the REAL API layer (analysisApi -> client): only fetch,
-// the platform and the download anchor are stubbed. findingsExport.test.ts mocks @/api, which is how the JUnit
-// export shipped broken (the client JSON-parsed its XML) with green unit tests.
 import {describe, it, expect, vi, afterEach} from 'vitest'
 
 const fileSave = vi.fn()
@@ -26,7 +23,6 @@ const junit =
   '<?xml version="1.0" encoding="UTF-8"?>\n<testsuites name="PAD Analysis" tests="2" failures="1"></testsuites>\n'
 const sarif = '{\n  "version": "2.1.0",\n  "runs": [{"results": [{"message": {"text": "\\u003cscript\\u003e"}}]}]\n}\n'
 
-// serve answers the two export routes with the server's bodies and records every request.
 function serve() {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
     const url = String(input)

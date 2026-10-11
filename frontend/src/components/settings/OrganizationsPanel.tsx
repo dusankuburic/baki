@@ -10,20 +10,12 @@ import {useConfirm} from '@/components/shared'
 import {orgIdFromAnchor} from './azure/registryView'
 import {ApiError} from '@/api/client'
 import {useToast} from '@/components/shared/Toast'
+import {emailErrorKey} from '@/lib/validators'
+import {EMAIL_MAX_LENGTH} from '@/lib/constraints'
 import {canUseOrgModels, inviteLinkURL, orgNameId} from './OrganizationsPanel/helpers'
 import OrgCreateSection from './OrganizationsPanel/OrgCreateSection'
 import OrgListSection from './OrganizationsPanel/OrgListSection'
 
-/**
- * Cloud-only Settings panel that exposes the existing `useOrgStore` actions.
- * Lets the user create/delete orgs, invite/remove members, and change member
- * roles. Gated by `!isTauri()` upstream in SettingsModal.
- *
- * Composition root: owns the cross-section state (the 403 banner, the
- * deployment-wide Azure availability, the credential-disabled note, the
- * invite form — which outlives org expansion switches) and wires the
- * sections in `./OrganizationsPanel/`.
- */
 export default function OrganizationsPanel() {
   const {t} = useTranslation('settings')
   const {error: toastError, success: toastSuccess} = useToast()
@@ -44,9 +36,6 @@ export default function OrganizationsPanel() {
   const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
   const {confirm} = useConfirm()
 
-  // A 403 from an org action (the caller's role changed since the list
-  // loaded) shows localized permission copy instead of the server's raw
-  // "forbidden"; cleared when the next action starts.
   const [forbidden, setForbidden] = useState(false)
   const reportFailure = (err: unknown) => {
     if (err instanceof ApiError && err.status === 403) {
@@ -60,15 +49,8 @@ export default function OrganizationsPanel() {
   }
   const bannerText = forbidden ? t('orgs.permissionDenied') : error
 
-  // Set when the deployment has no org keystore: the shared-models block
-  // hides for every org (it is a deployment property, not an org's).
   const [orgAzureUnavailable, setOrgAzureUnavailable] = useState(false)
   const markOrgAzureUnavailable = useCallback(() => setOrgAzureUnavailable(true), [])
-  // Removing or demoting the lender of an org resource's credential
-  // disables it server-side. The note says what disappeared and who
-  // re-enters it — in that org only — and the registry is marked stale, so
-  // the block (and the members' "Shared with you") fetch it again and show
-  // the resource as needing credentials. The chat picker refetches too.
   const [credentialDisabledNote, setCredentialDisabledNote] = useState<{orgId: string; name: string} | null>(null)
   const reportCredentialDisabled = useCallback(
     (orgId: string, name: string) => {
@@ -80,15 +62,8 @@ export default function OrganizationsPanel() {
     },
     [bumpProviderEpoch],
   )
-  // Credentials entered again (or a resource added): the note is stale. The
-  // registry store already relisted the chat picker.
   const handleOrgAzureConnectionSaved = useCallback(() => setCredentialDisabledNote(null), [])
 
-  // A Settings deep link to an organisation's Azure AI Foundry block
-  // ("Manage in Organizations"). The active organisation's block focuses its
-  // own heading once loaded; any other organisation — not switched to here,
-  // which would reset the open flow and chat — gets its name focused, so the
-  // user lands on it. Spent either way.
   const settingsAnchor = useUIStore(s => s.settingsAnchor)
   useEffect(() => {
     const anchoredOrg = orgIdFromAnchor(settingsAnchor)
@@ -115,10 +90,9 @@ export default function OrganizationsPanel() {
   const handleInvite = async () => {
     const email = inviteEmail.trim()
     if (!selected || !email) return
-    // Client-side format gate: a typo'd address used to burn a
-    // round-trip and surface a raw server error.
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setInviteError(t('orgs.inviteInvalidEmail'))
+    const emailKey = emailErrorKey(email)
+    if (emailKey) {
+      setInviteError(t(emailKey, {ns: 'common', max: EMAIL_MAX_LENGTH}))
       return
     }
     setInviteError(null)
@@ -131,7 +105,6 @@ export default function OrganizationsPanel() {
       setInviteLinkCopied(false)
     } catch (err) {
       reportFailure(err)
-      // other errors surface via store.error
     } finally {
       setInviteBusy(false)
     }
@@ -152,13 +125,9 @@ export default function OrganizationsPanel() {
       if (reply?.sharedCredentialDisabled) reportCredentialDisabled(selected.id, name ?? userId)
     } catch (err) {
       reportFailure(err)
-      // other errors surface via store.error
     }
   }
 
-  // A non-admin member leaves by removing their own row — the server allows
-  // exactly that self-removal. removeMember reloads the list, so the org drops
-  // out and the active org falls back to Personal.
   const handleLeave = async (org: Organisation) => {
     if (!currentUser) return
     const ok = await confirm({
@@ -174,7 +143,6 @@ export default function OrganizationsPanel() {
       toastSuccess(t('orgs.left', {name: org.name}))
     } catch (err) {
       reportFailure(err)
-      // other errors surface via store.error
     }
   }
 
@@ -186,7 +154,6 @@ export default function OrganizationsPanel() {
       if (reply?.sharedCredentialDisabled) reportCredentialDisabled(selected.id, name ?? userId)
     } catch (err) {
       reportFailure(err)
-      // other errors surface via store.error
     }
   }
 
@@ -203,7 +170,6 @@ export default function OrganizationsPanel() {
       await deleteOrg(org.id)
     } catch (err) {
       reportFailure(err)
-      // other errors surface via store.error
     }
   }
 

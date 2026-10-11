@@ -42,18 +42,12 @@ import type {FlowDiff, AnalysisReport} from '@/types'
 type SystemView = 'home' | 'dashboard' | 'library' | 'profile' | 'admin'
 
 type FlowView = 'block' | 'graph' | 'local-map' | 'map' | 'diff'
-// The raw-text editor is one more way of looking at the flow, so it sits in
-// the view switcher with the others. It used to be a stray button absolutely
-// positioned over the toolbar, where it overlapped the export icons.
 type ToolbarView = FlowView | 'source'
 
 function ToolbarDivider() {
   return <div className="main-toolbar-sep w-px h-5 bg-border-subtle mx-1 shrink-0" aria-hidden="true" />
 }
 
-// One toggle for both toolbar variants. Icon and label follow the document's
-// fullscreen state, so the same button leaves fullscreen again; it used to
-// request fullscreen on every click, and the second click did nothing.
 function FullscreenButton() {
   const {t} = useTranslation('shell')
   const {isFullscreen, toggleFullscreen} = useFullscreen()
@@ -67,9 +61,6 @@ function FullscreenButton() {
   )
 }
 
-// The toolbar answers to its own width (.main-toolbar in index.css): the view
-// switcher drops its labels, then the secondary actions fold into the "More"
-// menu, then the history buttons go. Nothing is pushed outside the pane.
 export default function MainPaneToolbar() {
   const mainPaneView = useUIStore(s => s.mainPaneView)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
@@ -163,10 +154,6 @@ export default function MainPaneToolbar() {
     }
   }
 
-  // handleReimport re-reads the current flow's source file (desktop), re-
-  // parses it, and auto-re-analyzes — the pragmatic fix-loop accelerator for
-  // after the user edits in Power Automate Desktop. One click instead of
-  // navigating the file picker + clicking Analyze.
   const handleReimport = async () => {
     if (!document) return
     setReimporting(true)
@@ -185,9 +172,6 @@ export default function MainPaneToolbar() {
     }
   }
 
-  // Leaving the source editor from the view switcher goes through the same
-  // guard as the editor's own close button: unsaved edits are confirmed
-  // away, never dropped by a view click.
   const handleViewChange = async (view: ToolbarView) => {
     if (view === 'source') {
       setShowSource(true)
@@ -219,15 +203,9 @@ export default function MainPaneToolbar() {
   ]
   if (document) viewOptions.push({value: 'source', label: t('toolbar.source'), icon: Code2})
 
-  // Re-import re-reads the flow's source FILE: it needs a filesystem and a
-  // file-backed flow. It was always rendered and answered 403 in cloud mode
-  // / 400 for uploaded flows.
   const canReimport = getPlatformCapabilities().fileSystem && !!document?.filePath
   const reimportLabel = reimporting ? t('toolbar.reimporting') : t('toolbar.reimport')
 
-  // The same actions as the inline buttons, for the "More" menu that replaces
-  // them in a narrow pane (see .main-toolbar-narrow). The graph views' Fit
-  // and PNG export fold in too; zoom in/out stay inline.
   const secondaryItems: DropdownItem[] = [
     ...(isGraphView && !showSource
       ? [
@@ -294,10 +272,6 @@ export default function MainPaneToolbar() {
         activation="manual"
       />
 
-      {/* The center breadcrumb copy is GONE (U5a.3): the interactive
-          Breadcrumbs bar renders directly under the tab strip — showing the
-          same path twice in one pane was chrome, not information. The diff
-          label stays (it replaces the editor view, not a duplicate). */}
       <div className="flex-1 min-w-0 flex items-center justify-center">
         {mainPaneView === 'diff' && !showSource && (
           <div className="flex items-center gap-2 min-w-0 text-sm font-medium text-brand-500">
@@ -308,7 +282,6 @@ export default function MainPaneToolbar() {
       </div>
 
       <div className="flex items-center gap-1 shrink-0">
-        {/* View-specific tools; none apply to the source editor. */}
         {!showSource && (
           <>
             {isGraphView && (

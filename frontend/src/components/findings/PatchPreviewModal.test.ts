@@ -34,7 +34,6 @@ describe('computeDiff', () => {
     const original = Array.from({length: 20}, (_, i) => `line${i}`).join('\n')
     const patched = original.replace('line10', 'CHANGED')
     const diff = computeDiff(original, patched)
-    // Should be much shorter than 20 lines (trimmed to ±3 context + ellipsis)
     expect(diff.length).toBeLessThanOrEqual(10)
   })
 
@@ -42,14 +41,12 @@ describe('computeDiff', () => {
     const original = Array.from({length: 20}, (_, i) => `line${i}`).join('\n')
     const patched = original.replace('line10', 'CHANGED')
     const diff = computeDiff(original, patched)
-    // Should have at least one ellipsis marker (context at start or end trimmed)
     const hasEllipsis = diff.some(d => d.text === '⋯')
     expect(hasEllipsis).toBe(true)
   })
 
   it('handles empty original', () => {
     const diff = computeDiff('', 'new content')
-    // Empty string splits to [''], which is a removed line; the new content is added
     expect(diff.some(d => d.type === 'added' && d.text === 'new content')).toBe(true)
   })
 

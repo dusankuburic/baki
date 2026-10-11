@@ -45,7 +45,6 @@ const USER: AzureScope = {kind: 'user'}
 const ORG: AzureScope = {kind: 'org', orgId: 'org-1'}
 const ANCHOR = 'provider-azure-foundry'
 const initialSettings = useSettingsStore.getState().settings
-// Some cases stub the action; every case starts on the real one.
 const realUpdateProvider = useSettingsStore.getState().updateProvider
 
 function conn(id: string, over: Partial<AzureConnection> = {}): AzureConnection {
@@ -131,7 +130,6 @@ function listing(connections: AzureConnection[], over: Partial<AzureConnectionsL
   }
 }
 
-// Every load of the registry answers with these.
 function seed(
   connections: AzureConnection[] = [],
   models: AzureModelEntry[] = [],
@@ -169,7 +167,6 @@ async function flushFrame() {
   })
 }
 
-// Opens a row's (or card's) kebab and picks an item.
 function pick(menuLabel: string, item: string) {
   fireEvent.click(screen.getByRole('button', {name: menuLabel}))
   fireEvent.click(screen.getByRole('menuitem', {name: item}))
@@ -319,7 +316,6 @@ describe('AzureFoundryPanel: states', () => {
     expect(review).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(review)
     expect(screen.getByRole('list', {name: 'Found in my-res'})).toBeInTheDocument()
-    // The row already in the registry says so instead of offering an Add.
     expect(within(screen.getByRole('list', {name: 'Found in my-res'})).getByText('Added')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', {name: 'Dismiss suggestions from my-res'}))
@@ -341,7 +337,6 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.getByText('Its lender left the organisation.')).toBeInTheDocument()
     expect(screen.getByText("Unavailable until the resource's credentials are entered again")).toBeInTheDocument()
 
-    // Test stays reachable in the row's menu, unavailable, and says why.
     fireEvent.click(screen.getByRole('button', {name: 'More actions for GPT-4.1'}))
     const testItem = screen.getByRole('menuitem', {name: 'Test'})
     expect(testItem).toHaveAttribute('aria-disabled', 'true')
@@ -354,11 +349,6 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.getByRole('dialog', {name: 'Enter credentials for my-res'})).toBeInTheDocument()
   })
 
-  // U1 end to end, and U6: the server sends a resource whose credential
-  // document is gone or unreadable with blank settings. Its card shows no
-  // made-up sign-in badge or host; Enter credentials saves what was typed;
-  // and focus lands on the resource's heading, not on the page, once the
-  // button that opened the modal has gone with the callout.
   it('re-enters the credentials of a resource whose settings came back blank, then focuses it', async () => {
     const blank = conn('default', {
       status: 'unreadable',
@@ -381,8 +371,6 @@ describe('AzureFoundryPanel: states', () => {
       target: {value: 'https://my-res.openai.azure.com'},
     })
     fireEvent.change(within(dialog).getByLabelText('API key', {selector: 'input'}), {target: {value: 'sk-again'}})
-    // The server's view once they are in (the models follow the resource's
-    // status, so the view is read again).
     seed([conn('default', {modelCount: 1})], [gpt])
     fireEvent.click(within(dialog).getByRole('button', {name: 'Save credentials'}))
 
@@ -391,7 +379,6 @@ describe('AzureFoundryPanel: states', () => {
       config: {endpoint: 'https://my-res.openai.azure.com', auth: {mode: 'api_key', key: 'sk-again'}},
       updatedAt: '2026-09-30T10:00:00Z',
     })
-    // The callout and its button are gone; focus is on the resource.
     expect(screen.queryByText("The stored credentials can't be read")).toBeNull()
     await waitFor(() => expect(heading).toHaveFocus())
     expect(status()).toHaveTextContent('my-res saved')
@@ -428,7 +415,6 @@ describe('AzureFoundryPanel: states', () => {
     expect(screen.queryByRole('button', {name: /^Enter credentials/})).toBeNull()
   })
 
-  // An unreadable stored credential offers both ways out to an admin.
   it('an unreadable credential offers Enter credentials and Remove resource', async () => {
     seed([conn('default', {shared: true, status: 'unreadable'})])
     api.deleteAzureConnection.mockResolvedValue({status: 'ok', deletedModels: 0, clearedKnowledgeEmbedding: false})
@@ -441,7 +427,6 @@ describe('AzureFoundryPanel: states', () => {
     expect(confirmMock).toHaveBeenCalledWith(
       expect.objectContaining({title: 'Remove my-res?', confirmLabel: 'Remove resource', danger: true}),
     )
-    // Back to the empty state, focus on its Add resource.
     await waitFor(() => expect(screen.getByRole('button', {name: 'Add resource'})).toHaveFocus())
   })
 
@@ -480,12 +465,10 @@ describe('AzureFoundryPanel: states', () => {
     await screen.findByText('GPT-4.1')
     expect(screen.getByRole('button', {name: 'Add resource'})).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'More actions for GPT-4.1'}))
-    // Personal "Make default" is not an organisation's action.
     expect(screen.queryByRole('menuitem', {name: 'Make default'})).toBeNull()
     fireEvent.click(screen.getByRole('menuitem', {name: 'Make default for members'}))
     await waitFor(() => expect(api.updateAzureModel).toHaveBeenCalledWith(ORG, 'gpt4100000', {isDefault: true}))
     await waitFor(() => expect(status()).toHaveTextContent('GPT-4.1 is now the default for members'))
-    // The designation moved (one per owner).
     const badges = screen.getAllByText('Default for members')
     expect(badges).toHaveLength(1)
     expect(badges[0]!.closest('li')).toHaveTextContent('GPT-4.1')
@@ -524,8 +507,6 @@ describe('AzureFoundryPanel: states', () => {
     ).toBeInTheDocument()
   })
 
-  // Tolerant wire enums: what a newer server added renders under a neutral
-  // label, and nothing that would have to send it back is offered.
   it('renders a resource and models a newer server describes with values this app does not know', async () => {
     seed(
       [
@@ -564,11 +545,9 @@ describe('AzureFoundryPanel: states', () => {
     const edit = within(voice).getByRole('button', {name: 'Edit Voice'})
     expect(edit).toBeDisabled()
     expect(edit).toHaveAttribute('title', "This version of the app can't edit this kind of model.")
-    // Not a chat kind this app knows: no "Make default" for it.
     fireEvent.click(within(voice).getByRole('button', {name: 'More actions for Voice'}))
     expect(screen.queryByRole('menuitem', {name: 'Make default'})).toBeNull()
     expect(screen.getByRole('menuitem', {name: 'Remove'})).toBeInTheDocument()
-    // The known model beside it is untouched.
     expect(
       within(rows.find(r => r.textContent?.includes('GPT-4.1'))!).getByRole('button', {name: 'Edit GPT-4.1'}),
     ).toBeEnabled()
@@ -584,7 +563,6 @@ describe('AzureFoundryPanel: the model list', () => {
     renderPanel()
     const list = await screen.findByRole('list', {name: 'Models of my-res'})
     const rows = within(list).getAllByRole('listitem')
-    // Registry order: General, then Documentation…
     expect(rows.map(r => r.querySelector('[data-focus^="model-name:"]')?.textContent)).toEqual([
       'GPT-4.1',
       'Search index',
@@ -599,16 +577,12 @@ describe('AzureFoundryPanel: the model list', () => {
     expect(docsRow).toHaveTextContent('Context window: 200k')
     expect(docsRow).toHaveTextContent(/Last test: Failed/)
     expect(within(docsRow).getByText('deployment not found')).toBeInTheDocument()
-    // The server default is marked while the user saved none.
     expect(within(rows[0]!).getByText('Default')).toBeInTheDocument()
     expect(rows[0]!).toHaveTextContent('Default for new chats')
     expect(within(rows[1]!).getByText('KB')).toBeInTheDocument()
     expect(rows[1]!).toHaveTextContent('Used for the knowledge base')
-    // The dash is for the eye; a screen reader hears "none".
     expect(rows[1]).toHaveTextContent(/Context window: —\s*none/)
-    // The header row is for sighted users only.
     expect(document.querySelector('.azure-models-head')).toHaveAttribute('aria-hidden', 'true')
-    // Two tab stops per row, named after it.
     expect(within(docsRow).getByRole('button', {name: 'Edit Docs writer'})).toBeInTheDocument()
     expect(within(docsRow).getByRole('button', {name: 'More actions for Docs writer'})).toBeInTheDocument()
   })
@@ -636,9 +610,6 @@ describe('AzureFoundryPanel: the model list', () => {
     expect(screen.queryByRole('menuitem', {name: 'Make default'})).toBeNull()
   })
 
-  // U5: which model new chats start on (the server default, while the user
-  // saved none) can move with any change to the models; the view reads it
-  // again instead of keeping [Default] on a removed model.
   it('moves [Default] to the new server default once the model it marked is removed', async () => {
     seed([conn('default')], [gpt, docs], {serverDefault: gpt.modelId})
     api.deleteAzureModel.mockResolvedValue({status: 'ok'})
@@ -647,7 +618,6 @@ describe('AzureFoundryPanel: the model list', () => {
     const rows = () => within(screen.getByRole('list', {name: 'Models of my-res'})).getAllByRole('listitem')
     expect(within(rows()[0]!).getByText('Default')).toBeInTheDocument()
 
-    // What the server says once GPT-4.1 is gone.
     api.listAzureModels.mockResolvedValue({models: [docs], serverDefault: docs.modelId})
     pick('More actions for GPT-4.1', 'Remove')
     await waitFor(() => expect(rows()).toHaveLength(1))
@@ -687,10 +657,8 @@ describe('AzureFoundryPanel: the model list', () => {
     await screen.findByText('Docs writer')
     vi.useFakeTimers()
     pick('More actions for Docs writer', 'Make default')
-    // Optimistic: the badge moved at once.
     const rows = () => within(screen.getByRole('list', {name: 'Models of my-res'})).getAllByRole('listitem')
     expect(within(rows()[1]!).getByText('Default')).toBeInTheDocument()
-    // Meanwhile another field of the same provider changes.
     void useSettingsStore.getState().updateProvider('azure-foundry', {temperature: 0.2})
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1100)
@@ -711,7 +679,6 @@ describe('AzureFoundryPanel: the model list', () => {
     seed([conn('default')], [gpt, docs])
     const {container} = renderPanel()
     await screen.findByText('Docs writer')
-    // Mounted before anything is announced.
     expect(status()).toBeEmptyDOMElement()
     expect(panelAlert(container)).toBeEmptyDOMElement()
 
@@ -742,7 +709,6 @@ describe('AzureFoundryPanel: the model list', () => {
     await screen.findByText('Search index')
     fireEvent.click(screen.getByRole('button', {name: 'More actions for Search index'}))
     expect(screen.queryByRole('menuitem', {name: 'Use for knowledge base'})).toBeNull()
-    // Make default is for chat models only.
     expect(screen.queryByRole('menuitem', {name: 'Make default'})).toBeNull()
     first.unmount()
 
@@ -759,7 +725,6 @@ describe('AzureFoundryPanel: the model list', () => {
     expect(api.updateAzureModel.mock.calls[1]![2]).toEqual({isKnowledgeEmbedding: true, force: true})
     expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({title: 'Change the knowledge base model?'}))
     await waitFor(() => expect(status()).toHaveTextContent(/now uses Search index\. Re-index it under Knowledge Base/))
-    // The Knowledge Base panel will ask for the re-index.
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({user: true})
   })
 
@@ -795,7 +760,6 @@ describe('AzureFoundryPanel: the model list', () => {
 
     api.deleteAzureModel.mockRejectedValueOnce(new ApiError('forbidden', 403, null))
     pick('More actions for GPT-4.1', 'Remove')
-    // A 403 speaks of permissions, not the raw server text.
     await waitFor(() =>
       expect(panelAlert(container)).toHaveTextContent(
         "Couldn't remove GPT-4.1: Only organisation admins can change the shared resources and models.",
@@ -816,15 +780,10 @@ describe('AzureFoundryPanel: the model list', () => {
         "Couldn't remove GPT-4.1: This list was saved by a newer version of baki.",
       ),
     )
-    // The view is loaded again and shows the list read-only (the notice, as
-    // well as the alert).
     await waitFor(() => expect(screen.queryByRole('button', {name: 'More actions for GPT-4.1'})).toBeNull())
     expect(screen.getAllByText(/Update baki to change these models/)).toHaveLength(2)
   })
 
-  // U8: the re-index is forced only once the server says the corpus needs it
-  // (REINDEX_REQUIRED) — an empty corpus needs none, and the Knowledge Base
-  // panel must not ask for one then.
   it('removing the knowledge-base model warns about the re-index, and forces it only when the server asks', async () => {
     seed([conn('default')], [gpt, {...search, isKnowledgeEmbedding: true}], {knowledgeEmbeddingEnabled: true})
     api.deleteAzureModel
@@ -837,7 +796,6 @@ describe('AzureFoundryPanel: the model list', () => {
     await waitFor(() => expect(api.deleteAzureModel).toHaveBeenCalledTimes(2))
     expect(api.deleteAzureModel.mock.calls[0]![2]).toEqual({})
     expect(api.deleteAzureModel.mock.calls[1]![2]).toEqual({force: true})
-    // The remove confirm said so up front: no second question.
     expect(confirmMock).toHaveBeenCalledTimes(1)
     const {container} = render(<>{confirmMock.mock.calls[0]![0].message}</>)
     expect(container).toHaveTextContent('The knowledge base must be re-indexed afterwards')
@@ -857,8 +815,6 @@ describe('AzureFoundryPanel: the model list', () => {
     expect(useAzureFoundryStore.getState().knowledgeReindex).toEqual({})
   })
 
-  // U8: without an Azure knowledge base (the desktop app,
-  // knowledgeEmbeddingEnabled false) the designation means nothing.
   it('shows and forces nothing about the knowledge base where none exists', async () => {
     seed([conn('default', {modelCount: 2})], [gpt, {...search, isKnowledgeEmbedding: true}], {
       knowledgeEmbeddingEnabled: false,
@@ -870,14 +826,12 @@ describe('AzureFoundryPanel: the model list', () => {
     expect(within(row).queryByText('KB')).toBeNull()
     expect(row).not.toHaveTextContent('Used for the knowledge base')
 
-    // The resource that holds it goes without the re-index note or force.
     pick('More actions for my-res', 'Remove resource')
     await waitFor(() => expect(api.deleteAzureConnection).toHaveBeenCalledWith(USER, 'default', {cascade: true}))
     const {container: resourceMessage} = render(<>{confirmMock.mock.calls[0]![0].message}</>)
     expect(resourceMessage).not.toHaveTextContent('re-indexed')
     first.unmount()
 
-    // So does the model itself.
     await resetAllStores()
     confirmMock.mockClear()
     renderPanel()
@@ -904,7 +858,6 @@ describe('AzureFoundryPanel: resources', () => {
     expect(container).toHaveTextContent(
       "deletes the resource's stored credentials and its 2 models: GPT-4.1, Docs writer",
     )
-    // Focus moves to the next resource's heading.
     await waitFor(() => expect(screen.getByRole('heading', {name: 'contoso'})).toHaveFocus())
     expect(status()).toHaveTextContent('my-res removed')
   })
@@ -966,8 +919,6 @@ describe('AzureFoundryPanel: resources', () => {
     expect(status()).toHaveTextContent('o4-mini added')
   })
 
-  // The Azure CLI sign-in is offered for a personal resource on a
-  // local backend, never for an organisation's.
   it('offers the Azure CLI only for a personal resource on a local backend', async () => {
     useSystemStore.setState({info: info(true), isLoaded: true})
     seed()
@@ -1009,7 +960,6 @@ describe('AzureFoundryPanel: discovery', () => {
 
     fireEvent.click(within(list).getByRole('button', {name: 'Add o4-mini (Chat)'}))
     await waitFor(() => expect(api.createAzureModel).toHaveBeenCalledTimes(1))
-    // No display name: the server gives it the name (cut to 64 characters).
     expect(api.createAzureModel).toHaveBeenCalledWith(USER, {
       connectionId: 'contoso',
       kind: 'chat',
@@ -1019,17 +969,13 @@ describe('AzureFoundryPanel: discovery', () => {
     const row = within(list).getByText('o4-mini').closest('li')!
     await waitFor(() => expect(within(row).getByText('Added')).toBeInTheDocument())
     expect(onFirstChatModel).toHaveBeenCalledTimes(1)
-    // Focus moves on to the next item still to add.
     await waitFor(() => expect(within(list).getByRole('button', {name: 'Add phi-4 (Chat)'})).toHaveFocus())
 
-    // A second chat model is not the first.
     fireEvent.click(within(list).getByRole('button', {name: 'Add phi-4 (Chat)'}))
     await waitFor(() => expect(api.createAzureModel).toHaveBeenCalledTimes(2))
     expect(onFirstChatModel).toHaveBeenCalledTimes(1)
   })
 
-  // U7: the row's reason is no live region — a refusal went unannounced, and
-  // focus, off the Add while it was busy, stayed lost.
   it('announces a failed quick add and puts focus back on its Add, which the reason describes', async () => {
     seed([entraConn('contoso')])
     api.discoverAzureConnection.mockResolvedValue(found)
@@ -1041,8 +987,6 @@ describe('AzureFoundryPanel: discovery', () => {
     add.focus()
     fireEvent.click(add)
     expect(add).toBeDisabled()
-    // A browser drops focus off a button that turns disabled (jsdom keeps it
-    // there, and won't blur it): stand in with focus elsewhere.
     const elsewhere = screen.getByRole('heading', {level: 3, name: 'Azure AI Foundry'})
     act(() => elsewhere.focus())
     expect(elsewhere).toHaveFocus()
@@ -1057,7 +1001,6 @@ describe('AzureFoundryPanel: discovery', () => {
     expect(status()).toBeEmptyDOMElement()
   })
 
-  // U10: every discoverable resource's card has these buttons.
   it("names each resource's repeated buttons after it, keeping their visible labels", async () => {
     seed([entraConn('contoso'), entraConn('fabrikam')])
     api.discoverAzureConnection.mockResolvedValue(found)
@@ -1199,9 +1142,7 @@ describe('AzureFoundryPanel: Shared with you', () => {
       "used in this organisation's flows when you have no Azure models or default of your own",
     )
     expect(within(row).queryByRole('button')).toBeNull()
-    // A member manages nothing there.
     expect(screen.queryByRole('button', {name: 'Manage in Organizations'})).toBeNull()
-    // The user's own registry is still empty.
     expect(screen.getByText('Connect an Azure AI Foundry resource')).toBeInTheDocument()
   })
 

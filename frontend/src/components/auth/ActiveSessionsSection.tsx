@@ -9,8 +9,6 @@ import {absoluteTime, relativeTimeText} from '@/lib/time'
 import {useSessions} from './useSessions'
 import {SectionCard, SectionNotice} from './SectionCard'
 
-// Five rows answer "is anything here I don't recognise?"; months of sign-ins
-// unfold on request instead of pushing the sections below out of view.
 const VISIBLE_LIMIT = 5
 
 const DEVICE_ICONS: Record<DeviceKind, LucideIcon> = {
@@ -27,8 +25,6 @@ export const ActiveSessionsSection: React.FC = () => {
   const {sessions, loading, error, refetch, revokingId, revoke, currentSessionId, revokingOthers, revokeOthers} =
     useSessions()
   const [showAll, setShowAll] = useState(false)
-  // Only offer bulk sign-out when we can tell which session is this one —
-  // with a null currentSessionId "others" would include the current session.
   const otherCount = currentSessionId ? sessions.filter(s => s.id !== currentSessionId).length : 0
   const visible = showAll ? sessions : sessions.slice(0, VISIBLE_LIMIT)
 

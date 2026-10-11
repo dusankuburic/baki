@@ -11,8 +11,6 @@ interface Row {
   flowCount: number
 }
 
-// Average health over the last 30 days. A day with no analyzed flow is a gap
-// in the line, never a zero; hairlines mark the tier thresholds.
 export function HealthTrendCard({
   data,
   onDetails,

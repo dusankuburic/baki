@@ -8,9 +8,6 @@ import {isTauri} from '@/platform/guards'
 
 type Tab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history'
 
-// Sharing and History are cloud features (collaborators, stored versions):
-// on desktop Sharing had no user to share as and History's Save Snapshot
-// answered 503, so both tabs are dropped there rather than shown broken.
 export const CLOUD_ONLY_TABS: readonly Tab[] = ['sharing', 'history']
 
 const allTabs: {value: Tab; icon: LucideIcon}[] = [
@@ -22,9 +19,6 @@ const allTabs: {value: Tab; icon: LucideIcon}[] = [
   {value: 'history', icon: History},
 ]
 
-// Labels resolve through i18n; the module-level array above stays translation-
-// free so visibleInspectorTabs() (a plain filter used outside React) keeps
-// working without a hook.
 const TAB_LABEL_KEYS = {
   details: 'tabs.details',
   ai: 'tabs.ai',
@@ -44,8 +38,6 @@ export default function InspectorTabs() {
   const setTab = useUIStore(s => s.setInspectorTab)
   const tabs = visibleInspectorTabs().map(tabDef => ({...tabDef, label: t(TAB_LABEL_KEYS[tabDef.value])}))
 
-  // A stale selection (e.g. a command that targets a hidden tab) would leave
-  // the tab strip with nothing active and an empty panel; snap back to Details.
   const hidden = !tabs.some(t => t.value === tab)
   useEffect(() => {
     if (hidden) setTab('details')

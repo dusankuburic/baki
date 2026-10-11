@@ -5,9 +5,6 @@ import {useToast} from '@/components/shared'
 import {useAdminStore} from '@/stores/adminStore'
 import {useAdminQuery} from './useAdminQuery'
 
-// One page of the audit log for the store's filters. The endpoint reports no
-// total, so the request asks for one row more than the page: that extra row
-// is the exact "there is a next page" signal, and is never shown.
 export function useAuditLog() {
   const {t} = useTranslation('admin')
   const filter = useAdminStore(s => s.audit)
@@ -39,7 +36,6 @@ export function useAuditLog() {
   const events = useMemo(() => (data ? data.slice(0, filter.pageSize) : null), [data, filter.pageSize])
   const hasMore = data !== null && data.length > filter.pageSize
 
-  // Events purged while paging can empty a later page: step back one.
   useEffect(() => {
     if (data && data.length === 0 && filter.page > 0) setAuditPage(filter.page - 1)
   }, [data, filter.page, setAuditPage])

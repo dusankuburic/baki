@@ -4,8 +4,6 @@ import {StatTile} from '@/components/charts'
 import type {DashboardAnalyticsData} from '@/types'
 import {ChartSection} from '../ChartSection'
 
-// Sign-in and secret-handling signals as tiles; the locked-account count is
-// instance-wide and only arrives for admins.
 export function SecuritySection({data}: {data: DashboardAnalyticsData}) {
   const {t} = useTranslation('dashboard')
   const sec = data.security

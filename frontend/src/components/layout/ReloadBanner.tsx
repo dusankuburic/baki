@@ -3,11 +3,6 @@ import {RefreshCw, X} from 'lucide-react'
 import {useBuildVersionStore} from '@/lib/buildVersion'
 import {reloadPage} from '@/lib/chunkLoad'
 
-// ReloadBanner offers a reload once the server runs another build than this
-// tab's bundle (lib/buildVersion): a tab left open across a deploy runs old
-// code against the new API. Non-blocking — a bar in the flow under the title
-// bar, never over the work — shown once per session; Dismiss keeps working on
-// the bundle as it is.
 export default function ReloadBanner() {
   const {t} = useTranslation('shell')
   const offered = useBuildVersionStore(s => s.offered)

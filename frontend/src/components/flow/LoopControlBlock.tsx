@@ -9,15 +9,10 @@ type Props = {
   onClick?: () => void
 }
 
-// EXIT LOOP and NEXT LOOP render as compact loop-control chips rather than full
-// BlockCards. They're visually grouped with the loop they belong to via the loop
-// accent color, but are clearly distinct from regular action blocks.
 export default function LoopControlBlock({block, selected = false, onClick}: Props) {
   const {t} = useTranslation('flow')
   const isExit = block.rawType === 'EXIT_LOOP'
 
-  // EXIT LOOP uses a warm warning accent so it reads as "early exit / danger";
-  // NEXT LOOP uses the loop color so it reads as "still inside the loop".
   const loopColor = getBlockColor('LOOP')
   const color = isExit ? 'var(--block-condition)' : loopColor
 
@@ -40,7 +35,6 @@ export default function LoopControlBlock({block, selected = false, onClick}: Pro
       }}
       onClick={onClick}
     >
-      {/* Left accent stripe — same pattern as BlockCard */}
       <div
         className="absolute left-0 top-0 bottom-0"
         style={{

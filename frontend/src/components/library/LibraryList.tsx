@@ -13,12 +13,6 @@ interface LibraryListProps {
   openingId?: string | null
 }
 
-// The columns are ranked (see .library-row in index.css): the name always
-// shows and takes what is left; owner, then subflows, drop out as the results
-// pane narrows. The header and the rows share the same classes, so a column
-// and its heading always disappear together — the old fixed pixel tracks
-// crushed the name to nothing and clipped "Subflows" while both headings
-// still showed.
 function LibraryListImpl({items, selectedId, onSelect, onOpen, openingId}: LibraryListProps) {
   const {t} = useTranslation('library')
   return (
@@ -42,8 +36,6 @@ function LibraryListImpl({items, selectedId, onSelect, onOpen, openingId}: Libra
               onClick={() => onSelect(flow)}
               onDoubleClick={() => onOpen(flow)}
               onKeyDown={e => {
-                // Keyboard parity: Enter/Space select; Enter opens when
-                // already selected (double-click equivalent).
                 if (e.key !== 'Enter' && e.key !== ' ') return
                 e.preventDefault()
                 if (e.key === 'Enter' && selected) {
@@ -59,7 +51,6 @@ function LibraryListImpl({items, selectedId, onSelect, onOpen, openingId}: Libra
               )}
             >
               <div className="flex items-center gap-2 min-w-0">
-                {/* The row being opened shows its spinner, like the grid card. */}
                 {openingId === flow.id && <Spinner size={12} className="shrink-0" />}
                 <div className="min-w-0">
                   <div className="font-medium text-text-primary truncate">{flow.name}</div>

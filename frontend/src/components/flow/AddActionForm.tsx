@@ -3,10 +3,6 @@ import {useTranslation} from 'react-i18next'
 import {Plus, X} from 'lucide-react'
 import {Button} from '@/components/shared'
 
-// composeActionLine builds one PAD action line from the form's parts — the
-// structured-editing slice (R3-1): users who don't know PAD's text format can
-// still build flows. Quoting stays the user's choice (the raw-parameters
-// field passes through verbatim, matching what the source editor accepts).
 export function composeActionLine(rawType: string, params: string, output: string): string {
   let line = rawType.trim()
   const p = params.trim()
@@ -16,10 +12,6 @@ export function composeActionLine(rawType: string, params: string, output: strin
   return line
 }
 
-// insertBeforeLastRegionEnd inserts line into source before the FINAL
-// `#EndRegion` marker (4-space indent, the region-body convention), so the
-// new action lands at the end of the last subflow. Sources without a region
-// end marker append at the end. Returns the new source.
 export function insertBeforeLastRegionEnd(source: string, line: string): string {
   const lines = source.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -38,9 +30,6 @@ interface Props {
   onClose: () => void
 }
 
-// AddActionForm is the structured "add block" editor: action type + raw
-// parameters + output variable → one composed PAD line, previewed live
-// before insertion.
 export default function AddActionForm({onInsert, onClose}: Props) {
   const {t} = useTranslation('flow')
   const [rawType, setRawType] = useState('')

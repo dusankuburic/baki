@@ -40,17 +40,11 @@ import {
 
 export interface AzureFoundryPanelProps {
   scope: AzureScope
-  /** The resource cards' heading level: 4 under AI Accounts' h3, 5 in an organisation's block. */
   headingLevel: 4 | 5
-  /** Org scope: the deployment has no org keystore. The panel renders nothing; the host hides its heading. */
   onUnavailable?: () => void
-  /** Org scope: the caller administers the organisation. Its members get a read-only view. */
   canEdit?: boolean
-  /** The host's section heading (tabIndex -1): a Settings deep link naming it is focused once the data loaded. */
   anchorId?: string
-  /** A resource was added, edited or given its credentials again. */
   onConnectionSaved?: (connection: AzureConnection) => void
-  /** The scope's first chat model (chat, Claude or agent) was added. */
   onFirstChatModel?: () => void
 }
 
@@ -61,19 +55,6 @@ function isCode(err: unknown, code: string): boolean {
   return getErrorCode(err) === code
 }
 
-// AI Accounts → Azure AI Foundry, and an organisation's block in
-// Organizations: the model registry of one scope. It owns
-//   - the states: first run, resources without models, the migrated
-//     resource and its discovery prompt, discovery suggestions,
-//     credentials needed, the organisation's view, loading and failures, a
-//     desktop list file it cannot write or had to recover, invalid
-//     settings and unsupported models;
-//   - the Resource and Model modals;
-//   - one sr-only status region and one alert region, both mounted up front
-//     (no toasts: they would render outside the Settings dialog);
-//   - where focus goes after an action (a new resource's heading, a new
-//     model's name, the next row after a removal, the anchored heading of a
-//     deep link).
 export default function AzureFoundryPanel({
   scope: scopeProp,
   headingLevel,
@@ -85,8 +66,6 @@ export default function AzureFoundryPanel({
 }: AzureFoundryPanelProps) {
   const {t} = useTranslation('settings')
   const {confirm} = useConfirm()
-  // One object per scope, whatever the host passes each render: the store's
-  // selectors and the children's effects key on it.
   const orgId = scopeProp.kind === 'org' ? scopeProp.orgId : null
   const scope = useMemo<AzureScope>(() => (orgId ? {kind: 'org', orgId} : {kind: 'user'}), [orgId])
   const state = useAzureFoundryStore(useMemo(() => selectAzureScope(scope), [scope]))
@@ -104,13 +83,9 @@ export default function AzureFoundryPanel({
 
   const labelOf = useCallback((p: ModelPurposePreset) => t(purposeLabelKey(p), {ns: 'common'}), [t])
 
-  // ---- loading ----
-
   useEffect(() => {
     void load(scope)
   }, [load, scope])
-  // A view marked stale while on screen (a lender's credential disabled, a
-  // change made elsewhere) is fetched again, in the background.
   useEffect(() => {
     if (state.status === 'ready' && state.loadedAt === 0) void load(scope)
   }, [state.status, state.loadedAt, load, scope])
@@ -124,12 +99,8 @@ export default function AzureFoundryPanel({
     if (unavailable) onUnavailableRef.current?.()
   }, [unavailable])
 
-  // ---- what the scope holds ----
-
   const readOnlyRegistry = state.registryState === 'read_only'
   const canEdit = canEditProp && !readOnlyRegistry
-  // An Azure knowledge base exists (cloud, with Azure embeddings): only then
-  // does the knowledge-base designation show or count — never on desktop.
   const knowledgeEnabled = state.knowledgeEmbeddingEnabled
   const ownConnections = useMemo(() => state.connections.filter(c => isOwnItem(scope, c)), [state.connections, scope])
   const ownModels = useMemo(() => state.models.filter(m => isOwnItem(scope, m)), [state.models, scope])
@@ -142,15 +113,11 @@ export default function AzureFoundryPanel({
     scope.kind === 'user' ? effectiveDefaultModelId(savedDefault, state.serverDefault, state.models) : null
   const allowCli = scope.kind === 'user' && localBackend
 
-  // ---- live regions ----
-
   const [status, setStatus] = useState({text: '', n: 0})
   const [alert, setAlert] = useState<{text: string; n: number} | null>(null)
   const announce = useCallback((text: string) => setStatus(s => ({text, n: s.n + 1})), [])
   const raise = useCallback((text: string) => setAlert(a => ({text, n: (a?.n ?? 0) + 1})), [])
 
-  // Why an action failed: a 403 and a read-only desktop list file get local
-  // copy; anything else keeps the server's own message.
   const reasonOf = useCallback(
     (err: unknown) =>
       err instanceof ApiError && err.status === 403
@@ -162,13 +129,6 @@ export default function AzureFoundryPanel({
             : t('azureModels.section.requestFailed'),
     [t],
   )
-
-  // ---- focus ----
-  //
-  // After an action focus goes to a data-focus target of the render that
-  // follows it (the store was patched before the action resolved, so the
-  // target is there). This runs after a closing modal's own focus restore:
-  // effect cleanups run before effects.
 
   const rootRef = useRef<HTMLDivElement>(null)
   const [pendingFocus, setPendingFocus] = useState<string | null>(null)
@@ -182,8 +142,6 @@ export default function AzureFoundryPanel({
     setPendingFocus(null)
   }, [pendingFocus])
 
-  // A Settings deep link to the host's heading: focused once the data has
-  // loaded (after Settings' own scroll reset), then the anchor is spent.
   const settled = state.status === 'ready' || state.status === 'error'
   useEffect(() => {
     if (!anchorId || anchor !== anchorId || !settled) return
@@ -191,18 +149,10 @@ export default function AzureFoundryPanel({
     useUIStore.getState().clearSettingsAnchor()
   }, [anchor, anchorId, settled])
 
-  // ---- modals ----
-
   const [connectionModal, setConnectionModal] = useState<ConnectionModalState | null>(null)
   const [modelModal, setModelModal] = useState<ModelModalState | null>(null)
-  // The resource just added: its discovery suggestions open at once.
   const [justAdded, setJustAdded] = useState<string | null>(null)
 
-  // Focus goes to the resource's heading after any save: a new resource's is
-  // where it now is, and the button that opened the modal for a saved one
-  // may be gone — "Enter credentials" and the invalid-settings callout's
-  // "Edit resource" leave with the callout once the resource is fixed, which
-  // would drop focus to the page.
   const handleConnectionSaved = (connection: AzureConnection, created: boolean) => {
     setConnectionModal(null)
     announce(
@@ -215,7 +165,6 @@ export default function AzureFoundryPanel({
     onConnectionSaved?.(connection)
   }
 
-  // The scope's first chat model: nothing else of a chat kind is held now.
   const reportFirstChatModel = (entry: AzureModelEntry) => {
     if (!onFirstChatModel || !isChatKind(entry.kind)) return
     const others = selectAzureScope(scope)(useAzureFoundryStore.getState()).models.filter(
@@ -242,8 +191,6 @@ export default function AzureFoundryPanel({
       confirmLabel: t('azureModels.knowledge.reindexConfirm'),
     })
 
-  // ---- resource actions ----
-
   const testConnection = async (connection: AzureConnection) => {
     try {
       const result = await runTest(scope, {connectionId: connection.id})
@@ -264,7 +211,6 @@ export default function AzureFoundryPanel({
 
   const removeConnection = async (connection: AzureConnection) => {
     const models = ownModels.filter(m => m.connectionId === connection.id)
-    // The knowledge-base model matters only where an Azure knowledge base exists.
     const knowledge = knowledgeEnabled ? models.find(m => m.isKnowledgeEmbedding) : undefined
     const ok = await confirm({
       title: t('azureModels.remove.resourceTitle', {name: connection.name}),
@@ -292,10 +238,6 @@ export default function AzureFoundryPanel({
       ownConnections.map(c => c.id),
       connection.id,
     )
-    // Sent without force: only a corpus that holds documents needs the
-    // re-index, and the server says so (REINDEX_REQUIRED). The confirm above
-    // already warned about it when the resource holds the knowledge-base
-    // model, so that answer is confirmed at once instead of asking twice.
     const run = async (force: boolean): Promise<void> => {
       try {
         await deleteConnection(scope, connection.id, {cascade: models.length > 0, ...(force ? {force: true} : {})})
@@ -306,7 +248,6 @@ export default function AzureFoundryPanel({
           if (knowledge || (await confirmReindex())) await run(true)
           return
         }
-        // Models this view did not know of: show them.
         if (isCode(err, 'CONNECTION_IN_USE')) void load(scope, {force: true})
         raise(t('azureModels.announce.removeFailed', {name: connection.name, reason: reasonOf(err)}))
       }
@@ -324,8 +265,6 @@ export default function AzureFoundryPanel({
     }
   }
 
-  // A refusal is raised as an alert as well as shown on the item's row (the
-  // row is no live region).
   const quickAdd = async (connection: AzureConnection, item: AzureDiscoveryItem): Promise<QuickAddResult> => {
     try {
       const entry = await createModel(scope, discoveryQuickAddInput(item, connection.id))
@@ -339,8 +278,6 @@ export default function AzureFoundryPanel({
     }
   }
 
-  // One after the other (the limit is checked per add); at the limit the
-  // rest are refused with the same reason.
   const addAll = async (connection: AzureConnection, items: AzureDiscoveryItem[]) => {
     const failures: Record<string, string> = {}
     let added = 0
@@ -383,8 +320,6 @@ export default function AzureFoundryPanel({
     onDismissDiscovery: connection => void dismissSuggestions(connection),
   }
 
-  // ---- model actions ----
-
   const testModel = async (entry: AzureModelEntry) => {
     try {
       const result = await runTest(scope, {model: {id: entry.id}})
@@ -403,8 +338,6 @@ export default function AzureFoundryPanel({
     }
   }
 
-  // "Default for new chats" is a setting, not a registry change: optimistic,
-  // and on a failed save only that field goes back.
   const makeDefault = async (entry: AzureModelEntry) => {
     announce(t('azureModels.announce.defaultSet', {name: entry.displayName}))
     const saved = await useSettingsStore.getState().updateProvider('azure-foundry', {defaultModel: entry.modelId})
@@ -456,8 +389,6 @@ export default function AzureFoundryPanel({
       entry.id,
       entry.connectionId,
     )
-    // As for a resource: force only once the server says the corpus needs
-    // the re-index, and without a second question when the confirm said so.
     const run = async (force: boolean): Promise<void> => {
       try {
         await deleteModel(scope, entry.id, force ? {force: true} : {})
@@ -476,7 +407,6 @@ export default function AzureFoundryPanel({
 
   const rowActions: ModelRowActions = {
     onEdit: entry => {
-      // Null for a kind this version of the app does not know; its row offers no Edit.
       const initial = modelFormFromEntry(entry)
       if (initial) setModelModal({entry, initial, reportedWindow: entry.reportedContextWindow})
     },
@@ -487,8 +417,6 @@ export default function AzureFoundryPanel({
     onUseForKnowledge: entry => void designateKnowledgeModel(entry),
     onRemove: entry => void removeModel(entry),
   }
-
-  // ---- render ----
 
   const uid = useId()
   const limitsId = `${uid}-limits`
@@ -689,7 +617,6 @@ export default function AzureFoundryPanel({
   )
 }
 
-// A note about the whole list (the desktop list file's state).
 function Notice({children}: {children: React.ReactNode}) {
   return (
     <div className="mb-4 flex items-start gap-2 rounded-lg border border-semantic-info/30 bg-semantic-info/10 px-3 py-2 text-xs text-text-secondary">

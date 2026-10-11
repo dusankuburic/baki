@@ -20,7 +20,6 @@ function Throws({error}: {error: Error}): null {
 
 describe('ErrorBoundary', () => {
   beforeEach(() => {
-    // React reports every caught render error on the console.
     vi.spyOn(console, 'error').mockImplementation(() => {})
   })
   afterEach(() => vi.clearAllMocks())

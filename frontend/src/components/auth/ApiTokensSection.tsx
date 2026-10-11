@@ -5,9 +5,6 @@ import {useUIStore} from '@/stores/uiStore'
 import {Button} from '@/components/shared'
 import {SectionCard} from './SectionCard'
 
-// ApiTokensSection points at Settings → API tokens: users look for personal
-// access tokens on their profile, and the panel that manages them is a
-// modal, so the profile links there instead of hosting a second copy.
 export const ApiTokensSection: React.FC = () => {
   const {t} = useTranslation('auth')
   const openSettings = useUIStore(s => s.openSettings)

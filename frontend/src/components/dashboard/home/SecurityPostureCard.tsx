@@ -5,8 +5,6 @@ import {StatTile} from '@/components/charts/StatTile'
 import {DetailsAction} from './DetailsAction'
 import type {DashboardSecurity} from '@/types'
 
-// Sign-in and secret-handling signals as tiles. Locked accounts is an
-// instance-wide count and only shows for admins (the payload says so).
 export function SecurityPostureCard({
   data,
   onDetails,

@@ -1,4 +1,5 @@
 import {useMemo} from 'react'
+import {useTranslation} from 'react-i18next'
 import {useUIStore} from '@/stores/uiStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useEditorStore} from '@/stores/editorStore'
@@ -11,6 +12,7 @@ import {logger} from '@/lib/logger'
 import {THEME_REGISTRY} from '@/lib/themeRegistry'
 import type {FlowDocument as DomainFlowDocument, RecentFile, AnalysisReport, Block} from '@/types'
 import type {useToast} from '@/components/shared'
+import {getErrorMessage} from '@/lib/getErrorMessage'
 
 function extractBlockCommands(doc: DomainFlowDocument) {
   const cmds: {id: string; label: string; section: string; onSelect: () => void}[] = []
@@ -77,6 +79,7 @@ export function useCommandList(deps: {
     user,
     toast,
   } = deps
+  const {t} = useTranslation('shell')
 
   return useMemo(() => {
     const cmds: CommandItem[] = [
@@ -91,7 +94,7 @@ export function useCommandList(deps: {
             if (doc) openDocument(doc as DomainFlowDocument)
           } catch (e) {
             logger.warn('Failed to open file:', e)
-            toast.error('Failed to open file', {description: String(e)})
+            toast.error(t('toasts.openFileFailed'), {description: getErrorMessage(e)})
           }
         },
       },
@@ -106,7 +109,7 @@ export function useCommandList(deps: {
             if (doc) openDocument(doc as DomainFlowDocument)
           } catch (e) {
             logger.warn('Failed to open folder:', e)
-            toast.error('Failed to open folder', {description: String(e)})
+            toast.error(t('toasts.openFolderFailed'), {description: getErrorMessage(e)})
           }
         },
       },
@@ -182,7 +185,7 @@ export function useCommandList(deps: {
             if (r) setReport(document.id, r as AnalysisReport)
           } catch (e) {
             logger.warn('analysis failed:', e)
-            toast.error('Analysis failed', {description: String(e)})
+            toast.error(t('toasts.analyzeFailed'), {description: getErrorMessage(e)})
           } finally {
             setAnalyzing(false)
           }
@@ -255,7 +258,6 @@ export function useCommandList(deps: {
       },
       {id: 'nav.profile', label: 'User Profile', section: 'Navigation', onSelect: () => setMainPaneView('profile')},
 
-      // ---- Appearance: theme switching via command palette ----
       {
         id: 'theme.toggle',
         label: 'Toggle Light/Dark Theme',
@@ -289,7 +291,6 @@ export function useCommandList(deps: {
       })
     }
 
-    // The portfolio is an org-wide governance view — cloud mode only.
     if (!isTauri()) {
       cmds.push({
         id: 'view.portfolio',
@@ -324,7 +325,7 @@ export function useCommandList(deps: {
               if (doc) openDocument(doc as DomainFlowDocument)
             } catch (e) {
               logger.warn('Failed to load recent file:', e)
-              toast.error('Failed to load file', {description: String(e)})
+              toast.error(t('toasts.loadFileFailed'), {description: getErrorMessage(e)})
             }
           },
         })
@@ -351,5 +352,6 @@ export function useCommandList(deps: {
     document,
     user?.role,
     toast,
+    t,
   ])
 }

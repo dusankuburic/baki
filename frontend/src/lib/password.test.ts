@@ -3,9 +3,9 @@ import {checkPassword, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH} from './passwor
 
 describe('checkPassword', () => {
   it('mirrors the server policy: 12–72 bytes and three of four character classes', () => {
-    expect(checkPassword('correct-horse-battery').valid).toBe(false) // lowercase + symbol only
+    expect(checkPassword('correct-horse-battery').valid).toBe(false)
     expect(checkPassword('Correct-horse-1').valid).toBe(true)
-    expect(checkPassword('CorrectHorse1').valid).toBe(true) // no symbol, still three classes
+    expect(checkPassword('CorrectHorse1').valid).toBe(true)
     expect(checkPassword('Short1!').valid).toBe(false)
   })
 
@@ -23,11 +23,11 @@ describe('checkPassword', () => {
   })
 
   it('counts bytes, not characters, like the server (bcrypt truncates at 72 bytes)', () => {
-    const emoji = '😀'.repeat(3) // 12 bytes, 3 characters, all "symbols"
+    const emoji = '😀'.repeat(3)
     expect(checkPassword(emoji).byteLength).toBe(PASSWORD_MIN_LENGTH)
     expect(checkPassword(emoji).longEnough).toBe(true)
 
-    const tooLong = 'Aa1'.repeat(24) + 'x' // 73 bytes
+    const tooLong = 'Aa1'.repeat(24) + 'x'
     expect(checkPassword(tooLong).byteLength).toBe(PASSWORD_MAX_LENGTH + 1)
     expect(checkPassword(tooLong).tooLong).toBe(true)
     expect(checkPassword(tooLong).valid).toBe(false)

@@ -1,23 +1,13 @@
-// Health score → tier. THE single source for every health colour in the app
-// (KPI tiles, charts, library rows, the inspector bar, shared reports): the
-// boundaries are 80/60/40 and the colours are the semantic tokens, so all 19
-// themes retint them together. Poor and critical share the error token — the
-// app has three status colours — and carry their distinction in the label.
 
 export type HealthTier = 'good' | 'fair' | 'poor' | 'critical'
 
 export interface HealthTierInfo {
   tier: HealthTier
   label: string
-  /** text colour class */
   text: string
-  /** subtle fill class */
   bg: string
-  /** outline class */
   border: string
-  /** solid fill class (bars, dots) */
   fill: string
-  /** CSS custom property carrying the colour, for inline styles and SVG */
   token: '--success' | '--warning' | '--error'
 }
 

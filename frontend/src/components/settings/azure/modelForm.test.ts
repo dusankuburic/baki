@@ -96,7 +96,6 @@ describe('the form', () => {
       deployment: 'o4-mini',
       displayName: 'o4-mini',
     })
-    // No display name: the server gives it the name.
     expect(discoveryQuickAddInput({...item, kind: 'agent', name: 'helper'}, 'abc0123456')).toEqual({
       connectionId: 'abc0123456',
       kind: 'agent',
@@ -105,9 +104,6 @@ describe('the form', () => {
     })
   })
 
-  // U9: agent names run to 128 characters, display names to 64. The quick
-  // add used to send the name as the display name, which the server refused
-  // (INVALID_DISPLAY_NAME) for any agent named with 65 or more.
   it('quick-adds and pre-fills an agent whose name is longer than a display name may be', () => {
     const name = 'Review agent ' + 'x'.repeat(87)
     expect([...name]).toHaveLength(100)
@@ -117,7 +113,6 @@ describe('the form', () => {
     expect(body).toEqual({connectionId: 'abc0123456', kind: 'agent', deployment: name, purpose: 'general'})
     expect(body).not.toHaveProperty('displayName')
 
-    // "Add with details…" starts on the server's default: the first 64.
     const details = modelFormFromDiscovery(item, 'abc0123456')
     expect(details.displayName).toBe(name.slice(0, 64))
     expect(details.displayNameEdited).toBe(false)
@@ -139,10 +134,8 @@ describe('the form', () => {
     expect([...typed.displayName]).toHaveLength(64)
     expect(validateModelForm(typed, {supportsAgents: true}).errors).toEqual({})
 
-    // Saved like that by the server, it keeps following on edit…
     const saved = modelFormFromEntry(entry({kind: 'agent', deployment: name, displayName: typed.displayName}))!
     expect(saved.displayNameEdited).toBe(false)
-    // …and a display name cleared on edit goes back to that default.
     expect(toModelUpdateInput({...saved, displayName: ' '}).displayName).toBe(typed.displayName)
   })
 
@@ -193,17 +186,13 @@ describe('validateModelForm', () => {
     expect(validateModelForm(form({kind: 'agent', deployment: 'helper'}), {supportsAgents: true}).errors).toEqual({})
   })
 
-  // The server refuses KIND_REQUIRES_PROJECT only for a change of kind or
-  // resource: an agent whose resource lost Entra ID stays editable in place.
   it('lets an unsupported agent be edited where it is, but not moved there or made one', () => {
     const agent = {kind: 'agent' as const, connectionId: 'abc0123456'}
     const edit = form({kind: 'agent', deployment: 'helper', description: 'Now with a description'})
     expect(validateModelForm(edit, {supportsAgents: false, existing: agent}).errors).toEqual({})
-    // Moved to another resource that can't run it either.
     expect(
       validateModelForm({...edit, connectionId: 'other00000'}, {supportsAgents: false, existing: agent}).errors,
     ).toEqual({kind: 'kindNeedsProject'})
-    // A chat model turned into an agent there.
     expect(
       validateModelForm(edit, {supportsAgents: false, existing: {kind: 'chat', connectionId: 'abc0123456'}}).errors,
     ).toEqual({kind: 'kindNeedsProject'})
@@ -216,13 +205,10 @@ describe('validateModelForm', () => {
     expect(long.firstInvalid).toBe('displayName')
   })
 
-  // The server stores both cleaned (NFC, whitespace runs collapsed, trimmed)
-  // and counts what it stores.
   it('counts the display name and the description as the server stores them', () => {
     const spaced = 'word' + '     '.repeat(10) + 'd'.repeat(150)
     expect(cleanLength(spaced)).toBe(155)
     expect(cleanLength('  two\n\n\tlines  ')).toBe(9)
-    // 'e' + a combining acute is one character once NFC-normalised.
     expect(cleanLength('cafe' + String.fromCodePoint(0x301))).toBe(4)
     expect(validateModelForm(form({description: spaced})).errors).toEqual({})
     expect(validateModelForm(form({displayName: 'x'.repeat(32) + '   '.repeat(20) + 'y'.repeat(31)})).errors).toEqual(
@@ -332,7 +318,6 @@ describe('request bodies', () => {
     })
   })
 
-  // U2: the edit is a compare-and-swap on the model as loaded.
   it("carries the edited model's updatedAt, and nothing when there is none", () => {
     expect(toModelUpdateInput(form(), undefined, '2026-09-30T10:00:00.123456Z')).toMatchObject({
       updatedAt: '2026-09-30T10:00:00.123456Z',

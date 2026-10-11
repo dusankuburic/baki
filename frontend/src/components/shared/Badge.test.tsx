@@ -3,9 +3,6 @@ import {render, screen} from '@testing-library/react'
 import {Users} from 'lucide-react'
 import Badge, {BADGE_TONES, type BadgeTone} from './Badge'
 
-// The Tailwind colour name for each CSS variable a badge fill is mixed from
-// (tailwind.config.js), to check that the fill lib/themeContrast.test.ts
-// measures is the fill the badge actually paints.
 const TAILWIND_COLOUR: Record<string, string> = {
   '--surface-3': 'surface-3',
   '--brand-500': 'brand-500',
@@ -46,8 +43,6 @@ describe('Badge', () => {
     expect(badgeOf('Not tested')).not.toHaveClass('uppercase')
   })
 
-  // "SHARED" alone does not say by whom; the screen reader hears the full
-  // label once, not the short text and then the label.
   it('gives screen readers the srLabel instead of the short visible text', () => {
     render(
       <Badge tone="brand" icon={Users} srLabel="Shared by Contoso">
@@ -56,7 +51,6 @@ describe('Badge', () => {
     )
     expect(screen.getByText('Shared')).toHaveAttribute('aria-hidden', 'true')
     expect(screen.getByText('Shared by Contoso')).toHaveClass('sr-only')
-    // The sr-only text is contained by the badge, not the nearest scroller.
     expect(badgeOf('Shared')).toHaveClass('relative')
     expect(badgeOf('Shared').querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
   })

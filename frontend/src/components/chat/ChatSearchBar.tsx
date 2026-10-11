@@ -5,7 +5,6 @@ import {ChevronDown, ChevronUp, Search, X} from 'lucide-react'
 interface Props {
   query: string
   onChange: (q: string) => void
-  // Position within the match list, 1-based for display. 0 when there are none.
   current: number
   total: number
   onPrev: () => void
@@ -13,11 +12,6 @@ interface Props {
   onClose: () => void
 }
 
-// Search steps THROUGH the conversation rather than filtering it: matches stay
-// in place with their surrounding turns, occurrences are highlighted, and
-// prev/next scrolls each one into view. Filtering hid the context that makes a
-// hit meaningful, and gave no clue where in a long answer the match actually
-// was.
 export default function ChatSearchBar({query, onChange, current, total, onPrev, onNext, onClose}: Props) {
   const {t} = useTranslation('chat')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -44,7 +38,6 @@ export default function ChatSearchBar({query, onChange, current, total, onPrev, 
             e.preventDefault()
             onClose()
           } else if (e.key === 'Enter') {
-            // Enter walks forward, Shift+Enter back — the find-bar convention.
             e.preventDefault()
             if (e.shiftKey) onPrev()
             else onNext()

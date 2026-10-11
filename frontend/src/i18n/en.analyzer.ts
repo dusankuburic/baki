@@ -1,6 +1,3 @@
-// Analyzer namespace — the rule reference catalogue and the related-rules
-// dependency map (src/components/analyzer). English values must match the
-// pre-i18n strings EXACTLY where a test asserts on them.
 export const enAnalyzer = {
   reference: {
     title: 'Rule Reference',
@@ -17,7 +14,6 @@ export const enAnalyzer = {
     libraryKind: 'Across flows',
     libraryKindHint: 'Compares the flows of a folder with each other; runs when a folder is analyzed.',
   },
-  // Preview rules (core/analyzer Stage): reported, but never a gate.
   stage: {
     preview: 'Preview',
     previewRuleHint:
@@ -30,8 +26,6 @@ export const enAnalyzer = {
     title: 'Related rules',
     summary: '{{links}} links · {{rules}} rules',
     refresh: 'Refresh',
-    // Fallback help text when the backend does not send `description`; it says
-    // the same thing the backend does.
     editorialNote:
       'Hand-maintained editorial map of rules whose findings are worth reviewing together. ' +
       'It is not derived from the analyzer and has no effect on evaluation order or results.',

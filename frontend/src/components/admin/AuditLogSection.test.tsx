@@ -61,7 +61,7 @@ describe('AuditLogSection', () => {
     renderSection()
     await screen.findAllByText('Changed settings')
     expect(listAuditEvents).toHaveBeenLastCalledWith(expect.objectContaining({limit: 16, offset: 0}), expect.anything())
-    expect(screen.getAllByRole('row')).toHaveLength(16) // the header row and fifteen events
+    expect(screen.getAllByRole('row')).toHaveLength(16)
     const nav = screen.getByRole('navigation', {name: 'Audit log pagination'})
     expect(nav).toHaveTextContent('Showing 1–15')
     expect(screen.getByRole('button', {name: 'Next page'})).toBeEnabled()
@@ -84,7 +84,7 @@ describe('AuditLogSection', () => {
     listAuditEvents.mockResolvedValue(EVENTS.slice(0, 15))
     renderSection()
     await screen.findAllByText('Changed settings')
-    expect(screen.getAllByRole('row')).toHaveLength(16) // the header row and fifteen events
+    expect(screen.getAllByRole('row')).toHaveLength(16)
     expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled()
   })
 

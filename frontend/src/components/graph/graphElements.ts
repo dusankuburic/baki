@@ -13,8 +13,6 @@ export function blocksToElements(subflow: Subflow): ElementDefinition[] {
     const typeLabel = resolveTypeLabel(block.type, block.name, block.rawType)
     const strippedName = stripBlockKeywords(block.type, block.name)
 
-    // For specific control blocks, if we have a valid stripped name,
-    // we omit the type header entirely to reduce redundancy as requested.
     const hideHeaderTypes = ['SWITCH', 'CASE', 'CONDITION']
     const shouldHideHeader = strippedName && hideHeaderTypes.includes(block.type)
 
@@ -41,10 +39,6 @@ export function blocksToElements(subflow: Subflow): ElementDefinition[] {
       },
     })
 
-    // Edge from parent: only connect to the FIRST child (entry point into the
-    // container). Subsequent children are reached via sequential sibling edges.
-    // Connecting to all children produces a cluttered fan-out that dagre lays out
-    // awkwardly with multiple incoming edges per child node.
     if (parentId && siblingIndex === 0) {
       elements.push({
         group: 'edges',
@@ -62,7 +56,6 @@ export function blocksToElements(subflow: Subflow): ElementDefinition[] {
         const prev = block.children[i - 1]
         if (!child) continue
         processBlock(child, block.id, i)
-        // Sequential edge between consecutive siblings (execution order).
         if (i > 0 && prev) {
           elements.push({
             group: 'edges',
@@ -82,7 +75,6 @@ export function blocksToElements(subflow: Subflow): ElementDefinition[] {
     const prev = subflow.blocks[i - 1]
     if (!block) continue
     processBlock(block, null, i)
-    // Sequential edges between root-level blocks.
     if (i > 0 && prev) {
       elements.push({
         group: 'edges',
@@ -98,7 +90,6 @@ export function blocksToElements(subflow: Subflow): ElementDefinition[] {
   return elements
 }
 
-/** Counts all blocks in a subflow recursively (root + all descendants). */
 export function countSubflowNodes(blocks: Block[]): number {
   let n = blocks.length
   for (const b of blocks) {

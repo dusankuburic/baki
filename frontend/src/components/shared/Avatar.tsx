@@ -12,28 +12,16 @@ const SIZE_CLASSES = {
 export type AvatarSize = keyof typeof SIZE_CLASSES
 
 interface AvatarProps {
-  /** Display name used for initials and the color hash fallback when colorSeed is omitted. */
   name: string
-  /** Stable identifier (e.g. user id) to hash into a color; falls back to `name` when absent. */
   colorSeed?: string
   avatarUrl?: string
   size?: AvatarSize
   className?: string
 }
 
-// Avatar renders a user's avatarUrl image, falling back to initials-on-color
-// when there is no URL or the image fails to load (broken link, revoked
-// signed URL, offline) — every existing avatar usage in the app rendered a
-// bare <img> with no error handling, so a dead URL showed a broken-image icon
-// instead of the initials fallback it already had the data for.
 export default function Avatar({name, colorSeed, avatarUrl, size = 'md', className}: AvatarProps) {
   const [imgFailed, setImgFailed] = useState(false)
 
-  // A failed load only condemns the URL that failed — when avatarUrl changes
-  // (e.g. the user is typing a new one in the profile form), try again.
-  // Adjusted DURING render rather than in an effect: React re-runs this
-  // component before committing, so the reset never reaches the DOM as an
-  // extra painted frame the way an effect-then-rerender would.
   const [lastUrl, setLastUrl] = useState(avatarUrl)
   if (avatarUrl !== lastUrl) {
     setLastUrl(avatarUrl)

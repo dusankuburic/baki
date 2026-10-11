@@ -18,7 +18,6 @@ describe('ToolTrail', () => {
     render(<ToolTrail calls={calls} />)
     expect(screen.getByText(/Used 2 tools/)).toBeInTheDocument()
     expect(screen.getByText(/1 failed/)).toBeInTheDocument()
-    // Details hidden until expanded.
     expect(screen.queryByText('Searching flow')).not.toBeInTheDocument()
   })
 
@@ -121,7 +120,6 @@ describe('FixOutcomeStrip by previewKind', () => {
     const strip = screen.getByTestId('approval-outcome')
     expect(strip).toHaveAttribute('data-preview-kind', 'something-new')
     expect(strip).toHaveTextContent('rename_variable')
-    // The item is the block label, not "Fix <type>".
     expect(strip).toHaveTextContent('Call API')
     expect(strip).not.toHaveTextContent('Fix applied')
     expect(strip).toHaveTextContent('Done.')

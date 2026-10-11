@@ -7,17 +7,6 @@ import {
   SAMPLE_FLOW_CONTENT,
 } from './helpers'
 
-/**
- * Chat streaming happy path E2E. The most intricate frontend machinery
- * (useAIChat → useChatStreamEngine → useStreamingMessage over the global SSE
- * connection) is otherwise only unit-tested. Strategy:
- *   - crypto.randomUUID is pinned via init script so the client-generated
- *     stream id is known in advance,
- *   - /api/events is served a complete text/event-stream body carrying
- *     chunk/tool/done `chat:event` envelopes for that stream id,
- *   - the send path's REST endpoints (begin/stream/save) are stubbed.
- */
-
 const STREAM_ID = 'e2e-fixed-stream-id'
 
 function sseBody(events: Array<{name: string; data: unknown}>) {
@@ -27,10 +16,7 @@ function sseBody(events: Array<{name: string; data: unknown}>) {
 type SseEvent = {name: string; data: unknown}
 
 interface ChatBootOptions {
-  // The chat:event envelopes the SSE connection serves (default: a reply
-  // that streams and finishes).
   sse?: SseEvent[]
-  // The /api/chat/resume answer (default: the finished reply).
   resume?: unknown
 }
 
@@ -42,18 +28,13 @@ const DEFAULT_SSE: SseEvent[] = [
 ]
 
 async function stubChatBoot(page: Page, options: ChatBootOptions = {}) {
-  // Proven auth bypass + boot stubs from the shared helpers.
   await setupAuthenticatedPage(page)
-  // Every crypto.randomUUID call returns the same constant: the send's
-  // client-generated stream id is then known in advance (thread ids and any
-  // other uuid consumers colliding with it is harmless in a test).
   await page.addInitScript(() => {
     Object.defineProperty(crypto, 'randomUUID', {value: () => 'e2e-fixed-stream-id'})
   })
 
   const bootStubs: Record<string, unknown> = {
     '/api/local-config': {mode: 'cloud'},
-    // capabilities is read unguarded by the dashboard/router (`info?.capabilities.sessionAnalytics`).
     '/api/system/info': {
       version: 'e2e',
       platform: 'linux',
@@ -62,10 +43,6 @@ async function stubChatBoot(page: Page, options: ChatBootOptions = {}) {
       gitCommit: '',
       capabilities: {sessionAnalytics: false},
     },
-    // Full AppSettings shape with first-run completed: the onboarding modal
-    // would otherwise overlay the composer. (The helper stubs this too, but
-    // this map is registered later and Playwright matches the last route
-    // first, so it must carry the flag itself.)
     '/api/system/settings': {
       version: 1,
       general: {firstRunCompleted: true},
@@ -82,9 +59,6 @@ async function stubChatBoot(page: Page, options: ChatBootOptions = {}) {
     '/api/analysis/analyze': mockAnalysisReport(),
     '/api/auth/refresh': {accessToken: 'tok', expiresAt: '2099-01-01T00:00:00Z'},
     '/api/auth/me': {id: 'user-1', email: 'e2e@example.com', role: 'member', displayName: 'E2E'},
-    // Every field the listing schema requires (api/schemas.lazy.ts): a
-    // listing that fails to parse reads as "Couldn't check your AI providers"
-    // and the composer never renders.
     '/api/providers/list': [
       {
         id: 'claude',
@@ -109,15 +83,10 @@ async function stubChatBoot(page: Page, options: ChatBootOptions = {}) {
     '/api/chat/suggested-prompts': ['Summarize this flow'],
     '/api/flow/source-files': [],
     '/api/chat/begin': {status: 'ok'},
-    // Onboarding's "Load sample & start" uploads the sample; stubbing it
-    // gives the app a real document so the AI tab activates.
     '/api/flow/upload': mockFlowDocument(),
     '/api/chat/stream': STREAM_ID,
     '/api/chat/save': {status: 'ok'},
     '/api/chat/cancel': {status: 'ok'},
-    // When the mocked SSE body completes instantly, the client's reconnect
-    // logic catch-ups via resume — serve the full message as a finished
-    // stream (the legitimate delta-resume protocol path).
     '/api/chat/resume': options.resume ?? {
       text: 'This flow has 1 error to fix.',
       done: true,
@@ -132,13 +101,6 @@ async function stubChatBoot(page: Page, options: ChatBootOptions = {}) {
 
   await page.route('**/api/**', async (route: Route) => {
     const url = new URL(route.request().url())
-    // The SSE connection: served instantly with envelopes addressed to the
-    // pinned stream id (every crypto.randomUUID call returns it, so the
-    // send's client-generated sid is guaranteed to match — blocking here
-    // instead would deadlock: registerStream awaits this connection BEFORE
-    // the stream POST exists). The boot-time global subscription parses these
-    // with no chat subscriber attached (dropped); the send-time subscription
-    // re-fetches and delivers.
     if (url.pathname === '/api/events') {
       await route.fulfill({
         status: 200,
@@ -160,10 +122,6 @@ async function stubChatBoot(page: Page, options: ChatBootOptions = {}) {
 
 async function openChatWithFlow(page: Page) {
   await page.goto('/')
-  // Load a flow through the file picker (the upload stub answers it). This
-  // used to go through the onboarding modal's "Load sample & start", which it
-  // reached by clicking Skip — Skip now dismisses the tour, as it says, so
-  // that route left the app with no flow and the AI tab inert.
   const openBtn = page.locator('button:has-text("Open file")').first()
   const [fileChooser] = await Promise.all([page.waitForEvent('filechooser'), openBtn.click()])
   await fileChooser.setFiles({
@@ -172,10 +130,6 @@ async function openChatWithFlow(page: Page) {
     buffer: Buffer.from(SAMPLE_FLOW_CONTENT),
   })
   await expect(page.locator('text=Customer Data Sync').first()).toBeVisible({timeout: 10_000})
-  // Open the AI inspector tab (Details is the default). `exact` matters: role
-  // name matching is a case-insensitive SUBSTRING, and "Details" contains
-  // "ai" — the non-exact locator matched Details first and clicked that, so
-  // the panel never switched and the composer was never rendered.
   const aiTab = page.getByRole('tab', {name: 'AI', exact: true})
   await aiTab.first().waitFor({timeout: 15_000})
   await aiTab.first().click()
@@ -186,28 +140,14 @@ test.describe('Chat streaming', () => {
     await stubChatBoot(page)
     await openChatWithFlow(page)
 
-    // The chat composer textarea (placeholder-driven; the sidebar search box
-    // is a plain input and must not be picked).
     const input = page.locator('textarea[placeholder*="Ask anything"]')
     await input.waitFor({timeout: 10_000})
     await input.fill('Summarize the findings')
     await input.press('Enter')
 
-    // The send path is the deterministic, E2E-valuable surface: the user
-    // message renders and the thread enters the streaming state (Generating…).
-    //
-    // NOTE on full chunk-streaming E2E: faithfully mocking the stateful SSE
-    // protocol (per-connection event delivery, reconnect backoff, delta-resume
-    // catch-up) via static route bodies proved non-deterministic — the chunk
-    // pipeline itself is covered by the useChatStreamEngine and
-    // useStreamingMessage unit suites. A live-backend e2e environment would
-    // be the right home for that assertion.
     await expect(page.getByText('Summarize the findings').first()).toBeVisible({timeout: 10_000})
     await expect(page.getByRole('tab', {name: /Generating/})).toBeVisible({timeout: 10_000})
 
-    // The conversation never scrolls sideways (Virtuoso's viewport is
-    // absolutely positioned, so padding on the scroller used to overflow it),
-    // and the composer's card shares the message column's edges.
     const log = page.getByRole('log')
     await expect.poll(() => log.evaluate(el => el.scrollWidth - el.clientWidth)).toBe(0)
     const edges = await page.evaluate(() => {
@@ -217,14 +157,11 @@ test.describe('Chat streaming', () => {
     })
     expect(edges).toEqual([0, 0])
 
-    // Focus mode: the whole chat becomes a full-window dialog. Escape stops
-    // the reply first (it is still generating), then leaves focus mode.
     await page.getByRole('button', {name: 'Focus mode'}).click()
     const focus = page.getByRole('dialog', {name: 'AI Chat'})
     await expect(focus).toBeVisible()
     await page.keyboard.press('Escape')
     if (await focus.isVisible()) {
-      // The reply was still generating: that Escape stopped it; one more leaves.
       await expect(page.getByRole('tab', {name: /Generating/})).toBeHidden({timeout: 10_000})
       await page.keyboard.press('Escape')
     }
@@ -232,10 +169,6 @@ test.describe('Chat streaming', () => {
   })
 })
 
-// A fix_proposal of a preview kind this bundle does not know (a tool a newer
-// server added): the generic card still asks for a decision — the tool's
-// name, each item's label and summary, Approve/Dismiss — and Dismiss reaches
-// the one decision route.
 test.describe('Approval card', () => {
   test('asks for a decision on a request of an unknown preview kind', async ({page}) => {
     const request = {
@@ -250,8 +183,6 @@ test.describe('Approval card', () => {
         {name: 'chat:event', data: {streamId: STREAM_ID, type: 'chunk', data: {content: 'Renaming… '}}},
         {name: 'chat:event', data: {streamId: STREAM_ID, type: 'fix_proposal', data: request}},
       ],
-      // The stream is still open (no done): a reconnect's resume replays the
-      // journaled request, so the card survives the catch-up.
       resume: {
         text: 'Renaming… ',
         done: false,

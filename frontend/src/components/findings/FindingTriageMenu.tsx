@@ -13,8 +13,6 @@ import {isTauri} from '@/platform/guards'
 import {useSuppressReasonPrompt} from './hooks/useSuppressReasonPrompt'
 import {TRIAGE_STATUSES, isKnown, type Finding, type Tolerant, type TriageStatus} from '@/types'
 
-// Order only — labels resolve through findings:triage.status.<status>, whose
-// keys mirror the TriageStatus union.
 const TRIAGE_OPTIONS: TriageStatus[] = ['open', 'acknowledged', 'in_progress', 'resolved', 'suppressed']
 
 interface AssignableUser {
@@ -35,20 +33,13 @@ export default function FindingTriageMenu({finding}: Props) {
   const promptSuppressReason = useSuppressReasonPrompt()
   const setFindingTriage = useAnalysisStore(s => s.setFindingTriage)
   const assignFinding = useAnalysisStore(s => s.assignFinding)
-  // Select only the single triage entry this card needs — selecting the whole
-  // triageMap would re-render every FindingCard on any triage change (O(N)).
   const triage = useAnalysisStore(s => s.triageMap.get(findingKey(finding)))
   const triageStatus: Tolerant<TriageStatus> = triage?.status ?? 'open'
-  // A status a newer server added: a neutral chip, and no reassignment (that
-  // request repeats the status, and this bundle sends only the ones it knows).
   const knownStatus = isKnown(TRIAGE_STATUSES, triageStatus)
   const organisations = useOrgStore(s => s.organisations)
   const currentUser = useAuthStore(s => s.user)
   const isDesktop = isTauri()
 
-  // Flatten all org members into a deduped id→user map for the assignee picker.
-  // Assignment is a cloud-only feature (desktop triage is in-memory and has no
-  // notion of other users), so the picker is hidden in Tauri mode below.
   const assignees = useMemo<AssignableUser[]>(() => {
     const map = new Map<string, AssignableUser>()
     for (const org of organisations) {
@@ -67,8 +58,6 @@ export default function FindingTriageMenu({finding}: Props) {
 
   const assignee = triage?.assigneeId ? assignees.find(a => a.id === triage.assigneeId) : undefined
 
-  // Shared dismissal contract (U1.5): outside click + Escape close both the
-  // triage menu and its assignee submenu.
   const triageRef = useDismissable(showTriage || showAssign, () => {
     setShowTriage(false)
     setShowAssign(false)
@@ -77,8 +66,6 @@ export default function FindingTriageMenu({finding}: Props) {
   const handleSetTriage = async (status: TriageStatus) => {
     setShowTriage(false)
     if (status === triageStatus) return
-    // Suppressing asks why (stored as the triage justification and shown on
-    // the chip); cancelling leaves the status unchanged.
     let justification: string | undefined
     if (status === 'suppressed') {
       const reason = await promptSuppressReason()
@@ -109,8 +96,6 @@ export default function FindingTriageMenu({finding}: Props) {
             triageTone(triageStatus).border,
             triageTone(triageStatus).bg,
           )}
-          // The stored justification had no renderer: the reason a teammate
-          // gave for suppressing was saved and never shown.
           title={
             [
               triage?.justification ? t('triage.labels.justification', {reason: triage.justification}) : '',
@@ -121,15 +106,12 @@ export default function FindingTriageMenu({finding}: Props) {
           }
         >
           {knownStatus ? t(`triage.status.${triageStatus}`) : t('triage.status.other')}
-          {/* Desktop triage is process memory (the store persists only in
-              cloud mode): say so on the chip, which otherwise looks saved. */}
           {isDesktop && (
             <span className="ml-1 normal-case tracking-normal opacity-70">· {t('triage.labels.sessionOnly')}</span>
           )}
         </span>
       )}
 
-      {/* Assignee chip — shown only when someone is assigned. */}
       {assignee && (
         <span
           className="flex items-center gap-1 text-2xs text-text-tertiary"
@@ -184,15 +166,9 @@ export default function FindingTriageMenu({finding}: Props) {
               </button>
             ))}
 
-            {/* Assignment lives behind a divider + submenu. Cloud-only: desktop
-                mode has no notion of other users, so the picker is hidden. */}
             {!isDesktop && knownStatus && assignees.length > 0 && (
               <>
                 <div className="my-0.5 border-t border-border-subtle" />
-                {/* Hover PEEKS into the submenu; only click/outside/Esc close
-                    it — a mouse-leave slam-shut made keyboard assignment
-                    unreachable (the submenu vanished before its buttons
-                    could take focus). */}
                 <div className="relative" onMouseEnter={() => setShowAssign(true)}>
                   <button
                     onClick={() => setShowAssign(s => !s)}

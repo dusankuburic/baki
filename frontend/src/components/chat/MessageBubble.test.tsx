@@ -36,9 +36,6 @@ describe('MessageBubble — interrupted state', () => {
 
 describe('MessageBubble — chat→app navigation', () => {
   it('navigates to the matching subflow when a mention pill is clicked', () => {
-    // F1-followup: patch INDIVIDUAL actions on the REAL stores (not a
-    // full-store getState mock that silently keeps passing when the
-    // component starts reading other state).
     const navigateToSourceFile = vi.fn(() => true)
     const setMainPaneView = vi.fn()
     const prevFlow = useFlowStore.getState()
@@ -110,7 +107,6 @@ describe('MessageBubble — served model', () => {
     render(<MessageBubble message={msg({content: 'hi', model: 'my-deployment', servedModel: 'gpt-4o-2024-08-06'})} />)
     expect(screen.getByText('· my-deployment')).toBeInTheDocument()
     expect(screen.getByTitle('Answered by gpt-4o-2024-08-06')).toHaveTextContent('· gpt-4o-2024-08-06')
-    // Named for screen readers too, not only in the mouse tooltip.
     expect(screen.getByRole('img', {name: 'Answered by gpt-4o-2024-08-06'})).toBeInTheDocument()
   })
 
@@ -144,9 +140,6 @@ describe('MessageBubble — provider errors', () => {
     expect(screen.queryByRole('button', {name: 'Open settings'})).toBeNull()
   })
 
-  // A failure on the organisation's shared credential also offers the
-  // Organizations section — the member cannot fix it under their own
-  // Accounts.
   it('a shared-credential auth failure also offers the organisation section', () => {
     const openSettings = vi.fn()
     const original = useUIStore.getState().openSettings
@@ -194,9 +187,6 @@ describe('MessageBubble — provider errors', () => {
   })
 })
 
-// An Azure AI Foundry reply is sent as "m/<id>": the bubble names the model
-// by the label it was sent with — the history keeps naming a model that is
-// renamed or removed later.
 describe('MessageBubble — model labels', () => {
   const azureMsg = (over: Partial<ChatMessage> = {}) =>
     msg({content: 'the docs', provider: 'azure-foundry', model: 'm/docs000000', ...over})
@@ -205,7 +195,6 @@ describe('MessageBubble — model labels', () => {
     render(<MessageBubble message={azureMsg({modelLabel: 'Docs writer', servedModel: 'gpt-4.1-2025-04-14'})} />)
     expect(screen.getByText('· Docs writer')).toBeInTheDocument()
     expect(screen.queryByText(/m\/docs000000/)).toBeNull()
-    // The served model still shows next to it.
     expect(screen.getByTitle('Answered by gpt-4.1-2025-04-14')).toBeInTheDocument()
   })
 
@@ -221,8 +210,6 @@ describe('MessageBubble — model labels', () => {
     expect(screen.getByText('· removed model')).toBeInTheDocument()
   })
 
-  // A label that is only the id is no label: a turn sent before the listing
-  // loaded stored its raw id there.
   it('takes a label that is only the id for none', () => {
     const {rerender} = render(
       <MessageBubble message={azureMsg({modelLabel: 'm/docs000000'})} modelLabel="Docs writer" />,
@@ -233,8 +220,6 @@ describe('MessageBubble — model labels', () => {
     expect(screen.queryByText(/m\/docs000000/)).toBeNull()
   })
 
-  // While nothing can be sent, Retry and Regenerate stay reachable and
-  // say why they do nothing.
   it('keeps Retry and Regenerate reachable but unavailable while nothing can be sent, with the reason', () => {
     const onRegenerate = vi.fn()
     const onRetry = vi.fn()
@@ -260,7 +245,6 @@ describe('MessageBubble — model labels', () => {
     expect(onRetry).not.toHaveBeenCalled()
     expect(screen.getByRole('button', {name: 'Retry'})).toHaveAccessibleDescription(reason)
 
-    // The reason going away re-renders (memo comparator), and Retry works.
     rerender(
       <MessageBubble
         message={azureMsg({id: 'm2', finishReason: 'error', content: 'failed'})}

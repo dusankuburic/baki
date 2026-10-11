@@ -73,14 +73,12 @@ describe('model kinds', () => {
     expect(modelKind('m/a1b2c3d4e5', {kind: 'claude'})).toBe('claude')
     expect(modelKind('m/a1b2c3d4e5', {kind: 'chat'})).toBe('chat')
     expect(modelKind('m/a1b2c3d4e5', {kind: 'embedding'})).toBe('embedding')
-    // A kind wins over a misleading legacy prefix.
     expect(modelKind('agent:helper', {kind: 'chat'})).toBe('chat')
   })
 
   it('falls back to the legacy routing prefixes', () => {
     expect(modelKind('agent:helper')).toBe('agent')
     expect(modelKind('claude:sonnet', null)).toBe('claude')
-    // An unknown kind (a newer server) reads like none.
     expect(modelKind('agent:helper', {kind: 'router'})).toBe('agent')
     expect(modelKind('gpt-4.1', {})).toBeUndefined()
     expect(modelKind(undefined)).toBeUndefined()
@@ -120,8 +118,6 @@ describe('modelNameOf', () => {
     expect(modelNameOf(undefined, undefined, listed)).toBe('')
   })
 
-  // C6: a turn sent before the listing loaded was once saved with its raw
-  // id as the label, which then won over the listing's name for good.
   it('treats a label that is only an id as none', () => {
     expect(modelNameOf('m/docs000000', 'm/docs000000', listed)).toBe('Docs writer')
     expect(modelNameOf('claude-opus-4-1', 'claude-opus-4-1', listed)).toBe('Claude Opus 4.1')

@@ -4,7 +4,6 @@ import {useAnalyticsStore} from '@/stores/analyticsStore'
 import {useOrgStore} from '@/stores/orgStore'
 import {AnalyticsFilterBar} from './AnalyticsFilterBar'
 
-// The real action, restored after each case (one stubs it).
 const realSetPreset = useAnalyticsStore.getState().setPreset
 
 beforeEach(() => {
@@ -21,9 +20,6 @@ function renderBar() {
 }
 
 describe('AnalyticsFilterBar: the time range', () => {
-  // U11: a preset refetches the analytics. With the segmented control's
-  // default (automatic) activation every arrow step picked a preset — one
-  // request per step while the user was only moving along the options.
   it('moves along the presets with the arrow keys without picking one, and picks on activation', () => {
     const setPreset = vi.fn()
     useAnalyticsStore.setState({setPreset})
@@ -43,7 +39,6 @@ describe('AnalyticsFilterBar: the time range', () => {
     expect(setPreset).not.toHaveBeenCalled()
     expect(selected).toHaveAttribute('aria-checked', 'true')
 
-    // Space or Enter on a button is a click.
     fireEvent.click(seven)
     expect(setPreset).toHaveBeenCalledTimes(1)
     expect(setPreset).toHaveBeenCalledWith('7d')

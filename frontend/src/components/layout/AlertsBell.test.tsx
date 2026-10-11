@@ -27,8 +27,6 @@ beforeEach(() => {
 })
 
 describe('AlertsBell', () => {
-  // Tolerant wire enums: the server writes an alert's title and message, so
-  // one of a type or severity this app does not know reads like any other.
   it('lists an alert of a type and severity a newer server added beside the known ones', () => {
     useGovernanceStore.setState({
       panelOpen: true,
@@ -48,13 +46,9 @@ describe('AlertsBell', () => {
     expect(screen.getByText('Drift detected')).toBeInTheDocument()
     expect(screen.getByText('Policy gate failed')).toBeInTheDocument()
     expect(screen.getByText('3 new errors')).toBeInTheDocument()
-    // Its chip carries the server's own word in the neutral warning style.
-    expect(screen.getByText('critical')).toHaveClass('text-amber-400')
+    expect(screen.getByText('critical')).toHaveClass('text-semantic-warning')
   })
 
-  // A "new rules" notice is about rules, not one flow: the row lists the rules
-  // and their reach, names the scope where an alert names its flow, and opens
-  // the analysis rule settings instead of a flow.
   it('renders a new_rules notice and opens the analysis rules from it', () => {
     useGovernanceStore.setState({
       panelOpen: true,
@@ -81,7 +75,6 @@ describe('AlertsBell', () => {
     expect(screen.getByText('+2 more')).toBeInTheDocument()
     expect(screen.getByText(/Findings in 3 flows/)).toBeInTheDocument()
     expect(screen.getByText('Your organisation')).toBeInTheDocument()
-    // The rule chips replace the server's sentence, which lists the same ids.
     expect(screen.queryByText('rule-a, rule-b, …')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByText('6 new rules report findings'))

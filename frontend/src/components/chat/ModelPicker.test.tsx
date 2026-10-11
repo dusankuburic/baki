@@ -6,8 +6,6 @@ import {useUIStore} from '@/stores/uiStore'
 import {useChatStore} from '@/stores/chatStore'
 import type {ModelDetail} from '@/types'
 
-// ---- listings ----
-
 const entry = (id: string, displayName: string, over: Partial<ModelDetail> = {}): ModelDetail => ({
   id: `m/${id.padEnd(10, '0')}`,
   displayName,
@@ -80,7 +78,6 @@ function renderPicker(over: Partial<PickerProps> = {}) {
 const trigger = () => screen.getByRole('button', {name: /^Model for this chat:/})
 const dialog = () => screen.getByRole('dialog', {name: 'Choose a model for this chat'})
 const listbox = () => within(dialog()).getByRole('listbox')
-// Scoped to the listbox: the Provider select's own <option>s share the role.
 const option = (name: RegExp) => within(listbox()).getByRole('option', {name})
 const optionTexts = () =>
   within(listbox())
@@ -121,9 +118,7 @@ describe('ModelPicker trigger', () => {
     })
     const name = within(button).getByText('Review bot')
     expect(name).toBeVisible()
-    // The provider rides as an icon with its name in the tooltip.
     expect(within(button).getByTitle('Azure AI Foundry')).toBeInTheDocument()
-    // The Shared badge is always shown, with its meaning spelled out.
     expect(within(button).getByText('Shared')).toBeVisible()
     expect(within(button).getByText('Shared by Contoso')).toHaveClass('sr-only')
   })
@@ -175,7 +170,6 @@ describe('ModelPicker trigger', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  // The logout reset takes the request counter back to 0.
   it('opens only on a request, never on the counter going back (the logout reset)', () => {
     useChatStore.setState({modelPickerRequest: 3})
     renderPicker()
@@ -185,7 +179,6 @@ describe('ModelPicker trigger', () => {
     expect(dialog()).toBeInTheDocument()
   })
 
-  // The chat moves focus to the trigger after a notice is dismissed.
   it('hands its trigger to a ref the chat passes', () => {
     const triggerRef: {current: HTMLButtonElement | null} = {current: null}
     renderPicker({triggerRef})
@@ -222,7 +215,6 @@ describe('ModelPicker list', () => {
     expect(within(gpt).getByText('Default')).toBeVisible()
     expect(option(/^Docs writer/)).toHaveAccessibleName('Docs writer Claude 200k context window')
     expect(option(/^Docs writer/)).toHaveAccessibleDescription('Writes flow documentation from the canvas')
-    // The thread's model is the selected option.
     expect(option(/^Docs writer/)).toHaveAttribute('aria-selected', 'true')
     expect(option(/^Review bot/)).toHaveAccessibleName('Review bot Agent Shared by Contoso 128k context window')
   })
@@ -244,8 +236,6 @@ describe('ModelPicker list', () => {
     const {props} = renderPicker()
     await openPicker(user)
     const list = within(dialog()).getByRole('listbox', {name: 'Models'})
-    // Seven or fewer models: no search box, focus lands on the list, on the
-    // thread's own model.
     expect(list).toHaveFocus()
     expect(within(dialog()).queryByRole('combobox')).toBeNull()
     expect(list).toHaveAttribute('aria-activedescendant', option(/^Docs writer/).id)
@@ -291,7 +281,6 @@ describe('ModelPicker list', () => {
     expect(search).toHaveAttribute('aria-controls', within(dialog()).getByRole('listbox').id)
 
     await user.type(search, 'documentation')
-    // The purpose label is searched too.
     expect(optionTexts()).toEqual([expect.stringMatching(/^Docs writer/)])
     await user.keyboard('{ArrowDown}')
     expect(search).toHaveAttribute('aria-activedescendant', option(/^Docs writer/).id)
@@ -333,8 +322,6 @@ describe('ModelPicker keyboard and focus', () => {
     const user = userEvent.setup()
     const many: PickerProvider = {...AZURE, models: [...AZURE.models, entry('x1', 'One'), entry('x2', 'Two')]}
     renderPicker({providers: [many]})
-    // The chat's own Escape (stop the reply, leave focus mode) listens on the
-    // document, and skips a claimed key.
     const reachedDocument: string[] = []
     const chatEscape = (e: KeyboardEvent) => reachedDocument.push(e.key)
     document.addEventListener('keydown', chatEscape)
@@ -443,9 +430,6 @@ describe('ModelPicker empty states and prompts', () => {
     expect(openSettings).toHaveBeenCalledWith('accounts', 'provider-azure-foundry')
   })
 
-  // With nothing to pick there is no search box or list to take focus;
-  // it stayed outside, so Escape reached the chat's own (stop the reply,
-  // leave focus mode) and focus leaving never closed the popup.
   it('with nothing to pick, focus still lands in the popup; Escape closes it and never reaches the chat', async () => {
     const user = userEvent.setup()
     renderPicker({providers: [{...AZURE, models: [EMBED]}], model: '', label: '', modelDetail: undefined})
@@ -460,7 +444,6 @@ describe('ModelPicker empty states and prompts', () => {
       expect(trigger()).toHaveFocus()
       expect(reachedDocument).not.toContain('Escape')
 
-      // Focus leaving closes it too.
       await openPicker(user)
       await user.tab()
       await user.tab()
@@ -488,8 +471,6 @@ describe('ModelPicker empty states and prompts', () => {
       </>,
     )
     await user.click(screen.getByRole('button', {name: 'Choose model'}))
-    // The thread's provider isn't listed: the first one shows — with no
-    // models, so the Provider select takes focus.
     expect(within(dialog()).getByRole('combobox', {name: 'Provider'})).toHaveFocus()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -525,9 +506,6 @@ describe('ModelPicker empty states and prompts', () => {
   })
 })
 
-// The trigger's provider glyph follows the catalogue `icon` (Phase 4b); the
-// id map is the fallback for a listing without one, or an icon the bundle
-// does not know.
 describe('ModelPicker provider glyph', () => {
   const glyph = (container: HTMLElement) =>
     container.querySelector('button[aria-haspopup="dialog"] svg:not(.lucide-chevron-down)')
@@ -544,7 +522,6 @@ describe('ModelPicker provider glyph', () => {
     expect(glyph(container)).toHaveClass('lucide-hard-drive')
   })
 
-  // F2: the icon is a server string used as a key into the glyph map.
   it('ignores an icon naming a prototype key', () => {
     const {container} = render(picker([{...CLAUDE, icon: 'constructor'}], 'claude'))
     expect(glyph(container)).toHaveClass('lucide-cloud')

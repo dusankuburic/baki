@@ -27,7 +27,6 @@ function sessions() {
   const now = Date.now()
   const iso = (t: number) => new Date(t).toISOString()
   return [
-    // Older than the current one: sorting must still pin "this device" first.
     {
       id: 'other-1',
       createdAt: iso(now - 30 * HOUR),

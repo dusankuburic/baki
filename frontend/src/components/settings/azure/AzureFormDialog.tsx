@@ -6,33 +6,19 @@ import {Button, Modal, useConfirm} from '@/components/shared'
 interface AzureFormDialogProps {
   title: string
   description?: string
-  /** md = 512 px (the Model modal), lg = 672 px (the Resource modal). Full screen below 640 px either way. */
   size: 'md' | 'lg'
-  /** The form's id: the footer sits outside the form, so its submit button names the form (form=). */
   formId: string
-  /** Unsaved edits: Escape, the X and Cancel ask before they are discarded. */
   dirty: boolean
-  /** A save is in flight: the dialog stays open until it settles. */
   busy: boolean
   submitLabel: string
   onSubmit: () => void
-  /** Closes the dialog (after the discard confirm, when there was something to discard). */
   onClose: () => void
-  /** The form-level alert: a server error no field owns, a conflict with its Reload. */
   formAlert?: ReactNode
-  /** The footer's start: a Test button with its cost hint and outcome. */
   footerStart?: ReactNode
-  /** The field that takes focus on open (the first one; the secret when entering credentials again). */
   initialFocusRef?: RefObject<HTMLElement | null>
   children: ReactNode
 }
 
-// The frame of the Resource and Model modals. The form validates on submit
-// (noValidate: no browser bubbles), Save stays enabled, and a click on the
-// backdrop does nothing — a stray click must not throw away a half-typed
-// form. Every other way out (Escape, the X, Cancel) goes through
-// requestClose, which asks before discarding unsaved edits; the confirm
-// stacks on this dialog, so its own Escape closes only the confirm.
 export default function AzureFormDialog({
   title,
   description,
@@ -96,8 +82,6 @@ export default function AzureFormDialog({
         </div>
       }
     >
-      {/* Always mounted: an error inserted into an existing alert region is
-          what gets it announced. */}
       <div
         role="alert"
         className={clsx(

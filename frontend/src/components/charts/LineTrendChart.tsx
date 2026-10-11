@@ -17,10 +17,6 @@ import {
   dataKeyOf,
 } from './axes'
 
-// A single measure over time: a 2px line over a 10% wash, gaps where there is
-// no value (never a fake zero), and optionally the previous period as a thin
-// de-emphasised line aligned day-for-day. Reference lines are hairlines at
-// the thresholds the reader cares about (health tiers).
 export function LineTrendChart<Row extends {date: string}>({
   data,
   dataKey,

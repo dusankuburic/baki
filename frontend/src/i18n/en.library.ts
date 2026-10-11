@@ -1,7 +1,3 @@
-// Library namespace — the cloud-library browse workspace
-// (src/components/library): filter rail, toolbar, grid/list results, pager,
-// detail panel and its write toasts. English values must match the pre-i18n
-// strings EXACTLY where a test asserts on them.
 export const enLibrary = {
   toolbar: {
     searchPlaceholder: 'Search flows by name…',

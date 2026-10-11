@@ -3,8 +3,6 @@ import {renderHook, act} from '@testing-library/react'
 import {useFlowStore} from '@/stores/flowStore'
 import type {FlowDocument} from '@/types'
 
-// The presence store's flow.changed fan-out, replaced by a plain listener
-// list the tests emit into; the socket itself is out of scope here.
 const presence = vi.hoisted(() => ({
   listeners: [] as Array<(version: number) => void>,
   state: {flowId: 'flow-1' as string | null, status: 'connected'},
@@ -56,12 +54,8 @@ describe('useFlowChangeSync', () => {
   })
   afterEach(() => vi.useRealTimers())
 
-  // The presence socket drops and reconnects while a reload is in flight: the
-  // reconnect aborts the download, and the server re-emits the current
-  // version on reconnect. That re-emit used to be dropped as "already seen",
-  // leaving the document stale until the next remote edit.
   it('reloads a version whose download was aborted by a reconnect when the server re-emits it', async () => {
-    getContent.mockImplementationOnce(() => new Promise<FlowDocument>(() => {})) // never settles: aborted
+    getContent.mockImplementationOnce(() => new Promise<FlowDocument>(() => {}))
     getContent.mockResolvedValue(doc('v7'))
     get.mockResolvedValue({version: 7})
     const {rerender} = renderHook(() => useFlowChangeSync())
@@ -70,19 +64,17 @@ describe('useFlowChangeSync', () => {
     await advance(FLOW_CHANGE_DEBOUNCE_MS)
     expect(getContent).toHaveBeenCalledTimes(1)
 
-    // Socket drops and comes back: the effect tears down (abort) and resubscribes.
     presence.state = {flowId: 'flow-1', status: 'reconnecting'}
     rerender()
     presence.state = {flowId: 'flow-1', status: 'connected'}
     rerender()
 
-    act(() => presence.emit(7)) // the server's re-emit after reconnect
+    act(() => presence.emit(7))
     await advance(FLOW_CHANGE_DEBOUNCE_MS)
     expect(getContent).toHaveBeenCalledTimes(2)
     expect(useFlowStore.getState().document?.name).toBe('v7')
     expect(useFlowStore.getState().libraryVersion).toBe(7)
 
-    // An applied version IS still deduplicated.
     act(() => presence.emit(7))
     await advance(FLOW_CHANGE_DEBOUNCE_MS)
     expect(getContent).toHaveBeenCalledTimes(2)
@@ -96,7 +88,6 @@ describe('useFlowChangeSync', () => {
     await advance(FLOW_CHANGE_DEBOUNCE_MS)
     expect(getContent).toHaveBeenCalledTimes(1)
 
-    // Another flow, whose current version happens to be 7 as well.
     const other = {id: 'flow-2', name: 'other', subflows: []} as unknown as FlowDocument
     useFlowStore.setState({document: other, libraryVersion: 1} as never)
     getContent.mockResolvedValue({...other, name: 'other-v7'})
@@ -110,8 +101,6 @@ describe('useFlowChangeSync', () => {
     expect(useFlowStore.getState().document?.name).toBe('other-v7')
   })
 
-  // A collaborator's multi-step edit arrives as several flow.changed events
-  // within a few hundred ms. Each used to start its own full-document reload.
   it('coalesces a burst of flow.changed events into ONE reload and applies the last document', async () => {
     get.mockResolvedValue({version: 6})
     getContent.mockResolvedValue(doc('v6'))
@@ -122,7 +111,7 @@ describe('useFlowChangeSync', () => {
       presence.emit(5)
       presence.emit(6)
     })
-    expect(getContent).not.toHaveBeenCalled() // trailing debounce: nothing yet
+    expect(getContent).not.toHaveBeenCalled()
 
     await advance(FLOW_CHANGE_DEBOUNCE_MS)
     expect(getContent).toHaveBeenCalledTimes(1)
@@ -155,7 +144,6 @@ describe('useFlowChangeSync', () => {
     expect(firstSignal?.aborted).toBe(true)
     expect(useFlowStore.getState().document?.name).toBe('v8')
 
-    // The superseded download resolving late must not roll the document back.
     await act(async () => {
       resolveFirst(doc('v7-stale'))
       await vi.advanceTimersByTimeAsync(0)

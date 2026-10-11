@@ -6,17 +6,12 @@ import {ApiError, request} from '@/api/client'
 import type {LocalModelsConfig} from '@/types'
 import {formatCount} from '@/lib/format'
 
-// The remove / discard-unsaved confirms go through the shared useConfirm hook;
-// a controllable mock keeps the tests on the section's own rendering. A
-// partial mock of the real barrel: every other primitive stays real.
 const confirmMock = vi.hoisted(() => vi.fn())
 vi.mock('@/components/shared', async importOriginal => ({
   ...(await importOriginal<typeof import('@/components/shared')>()),
   useConfirm: () => ({confirm: confirmMock, prompt: vi.fn()}),
 }))
 
-// The real providersApi (the request-body test) goes through a stubbed
-// transport; ApiError stays the real class.
 vi.mock('@/api/client', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api/client')>()),
   request: vi.fn(),
@@ -40,7 +35,6 @@ const api = vi.mocked(providersApi)
 const URL_OLLAMA = 'http://127.0.0.1:11434/v1'
 const configured: LocalModelsConfig = {configured: true, baseUrl: URL_OLLAMA}
 const empty: LocalModelsConfig = {configured: false, baseUrl: ''}
-// What GET and POST /api/providers/local/config answer on a cloud server.
 const unavailable = () =>
   new ApiError('local models are available in the desktop app only', 400, 'LOCAL_MODELS_UNAVAILABLE')
 const WINDOW_INVALID = 'Enter a whole number between 1024 and 2000000'
@@ -83,7 +77,6 @@ describe('LocalModelsSection', () => {
     fireEvent.click(saveButton())
 
     expect(await screen.findByText(URL_OLLAMA)).toBeInTheDocument()
-    // A blank context window sends none: the server applies its default.
     expect(api.saveLocalModelsConfig).toHaveBeenCalledWith(URL_OLLAMA, undefined)
     expect(api.getLocalModelsConfig).toHaveBeenCalledTimes(2)
     expect(onConfigured).toHaveBeenCalledTimes(1)
@@ -156,7 +149,6 @@ describe('LocalModelsSection', () => {
       expect(screen.queryByText(WINDOW_INVALID)).not.toBeInTheDocument()
       expect(saveButton()).toBeDisabled()
       fireEvent.blur(windowField())
-      // Linked to the field (aria-describedby) and marked invalid, like the URL error.
       expect(windowField()).toHaveAccessibleDescription(WINDOW_INVALID)
       expect(windowField()).toHaveAttribute('aria-invalid', 'true')
       expect(saveButton()).toBeDisabled()
@@ -219,7 +211,6 @@ describe('LocalModelsSection', () => {
     it('shows the saved base URL with Edit, Remove and Test', async () => {
       render(<LocalModelsSection />)
       expect(await screen.findByText(URL_OLLAMA)).toBeInTheDocument()
-      // No saved window: the effective default is shown.
       expect(screen.getByText('Context window')).toBeInTheDocument()
       expect(screen.getByText(formatCount(8192))).toBeInTheDocument()
       expect(screen.getByRole('button', {name: 'Edit'})).toBeInTheDocument()

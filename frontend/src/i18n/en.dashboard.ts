@@ -1,7 +1,8 @@
-// Dashboard copy: the Home overview, the Analytics page and the chart
-// foundation (src/components/charts). Same conventions as en.ts — keys mirror
-// the component concept, and no level mixes string leaves with nested objects.
 export const enDashboard = {
+  portfolio: {
+    reanalyzed: 'Re-analyzed "{{name}}"',
+    reanalyzeFailed: 'Re-analyze failed for "{{name}}"',
+  },
   common: {
     chart: 'Chart',
     table: 'Table',
@@ -91,8 +92,6 @@ export const enDashboard = {
     yourAccount: 'your account',
     inScope: 'in scope',
   },
-  // Audit action ids with the dots replaced by underscores (i18next reads a
-  // dot as a path). Anything not listed is humanised from the id.
   actions: {
     auth_login: 'Signed in',
     auth_logout: 'Signed out',
@@ -284,13 +283,11 @@ export const enDashboard = {
       flowsTruncated: 'Showing the first {{count}} flows; search to narrow down.',
       flowsList: 'Flows in scope',
       severity: 'Severity',
-      category: 'Category',
       rule: 'Rule',
       moreRules: 'More rules',
       fewerRules: 'Fewer rules',
       noRules: 'No rules in this scope yet.',
       compare: 'Compare',
-      compareLong: 'Compare with the previous period',
       reset: 'Reset filters',
       summary: 'Showing {{parts}}.',
       customRange: '{{from}} – {{to}}',
@@ -306,8 +303,6 @@ export const enDashboard = {
       avgHealth: 'Avg health',
       openFindings: 'Open findings',
       errors: 'Errors',
-      warnings: 'Warnings',
-      info: 'Info',
       autoFixable: 'Auto-fixable',
       analysesRun: 'Analysis runs',
       flowsAnalyzed: 'Flows analyzed',
@@ -345,7 +340,6 @@ export const enDashboard = {
       healthDistributionSub: 'Analyzed flows per score band',
       complexity: 'Complexity vs findings',
       complexitySub: 'Blocks against findings, coloured by health tier',
-      complexityEmpty: 'No flows with block metadata.',
       worst: 'Flows needing attention',
       worstSub: 'Lowest health first',
       worstEmpty: 'No analyzed flows in scope.',
@@ -364,8 +358,6 @@ export const enDashboard = {
       byProvider: 'Cost by provider',
       byModel: 'Usage by model',
       aiEmpty: 'No AI usage in this window.',
-      // Azure AI Foundry usage is not priced by baki: its cost cells read "—"
-      // (this is their accessible name) and its bars are left out of charts.
       costNotPriced: 'Not priced by baki',
       costOnlyUnpriced: 'Only Azure AI Foundry was used, and baki does not price it.',
       aiScopeUser: 'Your account · not tied to flows',
@@ -396,11 +388,8 @@ export const enDashboard = {
       band: 'Score band',
       flow: 'Flow',
       health: 'Health',
-      blocks: 'Blocks',
       analyzed: 'Analyzed',
-      from: 'From',
       to: 'To',
-      change: 'Change',
       status: 'Status',
       share: 'Share',
       tokensIn: 'Prompt tokens',
@@ -411,14 +400,9 @@ export const enDashboard = {
       model: 'Model',
       action: 'Action',
       actionId: 'Action id',
-      actor: 'Actor',
-      when: 'When',
-      resource: 'Resource',
       yes: 'yes',
       no: 'no',
     },
-    // How the usage tables name the internal routing ids: the model
-    // picker's labels for an Azure AI Foundry agent and a Claude deployment.
     models: {
       agent: 'Agent · {{name}}',
       claude: '{{name}} · Claude',

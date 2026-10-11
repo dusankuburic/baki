@@ -6,11 +6,6 @@ import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import type {PickerProvider} from './ModelPicker'
 import type {ModelDetail} from '@/types'
 
-// ChatHeader is the panel's only row of chrome — it absorbed the provider
-// selector, the model selector (now the ModelPicker: each thread keeps its
-// own model), the connection-status row and the whole action toolbar. These
-// cover the wiring that used to live in ChatToolbar.test.tsx.
-
 const models: ModelDetail[] = [
   {id: 'm1', displayName: 'Sonnet', contextLimit: 200_000, inputCostPerM: 3, outputCostPerM: 15},
   {id: 'm2', displayName: 'Haiku', contextLimit: 100_000, inputCostPerM: 1, outputCostPerM: 5},
@@ -58,7 +53,6 @@ describe('ChatHeader', () => {
     renderHeader()
     expect(picker()).toHaveAccessibleName('Model for this chat: Sonnet, Claude')
     expect(within(picker()).getByText('Sonnet')).toBeVisible()
-    // The connection state stays on the trigger's hover title.
     expect(picker()).toHaveAttribute('title', 'Ready')
   })
 
@@ -122,7 +116,6 @@ describe('ChatHeader', () => {
     const onToggleTools = vi.fn()
     renderHeader({useTools: true, onToggleTools})
     await openOverflow(user)
-    // Label states the CURRENT state, so the user can see tools are on.
     await user.click(screen.getByRole('menuitem', {name: 'Tools on'}))
     expect(onToggleTools).toHaveBeenCalled()
   })
@@ -136,8 +129,6 @@ describe('ChatHeader', () => {
       modelDetail: {...models[0]!, supportsTools: false},
     })
     await openOverflow(user)
-    // The chat service runs these through the text-marker fallback, so the
-    // item must stay enabled rather than be greyed out.
     const item = screen.getByRole('menuitem', {name: 'Tools off · no native tools'})
     expect(item).toBeEnabled()
     await user.click(item)
@@ -150,7 +141,6 @@ describe('ChatHeader', () => {
     await openOverflow(user)
     await user.click(screen.getByRole('menuitem', {name: 'Clear'}))
 
-    // The old inline strip auto-dismissed after 5s; this is a real dialog.
     expect(props.onClearContext).not.toHaveBeenCalled()
     await user.click(await screen.findByRole('button', {name: 'Clear'}))
     expect(props.onClearContext).toHaveBeenCalled()
@@ -194,14 +184,11 @@ describe('ChatHeader Foundry agent tools item', () => {
     await openOverflow(user)
     const item = screen.getByRole('menuitem', {name: 'Tools: defined by the agent'})
     expect(item).toHaveAttribute('aria-disabled', 'true')
-    // It says why — and stays in the arrow-key order, so keyboard and
-    // screen-reader users reach it (a plain `disabled` item was skipped).
     expect(item).toHaveAccessibleDescription('An agent runs the tools set up in its Azure AI Foundry definition')
-    await user.keyboard('{ArrowDown}{ArrowDown}') // New chat → Tools
+    await user.keyboard('{ArrowDown}{ArrowDown}')
     expect(item).toHaveFocus()
     expect(screen.queryByRole('menuitem', {name: 'Tools on'})).toBeNull()
     expect(screen.queryByRole('menuitem', {name: 'Tools off'})).toBeNull()
-    // Unavailable items swallow the click and Enter — the toggle stays inert.
     await user.keyboard('{Enter}')
     await user.click(item)
     expect(onToggleTools).not.toHaveBeenCalled()
@@ -267,8 +254,6 @@ describe('ChatHeader context window formatting', () => {
 })
 
 describe('ChatHeader unpriced models', () => {
-  // Azure AI Foundry is not priced by baki: its deployments list at 0/0 and
-  // the picker must show neither "$0" nor an estimate.
   it('shows no price on a zero-priced model', async () => {
     const user = userEvent.setup()
     const gpt: ModelDetail = {

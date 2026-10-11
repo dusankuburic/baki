@@ -15,9 +15,6 @@ import {ResponseValidationError, clearRequestCache} from './client'
 import {governanceApi, type GovernanceAlertType} from './governance'
 import {providersApi} from './providers'
 
-// The wire enums a newer server may extend (types/tolerant.ts): a value this
-// bundle does not know parses as itself instead of failing the whole response,
-// and the known ones keep their literal types.
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
     getBackendConfig: vi.fn().mockResolvedValue({apiUrl: 'http://localhost:9999', token: 'mock-token', port: 9999}),
@@ -130,7 +127,6 @@ describe('tolerant wire enums', () => {
     })
     expect(connections.registryState).toBe('migrating')
     expect(connections.connections[0]).toMatchObject({status: 'suspended', config: {authMode: 'managed_identity'}})
-    // Known values keep their literal types: the guard narrows to the closed union.
     expectTypeOf(connections.registryState).toEqualTypeOf<Tolerant<AzureRegistryState>>()
     const status = connections.connections[0]!.status
     expect(isKnown(AZURE_STATUSES, status)).toBe(false)
@@ -195,9 +191,6 @@ describe('tolerant wire enums', () => {
   })
 })
 
-// GET /api/providers/catalog (Phase 4b): the credential kind, the field types
-// and the modes are wire enums a newer server may grow. An entry the bundle
-// cannot form is kept — the panel renders it as a generic card — never dropped.
 describe('tolerant provider catalogue', () => {
   const spec = (over: Record<string, unknown> = {}) => ({
     id: 'claude',

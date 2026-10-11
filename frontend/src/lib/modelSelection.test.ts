@@ -9,7 +9,6 @@ import {
   type SelectableProvider,
 } from './modelSelection'
 
-// Azure registry entries (the migrated `default` resource's carry aliases).
 const gpt: SelectableModel = {id: 'm/gpt4100000', displayName: 'GPT-4.1', kind: 'chat', aliases: ['gpt-4.1']}
 const docs: SelectableModel = {id: 'm/docs000000', displayName: 'Docs writer', kind: 'claude', aliases: ['claude:docs']}
 const tester: SelectableModel = {
@@ -125,7 +124,6 @@ describe('resolveThreadModel: fallbacks', () => {
         fallback: {provider: 'azure-foundry', model: docs.id, label: 'Docs writer'},
       },
     })
-    // Dismissing pins the fallback; nothing is pinned automatically.
     expect(sel.pin).toBeUndefined()
   })
 
@@ -238,7 +236,7 @@ describe('resolveThreadModel: a thread from before per-thread memory (legacy)', 
       reply('azure-foundry', 'gpt-4.1'),
       {role: 'user', provider: 'azure-foundry', model: 'ignored'},
       reply('azure-foundry', 'claude:docs'),
-      {role: 'assistant'}, // no pair (an interrupted turn): skipped
+      {role: 'assistant'},
     ]
     const sel = resolveThreadModel(input({messages}))
     expect(sel).toEqual({
@@ -286,7 +284,6 @@ describe('resolveThreadModel: a thread from before per-thread memory (legacy)', 
         settings: withDefaults('claude', {claude: 'claude-custom'}),
       }),
     )
-    // Its pin stores no label: one that is only the id adds nothing.
     expect(custom).toEqual({
       provider: 'claude',
       model: 'claude-custom',
@@ -307,8 +304,6 @@ describe('resolveThreadModel: a thread from before per-thread memory (legacy)', 
     expect(sel).toMatchObject({provider: 'claude', model: 'claude-sonnet-4-6', reason: 'fallbackRemoved'})
   })
 
-  // C1: unpinned, the stand-in's first reply became the thread's "last
-  // reply", and inference then adopted the stand-in for good.
   describe('whose model is only temporarily unavailable', () => {
     const legacyGpt: SelectableModel = {
       id: 'm/legacy0000',
@@ -342,7 +337,6 @@ describe('resolveThreadModel: a thread from before per-thread memory (legacy)', 
       const afterReply = [
         ...history,
         {role: 'user'},
-        // The turn sent with pinThread:false went to the stand-in.
         reply('azure-foundry', gpt4o.id, {modelLabel: 'GPT-4o'}),
       ]
       const sel = resolveThreadModel(input({pin, messages: afterReply, providers}))
@@ -373,9 +367,6 @@ describe('resolveThreadModel: a thread from before per-thread memory (legacy)', 
   })
 })
 
-// C2: a configured provider can list nothing for a while — a local server
-// that is down, an Azure AI Foundry scope whose legacy import is still
-// running. That says nothing about the thread's model.
 describe('resolveThreadModel: a configured provider that lists nothing to chat with', () => {
   const localDown: SelectableProvider = {id: 'local', configured: true, defaultModel: '', models: []}
 
@@ -399,7 +390,6 @@ describe('resolveThreadModel: a configured provider that lists nothing to chat w
       }),
     )
     expect(pinned).toEqual({provider: 'azure-foundry', model: docs.id, label: 'Docs writer', reason: 'pinned'})
-    // Only an embedding model listed counts as nothing to chat with, too.
     const embedOnly = resolveThreadModel(
       input({pin: {provider: 'azure-foundry', model: docs.id}, providers: [azure([embed]), claude]}),
     )
@@ -426,8 +416,6 @@ describe('resolveThreadModel: a configured provider that lists nothing to chat w
   })
 })
 
-// C6: before the listing loads, a registry id has no name yet — and a turn
-// sent meanwhile stored "m/…" as its label, which then won for good.
 describe('resolveThreadModel: names before the listing loads', () => {
   it("never shows a registry id as a new thread's or a pin's name", () => {
     const loading = {listingLoaded: false, settings: withDefaults('azure-foundry', {'azure-foundry': docs.id})}
@@ -566,8 +554,6 @@ describe('legacyDefaultRewrite', () => {
     expect(legacyDefaultRewrite(undefined, listing, true)).toEqual(none)
   })
 
-  // C2: Azure lists nothing while its legacy import is pending — the saved
-  // default is not "gone" then.
   it('decides nothing on a listing with nothing to chat with', () => {
     const none = {rewriteTo: null, unresolved: false}
     expect(legacyDefaultRewrite('gpt-4.1', [], true)).toEqual(none)
@@ -585,16 +571,13 @@ describe('legacyDefaultRewrite', () => {
 
 describe('providerNewChatDefault', () => {
   it("is the model the provider's new chats start on here — the picker's [DEFAULT]", () => {
-    // The saved default, resolved through aliases…
     expect(
       providerNewChatDefault(withDefaults('azure-foundry', {'azure-foundry': 'claude:docs'}), azure([gpt, docs])),
     ).toMatchObject({model: docs.id, label: 'Docs writer', reason: 'default'})
-    // …else the server default…
     expect(providerNewChatDefault({activeProvider: 'claude', providers: {}}, azure([gpt, docs]))).toMatchObject({
       model: gpt.id,
       reason: 'serverDefault',
     })
-    // …never one that cannot be used, and null when nothing can.
     expect(
       providerNewChatDefault(
         withDefaults('azure-foundry', {'azure-foundry': tester.id}),

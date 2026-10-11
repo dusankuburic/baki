@@ -39,7 +39,6 @@ describe('OperationsSection (R2-6)', () => {
     expect(screen.getByText('Blob storage')).toBeInTheDocument()
     expect(screen.getByText('Redis')).toBeInTheDocument()
     expect(screen.getByText(/Overall: degraded/)).toBeInTheDocument()
-    // Error detail on hover title.
     expect(screen.getByTitle('connection refused')).toBeInTheDocument()
   })
 
@@ -58,7 +57,7 @@ describe('OperationsSection (R2-6)', () => {
   })
 
   it('renders unknown-state tiles while health has not loaded', async () => {
-    systemHealth.mockReturnValue(new Promise(() => {})) // pending
+    systemHealth.mockReturnValue(new Promise(() => {}))
     renderSection()
     expect(await screen.findByText('Database')).toBeInTheDocument()
     expect(screen.getAllByText('unknown').length).toBeGreaterThanOrEqual(3)

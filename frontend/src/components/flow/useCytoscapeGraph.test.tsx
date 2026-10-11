@@ -5,9 +5,6 @@ import {useFlowStore} from '@/stores/flowStore'
 import {useUIStore} from '@/stores/uiStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 
-// ---- cytoscape mock: records calls so the tests assert lifecycle behaviour
-// (create/destroy, element swap, race guards) without a real canvas. ----
-// Minimal cytoscape collection with the chainable methods the hook uses.
 class MockCollection {
   items: Array<MockElement>
   constructor(items: MockElement[] = []) {
@@ -69,8 +66,6 @@ const mockCy = {
   add(els: unknown) {
     this._added = els
     for (const el of els as Array<{data: Record<string, unknown>}>) {
-      // Dedupe by id like real cytoscape: the hook's two mount-time loads
-      // (instance effect + data effect) both add the same elements.
       if (el.data.id && this._elements.some(e => e.dataStore.id === el.data.id)) continue
       this._elements.push(new MockElement(!!el.data.id, el.data))
     }
@@ -121,11 +116,6 @@ const graph = (nodes: Array<{id: string; label: string}>, edges: Array<{source: 
   edges,
 })
 
-// The hook's mount effect bails without a real container element, so mount it
-// inside a harness div like ExecutionGraphView does.
-// The harness renders the hook's observable state into the DOM exactly like
-// ExecutionGraphView does (loading/error overlays) — DOM assertions then go
-// through RTL's normal act-wrapped update flow.
 function mount(subflowId?: string) {
   const Harness = () => {
     const api = useCytoscapeGraph(subflowId)
@@ -158,11 +148,9 @@ beforeEach(() => {
   useFlowStore.setState({document: {id: 'flow-1', name: 'F'} as never})
   useAnalysisStore.setState({reports: new Map()})
   useUIStore.setState({graphZoom: 1, resolvedTheme: 'dark'})
-  // The hook needs a real DOM node for containerRef; renderHook mounts a div.
 })
 
 afterEach(() => {
-  // drain pending state updates
 })
 
 describe('useCytoscapeGraph', () => {
@@ -230,11 +218,9 @@ describe('useCytoscapeGraph', () => {
     await waitFor(() => expect(mockCy._added).not.toBeNull())
     const added = mockCy._added as Array<{data: Record<string, unknown>}>
     const ids = added.filter(e => e.data.id).map(e => e.data.id)
-    // sf1 + its neighbors; sf3 is a neighbor of sf1 too (edge sf1→sf3).
     expect(ids).toContain('sf1')
     expect(ids).toContain('sf2')
     expect(ids).toContain('sf3')
-    // The center marker is set on the focused subflow.
     expect(added.find(e => e.data.id === 'sf1')?.data.isCenter).toBe('true')
     expect(added.find(e => e.data.id === 'sf2')?.data.isCenter).toBe('false')
   })
@@ -248,7 +234,6 @@ describe('useCytoscapeGraph', () => {
   })
 
   it('ignores a stale response that resolves after the instance was replaced', async () => {
-    // First mount: slow response. Unmount before it resolves → destroy + null ref.
     let resolveSlow!: (v: unknown) => void
     getExecutionGraph.mockReturnValue(new Promise(r => (resolveSlow = r)))
     const first = mount()
@@ -256,7 +241,6 @@ describe('useCytoscapeGraph', () => {
     first.unmount()
     expect(mockCy._destroyed).toBe(true)
 
-    // Resolve the stale request: must be dropped (no add on the dead instance).
     resolveSlow(graph([{id: 'sf1', label: 'Main'}]))
     await act(async () => {
       await Promise.resolve()
@@ -269,11 +253,9 @@ describe('useCytoscapeGraph', () => {
     const t = mount()
     await waitFor(() => expect(t.loadingEl()).toHaveTextContent('false'))
 
-    // Typing 'bill' matches the 'Billing' node (case-insensitive label match).
     fireEvent.change(t.getByTestId('cy-search'), {target: {value: 'bill'}})
     await waitFor(() => expect(t.matchCountEl()).toHaveTextContent('1'))
 
-    // Clearing the query clears the match count.
     fireEvent.change(t.getByTestId('cy-search'), {target: {value: ''}})
     await waitFor(() => expect(t.matchCountEl()).toHaveTextContent('null'))
   })

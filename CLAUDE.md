@@ -12,7 +12,8 @@ Baki is a static analyzer and AI assistant for Power Automate Desktop flows. It 
 Read [docs/architecture/README.md](docs/architecture/README.md) before changing backend structure. The
 refactoring roadmap is
 [docs/architecture/backend-refactoring-proposal.md](docs/architecture/backend-refactoring-proposal.md), and
-decisions are recorded in [docs/adr/](docs/adr/).
+decisions are recorded in [docs/adr/](docs/adr/). Frontend forms follow the shared validation layer described
+in [frontend/src/form-validation.md](frontend/src/form-validation.md).
 
 ## Commands
 

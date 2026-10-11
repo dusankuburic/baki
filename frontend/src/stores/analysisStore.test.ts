@@ -11,8 +11,6 @@ import {
 import {unknownValue} from '@/testing/testHelpers'
 import type {Finding, AnalysisReport} from '@/types'
 
-// Suppression persists via the triage API in cloud mode (jsdom reports !isTauri).
-// Mock it so the store's optimistic local behavior is what's under test.
 vi.mock('@/api', () => ({
   analysisApi: {
     setFindingStatus: vi.fn().mockResolvedValue({}),
@@ -42,7 +40,6 @@ function makeFinding(id: string, over: Partial<Finding> = {}): Finding {
   } as Finding
 }
 
-// A stored triage status a newer server added, as the listing hands it over.
 function seedUnknownStatus(f: Finding) {
   const key = findingKey(f)
   useAnalysisStore.setState({
@@ -52,8 +49,6 @@ function seedUnknownStatus(f: Finding) {
   })
 }
 
-// The findings filters read suppressedKeys directly, so that set is what
-// "suppressed" means to the UI.
 function isSuppressed(f: Finding): boolean {
   return useAnalysisStore.getState().suppressedKeys.has(findingKey(f))
 }
@@ -63,7 +58,6 @@ beforeEach(() => {
 })
 
 describe('suppression', () => {
-  // Findings are keyed by ruleId:blockId, so distinct findings need distinct blocks.
   const f1 = () => makeFinding('f1', {blockId: 'b1'})
   const f2 = () => makeFinding('f2', {blockId: 'b2'})
   const f3 = () => makeFinding('f3', {blockId: 'b3'})
@@ -76,7 +70,6 @@ describe('suppression', () => {
 
   it('suppression is keyed by fingerprint, so it survives a finding.id change', () => {
     useAnalysisStore.getState().suppressFinding(makeFinding('F-001', {blockId: 'b1'}), 'noise')
-    // A later analysis renumbers ids but the same rule fires on the same block.
     expect(isSuppressed(makeFinding('F-042', {blockId: 'b1'}))).toBe(true)
   })
 
@@ -89,14 +82,12 @@ describe('suppression', () => {
     expect(isSuppressed(f1())).toBe(true)
     expect(isSuppressed(f2())).toBe(true)
     expect(isSuppressed(f3())).toBe(true)
-    // f1 must not be duplicated in the list
     expect(state.suppressedFindings.filter(x => x.key === findingKey(f1()))).toHaveLength(1)
   })
 
   it('suppressMany persists the batch in a single request', () => {
     vi.mocked(analysisApi.setFindingStatusBatch).mockClear()
     useAnalysisStore.getState().suppressMany([f1(), f2(), f3()], 'bulk')
-    // One HTTP call for the whole batch, not one per finding.
     expect(analysisApi.setFindingStatusBatch).toHaveBeenCalledTimes(1)
     const items = vi.mocked(analysisApi.setFindingStatusBatch).mock.calls[0]![0]
     expect(items).toHaveLength(3)
@@ -159,8 +150,6 @@ describe('findingsByBlockOf', () => {
     expect(findingsByBlockOf(undefined).size).toBe(0)
   })
 
-  // Built on demand, once per report object: the store no longer carries an
-  // eager index for every retained report.
   it('is cached per report object and rebuilt for a new report', () => {
     const r1 = report()
     expect(findingsByBlockOf(r1)).toBe(findingsByBlockOf(r1))
@@ -212,28 +201,26 @@ describe('setReport eviction', () => {
     return {flowId, findings: list} as unknown as AnalysisReport
   }
 
-  // 20 reports of a 20k-finding flow kept ~10 MB of JSON each alive per
-  // session: the cap is now also a findings budget.
   it('evicts the oldest non-active report once the retained findings exceed the budget', () => {
     const store = useAnalysisStore.getState()
     const half = Math.ceil(MAX_RETAINED_FINDINGS / 2)
     store.setProtectedFlowId('active')
     store.setReport('active', makeBigReport('active', half))
     store.setReport('old', makeBigReport('old', half - 1))
-    expect(useAnalysisStore.getState().reports.size).toBe(2) // within budget
+    expect(useAnalysisStore.getState().reports.size).toBe(2)
 
     store.setReport('newer', makeBigReport('newer', 10))
 
     const reports = useAnalysisStore.getState().reports
-    expect(reports.has('active')).toBe(true) // the open flow's report survives
-    expect(reports.has('newer')).toBe(true) // the one just set survives
-    expect(reports.has('old')).toBe(false) // the oldest non-active one went
+    expect(reports.has('active')).toBe(true)
+    expect(reports.has('newer')).toBe(true)
+    expect(reports.has('old')).toBe(false)
   })
 
   it('a refreshed report becomes the newest, not the oldest, entry', () => {
     const store = useAnalysisStore.getState()
     for (let i = 0; i < 20; i++) store.setReport(`flow-${i}`, makeReport(`flow-${i}`))
-    store.setReport('flow-0', makeReport('flow-0')) // refreshed: moves to the newest slot
+    store.setReport('flow-0', makeReport('flow-0'))
     store.setReport('flow-20', makeReport('flow-20'))
     expect(useAnalysisStore.getState().reports.has('flow-0')).toBe(true)
     expect(useAnalysisStore.getState().reports.has('flow-1')).toBe(false)
@@ -281,14 +268,10 @@ describe('saved filter views', () => {
     const view = views.find(v => v.name === 'Errors+Warnings')!
     expect(view.severities).toEqual(['error', 'warning'])
     expect(view.hiddenCategories).toEqual(['Style', 'Compliance'])
-    // Older bundles know five categories: the compatibility field lists only those.
     expect(view.categories).toEqual(['Security', 'Reliability', 'Performance', 'Logic'])
     expect([...viewHiddenCategories(view)]).toEqual(['Style', 'Compliance'])
   })
 
-  // An older bundle applies `categories` as its shown set and offers "All" while
-  // that set has fewer than five entries; categories it has no chip for must not
-  // be in it, or it would show findings it can never hide again.
   it('saveCurrentView writes the compatibility categories out of the legacy five only', () => {
     const s = useAnalysisStore.getState()
     s.saveCurrentView('NoSecurity', new Set(['error']), new Set(['Security']))
@@ -307,12 +290,9 @@ describe('saved filter views', () => {
       'Style',
       'Logic',
     ])
-    // The new bundle reads the hidden set, not the compatibility field.
     expect([...viewHiddenCategories(views.find(v => v.name === 'NoPortability')!)]).toEqual(['Portability', 'Syntax'])
   })
 
-  // Views saved before the filter hid categories list the SHOWN ones out of the
-  // five that bundle knew: a category outside those five was never theirs to hide.
   it('reads a view saved by an older bundle as hiding only the legacy categories it left out', () => {
     const legacy = (categories: string[]) => ({name: 'old', severities: ['error'], categories}) as SavedFilterView
     expect([...viewHiddenCategories(legacy(['Security', 'Reliability', 'Performance', 'Style', 'Logic']))]).toEqual([])
@@ -320,7 +300,6 @@ describe('saved filter views', () => {
       ['Logic', 'Performance', 'Reliability', 'Style'].sort(),
     )
     expect(viewHiddenCategories(legacy([])).size).toBe(5)
-    // A malformed entry (hand-edited storage) hides nothing.
     expect(viewHiddenCategories({name: 'x', severities: []} as unknown as SavedFilterView).size).toBe(0)
   })
 
@@ -367,9 +346,6 @@ describe('finding triage status', () => {
     expect(analysisApi.setFindingStatus).toHaveBeenCalledTimes(1)
   })
 
-  // Regression: choosing "Suppressed" from the triage menu must also hide the
-  // finding (the suppress filter reads suppressedKeys), not just record the
-  // triage status. Previously the finding stayed visible until a reload.
   it('setFindingTriage suppressed mirrors into suppressedKeys and hides the finding', () => {
     const f = makeFinding('f1', {blockId: 'b1'})
     useAnalysisStore.getState().setFindingTriage(f, 'suppressed')
@@ -389,7 +365,6 @@ describe('finding triage status', () => {
     expect(useAnalysisStore.getState().suppressedKeys.has(key)).toBe(false)
     expect(isSuppressed(f)).toBe(false)
     expect(useAnalysisStore.getState().suppressedFindings.find(s => s.key === key)).toBeUndefined()
-    // The triage status itself is still recorded.
     expect(useAnalysisStore.getState().triageMap.get(key)?.status).toBe('resolved')
   })
 })
@@ -406,9 +381,7 @@ describe('finding assignment', () => {
     const key = findingKey(f())
     const entry = useAnalysisStore.getState().triageMap.get(key)
     expect(entry?.assigneeId).toBe('user-7')
-    // Status defaults to 'open' since none was set.
     expect(entry?.status).toBe('open')
-    // Persisted with the assignee id.
     expect(analysisApi.setFindingStatus).toHaveBeenCalledWith(expect.objectContaining({assigneeId: 'user-7'}))
   })
 
@@ -420,7 +393,6 @@ describe('finding assignment', () => {
     const key = findingKey(f())
     expect(useAnalysisStore.getState().triageMap.get(key)?.status).toBe('in_progress')
     expect(useAnalysisStore.getState().triageMap.get(key)?.assigneeId).toBe('user-9')
-    // The persist call carries BOTH the preserved status and the new assignee.
     expect(analysisApi.setFindingStatus).toHaveBeenCalledWith(
       expect.objectContaining({status: 'in_progress', assigneeId: 'user-9'}),
     )
@@ -430,7 +402,6 @@ describe('finding assignment', () => {
     useAnalysisStore.getState().setFindingTriage(f(), 'acknowledged')
     useAnalysisStore.getState().assignFinding(f(), 'user-2')
 
-    // Now change status — the assignee must survive.
     useAnalysisStore.getState().setFindingTriage(f(), 'in_progress')
     const key = findingKey(f())
     expect(useAnalysisStore.getState().triageMap.get(key)?.status).toBe('in_progress')
@@ -452,7 +423,6 @@ describe('finding assignment', () => {
     useAnalysisStore.getState().assignFinding(f(), null)
     const key = findingKey(f())
     expect(useAnalysisStore.getState().triageMap.get(key)?.assigneeId).toBeUndefined()
-    // Status is untouched.
     expect(useAnalysisStore.getState().triageMap.get(key)?.status).toBe('in_progress')
   })
 })
@@ -469,7 +439,6 @@ describe('bulk finding selection', () => {
     const s = useAnalysisStore.getState()
     s.selectAllFindings(['f1', 'f2', 'f3'])
     expect(useAnalysisStore.getState().selectedFindingIds.size).toBe(3)
-    // Toggle again deselects all
     useAnalysisStore.getState().selectAllFindings(['f1', 'f2', 'f3'])
     expect(useAnalysisStore.getState().selectedFindingIds.size).toBe(0)
   })
@@ -497,9 +466,6 @@ describe('triageFindingsBatch (U4.4)', () => {
     expect(items.every(i => i.assigneeId === 'me' && i.status === 'in_progress')).toBe(true)
   })
 
-  // A status a newer server added cannot be repeated by this bundle: a patch
-  // that keeps the status leaves that finding as it is; one that sets a status
-  // applies to it like to any other.
   it('leaves a finding of an unknown status alone unless the patch sets the status', () => {
     seedUnknownStatus(f1())
     vi.mocked(analysisApi.setFindingStatusBatch).mockClear()
@@ -523,9 +489,7 @@ describe('triageFindingsBatch (U4.4)', () => {
     vi.mocked(analysisApi.setFindingStatusBatch).mockClear()
     vi.mocked(analysisApi.setFindingStatusBatch).mockRejectedValueOnce(new Error('boom'))
     useAnalysisStore.getState().triageFindingsBatch([f1()], {status: 'resolved'})
-    // Optimistic first...
     expect(useAnalysisStore.getState().triageMap.get(findingKey(f1()))?.status).toBe('resolved')
-    // ...then rolled back after the rejection settles.
     await vi.waitFor(() => {
       expect(useAnalysisStore.getState().triageMap.get(findingKey(f1()))?.status ?? 'open').toBe('open')
     })
@@ -533,8 +497,6 @@ describe('triageFindingsBatch (U4.4)', () => {
 })
 
 describe('loadBaseline', () => {
-  // The toolbar's "N new" is drift: new-rule and preview findings are in the
-  // drift's `new` list but raise no drift.
   it('counts new findings minus those of new rules and preview rules', async () => {
     useFlowStore.setState({document: {id: 'flow-1'} as never})
     vi.mocked(analysisApi.baselineDrift).mockResolvedValue({
@@ -550,7 +512,6 @@ describe('loadBaseline', () => {
     await useAnalysisStore.getState().loadBaseline('flow-1')
     expect(useAnalysisStore.getState().baselineNewCount).toBe(1)
 
-    // A server from before rule sets sends neither count.
     vi.mocked(analysisApi.baselineDrift).mockResolvedValue({
       flowId: 'flow-1',
       hasBaseline: true,

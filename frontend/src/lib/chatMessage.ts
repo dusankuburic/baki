@@ -8,16 +8,8 @@ import type {
 } from '@/types'
 import {storableModelLabel} from './modelIds'
 
-// Known message roles the backend may send. A payload with any other role is
-// coerced to 'assistant' (the safest non-actionable default) so a malformed or
-// unexpected payload can't inject an unknown role into the store.
 const KNOWN_ROLES = new Set(['user', 'assistant', 'system'])
 
-// parseToolCalls validates the transparency trail attached to an assistant
-// message. The trail is persisted with the conversation (useChatStreamEngine
-// saves it on done), so it has to survive the read boundary too — without
-// this, reopening a flow silently dropped every ToolTrail and FixOutcomeStrip
-// that had been saved.
 function parseToolCalls(raw: unknown): ToolCallRecord[] | undefined {
   if (!Array.isArray(raw)) return undefined
   const out: ToolCallRecord[] = []
@@ -34,9 +26,6 @@ function parseToolCalls(raw: unknown): ToolCallRecord[] | undefined {
   return out.length > 0 ? out : undefined
 }
 
-// A persisted proposal must carry an id and a resolved status; everything else
-// is descriptive copy that defaults to empty rather than dropping the record
-// (an outcome strip with a blank label still tells the user what happened).
 function parseFixItem(raw: unknown): FixItemSnapshot | null {
   if (!raw || typeof raw !== 'object') return null
   const i = raw as Record<string, unknown>
@@ -66,8 +55,6 @@ function parseFixProposal(raw: unknown): FixProposalSnapshot | null {
     summary: typeof p.summary === 'string' ? p.summary : '',
     status: typeof p.status === 'string' ? p.status : '',
   }
-  // Kept as stamped: the client re-saves whole threads, so dropping them
-  // here would turn a later server's record back into a plain fix patch.
   if (typeof p.tool === 'string' && p.tool) snap.tool = p.tool
   if (typeof p.previewKind === 'string' && p.previewKind) snap.previewKind = p.previewKind
   if (typeof p.message === 'string' && p.message) snap.message = p.message
@@ -82,9 +69,6 @@ function parseFixProposal(raw: unknown): FixProposalSnapshot | null {
   return snap
 }
 
-// A persisted approval of another kind is read leniently — an id and a
-// status are all a strip needs — so an older bundle can show a newer
-// server's record instead of nothing.
 function parseApprovalItem(raw: unknown): ApprovalItemSnapshot | null {
   if (!raw || typeof raw !== 'object') return null
   const i = raw as Record<string, unknown>
@@ -121,23 +105,12 @@ function parseApproval(raw: unknown): ApprovalSnapshot | null {
   return snap
 }
 
-// parseChatMessage coerces an untrusted backend payload into a ChatMessage,
-// validating and defaulting each field instead of trusting the shape via `as`.
-// It returns null only when the payload lacks the identity/timestamp a stored
-// message needs; an empty content (e.g. an interrupted assistant turn) is kept.
-//
-// This is the type-safety guard for backend conversation responses: it
-// replaces unchecked `as ChatMessage` casts at
-// the read boundary so a malformed server/fixture message can't reach the chat
-// store with a missing id, an unknown role, or a non-string content.
 export function parseChatMessage(raw: unknown): ChatMessage | null {
   if (!raw || typeof raw !== 'object') return null
   const m = raw as Record<string, unknown>
 
   const id = typeof m.id === 'string' ? m.id : ''
   const timestamp = typeof m.timestamp === 'string' ? m.timestamp : ''
-  // id + timestamp are required to append/reconcile a message; content may be
-  // empty but must be a string so renderers can call .slice/.length safely.
   if (!id || !timestamp) return null
 
   const role = typeof m.role === 'string' && KNOWN_ROLES.has(m.role) ? (m.role as ChatMessage['role']) : 'assistant'
@@ -148,30 +121,18 @@ export function parseChatMessage(raw: unknown): ChatMessage | null {
     content: typeof m.content === 'string' ? m.content : '',
     timestamp,
   }
-  // Optional fields are attached only when present with the right type, so the
-  // parsed message never carries an undefined-valued key the store would have
-  // to defend against.
   if (typeof m.contextBlockId === 'string' && m.contextBlockId) out.contextBlockId = m.contextBlockId
   if (typeof m.tokensIn === 'number') out.tokensIn = m.tokensIn
   if (typeof m.tokensOut === 'number') out.tokensOut = m.tokensOut
   if (typeof m.provider === 'string' && m.provider) out.provider = m.provider as ChatMessage['provider']
   if (typeof m.model === 'string' && m.model) out.model = m.model
-  // The model's friendly name at send time. Dropping it here lost it for
-  // good: the client re-saves whole threads, and the server stores them as
-  // sent. A "label" that is only an id (a turn sent before the listing named
-  // its model) is no name: dropped, so the listing's name shows instead.
   const modelLabel = typeof m.modelLabel === 'string' ? storableModelLabel(m.modelLabel, out.model) : undefined
   if (modelLabel) out.modelLabel = modelLabel
-  // Served model + billed rates (saved on done): the meta line and the cost
-  // estimate keep them across a reload.
   if (typeof m.servedModel === 'string' && m.servedModel) out.servedModel = m.servedModel
   if (typeof m.inputCostPerM === 'number') out.inputCostPerM = m.inputCostPerM
   if (typeof m.outputCostPerM === 'number') out.outputCostPerM = m.outputCostPerM
   if (typeof m.finishReason === 'string') out.finishReason = m.finishReason as ChatMessage['finishReason']
 
-  // Agentic trail. Saved by useChatStreamEngine on done; restored here so a
-  // reopened conversation still shows which tools ran and how each fix
-  // proposal resolved.
   const toolCalls = parseToolCalls(m.toolCalls)
   if (toolCalls) out.toolCalls = toolCalls
   const single = parseFixProposal(m.fixProposal)
@@ -195,9 +156,6 @@ export function parseChatMessage(raw: unknown): ChatMessage | null {
   return out
 }
 
-// parseChatMessages validates a backend conversation's message list, dropping
-// any entries that fail parseChatMessage. Callers can append the result without
-// a per-message guard. A non-array or empty payload yields an empty list.
 export function parseChatMessages(raw: unknown): ChatMessage[] {
   if (!Array.isArray(raw)) return []
   const out: ChatMessage[] = []
@@ -208,15 +166,6 @@ export function parseChatMessages(raw: unknown): ChatMessage[] {
   return out
 }
 
-// parseConversationPayload reads a /api/chat/get response. The backend returns
-// the message list as a bare array; the pre-thread `{messages: [...]}` file
-// shape is still accepted. Reading `.messages` off the array (what the client
-// used to do) silently restored nothing — and the next save then replaced the
-// server's history with only the new turn.
-//
-// A payload of any OTHER shape throws rather than returning [] on purpose: an
-// unreadable response must count as a failed load (the thread is then never
-// full-replace saved), not as "this conversation is empty".
 export function parseConversationPayload(raw: unknown): ChatMessage[] {
   if (raw == null) return []
   if (Array.isArray(raw)) return parseChatMessages(raw)

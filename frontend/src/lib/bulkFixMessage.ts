@@ -1,6 +1,3 @@
-// bulkFixMessage picks the toast for a finished bulk fix. A batch the request's
-// time budget cut short still persisted the fixes it applied (it used to
-// discard them all); the user needs to know the rest is one more click away.
 export type BulkFixMessage = {variant: 'success' | 'warning'; title: string; description: string}
 
 export function bulkFixMessage(applied: number, ruleCount: number, partial: boolean): BulkFixMessage {

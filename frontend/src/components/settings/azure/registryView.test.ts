@@ -98,7 +98,6 @@ describe('registryView ownership and groups', () => {
       ['org-a', 'Acme', ['amodel0000', 'amodel0001'], ['ares']],
       ['org-z', 'Zeta', ['zmodel0000'], ['zres']],
     ])
-    // A group without a name anywhere falls back to its id.
     expect(sharedGroups([], [model('x000000000', {shared: true, orgId: 'org-q'})])[0]!.orgName).toBe('org-q')
   })
 })
@@ -110,7 +109,6 @@ describe('registryView limits', () => {
     expect(limitsView(8, 0, limits)).toMatchObject({show: true, connections: {used: 8, limit: 10, reached: false}})
     expect(limitsView(0, 40, limits).show).toBe(true)
     expect(limitsView(10, 50, limits)).toMatchObject({connections: {reached: true}, models: {reached: true}})
-    // A zero limit (a server that sent none) never blocks.
     expect(limitsView(3, 3, {connections: 0, models: 0})).toMatchObject({
       show: false,
       connections: {reached: false},
@@ -123,7 +121,6 @@ describe('registryView effective default', () => {
   it('prefers the saved default, else the server default, when they name a listed entry', () => {
     expect(effectiveDefaultModelId('m/bbbbbbbbbb', 'm/aaaaaaaaaa', models)).toBe('m/bbbbbbbbbb')
     expect(effectiveDefaultModelId('', 'm/aaaaaaaaaa', models)).toBe('m/aaaaaaaaaa')
-    // A legacy saved id names nothing listed: the server default applies.
     expect(effectiveDefaultModelId('gpt-4.1', 'm/aaaaaaaaaa', models)).toBe('m/aaaaaaaaaa')
     expect(effectiveDefaultModelId(undefined, 'm/gone000000', models)).toBeNull()
     expect(effectiveDefaultModelId(null, null, models)).toBeNull()
@@ -140,7 +137,6 @@ describe('registryView duplicates', () => {
     expect(findDuplicateModel(models, {connectionId: 'r1', kind: 'chat', deployment: ' gpt-4.1 '})?.id).toBe(
       'chat000000',
     )
-    // Chat and Claude share a name space; embeddings and agents have their own.
     expect(findDuplicateModel(models, {connectionId: 'r1', kind: 'claude', deployment: 'gpt-4.1'})?.id).toBe(
       'chat000000',
     )

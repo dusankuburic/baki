@@ -13,9 +13,6 @@ export interface AreaSeries {
   color: string
 }
 
-// Several daily series stacked as areas (severity mix, tokens in/out): the
-// stack shows the total and the bands its make-up. Two or more series always
-// carry a legend; the fills are solid enough to read as bands.
 export function StackedAreaChart<Row extends {date: string}>({
   data,
   series,

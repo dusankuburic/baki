@@ -2,8 +2,6 @@ import {describe, it, expect} from 'vitest'
 import {unknownValue} from '@/testing/testHelpers'
 import {severityTone, triageTone, successActionTone} from './severityTone'
 
-// The single source of severity/status tone classes (U2.1): semantic tokens
-// only — a raw-palette class here means a theme desync regression.
 describe('severityTone', () => {
   it('maps every severity to semantic-token classes', () => {
     for (const sev of ['error', 'warning', 'info'] as const) {

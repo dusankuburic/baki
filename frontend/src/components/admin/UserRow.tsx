@@ -8,9 +8,6 @@ import {roleBadgeClass} from '@/lib/roleBadge'
 import {absoluteTime, relativeTimeText} from '@/lib/time'
 import {ROLE_OPTIONS, roleLabel} from './roles'
 
-// One row of the user table. The role select is labelled per user and, for
-// an account without a valid role, shows a placeholder instead of the first
-// option (a bare <select value=""> displayed "Admin" for those accounts).
 export function UserRow({
   user,
   isSelf,

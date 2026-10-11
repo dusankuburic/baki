@@ -4,18 +4,10 @@ import type {ApprovalItem} from '@/stores/chatStore'
 import {PatchPreviewText} from '@/components/shared'
 import {ITEM_STATUS_TONE, type ApprovalPreviewProps} from '../preview'
 
-// Takes `t` rather than calling a hook: this is a plain helper, and an unknown
-// status still renders its raw wire value instead of a blank cell.
 function itemStatusLine(item: ApprovalItem, t: TFunction<'chat'>): string {
   return t(`fixCard.itemStatus.${item.status}`, {defaultValue: item.status})
 }
 
-/**
- * The fix-patch preview (apply_fix / apply_fixes): the block, its line and
- * rule, and the server-rendered patch preview (already secret-scrubbed). A
- * batch renders a per-fix row list; per-item outcomes land on the rows when
- * the batch decision resolves.
- */
 export default function FixPatchPreview({
   approval,
   pending,

@@ -3,13 +3,8 @@ import type {TFunction} from 'i18next'
 import {AlertTriangle} from 'lucide-react'
 import type {LegacyDefaultNotice, ThreadModelNotice} from './hooks/useProviderSetup'
 
-/** What the row shows: the thread's model notice, or the saved-default one. */
 export type ModelNoticeView = ThreadModelNotice | ({kind: 'legacyDefault'} & LegacyDefaultNotice)
 
-// modelNoticeSentences is the notice's copy, one translated sentence per
-// entry. The row renders it, and the chat panel's always-mounted status
-// region announces the same text (the row itself is not a live region, so a
-// notice is announced once, when it is raised).
 export function modelNoticeSentences(
   t: TFunction<'chat'>,
   notice: ModelNoticeView,
@@ -58,23 +53,11 @@ export function modelNoticeSentences(
 interface Props {
   notice: ModelNoticeView
   providerName: (id: string) => string
-  /** Opens the header's model picker. */
   onChooseModel: () => void
-  /**
-   * Removed: pins the thread to the model it now uses. Refused: hides the
-   * notice. Saved default: remembers it was seen. Never offered for a model
-   * that is only temporarily unavailable — the thread keeps it and returns
-   * to it once it can be used again.
-   */
   onDismiss: () => void
-  /** Opens AI Accounts at the models (the saved-default notice). */
   onManage: () => void
 }
 
-// ModelUnavailableNotice is the row under the chat header that says why this
-// thread is not on its own model (removed, or temporarily unavailable), that
-// the server refused a send for it, or that the saved Azure "Default for new
-// chats" no longer names anything.
 export default function ModelUnavailableNotice({notice, providerName, onChooseModel, onDismiss, onManage}: Props) {
   const {t} = useTranslation('chat')
   const sentences = modelNoticeSentences(t, notice, providerName)

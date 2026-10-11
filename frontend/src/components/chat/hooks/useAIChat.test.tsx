@@ -12,12 +12,6 @@ import {parseConversationPayload} from '@/lib/chatMessage'
 import type {TurnModel} from './useChatStreamEngine'
 import type {ChatMessage, ContextPreview, FlowDocument} from '@/types'
 
-// Integration test for useAIChat's send/stream/cancel/resend orchestration —
-// the seam this hook was split across (useChatRequestBuilder +
-// useChatStreamEngine). Uses the same SSE-mock pattern as
-// hooks/useStreamingMessage.test.tsx so the real streaming machinery runs
-// end-to-end instead of being stubbed out.
-
 type EventCb = (ev: {name: string; data: unknown}) => void
 type StateCb = (state: string) => void
 
@@ -41,9 +35,6 @@ vi.mock('@/api/client', () => ({
 }))
 
 vi.mock('@/api', () => ({
-  // Mirrors the real constructor (message, status, code, requestId, details)
-  // so a test can build a coded rejection and exercise the code-first
-  // classification.
   ApiError: class ApiError extends Error {
     constructor(
       message: string,
@@ -60,7 +51,6 @@ vi.mock('@/api', () => ({
     cancelStream: vi.fn().mockResolvedValue(undefined),
     beginStream: vi.fn(),
     resumeStream: vi.fn().mockResolvedValue({text: '', done: false, error: '', tokensOut: 0, tokensIn: 0}),
-    // The real endpoint returns a bare message array (see api/chat.ts).
     getConversation: vi.fn().mockResolvedValue([]),
     saveConversation: vi.fn().mockResolvedValue(undefined),
     clearConversation: vi.fn().mockResolvedValue(undefined),
@@ -92,10 +82,8 @@ const doc = {
 const initialChatState = useChatStore.getState()
 const initialFlowState = useFlowStore.getState()
 
-// The active thread's pair, as useProviderSetup resolves it for the panel.
 const TURN: TurnModel = {provider: 'claude', model: 'gpt-4'}
 
-// The stream engine lives in ChatStreamProvider, above the chat panel.
 function wrapper({children}: {children: React.ReactNode}) {
   return (
     <ToastProvider>
@@ -104,8 +92,6 @@ function wrapper({children}: {children: React.ReactNode}) {
   )
 }
 
-// renderChat mounts useAIChat against a fresh document and waits for
-// useChatConversations' auto-create-thread-on-mount effect to settle.
 async function renderChat() {
   useFlowStore.setState({...initialFlowState, document: doc})
   const view = renderHook(() => useAIChat({turnModel: TURN}), {wrapper})
@@ -137,7 +123,6 @@ describe('useAIChat send/stream/commit', () => {
       result.current.handleSend('hello', [])
     })
 
-    // User message appended immediately, request sent with the right shape.
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(1))
     expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
     const req = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0]
@@ -169,12 +154,7 @@ describe('useAIChat send/stream/commit', () => {
       tokensOut: 7,
       tokensIn: 3,
     })
-    // The stream slot is cleared once committed.
     expect(useChatStore.getState().streams[threadId]).toBeUndefined()
-    // The turn went without history, so the server owns its stored copy —
-    // the question at stream start, the answer (trail, finish reason, usage
-    // included) at stream end — and the client makes no full-replace save
-    // of the thread on done.
     expect(req.messages).toBeUndefined()
     expect(chatApi.saveConversation).not.toHaveBeenCalled()
   })
@@ -216,7 +196,6 @@ describe('useAIChat send/stream/commit', () => {
       result.current.handleSend('second', [])
     })
 
-    // Only the first send reached the API; the second was a no-op per-thread guard.
     expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
   })
 })
@@ -280,8 +259,6 @@ describe('useAIChat handleResend', () => {
       result.current.handleResend()
     })
 
-    // Both messages from the first turn are gone, and a new send goes out
-    // with the truncated history explicitly included.
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
     const secondReq = vi.mocked(chatApi.streamChatMessage).mock.calls[1]![0]
     expect(secondReq.userMessage).toBe('first question')
@@ -297,17 +274,10 @@ describe('useAIChat handleResend', () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// H1: history restore. The endpoint returns a bare array; reading `.messages`
-// off it restored nothing, and the next finished reply then REPLACED the
-// server's history with just the new turn.
-
 function msg(id: string, role: ChatMessage['role'], content: string): ChatMessage {
   return {id, role, content, timestamp: '2024-01-01T00:00:00Z'}
 }
 
-// seedPersistedThread puts a thread in the store the way a reload does
-// (hydrated from localStorage): no messages, no history status yet.
 function seedPersistedThread(id = 't-old') {
   useChatStore.setState({
     threads: [
@@ -368,8 +338,6 @@ describe('useAIChat history restore (H1)', () => {
     ).toEqual(['q1', 'a1', 'new question'])
   })
 
-  // A conversation load that reports an in-flight stream re-attaches
-  // to it through the app-wide engine (the real SSE + resume machinery).
   it('re-attaches an in-flight stream reported by the conversation load and commits the resumed done', async () => {
     seedPersistedThread()
     vi.mocked(chatApi.getConversation).mockResolvedValue({
@@ -400,7 +368,6 @@ describe('useAIChat history restore (H1)', () => {
     expect(committed.inputCostPerM).toBe(2.5)
     expect(committed.tokensIn).toBe(5)
     expect(committed.tokensOut).toBe(7)
-    // Thread totals and the slot (committed -> ended).
     const thread = useChatStore.getState().threads.find(t => t.id === 't-old')!
     expect(thread.tokensIn).toBe(5)
     expect(thread.tokensOut).toBe(7)
@@ -412,8 +379,6 @@ describe('useAIChat history restore (H1)', () => {
     let loadCalls = 0
     vi.mocked(chatApi.getConversation).mockImplementation(async () => {
       loadCalls++
-      // The in-flight id is reported once; the refetch after the failed
-      // resume sees the turn the server persisted in the meantime.
       return loadCalls <= 1
         ? {messages: [msg('a', 'user', 'q1')], activeStreamId: 'live-2'}
         : {messages: [msg('a', 'user', 'q1'), msg('b', 'assistant', 'persisted answer')]}
@@ -436,7 +401,6 @@ describe('useAIChat history restore (H1)', () => {
   it('re-attaches once: the refetch after a lost stream does not re-attach again', async () => {
     seedPersistedThread()
     let loadCalls = 0
-    // The server keeps listing the stream while every resume fails.
     vi.mocked(chatApi.getConversation).mockImplementation(async () => {
       loadCalls++
       return {messages: [msg('a', 'user', 'q1')], activeStreamId: 'live-3'}
@@ -445,7 +409,6 @@ describe('useAIChat history restore (H1)', () => {
     await renderSeeded()
 
     await waitFor(() => expect(loadCalls).toBe(2))
-    // Give a looping re-attach time to show itself.
     await act(async () => {
       await new Promise(r => setTimeout(r, 50))
     })
@@ -461,8 +424,6 @@ describe('useAIChat history restore (H1)', () => {
     const {result} = await renderSeeded()
     await waitFor(() => expect(result.current.historyState).toBe('loading'))
 
-    // The thread is cleared meanwhile: its local state is authoritative and
-    // the load in flight is stale.
     act(() => {
       useChatStore.getState().markHistoryLoaded('t-old')
     })
@@ -495,8 +456,6 @@ describe('useAIChat history restore (H1)', () => {
     })
 
     await waitFor(() => expect(useChatStore.getState().getMessages('t-old')).toHaveLength(2))
-    // The server persists the turn itself; a client save would have replaced
-    // the (unread) stored history with these two messages.
     expect(chatApi.saveConversation).not.toHaveBeenCalled()
   })
 
@@ -559,7 +518,6 @@ describe('useAIChat context preview (consent step)', () => {
 
   it('resets the composer as soon as the message is on screen, not after the network round-trips', async () => {
     vi.mocked(chatApi.previewContext).mockResolvedValue(PREVIEW)
-    // The create POST never answers: the reset must not wait for it.
     vi.mocked(chatApi.streamChatMessage).mockImplementation(() => new Promise(() => {}))
     const onConfirmed = vi.fn()
     const {result} = await renderChat()
@@ -584,7 +542,6 @@ describe('useAIChat context preview (consent step)', () => {
     await act(async () => {
       await result.current.handlePreviewContext('q', [], false, onConfirmed)
     })
-    // A new thread takes the panel while the dialog is open.
     act(() => {
       useChatStore.getState().createThread('flow1')
     })
@@ -601,13 +558,9 @@ describe('useAIChat context preview (consent step)', () => {
         .getMessages(original)
         .map(m => m.content),
     ).toEqual(['q'])
-    // The composer shows the other thread now: its text is left alone.
     expect(onConfirmed).not.toHaveBeenCalled()
   })
 })
-
-// ---------------------------------------------------------------------------
-// Send races: a send that lost its generation must clean up ITS stream only.
 
 describe('useChatStreamEngine send races', () => {
   it('a Stop while the create POST is in flight does not kill the follow-up that took the thread', async () => {
@@ -627,7 +580,6 @@ describe('useChatStreamEngine send races', () => {
       result.current.handleQueue('follow-up', [])
     })
 
-    // Stop frees the thread; the queued follow-up drains into it at once.
     await act(async () => {
       result.current.handleCancelStream()
     })
@@ -636,7 +588,6 @@ describe('useChatStreamEngine send races', () => {
     expect(sid2).not.toBe(sid1)
     expect(useChatStore.getState().streams[threadId]?.streamId).toBe(sid2)
 
-    // The stopped send's POST answers late: only its own stream is torn down.
     await act(async () => {
       resolveFirst('sid-1')
     })
@@ -656,8 +607,6 @@ describe('useChatStreamEngine send races', () => {
     })
 
     await waitFor(() => expect(useChatStore.getState().stagedPrompt).toEqual({threadId, text: 'hello there'}))
-    // Not an orphan question on screen (it would be saved as one), not a
-    // title, no stream slot — and the text is back as the thread's draft.
     expect(useChatStore.getState().getMessages(threadId)).toHaveLength(0)
     expect(useChatStore.getState().threads.find(t => t.id === threadId)?.title).toBe('')
     expect(useChatStore.getState().streams[threadId]).toBeUndefined()
@@ -669,7 +618,6 @@ describe("closing the flow's last thread", () => {
   it("replaces it with a fresh thread for the same flow, never another flow's", async () => {
     const {result} = await renderChat()
     const t1 = result.current.activeThreadId!
-    // Another flow's thread is in memory (opened earlier in the session).
     act(() => {
       useChatStore.getState().createThread('flow2')
       useChatStore.getState().switchThread(t1)
@@ -741,11 +689,6 @@ describe('useAIChat model label', () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// H2: the chat panel mounts and unmounts (inspector collapse, mobile drawer,
-// pop-out, breakpoint change). Owning the streams there cancelled every reply
-// in flight and left its thread stuck on "Stop".
-
 let panelApi: ReturnType<typeof useAIChat> | null = null
 function Panel() {
   const api = useAIChat({turnModel: TURN})
@@ -783,7 +726,6 @@ describe('replies survive the chat panel unmounting (H2)', () => {
       capturedCb!(chunkEvent(sid, 'first half'))
     })
 
-    // The panel goes away mid-reply.
     view.rerender(<Shell showPanel={false} />)
     expect(chatApi.cancelStream).not.toHaveBeenCalled()
 
@@ -843,18 +785,11 @@ describe('replies survive the chat panel unmounting (H2)', () => {
       panelApi!.handleQueue('follow-up', [])
     })
 
-    // The whole shell goes (logout, an error boundary): ending the live slot
-    // fires the drain, which must not send into the dead engine.
     view.unmount()
     await act(async () => {})
     expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
   })
 })
-
-// ---------------------------------------------------------------------------
-// Per-thread model memory: every turn goes to the thread's own pair; a send
-// pins it; queued and previewed turns keep the pair they were composed
-// under; a model removed after the picker listed it sends nothing.
 
 const DOCS: TurnModel = {provider: 'azure-foundry', model: 'm/docs000000', modelLabel: 'Docs writer'}
 const GPT: TurnModel = {provider: 'azure-foundry', model: 'm/gpt4100000', modelLabel: 'GPT-4.1'}
@@ -912,7 +847,6 @@ describe('useAIChat per-thread model memory', () => {
       result.current.handleSend('hi', [])
     })
     expect(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].model).toBe('m/gpt4100000')
-    // It returns to Docs writer once that can be used again.
     expect(pinOf(threadId)?.model).toBe('m/docs000000')
   })
 
@@ -930,14 +864,11 @@ describe('useAIChat per-thread model memory', () => {
 
     await waitFor(() => expect(useChatStore.getState().stagedPrompt).toEqual({threadId, text: 'document this flow'}))
     const st = useChatStore.getState()
-    // No question left without an answer, and no error bubble either.
     expect(st.getMessages(threadId)).toHaveLength(0)
     expect(st.drafts[threadId]).toBe('document this flow')
     expect(st.streams[threadId]).toBeUndefined()
-    // The listing refetches, and the thread's notice waits for it.
     expect(st.providerEpoch).toBe(epoch0 + 1)
     expect(st.modelRefusals[threadId]).toEqual({...DOCS, epoch: epoch0 + 1})
-    // The thread keeps naming the model it asked for.
     expect(pinOf(threadId)?.model).toBe('m/docs000000')
   })
 
@@ -955,7 +886,6 @@ describe('useAIChat per-thread model memory', () => {
       view.result.current.handleQueue('follow-up', [])
     })
 
-    // Before the reply ends, the user picks another model for the thread.
     act(() => {
       useChatStore.getState().setThreadModel(threadId, GPT)
     })
@@ -987,7 +917,6 @@ describe('useAIChat per-thread model memory', () => {
       await view.result.current.handlePreviewContext('q', [], false)
     })
     expect(vi.mocked(chatApi.previewContext).mock.calls[0]![0].model).toBe('m/docs000000')
-    // Something else becomes the panel's pair while the dialog is open.
     view.rerender({turnModel: GPT})
     act(() => {
       view.result.current.confirmContextPreview()
@@ -1012,10 +941,6 @@ describe('useAIChat per-thread model memory', () => {
     expect(useChatStore.getState().modelRefusals[threadId]).toMatchObject({model: 'm/docs000000', epoch: epoch0 + 1})
   })
 
-  // The server stores a turn sent without history itself, with the label
-  // the turn went to; the client re-saves whole threads after a resend (the
-  // turn it owns), and the server stores them as sent: a label dropped
-  // anywhere on the way would be lost for good.
   it('keeps modelLabel through commit → reload → resend save', async () => {
     vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
     const first = await renderWithTurn(DOCS)
@@ -1029,14 +954,11 @@ describe('useAIChat per-thread model memory', () => {
       capturedCb!(doneEvent(sid))
     })
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
-    // Server-owned: committed with its label, not saved from here.
     const saved = useChatStore.getState().getMessages(threadId)
     expect(saved[1]).toMatchObject({role: 'assistant', modelLabel: 'Docs writer'})
     expect(chatApi.saveConversation).not.toHaveBeenCalled()
     first.unmount()
 
-    // A reload: the thread comes back from storage, its conversation from the
-    // server exactly as it was stored, through the real read boundary.
     const thread = useChatStore.getState().threads.find(t => t.id === threadId)!
     useChatStore.setState(initialChatState, true)
     useChatStore.setState({threads: [thread], activeThreadId: threadId})
@@ -1060,9 +982,6 @@ describe('useAIChat per-thread model memory', () => {
     await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(4))
     expect(chatApi.saveConversation).not.toHaveBeenCalled()
 
-    // A resend carries the thread's history and is the client's to store:
-    // its save on done re-sends the loaded reply, label intact, beside the
-    // new one.
     capturedCb = null
     act(() => {
       second.result.current.handleResend()
@@ -1080,8 +999,6 @@ describe('useAIChat per-thread model memory', () => {
     expect(resaved[3]).toMatchObject({modelLabel: 'Docs writer'})
   })
 
-  // A turn sent before the listing named its model stored "m/…" as the
-  // label, which then beat the listing's name in bubbles and exports.
   it('never stores an id as the label of the reply or the pin', async () => {
     vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
     const {result} = await renderWithTurn({
@@ -1103,7 +1020,6 @@ describe('useAIChat per-thread model memory', () => {
     expect(useChatStore.getState().getMessages(threadId)[1]).not.toHaveProperty('modelLabel')
   })
 
-  // The notice waits for the model list to refresh; the toast doesn't.
   it('says at once that a send was refused for its model', async () => {
     vi.mocked(chatApi.streamChatMessage).mockRejectedValue(new ApiError('gone', 400, 'MODEL_NOT_AVAILABLE'))
     const {result} = await renderWithTurn(DOCS)
@@ -1117,8 +1033,6 @@ describe('useAIChat per-thread model memory', () => {
   })
 })
 
-// A reload mid-turn re-attaches the stream labelled from the thread's
-// record of the turn — the model it actually went to.
 describe('useAIChat in-flight turn record', () => {
   const inFlightOf = (threadId: string) => useChatStore.getState().threads.find(t => t.id === threadId)?.inFlight
 
@@ -1198,9 +1112,6 @@ describe('useAIChat in-flight turn record', () => {
   })
 })
 
-// Regenerate takes the last exchange off before sending it again; a refusal
-// must put the old answer back (the next save would otherwise delete it on
-// the server too).
 describe('useAIChat resend refused', () => {
   it('puts the exchange back as it was, and leaves the composer alone', async () => {
     vi.mocked(chatApi.streamChatMessage).mockResolvedValueOnce('sid')
@@ -1238,8 +1149,6 @@ describe('useAIChat resend refused', () => {
   })
 })
 
-// The composer's guidance (no Azure model to chat with) must hold every way
-// of sending; none may go out with model ''.
 describe('useAIChat while nothing can be sent', () => {
   it('refuses every way of sending, and Regenerate keeps the exchange', async () => {
     vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
@@ -1273,14 +1182,6 @@ describe('useAIChat while nothing can be sent', () => {
     expect(useChatStore.getState().queuedByThread[threadId]).toBeUndefined()
   })
 })
-
-// ---------------------------------------------------------------------------
-// Deploys: the draining server ends a running stream, or refuses a new one,
-// with SERVER_RESTARTING. The engine sends the turn again ONCE, the way Retry
-// does (the history before the question travels with it, so the server's
-// dangling copy of the question is replaced); a second refusal is the
-// ordinary error bubble with Retry. Fake timers only around the retry delay:
-// waitFor needs real ones.
 
 describe('useChatStreamEngine SERVER_RESTARTING', () => {
   afterEach(() => {
@@ -1319,11 +1220,9 @@ describe('useChatStreamEngine SERVER_RESTARTING', () => {
       capturedCb!(restarting(sid))
     })
 
-    // No error bubble: the partial answer stays on screen under a status.
     expect(useChatStore.getState().getMessages(threadId)).toHaveLength(1)
     expect(useChatStore.getState().streams[threadId]).toMatchObject({streamId: sid, text: 'partial'})
     expect(useChatStore.getState().streams[threadId]?.toolStatus).toMatch(/server restarted/i)
-    // Not at once: the new instance gets its moment (2 s plus jitter).
     await advance(1_900)
     expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
     await advance(1_200)
@@ -1354,8 +1253,6 @@ describe('useChatStreamEngine SERVER_RESTARTING', () => {
       content: 'full answer',
       finishReason: 'stop',
     })
-    // The turn carried its history, so it saves the thread: the server's
-    // copy of the cut-short attempt is replaced.
     await waitFor(() => expect(chatApi.saveConversation).toHaveBeenCalledTimes(1))
     expect(vi.mocked(chatApi.saveConversation).mock.calls[0]![2].map(m => m.content)).toEqual([
       'first question',
@@ -1409,7 +1306,6 @@ describe('useChatStreamEngine SERVER_RESTARTING', () => {
     })
     await advance(0)
     expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
-    // Waiting, not failed: the question stays, no bubble, the status says why.
     expect(useChatStore.getState().getMessages(threadId)).toHaveLength(1)
     expect(useChatStore.getState().streams[threadId]?.toolStatus).toMatch(/server restarted/i)
 
@@ -1418,7 +1314,6 @@ describe('useChatStreamEngine SERVER_RESTARTING', () => {
     await advance(1_200)
     vi.useRealTimers()
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
-    // Nothing was created the first time: the same request goes again.
     const sid = callAt(1).clientStreamId!
     expect(sid).toBeTruthy()
     expect(callAt(1).userMessage).toBe('hello')

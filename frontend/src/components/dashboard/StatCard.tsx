@@ -1,9 +1,5 @@
 import clsx from 'clsx'
 
-// StatCard is a single labeled metric tile (Flows Analyzed, Total Findings,
-// Avg Health). Extracted from AnalyticsDashboard for reuse + isolation.
-// ariaLabel optionally overrides the accessible name when the visual value
-// alone is ambiguous (e.g. a color-banded average health score).
 export function StatCard({
   label,
   value,

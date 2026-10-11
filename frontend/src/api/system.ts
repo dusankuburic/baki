@@ -15,12 +15,9 @@ export const systemApi = {
   appInfo: async (): Promise<AppInfoType> =>
     requestValidated('/api/system/info', await getAppInfoSchema(), {method: 'GET'}),
 
-  // Public (pre-auth) deployment flags; the login page reads them before any
-  // session exists.
   features: (): Promise<SystemFeatures> => request('/api/system/features', {method: 'GET'}),
 }
 
 export interface SystemFeatures {
-  /** Self-registration is closed; the server rejects /api/auth/register. */
   disableSignUp: boolean
 }

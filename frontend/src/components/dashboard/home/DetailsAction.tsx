@@ -1,8 +1,6 @@
 import {useTranslation} from 'react-i18next'
 import {ArrowRight} from 'lucide-react'
 
-// The "Details" link on a Home card: opens the Analytics page scrolled to the
-// section that expands on the card. Only offered where analytics exist.
 export function DetailsAction({title, onClick}: {title: string; onClick?: () => void}) {
   const {t} = useTranslation('dashboard')
   if (!onClick) return null

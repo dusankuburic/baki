@@ -9,10 +9,6 @@ import {useAuthStore} from '@/stores/authStore'
 import {roleLabel} from '../roles'
 import {useAdminQuery} from './useAdminQuery'
 
-// The user list for the store's filters and page, and the one role-change
-// action: a single confirmation (a danger dialog when it removes the caller's
-// own admin access), the request, a toast either way, and a refetch of the
-// same page plus the stats so the row and the tiles agree.
 export function useAdminUsers() {
   const {t} = useTranslation('admin')
   const list = useAdminStore(s => s.users)
@@ -44,8 +40,6 @@ export function useAdminUsers() {
     message => toastRef.current.error(t('users.loadFailed'), {description: message}),
   )
 
-  // A filter that shrinks the set can leave the page past the end: step back
-  // to the last page that has rows.
   const {data} = result
   useEffect(() => {
     if (data && data.items.length === 0 && data.total > 0 && list.page > 0) {
@@ -86,7 +80,6 @@ export function useAdminUsers() {
         return true
       } catch (e) {
         toastRef.current.error(t('users.roleFailed'), {description: getErrorMessage(e)})
-        // The account is gone: drop it from the page.
         if (e instanceof ApiError && e.status === 404) touchUsers()
         return false
       } finally {

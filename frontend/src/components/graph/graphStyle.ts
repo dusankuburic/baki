@@ -81,7 +81,6 @@ export function buildGraphStyle(t: GraphTokenColors): cytoscape.StylesheetJson {
         width: 210,
         height: 88,
         padding: 12 as unknown as string,
-        // fullLabel contains "TypeLabel\nStrippedName" (two lines)
         label: 'data(fullLabel)',
         color: t.textPrimary,
         'font-size': 12,
@@ -163,8 +162,6 @@ export function buildGraphStyle(t: GraphTokenColors): cytoscape.StylesheetJson {
       },
     },
     {
-      // Remote-collaborator selection: a dashed brand border distinguishes "a
-      // teammate is viewing this node" from the local selection (solid brand).
       selector: 'node.remote-selected',
       style: {
         'border-color': t.brand500,
