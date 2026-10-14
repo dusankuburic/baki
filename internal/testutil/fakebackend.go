@@ -46,6 +46,8 @@ type FakeBackend struct {
 	// Conversations stores chat history keyed by scope+"\x00"+flowID; nil-safe
 	// (the methods below tolerate a zero-valued struct-literal FakeBackend).
 	Conversations map[string][]interfaces.ChatMessage
+	// convVersions numbers the conversations (fakebackend_conversations_version.go).
+	convVersions conversationVersions
 	// OrgChannels backs the in-memory org-channel store (R2-3 tests).
 	OrgChannels map[string]*interfaces.OrgChannel
 	// ciCredentials backs the organisations' CI credentials (fakebackend_cicredentials.go), keyed by key id.
@@ -87,6 +89,8 @@ type FakeBackend struct {
 	// Users is keyed by user id; DeletedUsers lists the ids DeleteUser erased, in order.
 	Users        map[string]*interfaces.User
 	DeletedUsers []string
+	// userAvatars mirrors user_avatars (user id -> image), cascading with the account; lazily initialized.
+	userAvatars map[string]*interfaces.UserAvatar
 	// Collaborators is flowID -> userID -> grant; reads take the email from Users, as Postgres joins it.
 	Collaborators map[string]map[string]*interfaces.Collaborator
 	// FlowVersions is flowID -> snapshots, oldest first.
@@ -129,6 +133,8 @@ type FakeBackend struct {
 	idem fakeIdempotency
 	// jobRuns backs the background jobs' run state (fakebackend_jobs.go).
 	jobRuns fakeJobRuns
+	// flowSnapshots backs the cloud undo ring (fakebackend_flow_snapshots.go).
+	flowSnapshots fakeFlowSnapshots
 	// identityLinks backs the identity links (fakebackend_lookups.go).
 	identityLinks fakeIdentityLinks
 	// auditEvents keeps every saved audit row (the audit pool and detached writes save concurrently, hence
@@ -209,6 +215,9 @@ func jsonClone[T any](v T) (T, error) { return viaJSON[T](v) }
 
 func (m *FakeBackend) Ping(_ context.Context) error { return m.PingErr }
 func (m *FakeBackend) Close() error                 { return nil }
+
+// CurrentSchemaVersion has no schema to report: 0, which the admin health page leaves out.
+func (m *FakeBackend) CurrentSchemaVersion(context.Context) (int, error) { return 0, nil }
 
 // ---- Flows ----
 
@@ -458,6 +467,7 @@ func (m *FakeBackend) DeleteFlow(_ context.Context, id string) error {
 func (m *FakeBackend) deleteFlowLocked(id string) {
 	delete(m.Flows, id)
 	delete(m.FlowVersions, id)
+	m.dropFlowSnapshots(id)
 	delete(m.FlowHealth, id)
 	delete(m.snapshotRuleSets, id)
 	delete(m.FindingStatuses, id)
@@ -605,11 +615,8 @@ func (m *FakeBackend) SaveConversation(_ context.Context, flowID, scope string, 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.Conversations == nil {
-		m.Conversations = make(map[string][]interfaces.ChatMessage)
-	}
-	m.Conversations[convKey(flowID, scope)] = cp
-	return nil
+	_, err = m.storeConversationLocked(convKey(flowID, scope), cp)
+	return err
 }
 
 // LoadConversation returns an empty, non-nil slice when there is no conversation (or it was saved as nil).
@@ -630,6 +637,7 @@ func (m *FakeBackend) DeleteConversation(_ context.Context, flowID, scope string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.Conversations, convKey(flowID, scope))
+	m.convVersions.drop(convKey(flowID, scope))
 	return nil
 }
 
@@ -871,6 +879,42 @@ func (m *FakeBackend) UpdateUserProfile(_ context.Context, id, displayName, avat
 	return nil
 }
 
+// SaveUserAvatar mirrors the foreign key: storing an avatar for a user who does not exist is ErrNotFound.
+func (m *FakeBackend) SaveUserAvatar(_ context.Context, id, mimeType string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.Users[id]; !ok {
+		return interfaces.ErrNotFound
+	}
+	if m.userAvatars == nil {
+		m.userAvatars = make(map[string]*interfaces.UserAvatar)
+	}
+	cp := make([]byte, len(data))
+	copy(cp, data)
+	m.userAvatars[id] = &interfaces.UserAvatar{MimeType: mimeType, Data: cp, UpdatedAt: time.Now().UTC()}
+	return nil
+}
+
+func (m *FakeBackend) LoadUserAvatar(_ context.Context, id string) (*interfaces.UserAvatar, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	a, ok := m.userAvatars[id]
+	if !ok || a == nil {
+		return nil, interfaces.ErrNotFound
+	}
+	cp := *a
+	cp.Data = append([]byte(nil), a.Data...)
+	return &cp, nil
+}
+
+// DeleteUserAvatar is idempotent, like Postgres's DELETE.
+func (m *FakeBackend) DeleteUserAvatar(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.userAvatars, id)
+	return nil
+}
+
 // DeleteUser erases the account as Postgres's erase steps do (internal/storage/database/lifecycle_*.go), for the rows
 // the fake keeps: the owned flows go with their conversations and their cascade; the user's id is cleared where
 // rows stay with other people's content (versions, triage updater and assignee, baselines, comment author id and
@@ -957,6 +1001,7 @@ func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
 		maps.DeleteFunc(m.OrgInvites, func(_ string, inv *interfaces.OrgInvite) bool { return inv.Email == email })
 	}
 	delete(m.UserSettings, id)
+	delete(m.userAvatars, id)
 	maps.DeleteFunc(m.APITokens, func(_ string, t *interfaces.APIToken) bool { return t.UserID == id })
 	maps.DeleteFunc(m.UserTokens, func(_ string, t *interfaces.UserToken) bool { return t.UserID == id })
 	for _, grants := range m.Collaborators {
@@ -1033,6 +1078,11 @@ func (m *FakeBackend) ExportUserData(ctx context.Context, id string) (*interface
 	var err error
 	if out.User, err = m.LoadUserByID(ctx, id); err != nil {
 		return nil, fmt.Errorf("export: user: %w", err)
+	}
+	if avatar, aerr := m.LoadUserAvatar(ctx, id); aerr == nil {
+		out.Avatar = avatar
+	} else if !errors.Is(aerr, interfaces.ErrNotFound) {
+		return nil, fmt.Errorf("export: avatar: %w", aerr)
 	}
 	if out.Settings, err = m.LoadUserSettings(ctx, id); err != nil {
 		return nil, fmt.Errorf("export: settings: %w", err)
@@ -1126,6 +1176,7 @@ func (m *FakeBackend) PurgeExpiredData(_ context.Context, auditRetentionDays int
 	})
 	out.CICredentials = m.purgeCICredentialsLocked(now)
 	out.CIDeliveries = m.purgeCIDeliveriesLocked(now)
+	out.FlowSnapshots = m.purgeFlowSnapshots(now)
 	if auditRetentionDays <= 0 {
 		m.mu.Unlock()
 		return out, nil
@@ -2191,13 +2242,19 @@ func (m *FakeBackend) InvalidateUserTokens(_ context.Context, userID string, pur
 
 // ---- Audit log ----
 
-// SaveAuditEvent keeps a copy of the row.
+// SaveAuditEvent keeps a copy of the row; an id stored already is a no-op that returns nil, as the Postgres
+// INSERT ... ON CONFLICT (id) DO NOTHING is.
 func (m *FakeBackend) SaveAuditEvent(_ context.Context, e *interfaces.AuditEvent) error {
 	cp := *e
 	cp.Meta = maps.Clone(e.Meta)
 	m.auditMu.Lock()
+	defer m.auditMu.Unlock()
+	for _, have := range m.auditEvents {
+		if have.ID == cp.ID {
+			return nil
+		}
+	}
 	m.auditEvents = append(m.auditEvents, &cp)
-	m.auditMu.Unlock()
 	return nil
 }
 

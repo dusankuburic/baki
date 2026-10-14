@@ -28,7 +28,7 @@ outcomes: a changed step changes the fake and the scenario with it.
 ## What each operation does
 
 - **Export** (`ExportUserData`, streamed by `ExportUserDataTo`): the account, the flows the user owns with content,
-  settings, the whole audit history, API tokens, chat on the owned flows, the comments the user wrote (on any flow,
+  settings, the uploaded avatar image (base64, `avatar` is null without one), the whole audit history, API tokens, chat on the owned flows, the comments the user wrote (on any flow,
   including one they can no longer open) and their triage decisions on the owned flows, their organisations with
   their own membership, active sessions and the personal Azure registry (no secrets). A flow shared with the user and
   the other members of an organisation are other people's data and stay out. Any read error fails the export.
@@ -51,11 +51,45 @@ outcomes: a changed step changes the fake and the scenario with it.
 - **Retention sweep** (`PurgeExpiredData`; on the server store with accounts: cloud, and local mode with
   `PAD_AUTH_ENABLED`): expired sessions, tokens, invitations and share links; organisation CI credentials 30 days
   after they expired (listed until then, so an admin sees why a runner fails); the token blacklist, idempotency
-  keys and the CI webhook's delivery records older than an hour in batches; with an audit window, the audit trail,
+  keys and the CI webhook's delivery records older than an hour in batches; flow undo snapshots older than 24 hours
+  (batched; reads hide them at once); with an audit window, the audit trail,
   analysis history, usage and alerts older than it.
 
 The erasure and deletion statements, and the export's comment read, run without the row-level-security user
 (`asSystem`): they are keyed by one id the caller is authorised for, and must reach its rows on any flow.
+
+## Undo ring (`flow_snapshots`, migration 0045)
+
+The pre-mutation source that a fix, a batch fix, a source save or a restore replaced, so "that fix made it worse" can
+be undone. Before Phase 5b it lived in a per-process ring (`service/flow_snapshots.go`), which a deployment of
+several replicas cannot keep: an undo taken on a replica that did not apply the fix found nothing ("snapshot not
+found"), and a restart or deploy dropped the history. Decision (Phase 5b, recorded here, not in an ADR):
+
+- **A table, not Redis.** A snapshot is a whole source (tens of KB to MB), and the Redis of this deployment evicts
+  under memory pressure (`volatile-lru`) with the budget ledger and presence in the same keyspace. The row is
+  TOAST-compressed (lz4 where the server has it) like `flows.content`.
+- **Cloud only.** The service puts the ring of a stored flow in the table where `capability.Of(cfg)` has
+  `server-store` (`di.snapshotStoreOptions` wires `service.WithSnapshotStore`); the desktop has no store and keeps the
+  in-memory ring, which also holds the snapshots of a desktop file or folder in the other profiles (they restore to a
+  path, and a path is no row of `flows`). A service built without a store keeps the memory ring for stored flows too.
+- **Bounds** replace the memory ring's global byte budget: the newest 20 per flow (was 10), at most 32 MiB of stored
+  text per flow (member names count), a snapshot over that bound is not kept and evicts nothing, and a push applies
+  both in the statement that follows its insert. Reads hide a row older than 24 hours (`FlowSnapshotTTL`) at once;
+  the retention sweep deletes it (`PurgeResult.FlowSnapshots`, batched by `ctid` through `created_at`).
+- **Same transaction, never fatal.** The push joins the request's transaction under a savepoint: a request that rolls
+  back takes its snapshot with it, and a push that fails (the flow vanished, the text holds a NUL byte, a database
+  error) leaves the transaction and the mutation intact. The service logs it and goes on; listing reports a store
+  failure instead of an empty ring.
+- **Tenancy.** `flow_snapshots` has the policy of the other flow-child tables (migration 0034): a row is reachable
+  when its flow is, so the owner, a collaborator and an organisation member see it and nobody else does. A restore
+  loads by `(flow_id, id)`, so an id taken from another flow restores nothing (404).
+- **Lifecycle.** `ON DELETE CASCADE` takes the ring with its flow (account erasure, a
+  plain delete). No user id is stored. Not in the export bundle: it is a day-old copy of the exported flows' source.
+
+Rollback: the table is new and nothing else changed shape. The release before keeps its memory ring and never reads or
+writes the table, so an image rollback needs no schema rollback (`expand`); `bakicli migrate down 44` drops it.
+During a rolling deploy a replica of the old release answers its own undo from memory and one of the new release from
+the table; each sees only what it recorded until the old ones are gone.
 
 ## Open
 

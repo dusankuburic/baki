@@ -271,10 +271,13 @@ func TestArch_RoutesUseTheTypedAdapter(t *testing.T) {
 // handWrittenRoutes is the number of route registrations per file whose handler is not built by api.JSON or
 // api.Query. routes_chi.go's are the router's own (Swagger UI, WebSocket, metrics, pprof, SSE) and stay.
 var handWrittenRoutes = map[string]int{
-	"internal/api/analysis.go":              8,
-	"internal/api/analysis_findings.go":     9,
-	"internal/api/analysis_rules.go":        5,
-	"internal/api/auth.go":                  16,
+	"internal/api/analysis.go":          8,
+	"internal/api/analysis_findings.go": 9,
+	"internal/api/analysis_rules.go":    5,
+	"internal/api/auth.go":              16,
+	// The avatar upload (multipart) and the avatar serving route (a blob download) — the two classes the typed
+	// adapter does not fit; the avatar removal beside them is a typed Query endpoint.
+	"internal/api/auth_avatar.go":           2,
 	"internal/api/flow.go":                  12,
 	"internal/api/flow_blocks.go":           7,
 	"internal/api/flow_fixes.go":            3,

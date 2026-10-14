@@ -1,0 +1,18 @@
+ai.inflight-org | hash | baki:ai:inflight:org:{org} | ttl: 11m0s | v1 | on-down: closed | internal/service
+ai.inflight-user | hash | baki:ai:inflight:user:{scope} | ttl: 11m0s | v1 | on-down: closed | internal/service
+auth.revoked | pubsub | baki:auth:revoked | ttl: none | v0 | on-down: closed | internal/auth
+chat.active | string | baki:chat:active:{conversation} | ttl: 12m0s | v1 | on-down: open | internal/service
+chat.approval | string | baki:chat:approval:{proposal} | ttl: 1m10s | v1 | on-down: open | internal/service
+chat.cmd | pubsub | baki:chat:cmd:{instance} | ttl: none | v1 | on-down: closed | internal/service
+chat.decision | string | baki:chat:decision:{proposal} | ttl: 1m0s | v1 | on-down: closed | internal/service
+chat.reply | pubsub | baki:chat:reply:{instance} | ttl: none | v1 | on-down: closed | internal/service
+chat.resume | string | chat:resume:{stream} | ttl: 12m0s | v1 | on-down: open | internal/service
+flow.upload-id | string | baki:flow:upload-id:{user}:{digest} | ttl: 24h0m0s | v0 | on-down: open | internal/service
+inval.fanout | pubsub | baki:inval | ttl: none | v1 | kinds: inval, recheck, hb, resync | on-down: open | internal/invalidation
+ratelimit.bucket | hash | ratelimit:{group}:{addr} | ttl: 5m0s | v0 | on-down: degrade | internal/api/middleware
+sse.emit | pubsub | baki:sse:ev | ttl: none | v1 | on-down: open | internal/api
+sse.log | stream | baki:sse:log:{user} | ttl: 5m0s | v1 | on-down: open | internal/api
+sse.subs | hash | baki:sse:subs:{user} | ttl: 1m0s | v1 | on-down: open | internal/api
+ws.presence | hash | ws:presence:{flow} | ttl: 3m36s | v1 | on-down: open | internal/websocket
+ws.room | pubsub | ws:room:{flow} | ttl: none | v1 | on-down: open | internal/websocket
+ws.ticket | string | baki:ws:ticket:{jti} | ttl: 2m0s | v0 | on-down: open | internal/api

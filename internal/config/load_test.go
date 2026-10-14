@@ -349,6 +349,7 @@ func TestLoad_ReplicaAndServerConnectionKnobs(t *testing.T) {
 	clearLoadEnv(t)
 	t.Setenv("PAD_MODE", "local")
 	t.Setenv("PAD_MAX_REPLICAS", "3")
+	t.Setenv("PAD_REDIS_URL", "redis://localhost:6379/0") // several replicas need it (TestLoad_ManyReplicasNeedRedis)
 	t.Setenv("PAD_DB_SERVER_MAX_CONNS", "50")
 	cfg, err := Load()
 	if err != nil {
@@ -362,6 +363,36 @@ func TestLoad_ReplicaAndServerConnectionKnobs(t *testing.T) {
 			t.Setenv(k, "-1")
 			if _, err := Load(); err == nil || !strings.Contains(err.Error(), k) {
 				t.Errorf("%s=-1: err = %v, want a refusal naming it", k, err)
+			}
+		})
+	}
+}
+
+// TestLoad_ManyReplicasNeedRedis: replicas share rate limits, collaboration rooms and stream resume only through
+// Redis, so PAD_MAX_REPLICAS above 1 without PAD_REDIS_URL is refused at boot instead of running with the limits
+// multiplied and the rooms split. 0 (unknown) and 1 need none.
+func TestLoad_ManyReplicasNeedRedis(t *testing.T) {
+	for _, tc := range []struct {
+		replicas, redis string
+		wantErr         bool
+	}{
+		{"", "", false},
+		{"0", "", false},
+		{"1", "", false},
+		{"2", "", true},
+		{"3", "redis://localhost:6379/0", false},
+	} {
+		t.Run("replicas="+tc.replicas+" redis="+tc.redis, func(t *testing.T) {
+			clearLoadEnv(t)
+			t.Setenv("PAD_MODE", "local")
+			t.Setenv("PAD_MAX_REPLICAS", tc.replicas)
+			t.Setenv("PAD_REDIS_URL", tc.redis)
+			_, err := Load()
+			switch {
+			case tc.wantErr && (err == nil || !strings.Contains(err.Error(), "PAD_MAX_REPLICAS") || !strings.Contains(err.Error(), "PAD_REDIS_URL")):
+				t.Errorf("err = %v, want a refusal naming PAD_MAX_REPLICAS and PAD_REDIS_URL", err)
+			case !tc.wantErr && err != nil:
+				t.Errorf("err = %v, want none", err)
 			}
 		})
 	}

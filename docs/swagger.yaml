@@ -92,6 +92,25 @@ definitions:
           provider then uses LocalDefaultContextWindow, 8192).
         type: integer
     type: object
+  api.MeResponse:
+    properties:
+      avatarUrl:
+        type: string
+      createdAt:
+        type: string
+      displayName:
+        type: string
+      email:
+        type: string
+      emailVerified:
+        type: boolean
+      id:
+        type: string
+      profile:
+        $ref: '#/definitions/interfaces.ProfileSettings'
+      role:
+        type: string
+    type: object
   api.channelOptionsOut:
     properties:
       allowedHosts:
@@ -208,6 +227,11 @@ definitions:
         items:
           $ref: '#/definitions/pad-core_models.ChatMessage'
         type: array
+      version:
+        description: |-
+          Version is the stored conversation's version, to send back as baseVersion on save and clear; 0 for a
+          conversation that does not exist yet, omitted where the store has no versions (local files).
+        type: integer
     type: object
   api.createCICredentialRequest:
     properties:
@@ -298,6 +322,19 @@ definitions:
         example: ok
         type: string
     type: object
+  api.profileEcho:
+    properties:
+      avatarUrl:
+        type: string
+      displayName:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      role:
+        type: string
+    type: object
   api.providerCatalogOut:
     properties:
       providers:
@@ -316,6 +353,13 @@ definitions:
       none:
         type: integer
       viewer:
+        type: integer
+    type: object
+  api.saveConversationResponse:
+    properties:
+      status:
+        type: string
+      version:
         type: integer
     type: object
   api.statusResponse:
@@ -359,6 +403,15 @@ definitions:
       docId:
         type: string
       id:
+        type: string
+    type: object
+  interfaces.ProfileSettings:
+    properties:
+      bio:
+        type: string
+      jobTitle:
+        type: string
+      timezone:
         type: string
     type: object
   interfaces.User:
@@ -1304,8 +1357,9 @@ paths:
       - admin
   /api/admin/migration/status:
     get:
-      description: Returns the status/result of the most recent data migration (admin
-        only).
+      description: 'Returns the status/result of the most recent data migration on
+        any replica (admin only): the run and its result are recorded in the job state,
+        so every replica answers alike.'
       produces:
       - application/json
       responses:
@@ -1363,7 +1417,9 @@ paths:
         Reuses the same probes as readiness but reports each independently rather
         than collapsing to one pass/fail, and does NOT apply the consecutive-failure
         smoothing — an admin querying health wants the live picture, not a flap-dampened
-        one.
+        one. Also says which build (binaryVersion), schema migration (schemaVersion)
+        and replica (instanceId) answered, which differ between replicas during a
+        rolling deploy.
       produces:
       - application/json
       responses:
@@ -2799,15 +2855,18 @@ paths:
       - auth
   /api/auth/me:
     get:
-      description: Returns information about the currently authenticated user.
+      description: 'Returns information about the currently authenticated user: the
+        claims'' core, the stored profile (display name, avatar URL, account stamps)
+        and, in cloud mode, the settings document''s profile section (bio, job title,
+        timezone). The web client reads that section from its settings store; it is
+        here for other clients (the CLI, scripts) so they need no second call.'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/api.MeResponse'
         "401":
           description: Unauthorized
           schema:
@@ -2823,7 +2882,10 @@ paths:
       - application/json
       description: handleAuthUpdateProfile lets a user set their own display name
         and avatar URL. Both fields are optional and may be cleared by sending an
-        empty string.
+        empty string. The avatar URL is an http(s) URL, or the caller's own avatar
+        route (/api/users/{id}/avatar) to keep an uploaded picture while changing
+        the name; any other value, an empty one included, replaces the uploaded picture
+        and deletes the stored image. The route without an upload behind it is a 400.
       produces:
       - application/json
       responses:
@@ -2851,6 +2913,56 @@ paths:
               type: string
             type: object
       summary: Update profile
+      tags:
+      - auth
+  /api/auth/profile/avatar:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Re-encodes the uploaded PNG or JPEG (metadata stripped, downscaled
+        to at most 512 px, at most 512 KB stored), stores it as the caller's avatar
+        and points the profile's avatar URL at the serving route. A multipart/form-data
+        body with one "avatar" file part; the declared content type is never trusted
+        — the bytes decide.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: The updated profile
+          schema:
+            $ref: '#/definitions/api.profileEcho'
+        "400":
+          description: Not a PNG or JPEG image, or not a multipart form with an avatar
+            part
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Unknown account
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Over the upload size limit
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Upload an avatar image
       tags:
       - auth
   /api/auth/refresh:
@@ -3339,7 +3451,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Cancels an active streaming session.
+      description: Cancels an active streaming session. A stream that runs on another
+        server of a multi-server deployment is stopped through that server; when it
+        cannot be reached the answer is 503 with code REPLICA_UNREACHABLE (retry),
+        never an ok that stopped nothing.
       parameters:
       - description: request
         in: body
@@ -3362,6 +3477,18 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "403":
+          description: Not the stream's owner, or a stream mirrored by a server of
+            the release before multi-server stop (code STREAM_NOT_FOUND; the client
+            takes it as gone)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
+        "503":
+          description: The stream runs on another server this one could not reach
+            (code REPLICA_UNREACHABLE; Retry-After and details.retryAfterSeconds say
+            when to retry; nothing is known to have been stopped)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
       summary: Cancel stream
       tags:
       - chat
@@ -3369,7 +3496,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Deletes the chat history for a specific flow and provider.
+      description: Deletes the chat history for a specific flow and provider. With
+        baseVersion the history is deleted only if the conversation still has that
+        version, else 409 CONVERSATION_CONFLICT with details.version; without it the
+        delete is unconditional, as before.
       parameters:
       - description: request
         in: body
@@ -3392,6 +3522,11 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: 'CONVERSATION_CONFLICT: the conversation is no longer at baseVersion
+            (details.version is the current one)'
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
@@ -3450,6 +3585,12 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: The stream runs on another server this one could not reach
+            (code REPLICA_UNREACHABLE; Retry-After and details.retryAfterSeconds say
+            when to retry; the decision may not have been delivered, so send it again)
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
       summary: Respond to an approval prompt
       tags:
       - chat
@@ -3459,7 +3600,9 @@ paths:
       - application/json
       description: 'Retrieves the chat history for a specific flow and conversation
         key (the wire field is historically named `provider`). The body is an object
-        — {messages: [...]} (always an array) plus activeStreamId when the caller
+        — {messages: [...]} (always an array), version (the conversation''s version,
+        0 when none is stored yet; send it back as baseVersion on save and clear;
+        absent where the store has no versions) plus activeStreamId when the caller
         has a stream on this conversation whose question is stored but whose answer
         is not yet (live, or finished and still being stored) — so a client that reloads
         mid-turn can re-attach via /api/chat/resume instead of losing the answer until
@@ -3591,7 +3734,14 @@ paths:
       description: 'Saves the chat history for a specific flow and provider. A message''s
         modelLabel (the model''s display name when it was sent) is stored clamped:
         NFC-normalised, control, bidi and zero-width characters dropped, whitespace
-        collapsed, at most 64 characters.'
+        collapsed, at most 64 characters. With baseVersion (the version GET returned,
+        or a previous save answered) the list replaces the stored one only if the
+        conversation still has that version, and the response carries the new version;
+        a conversation that changed since answers 409 CONVERSATION_CONFLICT with details.version
+        (the current version): reload, merge by message id and save again. Without
+        baseVersion (a client from before versions) the save replaces the stored list
+        whatever it holds, which can erase a turn another tab or the server stored;
+        it is counted in pad_chat_blind_saves_total.'
       parameters:
       - description: request
         in: body
@@ -3605,15 +3755,18 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/api.saveConversationResponse'
         "400":
           description: Bad Request
           schema:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: 'CONVERSATION_CONFLICT: the conversation is no longer at baseVersion
+            (details.version is the current one)'
+          schema:
+            $ref: '#/definitions/render.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
@@ -3632,20 +3785,26 @@ paths:
         The done payload carries tokensIn, tokensOut and chunks, plus — when known
         — servedModel (the model that answered an alias such as an Azure AI Foundry
         deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token
-        rates the turn was billed at). An error payload carries message and, when
-        classified, code (AI_BUDGET_EXCEEDED, AI_BUDGET_UNAVAILABLE, PROVIDER_AUTH,
-        PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, PROVIDER_UNKNOWN when the turn
-        names a provider no spec describes, PROVIDER_NOT_ALLOWED when the provider
-        policy refused it — disabled in the deployment or off the organisation''s
-        allowed-provider list (ADR 0028), MODEL_NOT_AVAILABLE, SERVER_RESTARTING when
-        the server''s stop ended the stream, …). A provider id the registry does not
-        know is refused before any stream starts with 400 and code PROVIDER_UNKNOWN.
-        For provider azure-foundry the model is a model registry id ("m/<entryId>";
-        "" for the server default; a pre-registry deployment, "claude:" or "agent:"
-        id still resolves for one release): one the caller cannot use — removed, another
-        owner''s, no longer shared with them — is refused before any stream starts
-        with 400 and code MODEL_NOT_AVAILABLE. While the server is stopping no stream
-        starts: 503 with code SERVER_RESTARTING, a Retry-After header and details.retryAfterSeconds;
+        rates the turn was billed at). When the server stored the turn itself (cloud
+        mode, the request carried no history) the answer is in the store before done
+        is sent, and done and error also carry conversationVersion (the stored conversation''s
+        version after the server''s own writes) and conversationBase (the version
+        the turn began from), only while no other writer changed the thread in between;
+        a client still at conversationBase can adopt conversationVersion without saving
+        or reloading. An error payload carries message and, when classified, code
+        (AI_BUDGET_EXCEEDED, AI_BUDGET_UNAVAILABLE, PROVIDER_AUTH, PROVIDER_PERMISSION,
+        PROVIDER_NOT_CONFIGURED, PROVIDER_UNKNOWN when the turn names a provider no
+        spec describes, PROVIDER_NOT_ALLOWED when the provider policy refused it —
+        disabled in the deployment or off the organisation''s allowed-provider list
+        (ADR 0028), MODEL_NOT_AVAILABLE, SERVER_RESTARTING when the server''s stop
+        ended the stream, …). A provider id the registry does not know is refused
+        before any stream starts with 400 and code PROVIDER_UNKNOWN. For provider
+        azure-foundry the model is a model registry id ("m/<entryId>"; "" for the
+        server default; a pre-registry deployment, "claude:" or "agent:" id still
+        resolves for one release): one the caller cannot use — removed, another owner''s,
+        no longer shared with them — is refused before any stream starts with 400
+        and code MODEL_NOT_AVAILABLE. While the server is stopping no stream starts:
+        503 with code SERVER_RESTARTING, a Retry-After header and details.retryAfterSeconds;
         the request may be sent again once after that wait.'
       parameters:
       - description: request
@@ -3816,10 +3975,24 @@ paths:
   /api/events:
     get:
       description: Long-lived SSE channel for analysis, chat, and collaboration events.
-        Chunks stream incrementally; reconnect with Last-Event-ID to resume. While
-        the server is stopping a new stream is refused with 503 and code SERVER_RESTARTING
-        (Retry-After); one already open stays open until the server has delivered
-        the chat streams' terminal events.
+        Chunks stream incrementally. On a deployment with a shared Redis (several
+        replicas) every event except chat chunks, heartbeats and progress ticks carries
+        an `id:` line, and a client that reconnects with Last-Event-ID is replayed
+        the frames it missed (at most 200, from the last 5 minutes) before the live
+        stream continues. A reconnect the log cannot replay whole (more frames missed,
+        a cursor older than the log, or the log unreadable) gets one `replay:gap`
+        event instead of a partial replay, which tells the client to refetch what
+        it shows; without Redis the frames carry no id and the header is ignored,
+        so a client refetches what it needs after a reconnect. While the server is
+        stopping a new stream is refused with 503 and code SERVER_RESTARTING (Retry-After);
+        one already open stays open until the server has delivered the chat streams'
+        terminal events.
+      parameters:
+      - description: The id of the last frame the client received; replays what followed
+          it (needs the shared Redis, else ignored)
+        in: header
+        name: Last-Event-ID
+        type: string
       produces:
       - text/event-stream
       responses:
@@ -5223,17 +5396,18 @@ paths:
       - governance
   /api/health:
     get:
-      description: Returns 200 when downstream dependencies (DB) are reachable, 503
+      description: 'Returns 200 when downstream dependencies (DB) are reachable, 503
         otherwise. While the server is stopping it answers 503 {"status":"draining"}
-        from the first probe on, whatever its dependencies say.
+        from the first probe on, whatever its dependencies say. A dependency that
+        is down but not needed to serve (the Redis backplane) does not fail the probe:
+        the 200 body then lists it as {"status":"ok","degraded":["redis"]}.'
       produces:
       - application/json
       responses:
         "200":
-          description: OK
+          description: OK; degraded lists the optional dependencies that are down
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
         "503":
           description: Service Unavailable (status draining while the server stops)
@@ -6450,7 +6624,8 @@ paths:
           description: 'Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED;
             resend with force — on a resumed request: the caller''s model is not the
             one the run converted to) or another upload/re-index of this org — or
-            a background re-index on any replica — is in flight (KNOWLEDGE_BUSY)'
+            a background re-index on any replica — is in flight, or this replica is
+            at its lease cap (KNOWLEDGE_BUSY)'
           schema:
             additionalProperties:
               type: string
@@ -6471,7 +6646,8 @@ paths:
         "503":
           description: Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE),
             the budget could not be checked (BUDGET_UNAVAILABLE) or the background
-            job could not be started (KNOWLEDGE_JOB_UNAVAILABLE)
+            job could not be started (KNOWLEDGE_JOB_UNAVAILABLE) or the knowledge
+            base lock could not be taken (KNOWLEDGE_LOCK_UNAVAILABLE)
           schema:
             additionalProperties:
               type: string
@@ -6521,7 +6697,8 @@ paths:
             type: object
         "409":
           description: Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED)
-            or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)
+            or another upload/re-index of this org is in flight on any replica, or
+            this replica is at its lease cap (KNOWLEDGE_BUSY)
           schema:
             additionalProperties:
               type: string
@@ -6541,6 +6718,7 @@ paths:
             type: object
         "503":
           description: Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE)
+            or the knowledge base lock could not be taken (KNOWLEDGE_LOCK_UNAVAILABLE)
           schema:
             additionalProperties:
               type: string
@@ -8567,6 +8745,41 @@ paths:
       summary: Update org settings
       tags:
       - system
+  /api/users/{id}/avatar:
+    get:
+      description: 'Serves the stored avatar of any signed-in user (avatars appear
+        cross-user: comment authors, the admin list). 404 when the user never uploaded
+        one; the ETag is the image''s updated stamp, so a re-upload invalidates the
+        cache.'
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - image/png
+      - image/jpeg
+      responses:
+        "200":
+          description: The image bytes
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: No uploaded avatar
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a user's avatar image
+      tags:
+      - users
   /api/ws-ticket:
     post:
       description: Returns a short-lived, single-use ticket the client exchanges for
@@ -8610,17 +8823,18 @@ paths:
       - system
   /readyz:
     get:
-      description: Returns 200 when downstream dependencies (DB) are reachable, 503
+      description: 'Returns 200 when downstream dependencies (DB) are reachable, 503
         otherwise. While the server is stopping it answers 503 {"status":"draining"}
-        from the first probe on, whatever its dependencies say.
+        from the first probe on, whatever its dependencies say. A dependency that
+        is down but not needed to serve (the Redis backplane) does not fail the probe:
+        the 200 body then lists it as {"status":"ok","degraded":["redis"]}.'
       produces:
       - application/json
       responses:
         "200":
-          description: OK
+          description: OK; degraded lists the optional dependencies that are down
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
         "503":
           description: Service Unavailable (status draining while the server stops)

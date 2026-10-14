@@ -404,7 +404,7 @@ func (s *ProviderService) DisableOrgAzureCredentialsSavedBy(orgID, userID string
 		return nil, err
 	}
 	if len(keys) > 0 {
-		s.InvalidateScope(ai.OrgScope(orgID))
+		s.invalidateScopeEverywhere(ai.OrgScope(orgID))
 	}
 	return keys, nil
 }

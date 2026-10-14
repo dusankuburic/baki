@@ -1,5 +1,6 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
+import {displayTimeZone} from '@/lib/time'
 
 export type RangePreset = '7d' | '30d' | '90d' | 'custom'
 export type AnalyticsScope = 'all' | 'personal' | 'org'
@@ -84,6 +85,9 @@ export const useAnalyticsStore = create<AnalyticsState>()((set, get) => ({
 registerStoreReset(() => useAnalyticsStore.getState().reset())
 
 export function localTimeZone(): string {
+  // The zone chosen in the profile wins: the day buckets are cut where the user's dates are shown.
+  const chosen = displayTimeZone()
+  if (chosen) return chosen
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
   } catch {

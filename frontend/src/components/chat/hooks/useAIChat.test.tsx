@@ -31,6 +31,7 @@ vi.mock('@/api/client', () => ({
     cb(connState)
     return () => stateListeners.delete(cb)
   }),
+  subscribeEventGap: vi.fn(() => () => {}),
   getEventConnectionState: vi.fn(() => connState),
 }))
 
@@ -110,7 +111,7 @@ beforeEach(() => {
   vi.mocked(flowApi.getSourceFiles).mockResolvedValue([])
   vi.mocked(chatApi.resumeStream).mockResolvedValue({text: '', done: false, error: '', tokensOut: 0, tokensIn: 0})
   vi.mocked(chatApi.cancelStream).mockResolvedValue(undefined)
-  vi.mocked(chatApi.saveConversation).mockResolvedValue(undefined)
+  vi.mocked(chatApi.saveConversation).mockResolvedValue({})
 })
 
 describe('useAIChat send/stream/commit', () => {
@@ -1424,5 +1425,150 @@ describe('useChatStreamEngine SERVER_RESTARTING', () => {
 
     expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
     expect(useChatStore.getState().getMessages(threadId)[1]).toMatchObject({finishReason: 'error'})
+  })
+})
+
+describe('useAIChat adopts the version a finished turn names (ADR 0031, addendum)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const withVersion = (streamId: string, type: 'done' | 'error', base: number, version: number, extra = {}) => ({
+    name: 'chat:event',
+    data: {
+      streamId,
+      type,
+      data: {tokensOut: 3, tokensIn: 2, conversationBase: base, conversationVersion: version, ...extra},
+    },
+  })
+  const callAt = (i: number) => vi.mocked(chatApi.streamChatMessage).mock.calls[i]![0]
+
+  async function renderLoaded(version = 0) {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const view = await renderChat()
+    const threadId = view.result.current.activeThreadId!
+    // A new thread is born loaded at version 0 and reads nothing; a version is what a read of a stored one would give.
+    await waitFor(() => expect(useChatStore.getState().historyStatus[threadId]?.state).toBe('loaded'))
+    if (version) useChatStore.getState().setConversationVersion(threadId, version)
+    return {view, threadId}
+  }
+
+  async function send(view: Awaited<ReturnType<typeof renderLoaded>>['view'], text: string, nth: number) {
+    await act(async () => {
+      view.result.current.handleSend(text, [])
+    })
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(nth))
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    return callAt(nth - 1).clientStreamId!
+  }
+
+  it('two streamed turns in a row neither save nor reload: each done moves the held version', async () => {
+    const {view, threadId} = await renderLoaded(0)
+    const loadsAfterOpen = vi.mocked(chatApi.getConversation).mock.calls.length // a new thread reads nothing
+
+    const sid1 = await send(view, 'first', 1)
+    act(() => {
+      capturedCb!(chunkEvent(sid1, 'one'))
+    })
+    act(() => {
+      capturedCb!(withVersion(sid1, 'done', 0, 2))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    expect(useChatStore.getState().getConversationVersion(threadId)).toBe(2)
+
+    const sid2 = await send(view, 'second', 2)
+    // The request of the second turn carries no history: the server has it.
+    expect(callAt(1).messages).toBeUndefined()
+    act(() => {
+      capturedCb!(chunkEvent(sid2, 'two'))
+    })
+    act(() => {
+      capturedCb!(withVersion(sid2, 'done', 2, 4))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(4))
+
+    expect(useChatStore.getState().getConversationVersion(threadId)).toBe(4)
+    expect(chatApi.saveConversation).not.toHaveBeenCalled()
+    expect(chatApi.getConversation).toHaveBeenCalledTimes(loadsAfterOpen)
+
+    // A clear after those turns is made on the version the server is at.
+    await act(async () => {
+      view.result.current.handleClearThread()
+    })
+    await waitFor(() => expect(chatApi.clearConversation).toHaveBeenCalled())
+    expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', expect.any(String), 4)
+  })
+
+  it('does not adopt a version when the thread had moved on since the turn began', async () => {
+    const {view, threadId} = await renderLoaded(5)
+    const sid = await send(view, 'q', 1)
+    act(() => {
+      capturedCb!(withVersion(sid, 'done', 3, 9))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+
+    expect(useChatStore.getState().getConversationVersion(threadId)).toBe(5)
+    expect(chatApi.saveConversation).not.toHaveBeenCalled()
+  })
+
+  it('a done that names the stored version needs no client save even when the turn was not marked server-owned', async () => {
+    // A stream re-attached after a reload loses the send-time ownership flag; the version proves the server stored it.
+    const {view, threadId} = await renderLoaded(0)
+    const sid = await send(view, 'q', 1)
+    useChatStore
+      .getState()
+      .updateThread(threadId, {inFlight: {streamId: sid, messageId: 'm', provider: 'claude', model: 'gpt-4'}})
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'answer'))
+    })
+    act(() => {
+      capturedCb!(withVersion(sid, 'done', 0, 2))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    expect(chatApi.saveConversation).not.toHaveBeenCalled()
+  })
+
+  it("a restart error names the question's version; the re-sent turn reuses the question's id and saves on it without a conflict", async () => {
+    const {view, threadId} = await renderLoaded(0)
+    const sid = await send(view, 'first question', 1)
+    const firstId = callAt(0).userMessageId
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'partial'))
+    })
+
+    vi.useFakeTimers()
+    act(() => {
+      capturedCb!(withVersion(sid, 'error', 0, 1, {message: 'the server is restarting', code: 'SERVER_RESTARTING'}))
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_100)
+    })
+    vi.useRealTimers()
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
+
+    // The question the server stored as `firstId` is the one asked again: nothing to resurrect after the answer.
+    expect(callAt(1).userMessageId).toBe(firstId)
+    expect(
+      useChatStore
+        .getState()
+        .getMessages(threadId)
+        .map(m => m.id),
+    ).toEqual([firstId])
+    expect(useChatStore.getState().getConversationVersion(threadId)).toBe(1)
+
+    const sid2 = callAt(1).clientStreamId!
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(chunkEvent(sid2, 'full answer'))
+    })
+    act(() => {
+      capturedCb!(doneEvent(sid2))
+    })
+    await waitFor(() => expect(chatApi.saveConversation).toHaveBeenCalledTimes(1))
+    const [, , saved, base] = vi.mocked(chatApi.saveConversation).mock.calls[0]!
+    expect(saved.map(m => m.content)).toEqual(['first question', 'full answer'])
+    expect(saved[0]!.id).toBe(firstId)
+    expect(base).toBe(1)
+    expect(chatApi.getConversation).not.toHaveBeenCalled()
   })
 })

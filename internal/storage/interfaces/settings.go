@@ -18,6 +18,7 @@ type AppSettingsStore interface {
 // AppSettings MUST stay in field/tag parity with models.AppSettings — the service bridge round-trips via JSON and silently drops mismatches (service.TestSettingsRoundTrip guards it).
 type AppSettings struct {
 	Version     int                `json:"version"`
+	Profile     ProfileSettings    `json:"profile"`
 	General     GeneralSettings    `json:"general"`
 	Appearance  AppearanceSettings `json:"appearance"`
 	Layout      LayoutSettings     `json:"layout"`
@@ -25,6 +26,13 @@ type AppSettings struct {
 	Parser      ParserSettings     `json:"parser"`
 	Analysis    AnalysisSettings   `json:"analysis"`
 	RecentFiles []RecentFile       `json:"recentFiles"`
+}
+
+// ProfileSettings mirrors models.ProfileSettings — keep tag parity or the round-trip drops it.
+type ProfileSettings struct {
+	Bio      string `json:"bio,omitempty"`
+	JobTitle string `json:"jobTitle,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // Settings types — kept in field/tag parity with internal/models so the toModel/fromModel JSON bridge is lossless.

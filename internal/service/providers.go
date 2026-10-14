@@ -27,7 +27,7 @@ import (
 // is its tenant. The storage is the service's own (per-key and per-scope invalidation marks, a TTL per listing).
 var modelListings = cache.Declare("providers.model-listings",
 	cache.Keys(cache.KindTenant, cache.KindParam),
-	cache.ReplicaLocal("10 min TTL; credential changes on this replica drop the listings at once, another replica's within the TTL"))
+	cache.Shared(cache.MechanismInvalidation, "a credential change on any replica drops the listings on every replica once committed; the 10 min TTL bounds a lost message"))
 
 // credentialTenant is the cache tenant of a credential scope: an org's shared credential (ai.OrgScope), a user's
 // own keys, or the local user's ("").
@@ -89,6 +89,11 @@ type ProviderService struct {
 	modelGen         uint64
 	invalidatedKeys  map[cache.Key]invalidation
 	invalidatedScope map[string]invalidation
+	// invalidatedAll is the generation of the last whole-cache drop (InvalidateAllModels).
+	invalidatedAll uint64
+
+	// bus carries the drops that are not a domain event's to the other replicas (WithProviderEvents); nil announces nothing.
+	bus *eventbus.Bus
 }
 
 type modelCacheEntry struct {
@@ -105,6 +110,13 @@ type ProviderOption func(*ProviderService)
 // catalogue offer a provider when its spec's Modes include it.
 func WithProfile(p capability.Profile) ProviderOption {
 	return func(s *ProviderService) { s.profile = p }
+}
+
+// WithProviderEvents lets the service announce the listing drops that no CredentialChanged announces (a key saved
+// through the GitHub or Copilot sign-in, the local and Azure configurations, an organisation's Azure credentials
+// disabled as a side effect of an admin's demotion) to the other replicas on bus. nil announces nothing.
+func WithProviderEvents(bus *eventbus.Bus) ProviderOption {
+	return func(s *ProviderService) { s.bus = bus }
 }
 
 // NewProviderService builds the provider service. orgKeys holds organisations' shared credentials (nil leaves
@@ -321,6 +333,9 @@ func (s *ProviderService) invalidatedSinceLocked(key cache.Key, scope string, ge
 	if inv, ok := s.invalidatedKeys[key]; ok && inv.gen > gen {
 		return true
 	}
+	if s.invalidatedAll > gen {
+		return true
+	}
 	inv, ok := s.invalidatedScope[scope]
 	return ok && inv.gen > gen
 }
@@ -381,6 +396,19 @@ func (s *ProviderService) InvalidateScope(scope string) {
 	s.modelMu.Unlock()
 }
 
+// InvalidateAllModels drops every cached listing and refuses the listings in flight: what a replica does when it
+// cannot tell which of its listings a lost invalidation concerned.
+func (s *ProviderService) InvalidateAllModels() {
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+	s.modelGen++
+	s.invalidatedAll = s.modelGen
+	for k := range s.modelCache {
+		delete(s.modelCache, k)
+		modelListings.RecordEviction(cache.EvictDeleted)
+	}
+}
+
 // InvalidateModels drops one (scope, provider) cached listing so a config change shows immediately.
 func (s *ProviderService) InvalidateModels(scope, providerID string) {
 	key := modelListingKey(scope, providerID)
@@ -406,15 +434,56 @@ func SubscribeModelCache(bus *eventbus.Bus, s *ProviderService) {
 			return
 		}
 		s.InvalidateModels(e.Scope, e.ProviderID)
-	})
+	}, eventbus.Replicated(func(e events.CredentialChanged) []eventbus.Invalidation {
+		// "scope" is named even when empty (the deployment's); "provider" only for a single provider's listing.
+		scope := eventbus.NewScope("scope", e.Scope)
+		if e.ProviderID != "" && e.Kind != events.CredentialScopeErased {
+			scope["provider"] = e.ProviderID
+		}
+		return []eventbus.Invalidation{{Key: "providers.model-listings", Scope: scope}}
+	}, "providers.model-listings"))
 	eventbus.Subscribe(bus, eventbus.Sync, "provider-model-cache", func(_ context.Context, e events.AccountErased) {
 		s.InvalidateScope(e.KeyScope)
-	})
+	}, eventbus.Replicated(func(e events.AccountErased) []eventbus.Invalidation {
+		return []eventbus.Invalidation{{Key: "providers.model-listings", Scope: eventbus.NewScope("scope", e.KeyScope)}}
+	}, "providers.model-listings"))
 	eventbus.Subscribe(bus, eventbus.Sync, "provider-model-cache", func(_ context.Context, e events.OrgMemberChanged) {
 		if e.Kind == events.OrgDeleted && e.OrgID != "" {
 			s.InvalidateScope(ai.OrgScope(e.OrgID))
 		}
+	}, eventbus.Replicated(func(e events.OrgMemberChanged) []eventbus.Invalidation {
+		if e.Kind != events.OrgDeleted || e.OrgID == "" {
+			return nil
+		}
+		return []eventbus.Invalidation{{Key: "providers.model-listings", Scope: eventbus.NewScope("scope", ai.OrgScope(e.OrgID))}}
+	}, "providers.model-listings"))
+	// What a peer dropped: one provider's listing, a scope's, or (an empty scope: a resync) every listing.
+	bus.OnRemote("providers.model-listings", func(sc eventbus.Scope) {
+		scope, named := sc["scope"]
+		switch {
+		case !named:
+			s.InvalidateAllModels()
+		case sc["provider"] != "":
+			s.InvalidateModels(scope, sc["provider"])
+		default:
+			s.InvalidateScope(scope)
+		}
 	})
+}
+
+// invalidateScopeEverywhere drops scope's listings here and tells the other replicas to drop theirs, for a change no
+// CredentialChanged announces.
+func (s *ProviderService) invalidateScopeEverywhere(scope string) {
+	s.InvalidateScope(scope)
+	s.bus.Invalidate(context.Background(), "providers.model-listings", eventbus.NewScope("scope", scope))
+}
+
+// invalidateModelsEverywhere is invalidateScopeEverywhere for one provider's listing: a key saved, replaced or
+// revoked through a method of this service (the GitHub and Copilot sign-ins, the local and Azure configurations),
+// which no CredentialChanged announces.
+func (s *ProviderService) invalidateModelsEverywhere(scope, providerID string) {
+	s.InvalidateModels(scope, providerID)
+	s.bus.Invalidate(context.Background(), "providers.model-listings", eventbus.NewScope("scope", scope, "provider", providerID))
 }
 
 // chatModels drops non-chat entries (embedding deployments): kept in Models() for pricing, never in the chat picker.
@@ -1007,7 +1076,7 @@ func (s *ProviderService) PollGitHubAuth(ctx context.Context, scope string, devi
 			logger.Error("failed to save github token", "error", saveErr)
 		} else {
 			// A replacement token may carry other entitlements: drop the previous token's cached listing (mirrors Revoke).
-			s.InvalidateModels(scope, ai.GitHubModelsProviderID)
+			s.invalidateModelsEverywhere(scope, ai.GitHubModelsProviderID)
 		}
 		result.Token = ""
 	}
@@ -1021,7 +1090,7 @@ func (s *ProviderService) RevokeGitHubAuth(scope string) (err error) {
 		return err
 	}
 	// Drop the cached listing so the revoked credential's models disappear immediately.
-	s.InvalidateModels(scope, ai.GitHubModelsProviderID)
+	s.invalidateModelsEverywhere(scope, ai.GitHubModelsProviderID)
 	return nil
 }
 
@@ -1056,7 +1125,7 @@ func (s *ProviderService) PollCopilotAuth(ctx context.Context, scope string, dev
 			logger.Error("failed to save copilot oauth token", "error", saveErr)
 		} else {
 			// A replacement token may carry other entitlements: drop the previous token's cached listing (mirrors Revoke).
-			s.InvalidateModels(scope, ai.CopilotProviderID)
+			s.invalidateModelsEverywhere(scope, ai.CopilotProviderID)
 		}
 		result.Token = ""
 		// Pre-warm the Copilot session-token cache so the first chat turn doesn't pay the exchange RTT.
@@ -1100,7 +1169,7 @@ func (s *ProviderService) RevokeCopilotAuth(scope string) (err error) {
 		return err
 	}
 	// Drop the cached listing so the revoked credential's models disappear immediately.
-	s.InvalidateModels(scope, ai.CopilotProviderID)
+	s.invalidateModelsEverywhere(scope, ai.CopilotProviderID)
 	return nil
 }
 
@@ -1149,7 +1218,7 @@ func (s *ProviderService) SaveLocalConfig(scope, baseURL string, contextWindow i
 	if err := s.secrets.Save(scope, ai.LocalProviderID, raw); err != nil {
 		return ai.LocalConfig{}, err
 	}
-	s.InvalidateModels(scope, ai.LocalProviderID)
+	s.invalidateModelsEverywhere(scope, ai.LocalProviderID)
 	return cfg, nil
 }
 
@@ -1180,7 +1249,7 @@ func (s *ProviderService) SaveAzureFoundryConfig(scope string, cfg ai.AzureFound
 		if err := s.azure.legacySaveConfig(context.Background(), scope, cfg); err != nil {
 			return err
 		}
-		s.InvalidateModels(scope, ai.AzureFoundryProviderID)
+		s.invalidateModelsEverywhere(scope, ai.AzureFoundryProviderID)
 		return nil
 	}
 	cfg.Normalize()
@@ -1198,7 +1267,7 @@ func (s *ProviderService) SaveAzureFoundryConfig(scope string, cfg ai.AzureFound
 	if err := s.secrets.Save(scope, ai.AzureFoundryProviderID, raw); err != nil {
 		return err
 	}
-	s.InvalidateModels(scope, ai.AzureFoundryProviderID)
+	s.invalidateModelsEverywhere(scope, ai.AzureFoundryProviderID)
 	ai.InvalidateAzureFoundryModels(cfg)
 	if hadPrev && prev.Fingerprint() != cfg.Fingerprint() {
 		ai.ForgetAzureFoundryCredential(prev)
@@ -1279,7 +1348,7 @@ func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUp
 		if err != nil {
 			return "", err
 		}
-		s.InvalidateScope(ai.OrgScope(orgID))
+		s.invalidateScopeEverywhere(ai.OrgScope(orgID))
 		return at, nil
 	}
 	// A token-less save with a fresh secret may repair an unreadable row: the row's OrgKeyMeta stamp becomes the token.
@@ -1313,7 +1382,7 @@ func (s *ProviderService) SaveOrgAzureFoundryConfig(orgID, updatedBy, expectedUp
 	if !ok {
 		return "", ErrOrgCredentialConflict
 	}
-	s.InvalidateScope(ai.OrgScope(orgID))
+	s.invalidateScopeEverywhere(ai.OrgScope(orgID))
 	ai.InvalidateAzureFoundryModels(cfg)
 	if hadPrev && prev.Fingerprint() != cfg.Fingerprint() {
 		ai.ForgetAzureFoundryCredential(prev)
@@ -1331,7 +1400,7 @@ func (s *ProviderService) DeleteOrgAzureFoundryConfig(orgID string) (err error) 
 		if err := s.azure.legacyDeleteDefault(context.Background(), storageif.AzureOrgOwner(orgID), ""); err != nil {
 			return err
 		}
-		s.InvalidateScope(ai.OrgScope(orgID))
+		s.invalidateScopeEverywhere(ai.OrgScope(orgID))
 		return nil
 	}
 	prev, hadPrev := storedAzureConfig(func() (string, error) { return s.orgKeys.GetOrg(orgID, ai.AzureFoundryProviderID) })
@@ -1341,7 +1410,7 @@ func (s *ProviderService) DeleteOrgAzureFoundryConfig(orgID string) (err error) 
 	if hadPrev {
 		ai.ForgetAzureFoundryCredential(prev)
 	}
-	s.InvalidateScope(ai.OrgScope(orgID))
+	s.invalidateScopeEverywhere(ai.OrgScope(orgID))
 	return nil
 }
 

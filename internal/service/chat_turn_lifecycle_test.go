@@ -420,6 +420,11 @@ func (h *hangingConversationStore) LoadConversation(ctx context.Context, _, _ st
 	return nil, ctx.Err()
 }
 
+func (h *hangingConversationStore) LoadConversationVersioned(ctx context.Context, _, _ string) ([]storageif.ChatMessage, int64, error) {
+	<-ctx.Done()
+	return nil, 0, ctx.Err()
+}
+
 func TestPersistAssistantTurn_ReturnsWhenStoreHangs(t *testing.T) {
 	prev := persistAnswerTimeout
 	persistAnswerTimeout = 50 * time.Millisecond

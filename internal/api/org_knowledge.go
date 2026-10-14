@@ -66,10 +66,10 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 // @Produce      json
 // @Success      201 {object} map[string]interface{} "Uploaded"
 // @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), not allowed here (PROVIDER_NOT_ALLOWED: disabled in the deployment or off the organisation's allowed-provider list), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)"
-// @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED) or another upload/re-index of this org is in flight (KNOWLEDGE_BUSY)"
+// @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED) or another upload/re-index of this org is in flight on any replica, or this replica is at its lease cap (KNOWLEDGE_BUSY)"
 // @Failure      413 {object} map[string]string "The document chunks to more passages than one upload may index (KNOWLEDGE_DOCUMENT_TOO_LARGE)"
 // @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED)"
-// @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE)"
+// @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE) or the knowledge base lock could not be taken (KNOWLEDGE_LOCK_UNAVAILABLE)"
 // @Router       /api/orgs/{id}/knowledge/upload [post]
 func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Request) {
 	if h.knowledge == nil {
@@ -162,6 +162,9 @@ func renderKnowledgeEmbeddingErrorDetails(w http.ResponseWriter, err error, deta
 		render.ErrorWithCodeAndDetails(w, err, http.StatusServiceUnavailable, "EMBEDDING_PROVIDER_UNAVAILABLE", details)
 	case errors.Is(err, rag.ErrReembedUnavailable):
 		render.ErrorWithCodeAndDetails(w, err, http.StatusServiceUnavailable, "KNOWLEDGE_JOB_UNAVAILABLE", details)
+	case errors.Is(err, rag.ErrKnowledgeLockUnavailable):
+		// The cross-replica lock of the org could not be asked for (the database did not answer): nothing was started.
+		render.ErrorWithCodeAndDetails(w, err, http.StatusServiceUnavailable, "KNOWLEDGE_LOCK_UNAVAILABLE", details)
 	case errors.Is(err, ai.ErrRateLimited):
 		w.Header().Set("Retry-After", embeddingRetryAfter(err))
 		render.ErrorWithCodeAndDetails(w, err, http.StatusTooManyRequests, "EMBEDDING_RATE_LIMITED", details)
@@ -263,9 +266,9 @@ func decodeKnowledgeReindexRequest(body io.Reader) (knowledgeReindexRequest, err
 // @Success      200 {object} rag.ReindexResult "Re-indexed this request's pages ({chunks, docs}); nextCursor (with truncated=true) means chunks remain — post again with {force, cursor: nextCursor}. Every page is committed as it completes, so a later failure keeps the earlier pages — a request that FAILS after committing pages answers its error code with details {nextCursor, chunks} to resume from. Unforced, only the chunks not yet embedded under the caller's model are converted"
 // @Success      202 {object} map[string]string "background=true: the knowledge_reembed job was started ({status: accepted, job}); its progress is the job's run state (pad_job_* metrics, the job_runs row) and the document list's embeddingStranded counts"
 // @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment, or a background run was asked for on a personal key), not allowed here (PROVIDER_NOT_ALLOWED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body / cursor"
-// @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to) or another upload/re-index of this org — or a background re-index on any replica — is in flight (KNOWLEDGE_BUSY)"
+// @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to) or another upload/re-index of this org — or a background re-index on any replica — is in flight, or this replica is at its lease cap (KNOWLEDGE_BUSY)"
 // @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED) or the daily AI budget is spent (BUDGET_EXCEEDED)"
-// @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE), the budget could not be checked (BUDGET_UNAVAILABLE) or the background job could not be started (KNOWLEDGE_JOB_UNAVAILABLE)"
+// @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE), the budget could not be checked (BUDGET_UNAVAILABLE) or the background job could not be started (KNOWLEDGE_JOB_UNAVAILABLE) or the knowledge base lock could not be taken (KNOWLEDGE_LOCK_UNAVAILABLE)"
 // @Failure      504 {object} map[string]string "The request's deadline ran out before a page was committed (KNOWLEDGE_TIMEOUT)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/orgs/{id}/knowledge/reindex [post]

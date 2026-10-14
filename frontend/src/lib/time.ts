@@ -1,3 +1,30 @@
+// The zone the user chose in their profile (an IANA name); undefined renders in the device's. Set once from the
+// settings store (settingsStore.ts), read by every formatter below and in format.ts, so one choice moves every
+// timestamp instead of each call site passing it.
+let displayZone: string | undefined
+
+export function setDisplayTimeZone(zone: string | undefined): void {
+  displayZone = zone?.trim() || undefined
+}
+
+/** The chosen display zone, or undefined for the device's. */
+export function displayTimeZone(): string | undefined {
+  return displayZone
+}
+
+/** A date (no time) in the display zone; '' for an unparseable value. */
+export function localDate(value: string | number | Date, options?: Intl.DateTimeFormatOptions): string {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString(undefined, {...options, ...(displayZone ? {timeZone: displayZone} : {})})
+}
+
+/** Date and time in the display zone; '' for an unparseable value. */
+export function localDateTime(value: string | number | Date): string {
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? '' : absoluteTime(d.toISOString())
+}
+
 
 export function relativeTime(iso: string): string {
   const then = new Date(iso).getTime()
@@ -13,10 +40,10 @@ export function relativeTime(iso: string): string {
   return `${Math.floor(days / 7)}w`
 }
 
-export function absoluteTime(iso: string): string {
+export function absoluteTime(iso: string, timeZone: string | undefined = displayZone): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleString()
+  return d.toLocaleString(undefined, timeZone ? {timeZone} : undefined)
 }
 
 const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [

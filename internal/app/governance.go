@@ -126,7 +126,8 @@ func provideMigrationRunner(cfg *config.Config, dst storageif.StorageBackend, le
 	// Cross-replica single-run guard: without the Postgres advisory lock two
 	// pods could both pass the in-process guard and run the same migration. The
 	// lease also cancels a run whose lock was lost.
-	return runner.WithLeaser(leaser)
+	// The run and its result go to job_runs, so any replica answers the status endpoint for it.
+	return runner.WithLeaser(leaser).WithJobStore(dst)
 }
 
 // provideScanNowFunc wires the admin "scan now" action to the scanner wherever

@@ -31,10 +31,10 @@ const dashboardHomeMax = 1024
 var (
 	homeViews = cache.Declare("dashboard.home",
 		cache.Keys(cache.KindTenant, cache.KindVersion),
-		cache.ReplicaLocal("30 s TTL; this replica's flow changes and analyses drop the owner's view at once"))
+		cache.Shared(cache.MechanismInvalidation, "a flow change or analysis on any replica drops the owner's view on every replica once committed; the 30 s TTL bounds a lost message and other collaborators' views"))
 	analyticsViews = cache.Declare("dashboard.analytics",
 		cache.Keys(cache.KindTenant, cache.KindParam, cache.KindParam),
-		cache.ReplicaLocal("30 s TTL; this replica's flow changes drop the views of the owner and of the flow's org at once"))
+		cache.Shared(cache.MechanismInvalidation, "a flow change or analysis on any replica drops the views of the owner and of the flow's org on every replica once committed; the 30 s TTL bounds a lost message and other collaborators' views"))
 )
 
 // DashboardService assembles the welcome ("home") dashboard payload and persists per-flow analysis
@@ -60,12 +60,18 @@ type DashboardService struct {
 	// orgEpoch counts organisation invalidations: an analytics fill learns which organisations it spans only
 	// from its scope read, so it captures their generations after that read and is refused if one ran meanwhile.
 	orgEpoch atomic.Uint64
+
+	// bus announces the drops that are not a FlowChanged's (an analysis recorded) to the other replicas; nil announces nothing.
+	bus *eventbus.Bus
 }
+
+// DashboardOption configures NewDashboardService.
+type DashboardOption func(*DashboardService)
 
 // NewDashboardService builds the dashboard service; scope collects the analytics page's flow set (DI passes the
 // library's FlowScopeResolver; without one BuildAnalytics fails).
-func NewDashboardService(backend storageif.DashboardStore, analysis *AnalysisService, flowSvc *FlowService, scope ScopeResolver) *DashboardService {
-	return &DashboardService{
+func NewDashboardService(backend storageif.DashboardStore, analysis *AnalysisService, flowSvc *FlowService, scope ScopeResolver, opts ...DashboardOption) *DashboardService {
+	s := &DashboardService{
 		backend:  backend,
 		analysis: analysis,
 		flowSvc:  flowSvc,
@@ -73,6 +79,10 @@ func NewDashboardService(backend storageif.DashboardStore, analysis *AnalysisSer
 		home:     cache.New[*models.DashboardHomeData](homeViews, dashboardHomeMax, cache.WithTTL(dashboardCacheTTL)),
 		ana:      newAnaStore(),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 const dashboardTokenDays = 14
@@ -162,6 +172,11 @@ func (s *DashboardService) RecordAnalysis(ctx context.Context, doc *models.FlowD
 	// The flow's summary changed (an analysis is not a change of the flow, so no FlowChanged): drop the views
 	// built over it now instead of waiting out the TTL.
 	s.InvalidateFlowViews(doc.OwnerID, doc.OrganizationID)
+	// The other replicas' views of it too, once this write is durable.
+	if scope, ok := flowViewScope(doc.OwnerID, doc.OrganizationID); ok {
+		s.bus.Invalidate(ctx, "dashboard.home", scope)
+		s.bus.Invalidate(ctx, "dashboard.analytics", scope)
+	}
 }
 
 // BuildHome assembles the dashboard payload for userID; it never hard-fails —

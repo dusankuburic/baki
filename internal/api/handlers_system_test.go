@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -78,37 +79,75 @@ func TestHandleDeleteApiKey_BadBodyReturns400(t *testing.T) {
 	checkStatus(t, rr, http.StatusBadRequest)
 }
 
-// failingRedisPinger is a RedisPinger stand-in that always returns an error,
-// used to prove /readyz reports unhealthy when Redis (the optional backplane)
-// is configured but unreachable.
-type failingRedisPinger struct{ err error }
+// stubRedisPinger is a RedisPinger stand-in: err is what a live Ping answers (the admin health page), degraded what
+// the state view says (the readiness probe).
+type stubRedisPinger struct {
+	err      error
+	degraded bool
+}
 
-func (f failingRedisPinger) Ping(_ context.Context) error { return f.err }
+func (f stubRedisPinger) Ping(_ context.Context) error { return f.err }
+func (f stubRedisPinger) Degraded() bool               { return f.degraded }
 
-// TestReadinessProbe_503AfterNConsecutiveRedisFailures guards H21: when Redis
-// is configured (non-nil pinger) and unreachable, the probe must accumulate
-// failures and return 503 after readinessFailureThreshold consecutive hits.
-// Previously /readyz did not check Redis at all — an outage silently degraded
-// multi-replica correctness (rate limiter, hub presence, chat-resume all fail
-// open) without taking the pod out of rotation.
-func TestReadinessProbe_503AfterNConsecutiveRedisFailures(t *testing.T) {
-	// Use FakeBackend (always-healthy Ping) so the backend check passes and we
-	// isolate the Redis check failure path.
+func probeReady(t *testing.T, h *SystemHandler) (int, map[string]any) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	h.handleReadiness(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readyz body %q: %v", w.Body.String(), err)
+	}
+	return w.Code, body
+}
+
+// TestReadinessProbe_RedisDownIsDegradedNotUnready: every mechanism that uses Redis has a declared on-down
+// behaviour, so an outage must not take a replica out of rotation (it used to: 503 after three probes, on every
+// replica at once). The probe stays 200 and says so: {"status":"ok","degraded":["redis"]}.
+func TestReadinessProbe_RedisDownIsDegradedNotUnready(t *testing.T) {
 	h := &SystemHandler{
 		health:      service.NewHealthService(testutil.NewFakeBackend(), nil),
-		redisPinger: failingRedisPinger{err: errors.New("redis: connection refused")},
+		redisPinger: stubRedisPinger{err: errors.New("redis: connection refused"), degraded: true},
+	}
+	for i := 1; i <= 2*readinessFailureThreshold; i++ {
+		code, body := probeReady(t, h)
+		if code != http.StatusOK {
+			t.Fatalf("probe %d: status %d, want 200 however long Redis is down", i, code)
+		}
+		if body["status"] != "ok" {
+			t.Errorf("probe %d: status key = %v, want ok (the existing key is unchanged)", i, body["status"])
+		}
+		if d, _ := body["degraded"].([]any); len(d) != 1 || d[0] != "redis" {
+			t.Errorf("probe %d: degraded = %v, want [redis]", i, body["degraded"])
+		}
+	}
+}
+
+// A healthy Redis adds nothing to the body.
+func TestReadinessProbe_HealthyRedisAddsNoKey(t *testing.T) {
+	h := &SystemHandler{
+		health:      service.NewHealthService(testutil.NewFakeBackend(), nil),
+		redisPinger: stubRedisPinger{},
+	}
+	code, body := probeReady(t, h)
+	if code != http.StatusOK || len(body) != 1 || body["status"] != "ok" {
+		t.Errorf("status %d, body %v; want 200 and exactly {status: ok}", code, body)
+	}
+}
+
+// The database still gates readiness (503 after the consecutive-failure threshold) whatever Redis says, and a
+// 503 keeps its error body.
+func TestReadinessProbe_DatabaseDownStillFailsWithRedisDegraded(t *testing.T) {
+	backend := testutil.NewFakeBackend()
+	backend.PingErr = errors.New("db down")
+	h := &SystemHandler{
+		health:      service.NewHealthService(backend, nil),
+		redisPinger: stubRedisPinger{degraded: true},
 	}
 	for i := 1; i <= readinessFailureThreshold; i++ {
 		w := httptest.NewRecorder()
 		h.handleReadiness(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		if i < readinessFailureThreshold {
-			if w.Code != http.StatusOK {
-				t.Errorf("probe %d: expected 200 (below threshold), got %d", i, w.Code)
-			}
-		} else {
-			if w.Code != http.StatusServiceUnavailable {
-				t.Errorf("probe %d: expected 503 (at threshold), got %d", i, w.Code)
-			}
+		if want := map[bool]int{true: http.StatusServiceUnavailable, false: http.StatusOK}[i >= readinessFailureThreshold]; w.Code != want {
+			t.Errorf("probe %d: status %d, want %d", i, w.Code, want)
 		}
 	}
 }
@@ -168,5 +207,31 @@ func TestAdminSystemHealth_NonAdmin_Forbidden(t *testing.T) {
 	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/admin/system/health", bearer, nil)
 	if rr.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for non-admin, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// The admin page keeps reporting Redis as degraded (a live ping, not the smoothed state), and a Redis that
+// answers as ok.
+func TestAdminSystemHealth_RedisDownIsDegraded(t *testing.T) {
+	for name, tc := range map[string]struct {
+		pinger  stubRedisPinger
+		status  string
+		overall string
+	}{
+		"down":    {stubRedisPinger{err: errors.New("dial tcp: connection refused"), degraded: true}, "error", "degraded"},
+		"healthy": {stubRedisPinger{}, "ok", "ok"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := &SystemHandler{health: service.NewHealthService(testutil.NewFakeBackend(), nil), redisPinger: tc.pinger}
+			w := httptest.NewRecorder()
+			h.handleAdminSystemHealth(w, httptest.NewRequest(http.MethodGet, "/api/admin/system/health", nil))
+			var resp adminHealthResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != http.StatusOK || resp.Redis.Status != tc.status || resp.Overall != tc.overall {
+				t.Errorf("status %d, redis %q, overall %q; want 200, %q, %q", w.Code, resp.Redis.Status, resp.Overall, tc.status, tc.overall)
+			}
+		})
 	}
 }

@@ -11,6 +11,7 @@ import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useAsync} from '@/hooks/useAsync'
 import {downloadBlob} from '@/lib/csv'
 import {healthTier} from '@/lib/scoring'
+import {localDate} from '@/lib/time'
 
 function healthColor(score: number): string {
   return healthTier(score).text
@@ -319,7 +320,7 @@ export default function PortfolioView() {
                       )}
                     </td>
                     <td className="px-4 py-2 text-right text-text-tertiary tabular-nums">
-                      {e.analyzedAt ? new Date(e.analyzedAt).toLocaleDateString() : '—'}
+                      {e.analyzedAt ? localDate(e.analyzedAt) : '—'}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <button

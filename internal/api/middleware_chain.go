@@ -27,11 +27,11 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		newRL := func(rps, burst float64) *middleware.RateLimiter {
 			return middleware.NewRateLimiterRedis(redisClient, rps, burst, cfg.Server.TrustedProxies)
 		}
-		generalRl := newRL(cfg.Runtime.RateLimitGeneralRPS, cfg.Runtime.RateLimitGeneralBurst).SetGroup("general")
-		authRl := newRL(cfg.Runtime.RateLimitAuthRPS, cfg.Runtime.RateLimitAuthBurst).SetGroup("auth")
-		analysisRl := newRL(cfg.Runtime.RateLimitExpensiveRPS, cfg.Runtime.RateLimitExpensiveBurst).SetGroup("analysis")
-		chatRl := newRL(cfg.Runtime.RateLimitChatRPS, cfg.Runtime.RateLimitChatBurst).SetGroup("chat")
-		uploadRl := newRL(cfg.Runtime.RateLimitUploadRPS, cfg.Runtime.RateLimitUploadBurst).SetGroup("upload")
+		generalRl := newRL(cfg.Runtime.RateLimitGeneralRPS, cfg.Runtime.RateLimitGeneralBurst).SetGroup(route.RateGeneral)
+		authRl := newRL(cfg.Runtime.RateLimitAuthRPS, cfg.Runtime.RateLimitAuthBurst).SetGroup(route.RateAuth)
+		analysisRl := newRL(cfg.Runtime.RateLimitExpensiveRPS, cfg.Runtime.RateLimitExpensiveBurst).SetGroup(route.RateAnalysis)
+		chatRl := newRL(cfg.Runtime.RateLimitChatRPS, cfg.Runtime.RateLimitChatBurst).SetGroup(route.RateChat)
+		uploadRl := newRL(cfg.Runtime.RateLimitUploadRPS, cfg.Runtime.RateLimitUploadBurst).SetGroup(route.RateUpload)
 		channelTestRl := newRL(cfg.Runtime.RateLimitChannelTestRPS, cfg.Runtime.RateLimitChannelTestBurst).SetGroup(route.RateChannelTest)
 		if redisClient != nil {
 			logger.Info("rate limiting: using shared Redis backplane", "url_set", cfg.Redis.URL.IsSet())
@@ -39,19 +39,18 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl, channelTestRl)
 
 		// Per-user write throttle: one bucket per authenticated user capping their total write volume across endpoints; cloud only (local is single-user and would self-DoS). Installed on the Router; appended to rateLimiters so Stop() runs on shutdown.
-		perUserRl := newRL(cfg.Runtime.RateLimitPerUserRPS, cfg.Runtime.RateLimitPerUserBurst).SetGroup("peruser")
+		perUserRl := newRL(cfg.Runtime.RateLimitPerUserRPS, cfg.Runtime.RateLimitPerUserBurst).SetGroup(route.RatePerUser)
 		router.SetPerUserLimiter(perUserRl)
 		rateLimiters = append(rateLimiters, perUserRl)
 
 		// rateLimitersByGroup maps a bucket (rateLimitBucketOf) to its limiter
 		// so the per-request dispatch is a single lookup.
 		rateLimitersByGroup := map[string]*middleware.RateLimiter{
-			"general":  generalRl,
-			"auth":     authRl,
-			"analysis": analysisRl,
-			"chat":     chatRl,
-			"upload":   uploadRl,
-
+			route.RateGeneral:     generalRl,
+			route.RateAuth:        authRl,
+			route.RateAnalysis:    analysisRl,
+			route.RateChat:        chatRl,
+			route.RateUpload:      uploadRl,
 			route.RateChannelTest: channelTestRl,
 		}
 
@@ -98,14 +97,14 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 	return handler, rateLimiters
 }
 
-// Rate-limit group labels; unexported consts because they double as the limiter's group name
-// in metrics/logs.
+// Rate-limit group labels: the route package's bucket names, which double as the limiter's group name in metrics,
+// logs and Redis keys (testdata/ratelimit_groups.golden pins them).
 const (
-	rlGroupAuth     = "auth"
-	rlGroupAnalysis = "analysis"
-	rlGroupChat     = "chat"
-	rlGroupUpload   = "upload"
-	rlGroupGeneral  = "general"
+	rlGroupAuth     = route.RateAuth
+	rlGroupAnalysis = route.RateAnalysis
+	rlGroupChat     = route.RateChat
+	rlGroupUpload   = route.RateUpload
+	rlGroupGeneral  = route.RateGeneral
 )
 
 // authRateLimitPaths is the set of auth-shaped endpoints on the tighter auth bucket — deliberately including password recovery: those send email and run bcrypt, so the looser "general" bucket enabled email-flooding / SMTP cost amplification by rotating source IPs.
@@ -197,7 +196,7 @@ func rateLimitGroup(method string, u *url.URL) string {
 		if group, ok := azureOutboundRoute(path); ok {
 			return group
 		}
-		if path == "/api/flow/upload" {
+		if path == "/api/flow/upload" || path == "/api/auth/profile/avatar" {
 			return rlGroupUpload
 		}
 		// The channel test makes the server POST to an admin-chosen URL for up to 15 s (B13).

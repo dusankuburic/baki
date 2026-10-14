@@ -12,6 +12,7 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import {chatApi, ApiError} from '@/api'
 import {useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
+import {clearThreadConversation} from '@/lib/conversationSync'
 import {CHAT_ERROR_CODES} from '@/lib/chatErrors'
 import {conversationToMarkdown, downloadTextFile, safeFilename, type ExportModelName} from '@/lib/chatExport'
 import {useChatConversations} from './useChatConversations'
@@ -200,9 +201,12 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
   const handleClearThread = useCallback(() => {
     if (!doc || !activeThread || isCurrentThreadStreaming || readOnly) return
     const threadId = activeThread.id
-    chatApi
-      .clearConversation(activeThread.flowId, conversationKey(activeThread))
-      .then(() => {
+    clearThreadConversation(threadId, activeThread.flowId, conversationKey(activeThread))
+      .then(cleared => {
+        if (!cleared) {
+          toast.warning(t('errors.changedElsewhere'))
+          return
+        }
         const st = useChatStore.getState()
         if (!st.threads.some(th => th.id === threadId) || st.streams[threadId]) return
         clearThreadMessages(threadId)

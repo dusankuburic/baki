@@ -130,6 +130,74 @@ linked into that test binary, so the golden cannot silently miss one:
 go test ./internal/di/ -run TestCacheRegistry_Golden -update-caches
 ```
 
+A cache is `replica-local: <reason>` (each replica holds its own; the reason says why that is acceptable) or
+`shared: redis-inval: <reason>` (ADR 0032): the entries stay in each replica's memory, and a change on any replica
+drops them on every replica through the invalidation fan-out, with the TTL as the backstop for a lost message. `cache.New`
+builds the storage of both; any other `Shared` mechanism is refused, because `cache.Typed` cannot share entries.
+Flipping a cache is a reviewed diff here and in the subscribers golden, and
+`TestSubscribers_ReplicatedCachesAreSharedAndSharedCachesAreReplicated` fails when the two disagree.
+
+## Event subscribers: `internal/di/testdata/subscribers.golden`
+
+The event bus delivers in process (ADR 0009), so a subscriber that drops a cache entry or closes a socket affects its
+own replica only. Phase 5b makes every subscriber answer, as a required option of `eventbus.Subscribe`, whether the
+other replicas must reproduce its effect:
+
+- `eventbus.Local(reason)`: the effect stays here. Use it for a side effect that has to happen once (an email, a
+  bell row, a keystore write with audit rows) and for a cache that cannot go stale across replicas (keyed by a
+  version, or revalidated on every read). The reason is a sentence in the golden.
+- `eventbus.Replicated(invalidations, keys...)`: the other replicas reproduce it. `invalidations` maps the event to
+  `eventbus.Invalidation{Key, Scope}` values (nil for an event that changes nothing cached); `keys` declares every
+  key it may return. A key names a declared cache (`pad-core/cache.Declare`) or a `recheck.*` nudge to open
+  sockets and streams. A replicated subscriber must only drop what it holds derived from the event, idempotently,
+  from fields that are not secret and not free text.
+
+Neither is a default: a subscriber registered without one is `UNCLASSIFIED` in `Bus.Subscribers()` and fails
+`TestSubscribers_EveryOneChoseItsLocality`. `TestSubscribers_Golden` lists every subscriber the app registers (event,
+tier, the deliveries it runs in, name, locality), so a changed locality is a reviewed diff. Review it like a
+route-policy change; refresh only for an intended one:
+
+```
+go test ./internal/di/ -run TestSubscribers_Golden -update-subscribers
+```
+
+`TestSubscribers_EverySubscribeCallIsExercisedByTheGolden` reads the source: every `eventbus.Subscribe` call must sit
+in a registrar the golden test drives and carry an option, so a subscriber added in a new place cannot skip the
+review. `TestSubscribers_ReplicatedKeysNameDeclaredCachesOrRechecks` checks that no key is a typo.
+
+How a replicated subscriber reaches the other replicas (the seam, and the Redis transport that implements it in
+`internal/invalidation`, ADR 0032):
+
+1. `Bus.Publish` hands each replicated subscriber's `Invalidation`s to the `eventbus.Replicas` hook installed with
+   `Bus.SetReplicas`, once per distinct `(key, scope)` of the event. It does so through `txhook.Register`, so only
+   after the publisher's transaction committed (at once where there is none), never for a rolled-back write, and
+   after this replica's own Committed pass, with `PassOf(ctx) == Committed`. The hook must only enqueue; it never
+   fails the publisher. With no hook installed nothing changes (single replica, desktop, tests).
+2. A receiving replica calls `Bus.DeliverRemote(key, scope)` for each message of another origin. It runs the
+   applier the cache's owner registered with `Bus.OnRemote(key, apply)`: the same generation bump and delete the
+   local subscriber performs, so a fill in flight is refused. An empty scope means the whole cache (the receiver
+   calls it that way, for every `Bus.ReplicatedKeys()`, to resync after a gap). `DeliverRemote` never publishes,
+   so a message cannot loop; an unknown key is ignored and reported (`false`). `Bus.MissingAppliers()` lists
+   replicated keys without an applier; `TestSubscribers_EveryReplicatedKeyHasAnApplier` fails on one, so every
+   subscriber registers its applier beside itself. A change that is not a domain event announces itself with
+   `Bus.Invalidate(ctx, key, scope)` (same rules: after the commit, never for a rollback, only a key some replicated
+   subscriber declares). `TestSubscribers_ReplicatedCachesAreSharedAndSharedCachesAreReplicated` ties this golden to
+   the caches golden: a replicated cache key is a cache declared `cache.Shared(cache.MechanismInvalidation, ...)`.
+
+Scope vocabulary by key (an applier reads what its subscriber's scope function writes; a key present with an empty
+value names the empty value, as the deployment's credential scope):
+
+| Key | Scope |
+|---|---|
+| `settings.deployment` | none (the whole row) |
+| `rules.deployment-profile` | none |
+| `rules.profiles` | none (every org), or `org`, or `org` + `user` (that reader's entry) |
+| `providers.model-listings` | `scope` (credential key scope, possibly empty), plus `provider` for one provider's listing |
+| `rag.corpus-counts` | `org` |
+| `dashboard.home`, `dashboard.analytics` | `owner` and/or `org` (`DashboardService.InvalidateFlowViews`) |
+| `recheck.ws-access` | `what` = `flow` / `user` / `org` / `owner` with `id`; or `what` = `credential` with `user` and `jti` |
+| `recheck.sse-revocation` | `jti` |
+
 ## Background jobs: `internal/lifecycle/testdata/jobs.golden`
 
 `TestJobRegistry_Golden` lists every job declared with `lifecycle.DeclareJob` (ADR 0023): its name, its advisory-lock
@@ -182,8 +250,19 @@ when an exception grows and when it shrinks, so each pinned number can only go d
 `caches_test.go` scans `core/` as well (ADR 0017). It pins the caches still built without a declared spec
 (`cache.NewLRUCache`, `cache.NewSizedLRU`, golang-lru constructors; only the undo ring is left) and the
 `singleflight.Group`s, per file. `cache.Declare` may only be the value of a package-level var, with a literal name
-unique across both modules. `undeclaredMemos` lists the memos deliberately left off the registry, each with its
-reason, and `TestArch_UndeclaredMemosStillExist` checks that each is still where it says.
+unique across both modules. Memos deliberately left off the cache registry are entries of the state registry below.
+
+`state_test.go` holds the per-process state registry (ADR 0032). `TestArch_PerProcessStateDeclared` finds the keyed
+state in the server (a struct with a mutex or `sync.Map` and a map, `list.List` or LRU field; a package-level map,
+`sync.Map` or cache made empty and filled later; `internal/testutil` and `cmd/` are out of scope) and requires each
+to be an entry of `stateRegistry`: replica-local with a reason, shared with its mechanism and a `Test` function that
+proves it (the test must exist), database (in memory only without a server store), request-scoped, config,
+desktop-only or test-only. A reason that begins "known gap" names a cross-replica defect that is not fixed yet.
+A type that mixes localities is `composite` and lists its fields as `Type.field` entries.
+`TestArch_StateRegistryEntriesStillExist` fails on an entry whose file or identifier is gone, and
+`TestArch_StateRegistryCoversTheSurveyedState` on one of the surveyed pieces of state (`activeStreams`, `usedTickets`,
+`sseConnCount`, ...) that was dropped. Read-only tables built by a composite literal are not state and are not asked
+about.
 
 `config_test.go` type-checks the module, as `storehandles_test.go` does. `TestArch_ConfigNotMutatedOutsideConfig`
 fails on a write to the configuration outside `internal/config`, with no exceptions: an assignment, `++`/`--`, an
@@ -305,3 +384,25 @@ key is at `tokenPath`, `/healthz` answers 200, and SIGTERM (on Windows a CTRL_BR
 exit code 0 within the stop budget, with nothing else on stdout. `desktop.yml` runs it on Windows before the bundle
 build. `TestMainPackageIsMainGoAlone` keeps `main.go` the root package's only non-test file, since the Dockerfile and
 CI build `go build main.go`.
+
+## Two replicas: `TestTwoReplicas_EndToEnd`, the `two-replica` CI job and the deployment tests
+
+Three nets keep the multi-replica path honest; the operator-facing view is
+[operations.md](operations.md#running-more-than-one-replica).
+
+- `internal/di/two_replicas_test.go` assembles two replicas from the real providers on one miniredis and one store (the
+  in-memory one always, a Postgres database of its own when `DATABASE_URL` is set; two connection pools there) and runs the
+  cross-mechanism scenarios in order: a flow saved on one drops the other's home view, an event on one reaches a stream
+  on the other and replays after a reconnect with `Last-Event-ID`, racing conversation saves have exactly one winner, an
+  edit is undone through the other replica, a setting reaches the peer before its cache expires, a stop and an approval
+  decision made on one reach the stream running on the other, the AI budget counts the other replica's stream, and Redis
+  is killed and restored in the middle (degraded, local work goes on, remote commands answer 503, the budget fails
+  closed, then everything heals). It reuses the mechanisms' own harness (`internal/testutil/redisreplica`) and does not
+  repeat their unit tests.
+- The `two-replica` job in `ci.yml` brings up `docker-compose.replicas.yml` (two replicas, Redis, a balancer) and runs
+  `scripts/ci/two-replica-smoke.sh` over HTTP. The script runs the same way on a workstation, against any two replicas
+  (`SMOKE_A`, `SMOKE_B`), and its checks fail on two replicas without Redis (the fan-out and event checks do).
+- `internal/config/deploy_replicas_test.go` reads `infra/main.bicep`, the example parameters, `deploy.yml`, the overlay
+  and `ci.yml` as text: the repository ships one replica without Redis, more than one cannot ship without it, Redis runs
+  `volatile-lru` and every declared key has a TTL, the scale rule and the SKU follow the replica count, the template sets
+  no shared `PAD_INSTANCE_ID`, and the alerts read log lines the code still writes.

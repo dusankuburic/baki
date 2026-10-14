@@ -28,6 +28,11 @@ func (b *savesCountingBackend) SaveConversation(ctx context.Context, flowID, sco
 	return b.FakeBackend.SaveConversation(ctx, flowID, scope, messages)
 }
 
+func (b *savesCountingBackend) SaveConversationIf(ctx context.Context, flowID, scope string, expected int64, messages []storageif.ChatMessage) (int64, error) {
+	b.saves.Add(1)
+	return b.FakeBackend.SaveConversationIf(ctx, flowID, scope, expected, messages)
+}
+
 // A server-owned turn (the client sent no history) is two conversation
 // writes — the question at stream start, the answer at stream end — and the
 // stored answer carries the tool trail and finish reason the client used to

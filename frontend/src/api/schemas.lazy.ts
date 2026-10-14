@@ -58,6 +58,14 @@ export function buildSchemas() {
     displayName: z.string().optional(),
     avatarUrl: z.string().optional(),
     createdAt: z.string().optional(),
+    emailVerified: z.boolean().optional(),
+    profile: z
+      .object({
+        bio: z.string().optional(),
+        jobTitle: z.string().optional(),
+        timezone: z.string().optional(),
+      })
+      .optional(),
   })
 
   const LoginResponseSchema = z.object({

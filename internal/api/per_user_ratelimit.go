@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"pad-analyzer/internal/api/middleware"
+	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/auth"
 )
 
@@ -69,12 +70,12 @@ func (rt *Router) perUserKey(r *http.Request) string {
 		return ""
 	}
 	if claims := auth.ClaimsFromContext(r.Context()); claims != nil && claims.UserID != "" {
-		return "ratelimit:peruser:" + hashRateLimitKey(claims.UserID)
+		return middleware.BucketKey(route.RatePerUser, hashRateLimitKey(claims.UserID))
 	}
 	// Keyed like the per-IP limiters (RateLimitAddr): an IPv6 client by its
 	// /64, or rotating through the addresses of its own /64 bought a fresh
 	// bucket per anonymous write.
-	return "ratelimit:peruser:ip:" + middleware.RateLimitAddr(middleware.ClientIP(r, rt.trustedProxies))
+	return middleware.BucketKey(route.RatePerUser, "ip:"+middleware.RateLimitAddr(middleware.ClientIP(r, rt.trustedProxies)))
 }
 
 // isWriteMethod reports whether m is a state-changing verb. Per-user limiting

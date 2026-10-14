@@ -16,7 +16,7 @@ Capabilities (`capability.Capability`):
   no `users` row even on Postgres: their settings are the deployment's (`GET/POST /api/system/settings` act on the
   empty key scope), as on the desktop.
 - `row-level-security`: requests run in a per-user RLS transaction. This needs both a store and accounts.
-- `shared-state`: a Redis backplane shares rate limits, presence and chat-stream resume across replicas.
+- `shared-state`: a Redis backplane shares rate limits, presence, chat-stream resume and the commands that act on a running stream (stop, approval decision) across replicas. An unreachable Redis degrades it (the app runs on, `/readyz` lists `redis` under `degraded`) instead of refusing the boot; `PAD_MAX_REPLICAS` above 1 requires it ([ADR 0029](../adr/0029-redis-envelope-key-registry-and-health.md)).
 
 The desktop profile keeps cloud features off by design. Features that need the server store say so through
 the capability, instead of checking for a nil backend inline.
@@ -47,6 +47,14 @@ The CI webhook (`POST /api/integrations/ci`, [ADR 0019](../adr/0019-org-ci-crede
 | `local+db` without accounts | Authenticated by the server's `PAD_CI_WEBHOOK_SECRET` alone; without it, 503. The flow is resolved by id from the store. |
 | With accounts (`cloud`, or `local+db` with auth) | Organisation CI credentials, minted by org admins (`/api/orgs/{id}/ci-credentials`, which need `server-store` and `accounts`). A credential reaches its organisation's flows only. A personal API token with the `ci` scope (`Authorization: Bearer`) reaches the flows its user can read, personal ones included (an organisation's flow only for its members). `PAD_CI_WEBHOOK_SECRET` still works but is deprecated: a boot warning, and every answer to it carries `Deprecation: true` and a `Link` header. |
 
-Running more than one replica is a separate question. The deployment is pinned to one replica
-(`infra/main.bicep`) until the realtime backplane exists (Phase 5b of the proposal), even when `shared-state` is
-available.
+Running more than one replica is a separate question from the profile: it needs `shared-state` (the app refuses
+`PAD_MAX_REPLICAS` above 1 without `PAD_REDIS_URL`), and the repository still ships one replica without Redis
+(`infra/main.bicep`) until the two-replica CI job has been green; the capability is a repository variable away. The
+checklist, what is shared and what each mechanism does when Redis is down or a replica dies are in
+[operations.md](operations.md#running-more-than-one-replica).
+
+Some per-process state already follows the profile. The undo ring of a stored flow (the pre-mutation source that "undo
+fix" restores) lives in the `flow_snapshots` table wherever the profile has `server-store`, so any replica can undo
+what another applied; the desktop keeps it in memory, as it also does for the files and folders it opens in every
+profile ([data-lifecycle.md](data-lifecycle.md#undo-ring-flow_snapshots-migration-0045)). `di.snapshotStoreOptions`
+asks the capability, not the mode.

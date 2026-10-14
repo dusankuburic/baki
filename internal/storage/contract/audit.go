@@ -143,7 +143,8 @@ func auditListOrder(t *testing.T, store interfaces.AuditStore) {
 }
 
 // auditBatch: SaveAuditEvents writes every row of a batch or none of them. The recorder relies on it: after a
-// failed batch it writes the rows one by one, which would duplicate a partly written batch.
+// failed batch it writes the rows one by one, which would duplicate a partly written batch. A row whose id is
+// already stored is the exception: it is skipped (idempotent), not a failure.
 func auditBatch(t *testing.T, store interfaces.AuditStore) {
 	ctx := context.Background()
 	user := "contract-audit-" + uuid.NewString()[:8]
@@ -167,26 +168,25 @@ func auditBatch(t *testing.T, store interfaces.AuditStore) {
 		t.Fatalf("listed %d rows, want the batch's 3 newest first", len(rows))
 	}
 
-	// A row whose id is taken fails the batch, and the batch's other row is not written either.
+	// A row whose id is already stored is skipped, not an error (a spill file replayed twice, or by two replicas,
+	// stores each event once); the batch's other rows are still written. auditSameIDTwice covers the single save.
 	fresh := auditEvent(user, "contract.batch.rejected", now)
 	if err := store.SaveAuditEvents(ctx, []*interfaces.AuditEvent{fresh, auditEvent(user, "contract.batch.rejected", now)}); err != nil {
 		t.Fatalf("SaveAuditEvents (distinct ids): %v", err)
 	}
 	again := auditEvent(user, "contract.batch.rejected", now)
 	dup := *batch[0]
-	if err := store.SaveAuditEvents(ctx, []*interfaces.AuditEvent{again, &dup}); err == nil {
-		t.Fatal("a batch with a duplicate id was accepted")
+	if err := store.SaveAuditEvents(ctx, []*interfaces.AuditEvent{again, &dup}); err != nil {
+		t.Fatalf("a batch with an id already stored must be accepted, got %v", err)
 	}
 	rows, err = store.ListAuditEvents(ctx, interfaces.AuditFilter{UserID: user, Action: "contract.batch.rejected"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range rows {
-		if r.ID == again.ID {
-			t.Error("a row of the failed batch was written")
-		}
+	if len(rows) != 3 {
+		t.Errorf("listed %d rows of the batches, want 3 (the duplicate adds none)", len(rows))
 	}
-	if len(rows) != 2 {
-		t.Errorf("listed %d rows of the accepted batch, want 2", len(rows))
+	if all, err := store.ListAuditEvents(ctx, interfaces.AuditFilter{UserID: user, Limit: 500}); err != nil || len(all) != 6 {
+		t.Errorf("listed %d rows of the user (%v), want 6: the duplicate must not add a row", len(all), err)
 	}
 }

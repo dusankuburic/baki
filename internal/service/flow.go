@@ -44,7 +44,7 @@ var (
 	// uploadFlowIDs remembers, per caller, the flow id an upload minted, so an identical re-upload updates that flow.
 	uploadFlowIDs = cache.Declare("flow.upload-ids",
 		cache.Keys(cache.KindTenant, cache.KindContent),
-		cache.ReplicaLocal("a miss mints a new flow id: an identical re-upload through another replica creates a second flow, as after the TTL"))
+		cache.ReplicaLocal("the local half of the memo: with Redis configured the id is also claimed under the flow.upload-id key, which every replica reads first, so a miss here costs a lookup; without it a miss mints a new flow id and an identical re-upload through another replica creates a second flow, as after the TTL"))
 	// searchIndexes memoises a flow's search index, valid only for the document object it was built from.
 	searchIndexes = cache.Declare("flow.search-index",
 		cache.Keys(cache.KindResource),
@@ -127,6 +127,8 @@ type FlowService struct {
 	astCache    *ASTCache
 	// uploadIDs (cloud) remembers the upload's minted flow id per caller, so a re-upload updates that flow.
 	uploadIDs *cache.Typed[string]
+	// uploadShared (WithUploadIDs) is the Redis side of that memo, so a re-upload through another replica finds the id; nil on one replica.
+	uploadShared *sharedUploadIDs
 
 	// idxCache memoises search indexes by flow ID, each valid only for the document object it was built from.
 	idxCache *cache.Typed[*searchIndexEntry]
@@ -139,6 +141,10 @@ type FlowService struct {
 
 	// snapshots is the in-memory undo ring (flow_snapshots.go); nil when disabled.
 	snapshots *snapshotStore
+	// snapshotDB is the durable undo ring of cloud flows (WithSnapshotStore); nil keeps cloud flows on the memory
+	// ring too. snapshotLimits are the bounds each push to it enforces.
+	snapshotDB     storageif.FlowSnapshotStore
+	snapshotLimits storageif.FlowSnapshotLimits
 
 	// bus carries FlowChanged to the caches derived from flows (FlowCacheSubscribers) and to the realtime clients;
 	// nil in bare tests.
@@ -570,15 +576,22 @@ func (s *FlowService) LoadFlowFiles(ctx context.Context, files map[string]string
 
 	if s.uploadIDs != nil && callerID != "" {
 		// Cloud: an identical re-upload keeps its flow id; only ids whose flow still exists are reused.
-		idK, _ := uploadFlowIDs.Key(cache.User(callerID), cache.Content(filesDigest("", fileNames, files)))
-		if id, ok := s.uploadIDs.Get(idK); ok && id != "" {
-			if _, herr := s.storage.LoadFlowHeader(ctx, id); herr == nil {
+		digest := filesDigest("", fileNames, files)
+		idK, _ := uploadFlowIDs.Key(cache.User(callerID), cache.Content(digest))
+		overwrite := false
+		if id, inFlight := s.rememberedUploadID(ctx, idK, callerID, digest); id != "" {
+			switch _, herr := s.storage.LoadFlowHeader(ctx, id); {
+			case herr == nil:
 				doc.ID = id
-			} else {
+				overwrite = true // a reused id refreshes its TTL
+			case inFlight:
+				doc.ID = id // another replica claimed it a moment ago and is saving the flow
+			default:
 				s.uploadIDs.Delete(idK)
+				overwrite = true // a deleted flow's id is replaced
 			}
 		}
-		s.uploadIDs.Set(idK, doc.ID, 1, 0)
+		doc.ID = s.rememberUploadID(ctx, idK, callerID, digest, doc.ID, overwrite)
 	}
 
 	if s.astCache != nil {
@@ -1053,7 +1066,7 @@ func (s *FlowService) PatchFlow(ctx context.Context, doc *models.FlowDocument, p
 	if writeErr := atomicWriteConv(dir, targetPath, []byte(patched)); writeErr != nil {
 		return nil, fmt.Errorf("write source file: %w", writeErr)
 	}
-	s.pushSnapshot(doc, snap)
+	s.pushSnapshot(ctx, doc, snap)
 	// Commit point: release the file lock NOW and finish outside the critical section.
 	unlock()
 	unlock = func() {} // neutralize the deferred double-release
@@ -1215,7 +1228,7 @@ func (s *FlowService) SaveSource(ctx context.Context, doc *models.FlowDocument, 
 		if err != nil {
 			return nil, err
 		}
-		s.pushSnapshot(doc, snap)
+		s.pushSnapshot(ctx, doc, snap)
 		return updated, nil
 	}
 	targetPath, err := desktopSourcePath(doc, file)
@@ -1226,7 +1239,7 @@ func (s *FlowService) SaveSource(ctx context.Context, doc *models.FlowDocument, 
 	if err := atomicWriteConv(filepath.Dir(targetPath), targetPath, []byte(source)); err != nil {
 		return nil, fmt.Errorf("write source file: %w", err)
 	}
-	s.pushSnapshot(doc, snap)
+	s.pushSnapshot(ctx, doc, snap)
 	// The source-editor save replaced the file: derived caches are stale.
 	s.publishDesktopChange(ctx, doc)
 	if info, _ := os.Stat(doc.FilePath); info != nil && info.IsDir() {
@@ -1341,7 +1354,7 @@ func (s *FlowService) ApplyFixBatchResult(ctx context.Context, doc *models.FlowD
 		if err != nil {
 			return FixBatchResult{Applied: res.Fixed}, err
 		}
-		s.pushSnapshot(doc, snap)
+		s.pushSnapshot(pctx, doc, snap)
 		out.Doc = updated
 		return out, nil
 	}
@@ -1349,7 +1362,7 @@ func (s *FlowService) ApplyFixBatchResult(ctx context.Context, doc *models.FlowD
 	if err := atomicWriteConv(filepath.Dir(targetPath), targetPath, []byte(source)); err != nil {
 		return FixBatchResult{Applied: res.Fixed}, fmt.Errorf("write source file: %w", err)
 	}
-	s.pushSnapshot(doc, snap)
+	s.pushSnapshot(ctx, doc, snap)
 	s.publishDesktopChange(ctx, doc)
 	// Seed the AST cache so the reload below is a hit, not another parse.
 	s.cacheFileParse(targetPath, source, res.Doc)
@@ -1429,7 +1442,7 @@ func (s *FlowService) applyFixBatchDesktopFolder(ctx context.Context, doc *model
 		target := filepath.Join(doc.FilePath, name)
 		if werr := atomicWriteConv(doc.FilePath, target, []byte(src)); werr != nil {
 			if wrote {
-				s.pushSnapshot(doc, snap)
+				s.pushSnapshot(ctx, doc, snap)
 			}
 			return FixBatchResult{Applied: total}, fmt.Errorf("write %s: %w", name, werr)
 		}
@@ -1437,7 +1450,7 @@ func (s *FlowService) applyFixBatchDesktopFolder(ctx context.Context, doc *model
 		// The loop's parse is of exactly the bytes written: seed the member cache.
 		s.cacheFolderMember(name, src, fixedDocs[name])
 	}
-	s.pushSnapshot(doc, snap)
+	s.pushSnapshot(ctx, doc, snap)
 	s.publishDesktopChange(ctx, doc)
 	updated, err := s.LoadFlowFolder(doc.FilePath)
 	if err != nil {

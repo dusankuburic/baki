@@ -285,6 +285,15 @@ PUT /api/v1/auth/profile | kind=endpoint pattern=/api/auth/profile auth=jwt scop
 PUT /api/./auth/profile | kind=endpoint pattern=/api/auth/profile auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/auth/profile
 PUT /api/auth/profile/ | kind=endpoint pattern=/api/auth/profile auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/auth/profile
 OPTIONS /api/auth/profile | kind=method-not-allowed pattern=/api/auth/profile auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/auth/profile allow=PUT
+DELETE /api/auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/auth/profile/avatar
+DELETE /api/v1/auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/auth/profile/avatar
+DELETE /api/./auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/auth/profile/avatar
+DELETE /api/auth/profile/avatar/ | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/auth/profile/avatar
+OPTIONS /api/auth/profile/avatar | kind=method-not-allowed pattern=/api/auth/profile/avatar auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/auth/profile/avatar allow=POST,DELETE
+POST /api/auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=upload tx=tx deadline=default label=/api/auth/profile/avatar
+POST /api/v1/auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=upload tx=tx deadline=default label=/api/auth/profile/avatar
+POST /api/./auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=upload tx=tx deadline=default label=/api/auth/profile/avatar
+POST /api/auth/profile/avatar/ | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=upload tx=tx deadline=default label=/api/auth/profile/avatar
 POST /api/auth/refresh | kind=endpoint pattern=/api/auth/refresh auth=none scopes=- ratelimit=auth tx=none deadline=default label=/api/auth/refresh
 POST /api/v1/auth/refresh | kind=endpoint pattern=/api/auth/refresh auth=none scopes=- ratelimit=auth tx=none deadline=default label=/api/auth/refresh
 POST /api/./auth/refresh | kind=endpoint pattern=/api/auth/refresh auth=none scopes=- ratelimit=auth tx=none deadline=default label=/api/auth/refresh
@@ -1197,6 +1206,13 @@ POST /api/v1/system/settings/org/id1 | kind=endpoint pattern=/api/system/setting
 POST /api/./system/settings/org/id1 | kind=endpoint pattern=/api/system/settings/org/{id} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}
 POST /api/system/settings/org/id1/ | kind=endpoint pattern=/api/system/settings/org/{id} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}
 POST /api/system/settings/org/a%2Fb | kind=endpoint pattern=/api/system/settings/org/{id} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}
+GET /api/users/id1/avatar | kind=endpoint pattern=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/users/{id}/avatar
+GET /api/v1/users/id1/avatar | kind=endpoint pattern=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/users/{id}/avatar
+GET /api/./users/id1/avatar | kind=endpoint pattern=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/users/{id}/avatar
+GET /api/users/id1/avatar/ | kind=endpoint pattern=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/users/{id}/avatar
+GET /api/users/a%2Fb/avatar | kind=endpoint pattern=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/users/{id}/avatar
+HEAD /api/users/id1/avatar | kind=method-not-allowed pattern=/api/users/{id}/avatar auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/users/{id}/avatar allow=GET
+OPTIONS /api/users/id1/avatar | kind=method-not-allowed pattern=/api/users/{id}/avatar auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/users/{id}/avatar allow=GET
 POST /api/ws-ticket | kind=endpoint pattern=/api/ws-ticket auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/ws-ticket
 POST /api/v1/ws-ticket | kind=endpoint pattern=/api/ws-ticket auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/ws-ticket
 POST /api/./ws-ticket | kind=endpoint pattern=/api/ws-ticket auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/ws-ticket

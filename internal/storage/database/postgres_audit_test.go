@@ -81,7 +81,7 @@ func TestBuildAuditInsert_ParamCount(t *testing.T) {
 		t.Errorf("placeholder groups: got %d separators, want %d", got, n-1)
 	}
 	// Highest placeholder index must be exactly n*cols and under the ceiling.
-	last := fmt.Sprintf("NULLIF($%d,''))", n*auditInsertCols)
+	last := fmt.Sprintf("NULLIF($%d,''))", n*auditInsertCols) + auditInsertOnConflict // idempotent: a replayed row is a no-op
 	if !strings.HasSuffix(query, last) {
 		t.Errorf("query should end with %q", last)
 	}

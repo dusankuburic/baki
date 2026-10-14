@@ -61,3 +61,12 @@ func (s *HealthService) CheckBlob(ctx context.Context) error {
 	s.blobCheckedAt = time.Now()
 	return nil
 }
+
+// SchemaVersion is the highest schema migration the database has applied, which during a rolling deploy can be ahead
+// of this binary. 0 with no error when there is no store or it has no schema to report.
+func (s *HealthService) SchemaVersion(ctx context.Context) (int, error) {
+	if !s.HasStore() {
+		return 0, nil
+	}
+	return s.store.CurrentSchemaVersion(ctx)
+}

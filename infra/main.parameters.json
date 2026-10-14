@@ -1,13 +1,14 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
-  "_comment": "Example parameter file for a MANUAL `az deployment group create --parameters @infra/main.parameters.json`. The deploy workflow (.github/workflows/deploy.yml) passes parameters inline, so CI does not read this file. Deploy order: infra/registry.bicep, then infra/postgres.bicep (plus its one-time SQL bootstrap), then this template. maxReplicas stays 1: internal/api/events.go is an in-process SSE hub, so a second replica silently breaks chat streaming — see the header of infra/main.bicep. provisionRedis stays false for the same reason, and because the app refuses to boot when PAD_REDIS_URL is set but unreachable.",
+  "_comment": "Example parameter file for a MANUAL `az deployment group create --parameters @infra/main.parameters.json`. The deploy workflow (.github/workflows/deploy.yml) passes parameters inline, so CI does not read this file. Deploy order: infra/registry.bicep, then infra/postgres.bicep (plus its one-time SQL bootstrap), then this template. The repository default is one replica with no Redis (minReplicas 1, maxReplicas 1, provisionRedis false); more than one replica needs provisionRedis true, because the replicas share events, stream commands, the AI budget ledger, cache invalidation and rate limits only through Redis, and the app refuses to start with PAD_MAX_REPLICAS above 1 and no PAD_REDIS_URL. The deploy workflow takes these three from the repository variables PAD_MIN_REPLICAS, PAD_MAX_REPLICAS and PAD_PROVISION_REDIS (and scaleConcurrentRequests from PAD_SCALE_CONCURRENT_REQUESTS). See the header of infra/main.bicep and docs/architecture/operations.md, 'Running more than one replica'.",
   "parameters": {
     "appName":            { "value": "baki-backend" },
     "registryName":       { "value": "bakiprod" },
     "image":              { "value": "bakiprod.azurecr.io/baki-backend@sha256:<digest>" },
     "minReplicas":        { "value": 1 },
     "maxReplicas":        { "value": 1 },
+    "scaleConcurrentRequests": { "value": 100 },
     "cpu":                { "value": "0.5" },
     "memory":             { "value": "1.0Gi" },
 

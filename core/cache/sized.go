@@ -183,6 +183,15 @@ func (c *SizedLRU) Delete(ctx context.Context, key string) {
 	}
 }
 
+// Clear removes every entry, each counted as deleted.
+func (c *SizedLRU) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for el := c.ll.Back(); el != nil; el = c.ll.Back() {
+		c.removeElement(el, EvictDeleted)
+	}
+}
+
 // Len is the number of entries held (expired ones included until touched).
 func (c *SizedLRU) Len() int {
 	c.mu.Lock()

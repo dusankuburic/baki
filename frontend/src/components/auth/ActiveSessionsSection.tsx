@@ -6,6 +6,7 @@ import {type SessionInfo} from '@/api/auth'
 import {Button, IconButton, Skeleton, Spinner, useConfirm, useToast} from '@/components/shared'
 import {describeUserAgent, deviceKind, type DeviceKind} from '@/lib/userAgent'
 import {absoluteTime, relativeTimeText} from '@/lib/time'
+import {useSettingsStore} from '@/stores/settingsStore'
 import {useSessions} from './useSessions'
 import {SectionCard, SectionNotice} from './SectionCard'
 
@@ -127,6 +128,8 @@ function SessionRow({
   onRevoke: () => void
 }) {
   const {t} = useTranslation('auth')
+  // The user's chosen timezone (their profile section), not the device's, renders their own session stamps.
+  const timezone = useSettingsStore(s => s.settings.profile.timezone)
   const device = describeUserAgent(session.userAgent)
   const Icon = DEVICE_ICONS[deviceKind(session.userAgent)]
   const signedIn = relativeTimeText(session.createdAt)
@@ -152,14 +155,14 @@ function SessionRow({
           )}
         </p>
         {signedIn && (
-          <p className="text-xs text-text-tertiary mt-0.5 truncate" title={absoluteTime(session.createdAt)}>
+          <p className="text-xs text-text-tertiary mt-0.5 truncate" title={absoluteTime(session.createdAt, timezone)}>
             {session.ip
               ? t('sessions.signedInFrom', {when: signedIn, ip: session.ip})
               : t('sessions.signedIn', {when: signedIn})}
           </p>
         )}
         {expires && (
-          <p className="text-xs text-text-tertiary truncate" title={absoluteTime(session.expiresAt)}>
+          <p className="text-xs text-text-tertiary truncate" title={absoluteTime(session.expiresAt, timezone)}>
             {t('sessions.expires', {when: expires})}
           </p>
         )}

@@ -27,6 +27,7 @@ func Provide(lc fx.Lifecycle, cfg *config.Config, store storageif.StorageBackend
 	if store != nil {
 		as = store
 	}
+	rc.Instance = cfg.Runtime.InstanceID
 	r := New(as, rc)
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error {

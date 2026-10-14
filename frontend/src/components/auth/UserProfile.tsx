@@ -10,6 +10,7 @@ import {isTauri} from '@/platform/guards'
 import {Avatar, Button} from '@/components/shared'
 import {RoleBadge} from './SectionCard'
 import {ProfileSection} from './ProfileSection'
+import {ProfileDetailsSection} from './ProfileDetailsSection'
 import {OrganisationsSection} from './OrganisationsSection'
 import {ChangePasswordSection} from './ChangePasswordSection'
 import {ActiveSessionsSection} from './ActiveSessionsSection'
@@ -18,12 +19,11 @@ import {AccountDataSection} from './AccountDataSection'
 import {ApiTokensSection} from './ApiTokensSection'
 import {DangerZoneSection} from './DangerZoneSection'
 import {useActiveSection} from './useActiveSection'
+import {localDate} from '@/lib/time'
 
 function formatMemberSince(iso: string | undefined): string | null {
   if (!iso) return null
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toLocaleDateString(undefined, {year: 'numeric', month: 'long'})
+  return localDate(iso, {year: 'numeric', month: 'long'}) || null
 }
 
 const GROUPS = [
@@ -173,6 +173,7 @@ export const UserProfile: React.FC = () => {
           <div className="profile-content space-y-8 min-w-0">
             <ProfileGroup id="profile-account" title={t('nav.account')} description={t('groups.accountBody')}>
               <ProfileSection editing={editing} onEditingChange={setEditing} />
+              <ProfileDetailsSection />
               <OrganisationsSection organisations={organisations} userId={user.id} loading={orgsLoading} />
             </ProfileGroup>
             <ProfileGroup id="profile-security" title={t('nav.security')} description={t('groups.securityBody')}>

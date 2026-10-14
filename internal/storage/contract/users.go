@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -223,6 +224,64 @@ func runUserQueryScenarios(ctx context.Context, b interfaces.StorageBackend, run
 		err := b.UpdateUserRole(ctx, "contract-missing-user-"+runID, auth.RoleMember)
 		if !errors.Is(err, interfaces.ErrNotFound) {
 			t.Errorf("unknown user: expected ErrNotFound, got %v", err)
+		}
+	})
+}
+
+// runUserAvatarScenarios holds the uploaded-avatar store: the upsert round-trip, the foreign key on a missing
+// user, idempotent delete, and the erasure cascade.
+func runUserAvatarScenarios(ctx context.Context, b interfaces.StorageBackend, runID string, run func(string, func(*testing.T))) {
+	run("UserAvatar_save_load_replace_delete", func(t *testing.T) {
+		id := "contract-avatar-" + runID
+		u := &interfaces.User{ID: id, Email: id + "@example.com", Password: "hash"}
+		if err := b.CreateUser(ctx, u); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		t.Cleanup(func() { _ = b.DeleteUser(context.Background(), id) })
+
+		if _, err := b.LoadUserAvatar(ctx, id); !errors.Is(err, interfaces.ErrNotFound) {
+			t.Fatalf("LoadUserAvatar(before save): got %v, want ErrNotFound", err)
+		}
+
+		first := []byte("\x89PNG-not-really-a-full-image")
+		if err := b.SaveUserAvatar(ctx, id, "image/png", first); err != nil {
+			t.Fatalf("SaveUserAvatar: %v", err)
+		}
+		got, err := b.LoadUserAvatar(ctx, id)
+		if err != nil {
+			t.Fatalf("LoadUserAvatar: %v", err)
+		}
+		if got.MimeType != "image/png" || !bytes.Equal(got.Data, first) {
+			t.Errorf("round-trip: %q, %d bytes; want the stored image/png", got.MimeType, len(got.Data))
+		}
+		if got.UpdatedAt.IsZero() {
+			t.Errorf("LoadUserAvatar did not stamp UpdatedAt: %+v", got)
+		}
+
+		// A second save replaces the image, not the row.
+		second := []byte("replaced")
+		if err := b.SaveUserAvatar(ctx, id, "image/jpeg", second); err != nil {
+			t.Fatalf("SaveUserAvatar(replace): %v", err)
+		}
+		if got, err = b.LoadUserAvatar(ctx, id); err != nil || got.MimeType != "image/jpeg" || !bytes.Equal(got.Data, second) {
+			t.Errorf("after replace: %v (%q, %d bytes); want the second image", err, got.MimeType, len(got.Data))
+		}
+
+		if err := b.DeleteUserAvatar(ctx, id); err != nil {
+			t.Fatalf("DeleteUserAvatar: %v", err)
+		}
+		if err := b.DeleteUserAvatar(ctx, id); err != nil {
+			t.Errorf("DeleteUserAvatar(again): delete is idempotent, got %v", err)
+		}
+		if _, err := b.LoadUserAvatar(ctx, id); !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("LoadUserAvatar(after delete): got %v, want ErrNotFound", err)
+		}
+	})
+
+	run("UserAvatar_save_missing_user_returns_ErrNotFound", func(t *testing.T) {
+		err := b.SaveUserAvatar(ctx, "contract-avatar-missing-"+runID, "image/png", []byte("x"))
+		if !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("SaveUserAvatar(missing user): got %v, want ErrNotFound", err)
 		}
 	})
 }

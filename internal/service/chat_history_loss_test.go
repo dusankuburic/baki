@@ -20,6 +20,7 @@ type flakyConvStore struct {
 	stored   []storageif.ChatMessage
 	failLoad error
 	saves    int
+	version  int64
 }
 
 func (f *flakyConvStore) SaveConversation(_ context.Context, _, _ string, m []storageif.ChatMessage) error {
@@ -40,6 +41,31 @@ func (f *flakyConvStore) LoadConversation(_ context.Context, _, _ string) ([]sto
 }
 
 func (f *flakyConvStore) DeleteConversation(_ context.Context, _, _ string) error { return nil }
+
+// The versioned methods keep one version that every save moves, so the compare-and-swap path of the service is
+// exercised against the same failing load.
+func (f *flakyConvStore) LoadConversationVersioned(ctx context.Context, flowID, scope string) ([]storageif.ChatMessage, int64, error) {
+	msgs, err := f.LoadConversation(ctx, flowID, scope)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return msgs, f.version, err
+}
+
+func (f *flakyConvStore) SaveConversationIf(_ context.Context, _, _ string, expected int64, m []storageif.ChatMessage) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if expected != f.version {
+		return f.version, storageif.ErrConversationConflict
+	}
+	f.saves++
+	f.version++
+	f.stored = append([]storageif.ChatMessage(nil), m...)
+	return f.version, nil
+}
+
+func (f *flakyConvStore) DeleteConversationIf(_ context.Context, _, _ string, _ int64) error {
+	return nil
+}
 
 func (f *flakyConvStore) SaveUsageMetric(_ context.Context, _ *storageif.UsageMetric) error {
 	return nil

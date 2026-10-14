@@ -2,6 +2,7 @@ import {getErrorMessage} from '@/lib/getErrorMessage'
 import {create} from 'zustand'
 import {authApi, type AuthUser, type LoginRequest} from '@/api/auth'
 import {registerRefreshCallback, invalidateConfigCache, setSessionToken} from '@/api/client'
+import {clearAvatarCache} from '@/lib/avatarCache'
 import {decodeJwtPayload} from '@/lib/jwt'
 import {isTauri} from '@/platform/guards'
 import {resetAllStores, registerCurrentUserResolver} from './storeRegistry'
@@ -225,6 +226,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch {
     } finally {
       clearTokens()
+      // Other users' cached avatar images (bearer-fetched object URLs) must not survive the session.
+      clearAvatarCache()
       set({user: null, accessToken: null, isAuthenticated: false, isLoading: false, error: null})
       try {
         navigator.serviceWorker?.controller?.postMessage({type: 'PURGE_CACHES'})

@@ -57,7 +57,7 @@ func TestDeclare_RejectsBadDeclarations(t *testing.T) {
 		{"Keys twice", "x.y", []SpecOption{Keys(KindTenant), Keys(KindTenant), local}, "Keys given twice"},
 		{"too many parts", "x.y", []SpecOption{Keys(append([]PartKind{KindTenant}, sixteenParams()...)...), local}, "at most 16"},
 		{"no locality", "x.y", []SpecOption{Keys(KindTenant)}, "no locality"},
-		{"two localities", "x.y", []SpecOption{Keys(KindTenant), local, Shared("redis")}, "more than one locality"},
+		{"two localities", "x.y", []SpecOption{Keys(KindTenant), local, Shared("redis", "shared by a server")}, "more than one locality"},
 		{"locality without reason", "x.y", []SpecOption{Keys(KindTenant), ReplicaLocal("")}, "needs a reason"},
 		{"name without domain", "reports", []SpecOption{Keys(KindTenant), local}, "dot-separated"},
 		{"name with capitals", "Analyzer.reports", []SpecOption{Keys(KindTenant), local}, "dot-separated"},
@@ -75,7 +75,7 @@ func TestDeclare_RejectsBadDeclarations(t *testing.T) {
 		{Keys(KindTenant, KindRuleProfile, KindContent), local},
 		{Keys(KindTenant, KindParam, KindParam, KindContent, KindContent), local},
 		{Global("one deployment row"), local}, // a singleton: no parts at all
-		{Keys(KindResource), Global("ids are unique"), Shared("redis")},
+		{Keys(KindResource), Global("ids are unique"), Shared("redis", "shared by a server")},
 	}
 	for i, opts := range ok {
 		if _, err := newSpec("x.ok-spec", opts...); err != nil {
@@ -238,6 +238,29 @@ func TestKey_EncodingIsReadable(t *testing.T) {
 		if _, ok := decodeKey(bad); ok {
 			t.Errorf("decodeKey accepted %q", bad)
 		}
+	}
+}
+
+// TestShared_NeedsAMechanismAndAReason: Shared names how the entries are shared and why that is enough, and the
+// golden prints both.
+func TestShared_NeedsAMechanismAndAReason(t *testing.T) {
+	for _, tc := range []struct{ mechanism, reason, want string }{
+		{"", "r", "needs a mechanism"},
+		{" ", "r", "needs a mechanism"},
+		{"redis-inval", "", "needs a reason"},
+		{"redis-inval", " ", "needs a reason"},
+	} {
+		_, err := newSpec("x.shared", Keys(KindTenant), Shared(tc.mechanism, tc.reason))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("Shared(%q, %q): err = %v, want it to mention %q", tc.mechanism, tc.reason, err, tc.want)
+		}
+	}
+	info := testSpec(t, "x.shared", Keys(KindTenant), Shared(MechanismInvalidation, "30 s TTL backstop")).Info()
+	if info.Locality != LocalityShared || info.Mechanism != "redis-inval" || info.Where != "redis-inval: 30 s TTL backstop" {
+		t.Errorf("info = %+v, want shared / redis-inval / %q", info, "redis-inval: 30 s TTL backstop")
+	}
+	if got := testSpec(t, "x.local", Keys(KindTenant), ReplicaLocal("why")).Info(); got.Mechanism != "" || got.Where != "why" {
+		t.Errorf("replica-local info = %+v, want no mechanism and the reason as Where", got)
 	}
 }
 

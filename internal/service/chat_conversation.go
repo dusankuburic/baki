@@ -110,6 +110,21 @@ func (s *ChatService) SaveConversation(ctx context.Context, flowID, provider str
 	return err
 }
 
+// normalizeConversation is what a history is trimmed to before it is stored.
+func normalizeConversation(messages []models.ChatMessage) []models.ChatMessage {
+	// Drop a blank assistant message: an empty 'stop' answer used to brick the
+	// thread on Claude (Messages API rejects {"role":"assistant","content":""}).
+	filtered := make([]models.ChatMessage, 0, len(messages))
+	for _, m := range messages {
+		if m.Role == "assistant" && strings.TrimSpace(m.Content) == "" &&
+			len(m.ToolCalls) == 0 && len(m.FixProposals) == 0 && m.FixProposal == nil {
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	return evictConvMessages(filtered)
+}
+
 // saveConversation is SaveConversation reporting whether the list was stored
 // (false/nil = "Save conversation history" off: accepted and dropped).
 func (s *ChatService) saveConversation(ctx context.Context, flowID, provider string, messages []models.ChatMessage) (stored bool, err error) {
@@ -121,17 +136,7 @@ func (s *ChatService) saveConversation(ctx context.Context, flowID, provider str
 	if !s.conversationHistoryEnabled(ctx) {
 		return false, nil
 	}
-	// Drop a blank assistant message: an empty 'stop' answer used to brick the
-	// thread on Claude (Messages API rejects {"role":"assistant","content":""}).
-	filtered := make([]models.ChatMessage, 0, len(messages))
-	for _, m := range messages {
-		if m.Role == "assistant" && strings.TrimSpace(m.Content) == "" &&
-			len(m.ToolCalls) == 0 && len(m.FixProposals) == 0 && m.FixProposal == nil {
-			continue
-		}
-		filtered = append(filtered, m)
-	}
-	trimmed := evictConvMessages(filtered)
+	trimmed := normalizeConversation(messages)
 
 	if s.useBackendConversations() {
 		if err := s.backend.SaveConversation(ctx, flowID, provider, toStorageMessages(trimmed)); err != nil {
@@ -191,11 +196,18 @@ func (s *ChatService) ClearConversation(ctx context.Context, flowID, provider st
 // stalled store parked every finishing stream on the stripe mutex. Test variable.
 var persistAnswerTimeout = 15 * time.Second
 
+// answerWrite is what persistAssistantTurn did: Written says this call put the answer in the store, and the versions
+// say what the conversation looked like around that write (see mutation); the zero value is "nothing written".
+type answerWrite struct {
+	Written         bool
+	Loaded, Version int64
+}
+
 // persistAssistantTurn appends the finished answer server-side (a closed tab used to leave a stored
 // question with no answer); best-effort, idempotent, bounded by persistAnswerTimeout. model/modelLabel persist the requested id and send-time label.
-func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest, ctl *streamCtl, model, modelLabel string) {
+func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest, ctl *streamCtl, model, modelLabel string) answerWrite {
 	if doc == nil || ctl == nil {
-		return
+		return answerWrite{}
 	}
 	ctl.mu.Lock()
 	answer := ctl.buffer.String()
@@ -205,13 +217,13 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	events := ctl.snapshotEvents()
 	ctl.mu.Unlock()
 	if !done || errMsg != "" {
-		return
+		return answerWrite{}
 	}
 	// The tool trail and fix records come from the stream's journal, as the
 	// client pins them; a blank answer still stores when tools ran or a fix was proposed.
 	toolCalls, fixes := journalTurnRecord(events)
 	if strings.TrimSpace(answer) == "" && len(toolCalls) == 0 && len(fixes) == 0 {
-		return
+		return answerWrite{}
 	}
 
 	convKey := req.ConversationKey()
@@ -219,25 +231,12 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	// still land — within a bound (see persistAnswerTimeout).
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistAnswerTimeout)
 	defer cancel()
-	// Same critical section as reconstruct + persist-user-turn: the next turn
-	// may be reading the history this full-file replace overwrites.
+	// The next turn may be reading the history this write replaces. The lock queues this replica's writers; the
+	// compare-and-swap in mutateConversation settles the other replicas'.
 	mu := s.convMutexFor(doc.ID, convKey)
 	mu.Lock()
 	defer mu.Unlock()
-	history, err := s.GetConversation(writeCtx, doc.ID, convKey)
-	if err != nil {
-		logger.Warn("chat: could not load conversation to store the answer", "error", err)
-		return
-	}
 	answerID := clientMessageID(req.AssistantMessageID)
-	// Already stored: a retry, or the client got there first; an id match
-	// anywhere also covers its interrupted partial (else the reply shows twice).
-	if slices.ContainsFunc(history, func(m models.ChatMessage) bool { return m.ID == answerID }) {
-		return
-	}
-	if n := len(history); n > 0 && history[n-1].Role == "assistant" && history[n-1].Content == answer {
-		return
-	}
 	// Usage, served model and billed rates as the client saved them on done,
 	// so a reload keeps the tag and prices the turn at what it cost.
 	msg := models.ChatMessage{
@@ -257,18 +256,30 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 		ToolCalls:      toolCalls,
 		FixProposals:   fixes,
 	}
-	// Right after its own question when stored under the client's id (a queued
-	// follow-up's question can land in between) — else at the end.
-	at := len(history)
-	if id := req.UserMessageID; id != "" && clientMessageID(id) == id {
-		if i := slices.IndexFunc(history, func(m models.ChatMessage) bool { return m.ID == id && m.Role == "user" }); i >= 0 {
-			at = i + 1
+	res, err := s.mutateConversationAt(writeCtx, doc.ID, convKey, func(history []models.ChatMessage) ([]models.ChatMessage, bool, error) {
+		// Already stored: a retry, or the client got there first; an id match
+		// anywhere also covers its interrupted partial (else the reply shows twice).
+		if slices.ContainsFunc(history, func(m models.ChatMessage) bool { return m.ID == answerID }) {
+			return history, false, nil
 		}
-	}
-	history = slices.Insert(history, at, msg)
-	if err := s.SaveConversation(writeCtx, doc.ID, convKey, history); err != nil {
+		if n := len(history); n > 0 && history[n-1].Role == "assistant" && history[n-1].Content == answer {
+			return history, false, nil
+		}
+		// Right after its own question when stored under the client's id (a queued
+		// follow-up's question can land in between) — else at the end.
+		at := len(history)
+		if id := req.UserMessageID; id != "" && clientMessageID(id) == id {
+			if i := slices.IndexFunc(history, func(m models.ChatMessage) bool { return m.ID == id && m.Role == "user" }); i >= 0 {
+				at = i + 1
+			}
+		}
+		return slices.Insert(history, at, msg), true, nil
+	})
+	if err != nil {
 		logger.Warn("chat: failed to store the finished answer", "error", err)
+		return answerWrite{}
 	}
+	return answerWrite{Written: res.Changed && res.Versioned, Loaded: res.Loaded, Version: res.Version}
 }
 
 // Card and item statuses the stored fix records may carry — the client's own

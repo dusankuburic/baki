@@ -6,6 +6,7 @@ import {authApi, type IdentityLinkInfo, type SSOInfo} from '@/api/auth'
 import {Button, useConfirm, useToast} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
 import {SectionCard, SectionNotice} from './SectionCard'
+import {localDate} from '@/lib/time'
 
 function readLinkedHash(): string | null {
   const hash = window.location.hash.replace(/^#/, '')
@@ -120,7 +121,7 @@ export const LinkedIdentitiesSection: React.FC = () => {
                 </p>
                 <p className="text-xs text-text-tertiary truncate">
                   {link.email ? `${link.email} · ` : ''}
-                  {t('linked.linkedOn', {date: new Date(link.createdAt).toLocaleDateString()})}
+                  {t('linked.linkedOn', {date: localDate(link.createdAt)})}
                 </p>
               </div>
               <Button

@@ -4,6 +4,7 @@ import {
   budgetDetail,
   providerErrorInfo,
   isStreamGone,
+  isReplicaUnreachable,
   retryAfterHint,
   serverRestartDelayMs,
 } from './chatErrors'
@@ -140,5 +141,15 @@ describe('providerErrorInfo: PROVIDER_UNKNOWN', () => {
       refreshProviders: true,
       action: 'chooseModel',
     })
+  })
+})
+
+describe('isReplicaUnreachable', () => {
+  it('is true for the REPLICA_UNREACHABLE code and nothing else', () => {
+    expect(isReplicaUnreachable({status: 503, code: 'REPLICA_UNREACHABLE'})).toBe(true)
+    expect(isReplicaUnreachable({status: 503, code: 'SERVER_RESTARTING'})).toBe(false)
+    expect(isReplicaUnreachable({status: 503})).toBe(false)
+    expect(isReplicaUnreachable(new Error('REPLICA_UNREACHABLE'))).toBe(false)
+    expect(isReplicaUnreachable(null)).toBe(false)
   })
 })

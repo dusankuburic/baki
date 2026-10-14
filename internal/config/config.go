@@ -41,6 +41,10 @@ const (
 // storage layer's pgvector contract and the AI factory's width must agree.
 const DefaultEmbeddingDim = 1536
 
+// DefaultKnowledgeLeaseCap is how many org knowledge-base leases a replica holds at once when
+// PAD_KNOWLEDGE_LEASE_CAP is unset; rag.DefaultLeaseCap is the same number for a service built without config.
+const DefaultKnowledgeLeaseCap = 4
+
 // EmbeddingProviderIDs lists the provider ids PAD_EMBEDDING_PROVIDER accepts:
 // the embedding-capable providers. The ai package cannot be imported here (it
 // imports config); an ai test keeps the lists in sync.
@@ -53,6 +57,15 @@ func (s StorageConfig) EffectiveEmbeddingDim() int {
 		return s.EmbeddingDim
 	}
 	return DefaultEmbeddingDim
+}
+
+// EffectiveKnowledgeLeaseCap is the per-replica cap of org knowledge-base leases in force: KnowledgeLeaseCap, or
+// DefaultKnowledgeLeaseCap when unset.
+func (s StorageConfig) EffectiveKnowledgeLeaseCap() int {
+	if s.KnowledgeLeaseCap > 0 {
+		return s.KnowledgeLeaseCap
+	}
+	return DefaultKnowledgeLeaseCap
 }
 
 // Config holds the complete application configuration.
@@ -184,7 +197,9 @@ type GovernanceConfig struct {
 	// AuditSpillDir is the directory for the audit-event on-disk spill queue
 	// used when the in-memory pool overflows. Empty → os.TempDir() (zero-config,
 	// but a pod restart loses in-flight spilled events); a mounted volume gives
-	// cross-restart durability; "off" disables the spill queue entirely.
+	// cross-restart durability; "off" disables the spill queue entirely. Each
+	// replica spills to audit-spill-<instance>.jsonl; on a shared volume a
+	// replica replays the files of replicas that are gone (internal/audit).
 	AuditSpillDir string
 }
 
@@ -296,6 +311,11 @@ type StorageConfig struct {
 	// silently split the org's retrieval). Validate accepts only
 	// EmbeddingProviderIDs.
 	EmbeddingProvider string
+	// KnowledgeLeaseCap is how many org knowledge-base leases (an upload or a re-index of one org, held across
+	// every replica) one replica holds at once: PAD_KNOWLEDGE_LEASE_CAP. Each pins a pooled database connection for
+	// the operation, which lasts seconds to minutes; the operation beyond the cap answers 409 KNOWLEDGE_BUSY. 0 ⇒
+	// DefaultKnowledgeLeaseCap (EffectiveKnowledgeLeaseCap).
+	KnowledgeLeaseCap int
 
 	// Azure Blob Storage settings (optional). Used when Backend == StorageDatabase.
 	AzureStorageAccount   string

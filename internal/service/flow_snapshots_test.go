@@ -62,7 +62,7 @@ func TestSnapshots_FixCaptureAndRestore(t *testing.T) {
 		t.Fatal("fix did not land")
 	}
 
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != 1 {
 		t.Fatalf("want 1 snapshot after the fix, got %d", len(snaps))
 	}
@@ -86,7 +86,7 @@ func TestSnapshots_FixCaptureAndRestore(t *testing.T) {
 		t.Errorf("handler wrap survived the restore")
 	}
 	// The restore itself snapshotted the FIXED state → undoable too.
-	if got := len(svc.ListSourceSnapshots(doc)); got != 2 {
+	if got := len(snapshotsOf(t, svc, doc)); got != 2 {
 		t.Errorf("restore should add its own snapshot, got %d total", got)
 	}
 }
@@ -96,9 +96,9 @@ func TestSnapshots_FixCaptureAndRestore(t *testing.T) {
 func TestSnapshots_RingBounded(t *testing.T) {
 	svc, doc := newDesktopFlowSvc(t)
 	for i := 0; i < maxSnapshotsPerFlow+5; i++ {
-		svc.pushSnapshot(doc, svc.snapshotDesktopFile(doc, doc.FilePath, "iter"))
+		svc.pushSnapshot(context.Background(), doc, svc.snapshotDesktopFile(doc, doc.FilePath, "iter"))
 	}
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != maxSnapshotsPerFlow {
 		t.Fatalf("ring size = %d, want %d", len(snaps), maxSnapshotsPerFlow)
 	}

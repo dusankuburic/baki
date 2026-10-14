@@ -90,3 +90,82 @@ func TestPubSub_UnreachableServerNeverReportsReady(t *testing.T) {
 		t.Fatalf("Subscribe against a dead server: err=%v ready=%v; want an error and not ready", err, ready)
 	}
 }
+
+// On a declared channel a message of a version or kind this release does not know is counted and dropped before the
+// subscriber sees it; a v0 message (no envelope) and one the subscriber must judge for itself (not JSON) pass.
+func TestPubSub_DropsWhatThisReleaseDoesNotKnow(t *testing.T) {
+	_, client := newMiniRedis(t)
+	ps := NewPubSub(client)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	channel := RevocationChannel.Key()
+
+	ready := make(chan struct{}, 1)
+	got := make(chan string, 8)
+	go func() {
+		_ = ps.Subscribe(ctx, channel, func() { ready <- struct{}{} }, func(p []byte) { got <- string(p) })
+	}()
+	waitFor(t, "onReady", ready)
+
+	unknownBefore := count(RevocationChannel.Name(), ResultUnknown)
+	badBefore := count(RevocationChannel.Name(), ResultBad)
+	for _, payload := range []string{
+		`{"v":9,"jti":"future"}`,                            // a newer version: dropped
+		`{"v":1,"kind":"auth.other","jti":"odd"}`,           // another kind (and v1 > the declared v0): dropped
+		`{"jti":"old","expires_at":"2100-01-01T00:00:00Z"}`, // v0, the shipped shape: delivered
+		`not json`, // undecodable: counted, still delivered for the subscriber to judge
+	} {
+		if err := ps.Publish(ctx, channel, []byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p := waitFor(t, "the v0 message", got); p != `{"jti":"old","expires_at":"2100-01-01T00:00:00Z"}` {
+		t.Fatalf("first delivered payload = %q, want the v0 message", p)
+	}
+	if p := waitFor(t, "the undecodable message", got); p != "not json" {
+		t.Fatalf("second delivered payload = %q", p)
+	}
+	select {
+	case extra := <-got:
+		t.Fatalf("a payload this release does not know reached the subscriber: %q", extra)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if d := count(RevocationChannel.Name(), ResultUnknown) - unknownBefore; d != 2 {
+		t.Errorf("unknown count grew by %v, want 2", d)
+	}
+	if d := count(RevocationChannel.Name(), ResultBad) - badBefore; d != 1 {
+		t.Errorf("bad count grew by %v, want 1", d)
+	}
+}
+
+// A channel that declares the kinds it carries is decoded, and its messages counted, by its subscriber, which
+// knows them: the layer under it passes every one on, even a kind that is not the declared name's.
+var multiKindChannel = Declare(Spec{
+	Name: "demo.multikind", Kind: KindPubSub, Pattern: "demo:multikind", Version: 1,
+	Kinds: []string{"first", "second"}, OnDown: OnDownOpen, Owner: "internal/redisx",
+})
+
+func TestPubSub_ADeclaredKindsChannelPassesEveryKindOn(t *testing.T) {
+	_, client := newMiniRedis(t)
+	ps := NewPubSub(client)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	channel := multiKindChannel.Key()
+
+	ready := make(chan struct{}, 1)
+	got := make(chan string, 8)
+	go func() {
+		_ = ps.Subscribe(ctx, channel, func() { ready <- struct{}{} }, func(p []byte) { got <- string(p) })
+	}()
+	waitFor(t, "onReady", ready)
+	for _, payload := range []string{`{"v":1,"kind":"first"}`, `{"v":1,"kind":"second"}`, `{"v":7,"kind":"third"}`} {
+		if err := ps.Publish(ctx, channel, []byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []string{`{"v":1,"kind":"first"}`, `{"v":1,"kind":"second"}`, `{"v":7,"kind":"third"}`} {
+		if p := waitFor(t, want, got); p != want {
+			t.Errorf("delivered %q, want %q", p, want)
+		}
+	}
+}

@@ -439,11 +439,46 @@ func TestTyped_SizeOfCollectedCachesDropsOut(t *testing.T) {
 	runtime.KeepAlive(keep)
 }
 
-// TestTyped_SharedSpecRefused: Typed is replica-local storage.
-func TestTyped_SharedSpecRefused(t *testing.T) {
-	s := testSpec(t, "x.shared", Keys(KindTenant), Shared("redis"))
-	mustPanic(t, "New with a Shared spec", func() { New[int](s, 1) })
+// TestTyped_SharedSpecs: Typed is replica-local storage, so a Shared spec may build one only where the sharing is
+// the invalidation fan-out, which leaves the entries in each replica's memory and tells the others to drop them
+// (MechanismInvalidation). Any other mechanism would promise entries Typed cannot share.
+func TestTyped_SharedSpecs(t *testing.T) {
+	fanned := testSpec(t, "x.fanned", Keys(KindTenant), Shared(MechanismInvalidation, "dropped on every replica"))
+	c := New[int](fanned, 1)
+	k, _ := fanned.Key(Org("acme"))
+	c.Set(k, 7, 1, 0)
+	if v, ok := c.Get(k); !ok || v != 7 {
+		t.Errorf("Get after Set on a fan-out spec = %v, %v, want 7, true", v, ok)
+	}
+	other := testSpec(t, "x.other", Keys(KindTenant), Shared("redis", "entries live in Redis"))
+	mustPanic(t, "New with a Shared spec whose mechanism Typed cannot provide", func() { New[int](other, 1) })
 	mustPanic(t, "New with a nil spec", func() { New[int](nil, 1) })
+}
+
+// TestTyped_Clear: the whole cache goes at once (an invalidation fan-out resync) and is counted as deletions.
+func TestTyped_Clear(t *testing.T) {
+	s := testSpec(t, "x.clear", Keys(KindTenant), ReplicaLocal("recomputed on a miss"))
+	c := New[string](s, 10)
+	for _, org := range []string{"a", "b", "c"} {
+		k, _ := s.Key(Org(org))
+		c.Set(k, org, 1, 0)
+	}
+	before := s.Info().Stats.Evictions[EvictDeleted]
+	c.Clear()
+	if c.Len() != 0 || c.Cost() != 0 {
+		t.Errorf("after Clear: %d entries, cost %d, want none", c.Len(), c.Cost())
+	}
+	if got := s.Info().Stats.Evictions[EvictDeleted] - before; got != 3 {
+		t.Errorf("Clear counted %d deletions, want 3", got)
+	}
+	k, _ := s.Key(Org("a"))
+	if _, ok := c.Get(k); ok {
+		t.Error("an entry survived Clear")
+	}
+	c.Set(k, "again", 1, 0)
+	if v, ok := c.Get(k); !ok || v != "again" {
+		t.Errorf("the cache is not usable after Clear: %v, %v", v, ok)
+	}
 }
 
 // TestRecord_OwnStorage: a cache with its own storage records its events and size through its spec.

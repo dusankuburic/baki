@@ -345,14 +345,14 @@ func (h *AdminHandler) handleMigrationStart(w http.ResponseWriter, r *http.Reque
 }
 
 // @Summary      Data migration status
-// @Description  Returns the status/result of the most recent data migration (admin only).
+// @Description  Returns the status/result of the most recent data migration on any replica (admin only): the run and its result are recorded in the job state, so every replica answers alike.
 // @Tags         admin
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "OK"
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Router       /api/admin/migration/status [get]
 func (h *AdminHandler) handleMigrationStatus(w http.ResponseWriter, r *http.Request) {
-	render.JSON(w, h.runner.Status())
+	render.JSON(w, h.runner.StatusContext(r.Context()))
 }
 
 // --- Power Platform connector auth ---

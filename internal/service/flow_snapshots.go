@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
 	"pad-core/parser"
@@ -34,8 +36,23 @@ const (
 	maxSnapshotBytesCloud int64 = 64 << 20
 )
 
-// SourceSnapshot is one pre-mutation state of a flow's source text, session-scoped (in-memory) — the undo
-// affordance for "that fix made it worse", not a version-control system.
+// Where the ring lives: a cloud flow's snapshots go to the database (WithSnapshotStore, migration 0045), so an undo
+// finds what another replica recorded and survives a restart; the in-memory ring above is the desktop's, whose
+// snapshots restore to a file path, and the fallback of a service built without a store. The durable ring is 20
+// deep and 24 hours long (storageif.FlowSnapshotTTL), and replaces the global byte budget with a bound per flow
+// (a snapshot over it is not kept, older ones drop first): the rows are TOAST-compressed and a flow is deleted with
+// its ring, so no single flow can pin more than this.
+const (
+	maxFlowSnapshots           = 20
+	maxFlowSnapshotBytes int64 = 32 << 20
+)
+
+// ErrSnapshotNotFound: the id names no live snapshot of this flow (never recorded, pruned, expired, or another
+// flow's). A not-found for the API (404).
+var ErrSnapshotNotFound = fmt.Errorf("snapshot not found: %w", ErrNotFound)
+
+// SourceSnapshot is one pre-mutation state of a flow's source text — the undo affordance for "that fix made it
+// worse", not a version-control system. Held in memory (desktop) or in the database (cloud).
 type SourceSnapshot struct {
 	ID        string    `json:"id"`
 	FlowID    string    `json:"flowId"`
@@ -209,9 +226,36 @@ func flowSnapshotKey(doc *models.FlowDocument) string {
 // rejected (OCC conflict, parse-error gate, write error) still consumed an undo slot and pinned a full source
 // copy. Each returns nil when there is nothing to capture; pushSnapshot ignores nil.
 
-// pushSnapshot records snap in doc's undo ring — only after the mutation it precedes has persisted.
-func (s *FlowService) pushSnapshot(doc *models.FlowDocument, snap *SourceSnapshot) {
-	if s.snapshots == nil || snap == nil {
+// durableSnapshots reports whether doc's undo ring is the database's: a stored flow where a store was wired. A
+// desktop file (or folder) is no row of flows and restores to a path, so its ring stays in memory.
+func (s *FlowService) durableSnapshots(doc *models.FlowDocument) bool {
+	return s.snapshotDB != nil && doc.FilePath == ""
+}
+
+// pushSnapshot records snap in doc's undo ring — only after the mutation it precedes has persisted. ctx is the
+// context the mutation persisted under: the durable ring joins its request transaction, so a mutation that rolls
+// back takes its snapshot with it. A snapshot that cannot be stored is logged and dropped, never an error: it is an
+// affordance, and failing the fix that already landed would lose the more valuable half.
+func (s *FlowService) pushSnapshot(ctx context.Context, doc *models.FlowDocument, snap *SourceSnapshot) {
+	if snap == nil {
+		return
+	}
+	if s.durableSnapshots(doc) {
+		err := s.snapshotDB.PushFlowSnapshot(ctx, &storageif.FlowSnapshot{
+			ID: snap.ID, FlowID: doc.ID, Label: snap.Label, CreatedAt: snap.CreatedAt, Bytes: snap.Bytes,
+			Source: snap.source, Files: snap.Files,
+		}, s.snapshotLimits)
+		switch {
+		case err == nil:
+		case errors.Is(err, storageif.ErrFlowSnapshotTooLarge):
+			// Larger than the flow's whole bound: keeping it would evict every older snapshot and then itself.
+			logger.Warn("source snapshot exceeds the undo budget; not kept", "flow", doc.ID, "bytes", snap.retainedBytes(), "budget", s.snapshotLimits.MaxBytes)
+		default:
+			logger.Warn("source snapshot not stored", "flow", doc.ID, "label", snap.Label, "error", err)
+		}
+		return
+	}
+	if s.snapshots == nil {
 		return
 	}
 	s.snapshots.push(flowSnapshotKey(doc), snap)
@@ -307,12 +351,49 @@ func (s *FlowService) snapshotDesktopFiles(doc *models.FlowDocument, files map[s
 	}
 }
 
-// ListSourceSnapshots returns the flow's undo ring, newest last.
-func (s *FlowService) ListSourceSnapshots(doc *models.FlowDocument) []*SourceSnapshot {
-	if s.snapshots == nil || doc == nil {
-		return nil
+// ListSourceSnapshots returns the flow's undo ring, newest last. The durable ring lists metadata only (the text
+// loads on restore) and reports a store failure rather than an empty ring, which would read as "nothing to undo".
+func (s *FlowService) ListSourceSnapshots(ctx context.Context, doc *models.FlowDocument) ([]*SourceSnapshot, error) {
+	if doc == nil {
+		return []*SourceSnapshot{}, nil
 	}
-	return s.snapshots.list(flowSnapshotKey(doc))
+	if s.durableSnapshots(doc) {
+		rows, err := s.snapshotDB.ListFlowSnapshots(ctx, doc.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list snapshots: %w", err)
+		}
+		out := make([]*SourceSnapshot, len(rows))
+		for i, r := range rows {
+			out[i] = &SourceSnapshot{ID: r.ID, FlowID: r.FlowID, Label: r.Label, CreatedAt: r.CreatedAt, Bytes: r.Bytes}
+		}
+		return out, nil
+	}
+	if s.snapshots == nil {
+		return []*SourceSnapshot{}, nil
+	}
+	return append([]*SourceSnapshot{}, s.snapshots.list(flowSnapshotKey(doc))...), nil
+}
+
+// takeSnapshot resolves a restore point of doc's ring, loading its text from the database for a durable one.
+func (s *FlowService) takeSnapshot(ctx context.Context, doc *models.FlowDocument, snapshotID string) (*SourceSnapshot, error) {
+	if s.durableSnapshots(doc) {
+		row, err := s.snapshotDB.LoadFlowSnapshot(ctx, doc.ID, snapshotID)
+		if errors.Is(err, storageif.ErrNotFound) {
+			return nil, fmt.Errorf("%w: %q for this flow", ErrSnapshotNotFound, snapshotID)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("load snapshot: %w", err)
+		}
+		return &SourceSnapshot{ID: row.ID, FlowID: row.FlowID, Label: row.Label, CreatedAt: row.CreatedAt, Bytes: row.Bytes, Files: row.Files, source: row.Source}, nil
+	}
+	if s.snapshots == nil {
+		return nil, fmt.Errorf("no snapshots available")
+	}
+	snap, ok := s.snapshots.take(flowSnapshotKey(doc), snapshotID)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q for this flow", ErrSnapshotNotFound, snapshotID)
+	}
+	return snap, nil
 }
 
 // RestoreSourceSnapshot writes the snapshot's bytes back: desktop re-writes the recorded file; cloud persists
@@ -321,12 +402,9 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
-	if s.snapshots == nil {
-		return nil, fmt.Errorf("no snapshots available")
-	}
-	snap, ok := s.snapshots.take(flowSnapshotKey(doc), snapshotID)
-	if !ok {
-		return nil, fmt.Errorf("snapshot %q not found for this flow", snapshotID)
+	snap, err := s.takeSnapshot(ctx, doc, snapshotID)
+	if err != nil {
+		return nil, err
 	}
 
 	if snap.TargetPath != "" && snap.Files != nil {
@@ -347,13 +425,13 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 			target := filepath.Join(snap.TargetPath, name)
 			if err := atomicWriteConv(snap.TargetPath, target, []byte(text)); err != nil {
 				if wrote {
-					s.pushSnapshot(doc, before)
+					s.pushSnapshot(ctx, doc, before)
 				}
 				return nil, fmt.Errorf("restore snapshot (%s): %w", name, err)
 			}
 			wrote = true
 		}
-		s.pushSnapshot(doc, before)
+		s.pushSnapshot(ctx, doc, before)
 		s.publishDesktopChange(ctx, doc)
 		logger.Info("folder snapshot restored", "flow", doc.ID, "snapshot", snapshotID, "label", snap.Label)
 		return s.LoadFlowFolder(snap.TargetPath)
@@ -366,7 +444,7 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 		if err := atomicWriteConv(filepath.Dir(snap.TargetPath), snap.TargetPath, []byte(snap.source)); err != nil {
 			return nil, fmt.Errorf("restore snapshot: %w", err)
 		}
-		s.pushSnapshot(doc, before)
+		s.pushSnapshot(ctx, doc, before)
 		// The restored bytes replaced the file: derived caches are stale.
 		s.publishDesktopChange(ctx, doc)
 		if doc.FilePath != "" {
@@ -396,7 +474,7 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 		if err != nil {
 			return nil, err
 		}
-		s.pushSnapshot(doc, before)
+		s.pushSnapshot(ctx, doc, before)
 		logger.Info("folder snapshot restored", "flow", doc.ID, "snapshot", snapshotID, "label", snap.Label)
 		return updated, nil
 	}
@@ -408,7 +486,7 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 	if err != nil {
 		return nil, err
 	}
-	s.pushSnapshot(doc, before)
+	s.pushSnapshot(ctx, doc, before)
 	logger.Info("source snapshot restored", "flow", doc.ID, "snapshot", snapshotID, "label", snap.Label)
 	return updated, nil
 }
@@ -464,4 +542,13 @@ func (s *FlowService) GetSourceMeta(doc *models.FlowDocument) (*SourceMeta, erro
 		}
 	}
 	return &SourceMeta{Size: total, ModTime: latest.UTC().Format(time.RFC3339Nano), Files: len(entries)}, nil
+}
+
+// WithSnapshotStore keeps the undo ring of cloud flows in store, shared by every replica, instead of in this
+// process's memory. Desktop file flows keep the memory ring either way.
+func WithSnapshotStore(store storageif.FlowSnapshotStore) FlowOption {
+	return func(s *FlowService) {
+		s.snapshotDB = store
+		s.snapshotLimits = storageif.FlowSnapshotLimits{Keep: maxFlowSnapshots, MaxBytes: maxFlowSnapshotBytes}
+	}
 }

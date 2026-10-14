@@ -8,6 +8,7 @@ import {request, ApiError} from '@/api/client'
 import {useToast} from '@/components/shared/Toast'
 import {useConfirm} from '@/components/shared'
 import {roleLabelKey} from './helpers'
+import {localDate} from '@/lib/time'
 
 interface OrgInvite {
   id: string
@@ -63,7 +64,7 @@ export default function PendingInvites({orgId}: {orgId: string; onInviteSent?: (
 
   if (pending.length === 0) return null
 
-  const formatDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
+  const formatDate = (iso: string) => localDate(iso, {month: 'short', day: 'numeric'})
 
   return (
     <div className="mt-3">

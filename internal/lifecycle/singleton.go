@@ -560,6 +560,9 @@ func SetInstanceID(id string) {
 	instanceMu.Unlock()
 }
 
+// InstanceID is the name SetInstanceID gave this replica (the holder column of the job state, the admin health page).
+func InstanceID() string { return instanceID() }
+
 func instanceID() string {
 	instanceMu.RLock()
 	defer instanceMu.RUnlock()

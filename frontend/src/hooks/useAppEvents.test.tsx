@@ -7,12 +7,19 @@ import {useGovernanceStore} from '@/stores/governanceStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 
 let capturedCallback: ((ev: {name: string; data?: unknown}) => void) | null = null
+let capturedGap: (() => void) | null = null
 
 vi.mock('@/api/client', () => ({
   subscribeToEvents: vi.fn(async (cb: (ev: {name: string; data?: unknown}) => void) => {
     capturedCallback = cb
     return () => {
       capturedCallback = null
+    }
+  }),
+  subscribeEventGap: vi.fn((cb: () => void) => {
+    capturedGap = cb
+    return () => {
+      capturedGap = null
     }
   }),
 }))
@@ -54,6 +61,7 @@ const fullDoc = (id: string, name: string) => ({id, name, subflows: [{id: 'sf1',
 
 beforeEach(() => {
   capturedCallback = null
+  capturedGap = null
   vi.clearAllMocks()
   mockUnreadCount.mockResolvedValue({count: 0})
   useFlowStore.setState({document: null})
@@ -278,6 +286,35 @@ describe('useAppEvents', () => {
       capturedCallback!({name: 'settings:changed', data: {}})
       vi.advanceTimersByTime(1500)
       expect(loadFromBackend).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+      useSettingsStore.setState({loadFromBackend: original})
+    }
+  })
+})
+
+describe('useAppEvents replay gap', () => {
+  it('refetches what the missed events would have updated, and stops listening on unmount', async () => {
+    mockUnreadCount.mockResolvedValue({count: 5})
+    const loadFromBackend = vi.fn().mockResolvedValue(undefined)
+    const original = useSettingsStore.getState().loadFromBackend
+    useSettingsStore.setState({loadFromBackend})
+    try {
+      const {unmount} = render(<TestComponent openDocument={vi.fn()} />)
+      await new Promise(r => setTimeout(r, 10))
+      expect(capturedGap).not.toBeNull()
+
+      vi.useFakeTimers()
+      capturedGap!()
+      capturedGap!() // a burst is one refetch
+      vi.advanceTimersByTime(1600)
+      expect(loadFromBackend).toHaveBeenCalledTimes(1)
+      vi.useRealTimers()
+      await new Promise(r => setTimeout(r, 10))
+      expect(useGovernanceStore.getState().unreadCount).toBe(5)
+
+      unmount()
+      expect(capturedGap).toBeNull()
     } finally {
       vi.useRealTimers()
       useSettingsStore.setState({loadFromBackend: original})

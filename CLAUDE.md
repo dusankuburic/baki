@@ -44,6 +44,9 @@ go test ./internal/api/ -run TestRoutePolicyDeclared_Golden -update-route-policy
 go test ./internal/api/ -run TestAuthzMatrix_Golden -update-authz-matrix
 go test ./internal/storage/database/ -run TestMigrationChecksums_Golden -update-migration-checksums
 go test ./internal/di/ -run TestCacheRegistry_Golden -update-caches
+go test ./internal/di/ -run TestSubscribers_Golden -update-subscribers
+go test ./internal/di/ -run TestRedisKeys_Golden -update-redis-keys
+go test ./internal/api/ -run TestRateLimitGroups_Golden -update-ratelimit-groups
 go test ./core/analyzer/ -run TestFindingsGolden -update-findings
 go test ./core/export/ -run TestExportGolden -update-export-golden   # also after analyzer output changes
 go test ./internal/mail/ -run TestMailGolden -update-mail-golden

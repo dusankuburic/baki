@@ -6,10 +6,12 @@ import type {ErrorUsage} from '@/lib/chatEvent'
 
 type EventCb = (ev: {name: string; data: unknown}) => void
 type StateCb = (state: string) => void
+type GapCb = () => void
 
 let connState = 'open'
 let capturedCb: EventCb | null = null
 const stateListeners = new Set<StateCb>()
+const gapListeners = new Set<GapCb>()
 
 function setConnState(s: string) {
   connState = s
@@ -27,6 +29,10 @@ vi.mock('@/api/client', () => ({
     stateListeners.add(cb)
     cb(connState)
     return () => stateListeners.delete(cb)
+  }),
+  subscribeEventGap: vi.fn((cb: GapCb) => {
+    gapListeners.add(cb)
+    return () => gapListeners.delete(cb)
   }),
   getEventConnectionState: vi.fn(() => connState),
 }))
@@ -64,6 +70,7 @@ beforeEach(() => {
   connState = 'open'
   capturedCb = null
   stateListeners.clear()
+  gapListeners.clear()
   vi.clearAllMocks()
   vi.mocked(chatApi.resumeStream).mockResolvedValue({text: '', done: false, error: '', tokensOut: 0, tokensIn: 0})
   vi.mocked(chatApi.cancelStream).mockResolvedValue(undefined)
@@ -343,6 +350,36 @@ describe('done meta (served model + billed rates)', () => {
     expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o', ...RATES})
   })
 
+  it('passes the stored conversation version a done names, and the version the turn began from', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+
+    capturedCb!(chunkEvent('s1', 'hi'))
+    capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 1, conversationVersion: 12, conversationBase: 10}))
+
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {conversationVersion: 12, conversationBase: 10})
+  })
+
+  it('keeps the conversation version through a chunk-mismatch resume that does not know it', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+    capturedCb!(chunkEvent('s1', 'hi'))
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'hi there',
+      done: true,
+      error: '',
+      tokensOut: 3,
+      tokensIn: 1,
+    })
+
+    capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 2, conversationVersion: 12, conversationBase: 10}))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {conversationVersion: 12, conversationBase: 10})
+  })
+
   it('passes no meta for a plain done', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
@@ -496,5 +533,67 @@ describe('fix_decision dispatch', () => {
     capturedCb!(fixDecisionEvent('s1', {proposalId: 'p1', status: 'applied'}))
 
     expect(handler.onFixDecision).toHaveBeenCalledWith('p1', 'applied', undefined, 's1', undefined)
+  })
+})
+
+describe('cancel', () => {
+  it('tells the handler when the stop could not reach the server running the stream, and only then', async () => {
+    const handler = {...makeHandler(), onStopUnreachable: vi.fn()}
+    const {result} = renderHook(() => useStreamingMessage(handler))
+
+    vi.mocked(chatApi.cancelStream).mockRejectedValueOnce(
+      Object.assign(new Error('x'), {status: 503, code: 'REPLICA_UNREACHABLE'}),
+    )
+    result.current.cancel('s1')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(handler.onStopUnreachable).toHaveBeenCalledWith('s1')
+
+    vi.mocked(chatApi.cancelStream).mockRejectedValueOnce(
+      Object.assign(new Error('x'), {status: 403, code: 'STREAM_NOT_FOUND'}),
+    )
+    result.current.cancel('s2')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(handler.onStopUnreachable).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('replay gap marker', () => {
+  // The server could not replay what the reconnect missed: the chunk events of a running stream are among the gap, so
+  // the stream is resumed by offset exactly as after a reconnect.
+  function gap() {
+    gapListeners.forEach(l => l())
+  }
+
+  it('resumes every registered stream by delta, as a reconnect does', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+    capturedCb!(chunkEvent('s1', 'partial'))
+    vi.mocked(chatApi.resumeStream).mockClear()
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'partial more',
+      done: false,
+      error: '',
+      tokensOut: 0,
+      tokensIn: 0,
+    })
+
+    gap()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(chatApi.resumeStream).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(chatApi.resumeStream).mock.calls[0]![0]).toBe('s1')
+  })
+
+  it('does nothing when no stream is registered', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1', false)
+    result.current.teardownStream?.('s1')
+    vi.mocked(chatApi.resumeStream).mockClear()
+
+    gap()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(chatApi.resumeStream).not.toHaveBeenCalled()
   })
 })

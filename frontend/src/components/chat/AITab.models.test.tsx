@@ -172,7 +172,7 @@ beforeEach(() => {
   vi.mocked(chatApi.getSuggestedPrompts).mockResolvedValue([])
   vi.mocked(chatApi.getConversation).mockResolvedValue({messages: []})
   vi.mocked(chatApi.cancelStream).mockResolvedValue(undefined)
-  vi.mocked(chatApi.saveConversation).mockResolvedValue(undefined)
+  vi.mocked(chatApi.saveConversation).mockResolvedValue({})
   vi.mocked(flowApi.getSourceFiles).mockResolvedValue([])
   vi.mocked(providersApi.listProviders).mockResolvedValue([azure([GPT, DOCS])])
   const s = useSettingsStore.getState().settings

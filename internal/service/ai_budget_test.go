@@ -60,7 +60,7 @@ type failingLedger struct {
 	err error
 }
 
-func (l *failingLedger) others(string, string, inFlightSpend) (float64, float64, error) {
+func (l *failingLedger) others(context.Context, string, string, inFlightSpend) (float64, float64, error) {
 	return 0, 0, l.err
 }
 

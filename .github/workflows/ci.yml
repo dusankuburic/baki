@@ -404,6 +404,50 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  two-replica:
+    # The cross-replica mechanisms of Phase 5b (docs/adr/0029 to 0033) on real containers: two replicas of the image
+    # on one Postgres and one Redis behind a round-robin balancer (docker-compose.replicas.yml), driven over HTTP by
+    # scripts/ci/two-replica-smoke.sh: sign-in across replicas, a change on one showing on the other, an event on one
+    # reaching a stream on the other and replaying after a reconnect, a conversation save racing from both, an undo
+    # through the other replica, and Redis stopped and started. The in-process counterpart, on miniredis, is
+    # internal/di/two_replicas_test.go in the go-test job. The repository keeps maxReplicas at 1 until this job
+    # is green (docs/architecture/operations.md, "Running more than one replica"); it gates the deploy like the rest.
+    name: Two Replicas
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COMPOSE_FILES: -f docker-compose.yml -f docker-compose.replicas.yml
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+      # The one image both replicas run (docker-compose.replicas.yml names it, and app-b never builds), shared
+      # with the Docker Build job's layer cache.
+      - name: Build the image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: baki-backend:replicas
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Throwaway secrets for this run only; the compose file refuses to start without them.
+      - name: Generate the stack's secrets
+        run: |
+          set -euo pipefail
+          echo "PAD_AUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "PAD_METRICS_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - name: Start the stack
+        run: docker compose $COMPOSE_FILES up -d --no-build --wait --wait-timeout 300
+      - name: Run the smoke scenarios
+        run: scripts/ci/two-replica-smoke.sh
+      - name: Container logs
+        if: failure()
+        run: docker compose $COMPOSE_FILES logs --no-color --tail 300
+      - name: Stop the stack
+        if: always()
+        run: docker compose $COMPOSE_FILES down -v
+
   bicep:
     # The Azure templates had never been compiled by anything. infra/main.bicep
     # carried a leaked shell-quoting artifact that made `bicep build` fail

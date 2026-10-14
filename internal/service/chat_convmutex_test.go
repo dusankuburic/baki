@@ -21,6 +21,10 @@ func (p *panicOnSaveStore) SaveConversation(context.Context, string, string, []s
 	panic("boom: simulated storage failure during persist")
 }
 
+func (p *panicOnSaveStore) SaveConversationIf(context.Context, string, string, int64, []storageif.ChatMessage) (int64, error) {
+	panic("boom: simulated storage failure during persist")
+}
+
 // TestReconstructAndPersistUserTurn_ReleasesMutexOnPanic is the regression test for the
 // per-conversation mutex leak: a panic inside the locked critical section (a storage
 // failure during persist) must still release via defer-unlock. The section used manual

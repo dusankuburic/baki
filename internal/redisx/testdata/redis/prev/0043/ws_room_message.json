@@ -1,0 +1,1 @@
+{"o":"replica-a","e":{"type":"block.update","flowId":"flow-1","userId":"user-1","ts":"2026-10-01T12:00:00Z","payload":{"blockId":"block-7","text":"Set variable"}}}

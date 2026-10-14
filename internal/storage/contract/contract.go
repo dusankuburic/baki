@@ -70,8 +70,10 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend, opts ...Option) {
 	runReturnShapeScenarios(ctx, b, run)
 	runCreateUserScenarios(ctx, b, runID, run)
 	runConversationScenarios(ctx, b, runID, run)
+	runConversationVersionScenarios(ctx, b, runID, run)
 	runSettingsScenarios(ctx, b, runID, run)
 	runUserQueryScenarios(ctx, b, runID, run)
+	runUserAvatarScenarios(ctx, b, runID, run)
 	runFlowScenarios(ctx, b, runID, run)
 	runFindingStatusScenarios(ctx, b, runID, run)
 	runAPITokenScenarios(ctx, b, runID, run)
@@ -90,5 +92,7 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend, opts ...Option) {
 	runCICredentialScenarios(ctx, b, runID, run)
 	runCIDeliveryScenarios(ctx, b, runID, run)
 	runJobRunScenarios(ctx, b, runID, run)
+	runJobDetailScenarios(ctx, b, runID, run)
 	runKnowledgeScenarios(ctx, b, runID, run)
+	runFlowSnapshotScenarios(ctx, b, runID, run)
 }

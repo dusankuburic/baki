@@ -32,6 +32,7 @@ const (
 
 type AppSettings struct {
 	Version     int                `json:"version"`
+	Profile     ProfileSettings    `json:"profile"`
 	General     GeneralSettings    `json:"general"`
 	Appearance  AppearanceSettings `json:"appearance"`
 	Layout      LayoutSettings     `json:"layout"`
@@ -39,6 +40,18 @@ type AppSettings struct {
 	Parser      ParserSettings     `json:"parser"`
 	Analysis    AnalysisSettings   `json:"analysis"`
 	RecentFiles []RecentFile       `json:"recentFiles"`
+}
+
+// ProfileSettings is the user's identity card beyond the account row: what the profile page shows beside the
+// display name. All fields are optional; an empty timezone keeps the device's. The interface's UI language has
+// its own key (pad-language, i18n) and one supported value, so no locale lives here.
+type ProfileSettings struct {
+	// Bio is a free-form introduction; the UI caps it, the store does not.
+	Bio string `json:"bio,omitempty"`
+	// JobTitle is what the user does, as they would put it under their name.
+	JobTitle string `json:"jobTitle,omitempty"`
+	// Timezone is an IANA zone name (Europe/Belgrade); the date formatters honour it, empty means the device's.
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // GeneralSettings used to also carry lastUsedVersion, checkForUpdates and

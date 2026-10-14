@@ -171,48 +171,6 @@ var singleflightGroups = map[string]int{
 	"internal/storage/database/azure.go":    1, // Azure registry reads
 }
 
-// undeclaredMemos are the caches left off the registry, with why: memos of configuration or of immutable artifacts,
-// keyed by nothing a tenant controls and holding nothing a tenant owns, so they need no tenant part and are not
-// worth a spec (ADR 0017). The internal/ai memos are Phase 4b's (factory-scoped), request-scoped memos die with the
-// request, and per-process state (undo rings, report pairs, stream registries, rate limiters) is Phase 5b's state
-// registry. TestArch_UndeclaredMemosStillExist keeps the list honest.
-var undeclaredMemos = []struct{ file, ident, why string }{
-	{"internal/service/health.go", "blobCheckedAt", "one timestamp: the last successful blob probe (15 s)"},
-	{"internal/sso/client.go", "providerFetched", "one value: the IdP's discovery document (15 min)"},
-	{"internal/egress/egress.go", "proxyVerdicts", "per transport: an operator-allow-listed host's pass (1 min)"},
-	{"internal/api/handlers.go", "indexShellCache", "the SPA shell's bytes by path: an immutable build artifact"},
-	{"internal/api/dashboard_params.go", "tzLocCache", "time zones by name: the tz database"},
-	{"internal/api/middleware/ip.go", "proxySetCache", "parsed trusted-proxy configurations"},
-	{"internal/storage/settingsdoc/settingsdoc.go", "fieldCache", "struct fields by reflect.Type"},
-	{"internal/auth/cached_blacklist.go", "CachedBlacklist", "the token revocation set: state the auth path must see in full, synced over pub/sub"},
-}
-
-// TestArch_UndeclaredMemosStillExist: each memo undeclaredMemos lists is still where it says. A memo that moved,
-// changed or gained tenant data is reviewed again (declare it, or update the entry).
-func TestArch_UndeclaredMemosStillExist(t *testing.T) {
-	files := map[string]*ast.File{}
-	for _, f := range sourceFiles(t) {
-		files[f.path] = f.ast
-	}
-	for _, m := range undeclaredMemos {
-		f, ok := files[m.file]
-		if !ok {
-			t.Errorf("%s (%s) is gone: remove it from undeclaredMemos, or update the entry", m.file, m.ident)
-			continue
-		}
-		found := false
-		ast.Inspect(f, func(n ast.Node) bool {
-			if id, ok := n.(*ast.Ident); ok && id.Name == m.ident {
-				found = true
-			}
-			return !found
-		})
-		if !found {
-			t.Errorf("%s no longer has %s: review the memo (declare it, or update undeclaredMemos)", m.file, m.ident)
-		}
-	}
-}
-
 // TestArch_CacheDeclarationsArePackageLevel: cache.Declare runs once per kind, as the value of a package-level var,
 // with a literal name unique across both modules. So every declaration exists as soon as its package is imported
 // (the caches golden sees it, a duplicate fails at init), and the metrics' cache label is a closed set.

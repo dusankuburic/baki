@@ -9,10 +9,12 @@ import type {
   AISettings,
   GeneralSettings,
   ParserSettings,
+  ProfileSettings,
 } from '@/types'
 
 import {settingsApi} from '@/api'
 import {logger} from '@/lib/logger'
+import {setDisplayTimeZone} from '@/lib/time'
 
 type SettingsListener = (settings: AppSettings) => void
 const listeners: SettingsListener[] = []
@@ -39,6 +41,11 @@ export function providerConfig(ai: Pick<AISettings, 'providers'>, id: ProviderID
 
 export const defaultSettings: AppSettings = {
   version: 1,
+  profile: {
+    bio: '',
+    jobTitle: '',
+    timezone: '',
+  },
   general: {
     firstRunCompleted: false,
   },
@@ -168,6 +175,7 @@ interface SettingsState {
 
   loadFromBackend: () => Promise<void>
   updateSettings: (patch: Partial<AppSettings>) => Promise<void>
+  updateProfile: (profile: Partial<ProfileSettings>) => Promise<void>
   updateGeneral: (general: Partial<GeneralSettings>) => Promise<void>
   updateAppearance: (appearance: Partial<AppearanceSettings>) => Promise<void>
   updateParser: (parser: Partial<ParserSettings>) => Promise<void>
@@ -260,6 +268,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           const merged: AppSettings = {
             ...defaultSettings,
             ...loaded,
+            profile: {
+              ...defaultSettings.profile,
+              ...loaded.profile,
+            },
             general: {
               ...defaultSettings.general,
               ...loaded.general,
@@ -325,6 +337,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       await applyAndPersist({...prev, ...patch}, prev)
     },
 
+    updateProfile: async profile => {
+      const prev = get().settings
+      await applyAndPersist({...prev, profile: {...prev.profile, ...profile}}, prev)
+    },
+
     updateGeneral: async general => {
       const prev = get().settings
       await applyAndPersist({...prev, general: {...prev.general, ...general}}, prev)
@@ -384,6 +401,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     },
   }
 })
+
+// One display zone for every timestamp: the profile's choice, or the device's while it is empty.
+useSettingsStore.subscribe(s => setDisplayTimeZone(s.settings.profile?.timezone))
 
 registerStoreReset(() => {
   dropPendingPersist()

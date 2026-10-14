@@ -1,0 +1,129 @@
+# Two replicas of the app on one Postgres and one Redis, for trying the cross-replica mechanisms by hand and for the
+# two-replica CI job (scripts/ci/two-replica-smoke.sh). Layer it on the development file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.replicas.yml up --build
+#
+# What you get: app-a on http://localhost:8081 and app-b on http://localhost:8082 (each addressable on its own, which
+# the smoke script needs), and `lb` on http://localhost:8080 sending requests to the two in turn, flushing as bytes
+# arrive so server-sent events stream through. Redis is in the stack: replicas share their events, stream commands,
+# AI budget ledger, cache invalidation and rate limits only through it, and PAD_MAX_REPLICAS=2 makes the app refuse to
+# start without it. The base file's own `app` is switched off (profile) so it does not take the port.
+#
+# This is a development stack, like the base file: plaintext HTTP, a TLS-less database. Do not deploy it. For several
+# replicas behind TLS on a host, see "Running more than one replica" in docs/architecture/operations.md.
+#
+# Rate limits are raised below (a smoke run signs in and calls the API far faster than the 1 rps default per address);
+# set PAD_RATE_LIMIT_* in your environment or .env to change them.
+name: baki-replicas
+
+services:
+  redis:
+    # volatile-lru is what the managed Redis runs (infra/main.bicep): only keys with an expiry are evicted, and every
+    # key the app writes has one. No persistence: nothing here is meant to survive a restart (the keys are leases,
+    # logs of a few minutes and counters).
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-lru", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # The base file's single app, not started here.
+  app:
+    profiles: ["single-replica"]
+
+  app-a:
+    extends:
+      file: docker-compose.yml
+      service: app
+    # One image for both replicas: app-a builds it, app-b only runs it.
+    image: baki-backend:replicas
+    profiles: !reset []
+    ports: !override
+      - "8081:8080"
+    environment:
+      - PAD_PORT=8080
+      - PAD_INSTANCE_ID=app-a
+      - PAD_MAX_REPLICAS=2
+      - PAD_REDIS_URL=redis://redis:6379
+      - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082}
+      - PAD_RATE_LIMIT_GENERAL_RPS=${PAD_RATE_LIMIT_GENERAL_RPS:-200}
+      - PAD_RATE_LIMIT_GENERAL_BURST=${PAD_RATE_LIMIT_GENERAL_BURST:-400}
+      - PAD_RATE_LIMIT_AUTH_RPS=${PAD_RATE_LIMIT_AUTH_RPS:-50}
+      - PAD_RATE_LIMIT_AUTH_BURST=${PAD_RATE_LIMIT_AUTH_BURST:-100}
+      - PAD_RATE_LIMIT_PER_USER_RPS=${PAD_RATE_LIMIT_PER_USER_RPS:-200}
+      - PAD_RATE_LIMIT_PER_USER_BURST=${PAD_RATE_LIMIT_PER_USER_BURST:-400}
+      - PAD_RATE_LIMIT_UPLOAD_RPS=${PAD_RATE_LIMIT_UPLOAD_RPS:-50}
+      - PAD_RATE_LIMIT_UPLOAD_BURST=${PAD_RATE_LIMIT_UPLOAD_BURST:-100}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  app-b:
+    extends:
+      file: docker-compose.yml
+      service: app
+    image: baki-backend:replicas
+    # Built by app-a: compose would otherwise build the same context twice.
+    build: !reset null
+    pull_policy: never
+    profiles: !reset []
+    ports: !override
+      - "8082:8080"
+    environment:
+      - PAD_PORT=8080
+      - PAD_INSTANCE_ID=app-b
+      - PAD_MAX_REPLICAS=2
+      - PAD_REDIS_URL=redis://redis:6379
+      - PAD_ALLOWED_ORIGINS=${PAD_ALLOWED_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8082,http://127.0.0.1:8082}
+      - PAD_RATE_LIMIT_GENERAL_RPS=${PAD_RATE_LIMIT_GENERAL_RPS:-200}
+      - PAD_RATE_LIMIT_GENERAL_BURST=${PAD_RATE_LIMIT_GENERAL_BURST:-400}
+      - PAD_RATE_LIMIT_AUTH_RPS=${PAD_RATE_LIMIT_AUTH_RPS:-50}
+      - PAD_RATE_LIMIT_AUTH_BURST=${PAD_RATE_LIMIT_AUTH_BURST:-100}
+      - PAD_RATE_LIMIT_PER_USER_RPS=${PAD_RATE_LIMIT_PER_USER_RPS:-200}
+      - PAD_RATE_LIMIT_PER_USER_BURST=${PAD_RATE_LIMIT_PER_USER_BURST:-400}
+      - PAD_RATE_LIMIT_UPLOAD_RPS=${PAD_RATE_LIMIT_UPLOAD_RPS:-50}
+      - PAD_RATE_LIMIT_UPLOAD_BURST=${PAD_RATE_LIMIT_UPLOAD_BURST:-100}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # Not before app-a has migrated the schema (the boot's migrations also serialise on an advisory lock, so this
+      # only saves app-b a wait).
+      app-a:
+        condition: service_healthy
+
+  lb:
+    # The caddy image the production overlay pins. Plain HTTP on 8080 for the stack, round robin, no buffering.
+    image: caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
+    ports:
+      - "8080:8080"
+    configs:
+      - source: lb_caddyfile
+        target: /etc/caddy/Caddyfile
+    depends_on:
+      app-a:
+        condition: service_healthy
+      app-b:
+        condition: service_healthy
+    restart: unless-stopped
+
+configs:
+  lb_caddyfile:
+    content: |
+      {
+        auto_https off
+        admin off
+      }
+      :8080 {
+        reverse_proxy app-a:8080 app-b:8080 {
+          lb_policy round_robin
+          # Write responses through as they arrive: /api/events is a long-lived event stream.
+          flush_interval -1
+        }
+      }

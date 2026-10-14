@@ -54,6 +54,26 @@ func (p *PubSub) Subscribe(ctx context.Context, channel string, onReady func(), 
 			}
 			return err
 		}
-		onMessage([]byte(msg.Payload))
+		payload := []byte(msg.Payload)
+		if !acceptable(channel, payload) {
+			continue
+		}
+		onMessage(payload)
 	}
+}
+
+// maxCountedPayload bounds what this layer parses: a larger message goes to the subscriber, which bounds its own
+// input (the blacklist refuses anything over 1 KiB), uncounted, so the envelope check adds no parse of junk.
+const maxCountedPayload = 16 << 10
+
+// acceptable counts a message by its declared kind and drops one whose version or kind this release does not
+// know. A payload that is not decodable at all still goes to the subscriber, which validates its own wire form
+// (the blacklist logs and ignores it): the count is all this layer adds. A channel no declaration claims passes
+// untouched, and so does one that declares its Kinds (its subscriber decodes and counts each of them).
+func acceptable(channel string, payload []byte) bool {
+	s, ok := Match(channel)
+	if !ok || s.Kind != KindPubSub || len(s.Kinds) > 0 || len(payload) > maxCountedPayload {
+		return true
+	}
+	return Decode(s.Name, s.Version, payload, nil) != ResultUnknown
 }

@@ -92,9 +92,17 @@ export function registerRefreshCallback(fn: () => Promise<void>): void {
   refreshCallback = fn
 }
 
+// The `id:` of the last frame the server sent. A reconnect sends it as Last-Event-ID so a server with the shared
+// Redis replays what the gap missed. Empty until a server sends an id: an older server never does, so it never
+// receives the header (a cross-origin preflight would reject it).
+let lastEventId = ''
+const SSE_MAX_EVENT_ID_LENGTH = 128
+
 let sessionToken: string | null = null
 export function setSessionToken(token: string | null): void {
   sessionToken = token
+  // The last event id belongs to the signed-in user's log on the server: a sign-out forgets it.
+  if (token === null) lastEventId = ''
 }
 
 function tokenExpired(token: string | null): boolean {
@@ -433,6 +441,29 @@ export async function requestBlob(path: string, opts: RawRequestOptions = {}): P
   return (await requestRaw(path, opts)).blob()
 }
 
+// requestForm sends one file as a multipart/form-data "file" part. The fetch layer must not touch the body or
+// set Content-Type: the browser draws the multipart boundary, and every other helper JSON-stringifies.
+export async function requestForm<T>(path: string, file: File | Blob, field = 'avatar'): Promise<T> {
+  await ensureFreshToken(path)
+  const cfg = await getBackendConfig()
+  const token = sessionToken || cfg.token
+  const body = new FormData()
+  body.append(field, file, file instanceof File ? file.name : 'avatar')
+  const response = await fetch(`${cfg.apiUrl}${path}`, {
+    method: 'POST',
+    headers: {Authorization: `Bearer ${token}`},
+    body,
+  })
+  noteServerVersion(serverVersionOf(response))
+  if (!response.ok) throw await errorFor(response)
+  const text = await response.text()
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new Error('Server returned a non-JSON response')
+  }
+}
+
 export async function requestText(path: string, opts: RawRequestOptions = {}): Promise<string> {
   return (await requestRaw(path, opts)).text()
 }
@@ -447,6 +478,7 @@ export type EventConnectionState = 'idle' | 'connecting' | 'open' | 'reconnectin
 export type EventCallback = (event: {name: string; data: unknown}) => void
 
 const listeners = new Set<EventCallback>()
+const gapListeners = new Set<() => void>()
 const connectionListeners = new Set<(state: EventConnectionState) => void>()
 
 const SSE_INACTIVITY_TIMEOUT_MS = 45_000
@@ -457,6 +489,16 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectAttempt = 0
 let streamActive = false
 let teardownTimer: ReturnType<typeof setTimeout> | null = null
+
+// parseEventId is the value of an `id:` line, or null when it cannot be an id (empty, too long, or holding NUL,
+// which the SSE specification says to ignore).
+function parseEventId(line: string): string | null {
+  let value = line.slice(3)
+  if (value.startsWith(' ')) value = value.slice(1)
+  if (value.endsWith('\r')) value = value.slice(0, -1)
+  if (value === '' || value.length > SSE_MAX_EVENT_ID_LENGTH || value.includes('\0')) return null
+  return value
+}
 
 const SSE_MAX_RECONNECT_ATTEMPTS = 10
 let sseGivenUp = false
@@ -495,6 +537,26 @@ export function subscribeConnectionState(cb: (state: EventConnectionState) => vo
   return () => {
     connectionListeners.delete(cb)
   }
+}
+
+// The server could not replay everything a reconnect missed (more frames than its log carries, a cursor older than the
+// log, or Redis unreadable) and says so with a replay:gap event, which is not handed to the event listeners: a gap
+// subscriber refetches what it shows, as it does after a reconnect. Returns the unsubscribe function.
+export function subscribeEventGap(cb: () => void): () => void {
+  gapListeners.add(cb)
+  return () => {
+    gapListeners.delete(cb)
+  }
+}
+
+const GAP_EVENT = 'replay:gap'
+
+function deliverEvent(data: unknown): void {
+  if (typeof data === 'object' && data !== null && (data as {name?: unknown}).name === GAP_EVENT) {
+    dispatchSafely(gapListeners, l => l())
+    return
+  }
+  dispatchSafely(listeners, l => l(data as Parameters<EventCallback>[0]))
 }
 
 function scheduleReconnect(): void {
@@ -559,7 +621,11 @@ async function connectEvents(): Promise<void> {
   try {
     const response = await fetch(`${cfg.apiUrl}/api/events`, {
       method: 'GET',
-      headers: {Authorization: `Bearer ${token}`, Accept: 'text/event-stream'},
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'text/event-stream',
+        ...(lastEventId ? {'Last-Event-ID': lastEventId} : {}),
+      },
       signal: controller.signal,
     })
     noteServerVersion(serverVersionOf(response))
@@ -585,6 +651,12 @@ async function connectEvents(): Promise<void> {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    // An `id:` line applies to the event whose `data:` line follows it, as in the SSE specification.
+    let pendingId: string | null = null
+    const takeId = () => {
+      if (pendingId !== null) lastEventId = pendingId
+      pendingId = null
+    }
     while (true) {
       const {done, value} = await reader.read()
       if (done) break
@@ -593,12 +665,14 @@ async function connectEvents(): Promise<void> {
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
       for (const line of lines) {
-        if (line.startsWith('data:')) {
+        if (line.startsWith('id:')) {
+          pendingId = parseEventId(line)
+        } else if (line.startsWith('data:')) {
           let payload = line.slice(5)
           if (payload.startsWith(' ')) payload = payload.slice(1)
+          takeId()
           try {
-            const data = JSON.parse(payload)
-            dispatchSafely(listeners, l => l(data))
+            deliverEvent(JSON.parse(payload))
           } catch (err) {
             logger.warn('SSE JSON error', err)
           }
@@ -606,12 +680,14 @@ async function connectEvents(): Promise<void> {
       }
     }
     buffer += decoder.decode()
-    if (buffer.startsWith('data:')) {
+    if (buffer.startsWith('id:')) {
+      pendingId = parseEventId(buffer)
+    } else if (buffer.startsWith('data:')) {
       let payload = buffer.slice(5)
       if (payload.startsWith(' ')) payload = payload.slice(1)
+      takeId()
       try {
-        const data = JSON.parse(payload)
-        dispatchSafely(listeners, l => l(data))
+        deliverEvent(JSON.parse(payload))
       } catch {
       }
     }
@@ -656,6 +732,7 @@ export async function subscribeToEvents(callback: EventCallback) {
         teardownTimer = null
         if (listeners.size > 0) return
         streamActive = false
+        lastEventId = ''
         sseGivenUp = false
         clearOnlineRetry()
         if (reconnectTimer) {

@@ -41,10 +41,12 @@ var (
 	ErrInvalidVerifyToken = errors.New("invalid or expired verification token")
 )
 
-// authStore is the narrow slice of StorageBackend AuthService needs: account CRUD/lookup plus one-shot tokens.
+// authStore is the narrow slice of StorageBackend AuthService needs: account CRUD/lookup, one-shot tokens, and
+// the caller's own settings document (whose profile section /api/auth/me merges).
 type authStore interface {
 	storageif.UserStore
 	storageif.UserTokenStore
+	LoadUserSettings(ctx context.Context, userID string) (*storageif.AppSettings, error)
 }
 
 // AuthService owns the credential-verification and account-mutation business logic: bcrypt timing-attack
@@ -297,7 +299,33 @@ func (s *AuthService) User(ctx context.Context, userID string) (*storageif.User,
 	return s.backend.LoadUserByID(ctx, userID)
 }
 
-// UpdateProfile sets the user's display name and avatar URL; an empty value clears it.
-func (s *AuthService) UpdateProfile(ctx context.Context, userID, displayName, avatarURL string) error {
-	return s.backend.UpdateUserProfile(ctx, userID, displayName, avatarURL)
+// UpdateProfile sets the user's display name and avatar URL; an empty value clears it. servingURL is the avatar
+// serving route (an API concern the caller passes in), and the stored image and the URL stay in step: an
+// avatarURL equal to servingURL keeps the upload (and is refused with ErrAvatarImage when there is none, since
+// it would point at a 404); any other value, an external URL or empty, replaces the upload, so the old image is
+// deleted instead of staying served and exported behind a profile that no longer shows it.
+func (s *AuthService) UpdateProfile(ctx context.Context, userID, displayName, avatarURL, servingURL string) error {
+	if avatarURL == servingURL && avatarURL != "" {
+		if _, err := s.backend.LoadUserAvatar(ctx, userID); err != nil {
+			if errors.Is(err, storageif.ErrNotFound) {
+				return fmt.Errorf("%w: there is no uploaded picture to point at", ErrAvatarImage)
+			}
+			return err
+		}
+		return s.backend.UpdateUserProfile(ctx, userID, displayName, avatarURL)
+	}
+	if err := s.backend.UpdateUserProfile(ctx, userID, displayName, avatarURL); err != nil {
+		return err
+	}
+	return s.backend.DeleteUserAvatar(ctx, userID)
+}
+
+// ProfileFields returns the user's identity-card fields — their settings document's profile section. A user who
+// never saved settings reads the defaults, whose profile section is empty.
+func (s *AuthService) ProfileFields(ctx context.Context, userID string) (storageif.ProfileSettings, error) {
+	settings, err := s.backend.LoadUserSettings(ctx, userID)
+	if err != nil {
+		return storageif.ProfileSettings{}, err
+	}
+	return settings.Profile, nil
 }

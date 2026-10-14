@@ -1,4 +1,4 @@
-import {request, requestValidated, requestBlob} from './client'
+import {request, requestValidated, requestBlob, requestForm} from './client'
 import {getAuthUserSchema, getLoginResponseSchema, getRegisterResponseSchema, getRefreshResponseSchema} from './schemas'
 
 export interface LoginRequest {
@@ -30,6 +30,12 @@ export interface AuthUser {
   displayName?: string
   avatarUrl?: string
   createdAt?: string
+  emailVerified?: boolean
+  profile?: {
+    bio?: string
+    jobTitle?: string
+    timezone?: string
+  }
 }
 
 export interface RefreshResponse {
@@ -100,6 +106,13 @@ export const authApi = {
 
   updateProfile: (profile: UpdateProfileRequest): Promise<AuthUser> =>
     request('/api/auth/profile', {body: profile, method: 'PUT'}),
+
+  // The multipart upload and its removal; the server re-encodes the image, so the file never reaches storage
+  // as uploaded (metadata stripped, downscaled, size-capped).
+  uploadAvatar: (file: File | Blob): Promise<AuthUser> =>
+    requestForm('/api/auth/profile/avatar', file),
+
+  deleteAvatar: (): Promise<AuthUser> => request('/api/auth/profile/avatar', {method: 'DELETE'}),
 
   changePassword: (currentPassword: string, newPassword: string): Promise<void> =>
     request('/api/auth/change-password', {body: {oldPassword: currentPassword, newPassword}}),

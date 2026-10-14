@@ -118,7 +118,7 @@ func TestApplyFixBatchResult_DesktopPersistsFixesAppliedBeforeDeadline(t *testin
 	if out.Doc == nil || out.Doc.Metadata.BlockCount != doc.Metadata.BlockCount-2 || out.Doc.FilePath != path {
 		t.Fatalf("returned doc = %+v, want the re-parse of the written file (%d blocks)", out.Doc, doc.Metadata.BlockCount-2)
 	}
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != 1 || snaps[0].source != orig || snaps[0].Label != "before batch fix" {
 		t.Fatalf("want one 'before batch fix' snapshot of the original bytes, got %+v", snaps)
 	}
@@ -204,8 +204,8 @@ func TestApplyFixBatchResult_CloudPersistsPartialUnderDetachedContext(t *testing
 	if stored.Version != 1 {
 		t.Fatalf("stored version = %d, want 1 (one save)", stored.Version)
 	}
-	if len(svc.ListSourceSnapshots(doc)) != 1 {
-		t.Fatalf("want one undo entry for the partial batch, got %d", len(svc.ListSourceSnapshots(doc)))
+	if len(snapshotsOf(t, svc, doc)) != 1 {
+		t.Fatalf("want one undo entry for the partial batch, got %d", len(snapshotsOf(t, svc, doc)))
 	}
 }
 
@@ -245,7 +245,7 @@ func TestApplyFixBatchResult_DesktopFolderKeepsMembersFixedBeforeDeadline(t *tes
 	if out.Doc == nil || !out.Doc.IsFolder || out.Doc.Metadata.BlockCount != doc.Metadata.BlockCount-2 {
 		t.Fatalf("returned doc = %+v, want the re-merged folder with 2 blocks fewer", out.Doc)
 	}
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != 1 || snaps[0].Files["Main.txt"] != mainSrc || len(snaps[0].Files) != 1 {
 		t.Fatalf("want one folder snapshot carrying Main.txt only, got %+v", snaps)
 	}

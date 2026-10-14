@@ -172,35 +172,41 @@ func (s *ChatService) convMutexFor(flowID, convKey string) *sync.Mutex {
 	return &s.convMutexes[h.Sum32()%convMutexStripes]
 }
 
-// reconstructAndPersistUserTurn holds the per-conversation mutex across both steps (SaveConversation is a full-file replace).
-func (s *ChatService) reconstructAndPersistUserTurn(ctx context.Context, doc *models.FlowDocument, req *models.ChatRequest, convKey string) bool {
+// reconstructAndPersistUserTurn holds the per-conversation mutex across both steps (a file save is a full replace, and
+// in cloud mode the lock queues this replica's writers while the version check settles the other replicas').
+func (s *ChatService) reconstructAndPersistUserTurn(ctx context.Context, doc *models.FlowDocument, req *models.ChatRequest, convKey string) (stored bool, write *convWrite) {
 	mu := s.convMutexFor(doc.ID, convKey)
 	mu.Lock()
 	defer mu.Unlock()
+	if s.useBackendConversations() {
+		return s.persistUserTurnVersioned(ctx, doc, req, convKey)
+	}
 	history, err := s.reconstructHistory(ctx, doc, *req)
 	if err != nil {
 		// Do NOT persist: SaveConversation is a full-file replace — a history we failed to read would be destroyed.
 		logger.Warn("chat: history load failed; answering without prior context and "+
 			"skipping persistence so the stored conversation is not overwritten", "error", err)
 		req.Messages = nil
-		return false
+		return false, nil
 	}
 	req.Messages = history
-	return s.persistInitialUserTurn(ctx, doc, *req)
+	return s.persistInitialUserTurn(ctx, doc, *req), nil
 }
 
 // tryStartStream checks the per-caller cap and reserves the stream ID atomically, counting the stream's worker for
 // Shutdown; a server that is shutting down refuses with ErrServerRestarting.
 func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bool, error) {
 	s.streamCapMu.Lock()
-	defer s.streamCapMu.Unlock()
 	if s.closing {
+		s.streamCapMu.Unlock()
 		return false, ErrServerRestarting
 	}
 	if _, dup := s.finishedStreams.Load(streamID); dup {
+		s.streamCapMu.Unlock()
 		return false, errStreamIDInUse
 	}
 	if _, loaded := s.activeStreams.LoadOrStore(streamID, ctl); loaded {
+		s.streamCapMu.Unlock()
 		return false, errStreamIDInUse
 	}
 	active := 0
@@ -213,11 +219,29 @@ func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bo
 	// Undo and reject as cap-exceeded (not collision) so the caller reports the right reason.
 	if active > maxConcurrentStreamsPerScope {
 		s.activeStreams.Delete(streamID)
+		s.streamCapMu.Unlock()
 		return false, nil
 	}
-	// The budget's in-flight ledger holds exactly the active streams (released where activeStreams drops it).
-	s.aiBudget().hold(ctl)
+	s.streamCapMu.Unlock()
+
+	// The budget's in-flight ledger holds exactly the active streams (released where activeStreams drops it). The write
+	// can be a Redis round trip, so it runs with the slot reserved but the lock free: a slow Redis delays this start
+	// alone, not every other start and the server's stop.
+	if err := s.aiBudget().hold(ctl); err != nil { // the shared ledger cannot answer: fail closed
+		s.activeStreams.Delete(streamID)
+		return false, err
+	}
+	// The worker is counted under the lock that Shutdown sets closing under, so Shutdown's Wait cannot miss it; a stop
+	// that began during the write refuses the start and gives the entry back.
+	s.streamCapMu.Lock()
+	if s.closing {
+		s.streamCapMu.Unlock()
+		s.activeStreams.Delete(streamID)
+		s.aiBudget().release(ctl)
+		return false, ErrServerRestarting
+	}
 	s.workers.Add(1) // the worker StreamChatMessage starts next; it calls Done as its very last step
+	s.streamCapMu.Unlock()
 	return true, nil
 }
 
@@ -285,6 +309,8 @@ type ChatService struct {
 	convMutexes [convMutexStripes]sync.Mutex
 	// resume mirrors stream state for cross-replica reconnect resume; no-op single-replica.
 	resume resumeStore
+	// cluster links this replica to the others (stream commands, the approval and active-stream keys); nil without Redis.
+	cluster *chatCluster
 
 	// pendingFixDecisions holds apply_fix proposals awaiting approve/decline, keyed by ID.
 	pendingFixDecisions sync.Map
@@ -315,6 +341,12 @@ type ChatOptions struct {
 	Azure *AzureModelService
 	// Resume enables cross-replica stream resume; nil (PAD_REDIS_URL unset) keeps the single-replica default.
 	Resume *redis.Client
+	// Instance names this replica to the others (config Runtime.InstanceID); with a boot suffix it is stamped in every
+	// resume snapshot and is the address of the replica's command channel. Used with Resume only.
+	Instance string
+	// BusKey signs the stream commands between replicas (redisx.DeriveBusKey of the deployment's shared secret); empty
+	// leaves them unsigned. Used with Resume only.
+	BusKey []byte
 }
 
 func NewChatService(
@@ -344,7 +376,7 @@ func NewChatService(
 		chatCtxCache:  newChatContextCache(),
 	}
 	if opts.Resume != nil {
-		s.resume = redisResumeStore{c: opts.Resume}
+		s.attachCluster(opts.Resume, opts.Instance, opts.BusKey)
 	}
 	return s
 }
@@ -518,18 +550,7 @@ func (s *ChatService) persistInitialUserTurn(ctx context.Context, doc *models.Fl
 		return false
 	}
 	convKey := req.ConversationKey()
-	userID := clientMessageID(req.UserMessageID)
-	// A resend reusing a stored message id gets a fresh one, not a duplicate in the history.
-	if slices.ContainsFunc(req.Messages, func(m models.ChatMessage) bool { return m.ID == userID }) {
-		userID = uuid.NewString()
-	}
-	userMsg := models.ChatMessage{
-		ID:             userID,
-		Role:           "user",
-		Content:        req.UserMessage,
-		Timestamp:      time.Now(),
-		ContextBlockID: req.ContextBlockID,
-	}
+	userMsg := newUserTurn(req, req.Messages)
 	persisted := make([]models.ChatMessage, 0, len(req.Messages)+1)
 	persisted = append(persisted, req.Messages...)
 	persisted = append(persisted, userMsg)
@@ -693,7 +714,20 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 
 	go s.watchStream(ctx, streamID, scope, ctl)
 
+	// storeAnswer is set by the worker once it owns the turn's history: the answer must be in the store before
+	// "done" leaves, and the event names the version it was stored at (ADR 0031, addendum).
+	var storeAnswer func()
 	emit := func(eventType string, data map[string]interface{}) {
+		if eventType == "done" && storeAnswer != nil {
+			// The stored answer carries the billed rates this event names: record them before the write reads them.
+			ctl.mu.Lock()
+			ctl.noteDoneRates(data)
+			ctl.mu.Unlock()
+			storeAnswer()
+		}
+		if eventType == "done" || eventType == "error" {
+			ctl.stampConversationVersion(data)
+		}
 		// Journal first (under the ctl lock): agentic events survive a disconnect via replay.
 		ctl.mu.Lock()
 		ctl.recordJournal(eventType, data)
@@ -730,8 +764,9 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				logger.Error("chat stream goroutine panicked", "streamID", streamID, "panic", r)
 			}
 		}()
-		// persistAnswer: server-owned turns store the answer from cleanup, after leaving the active set — the write must not hold the slot.
-		persistAnswer := false
+		// persistAnswer: server-owned turns store the answer before "done" (storeAnswer), else from cleanup, after
+		// leaving the active set — the write must not hold the slot. answerAttempted: that write ran; cleanup skips it.
+		persistAnswer, answerAttempted := false, false
 		// turn is the turn's model once prepareTurn ran: the answer stores its requested id and label, never the provider-level id.
 		var turn turnModel
 		defer func() {
@@ -754,7 +789,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			s.activeStreams.Delete(streamID)
 			s.aiBudget().release(ctl)
 			time.AfterFunc(resumeRetention, func() { s.finishedStreams.Delete(streamID) })
-			if persistAnswer {
+			if persistAnswer && !answerAttempted {
 				// Read settings afresh: history-saving may have been switched off mid-stream.
 				s.persistAssistantTurn(withoutTurnMemo(ctx), doc, req, ctl, turn.requested, turn.label)
 			}
@@ -790,8 +825,21 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			// Store the answer at finish (a closed tab must not lose it); from cleanup so every exit path does it.
 			persistAnswer = true
 			// Under the per-conversation mutex (SaveConversation replaces the whole file); only then may a reload be sent back.
-			if s.reconstructAndPersistUserTurn(ctx, doc, &req, req.ConversationKey()) {
+			stored, write := s.reconstructAndPersistUserTurn(ctx, doc, &req, req.ConversationKey())
+			if stored {
 				ctl.userTurnStored.Store(true)
+			}
+			ctl.convWrite.Store(write)
+			storeAnswer = func() {
+				answerAttempted = true
+				// Read settings afresh: history-saving may have been switched off mid-stream.
+				ans := s.persistAssistantTurn(withoutTurnMemo(ctx), doc, req, ctl, turn.requested, turn.label)
+				// Kept only when contiguous with the question's write; else someone else's message is in the version.
+				if q := ctl.convWrite.Load(); q != nil && ans.Written && ans.Loaded == q.Version {
+					ctl.convWrite.Store(&convWrite{Base: q.Base, Version: ans.Version})
+				} else {
+					ctl.convWrite.Store(nil)
+				}
 			}
 		}
 

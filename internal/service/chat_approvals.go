@@ -13,9 +13,10 @@ import (
 // The approvals component of the chat service (ADR 0026): a tool that must ask the stream's owner before acting
 // registers an approvalRequest, which shows the card (the fix_proposal event), waits for the decision with
 // keepalives, and resolves the card (fix_decision) on every exit — decided, timed out, or cancelled with the
-// stream. The decision arrives through ResolveApproval from POST /api/chat/fix-decision. The pending set is
+// stream. The decision arrives through DecideApproval from POST /api/chat/fix-decision: ResolveApproval here, or,
+// for a stream another replica runs, a command to that replica (chat_commands.go, ADR 0033). The pending set is
 // process memory: an approval lives inside one stream for at most decisionWait, and nothing restarts a tool
-// loop after a process restart (Phase 5b's item).
+// loop after a process restart.
 
 // fixDecisionTimeout bounds the approval wait; a var so tests can shorten it (fixDecisionWait).
 var fixDecisionTimeout = ai.FixDecisionTimeout
@@ -113,6 +114,10 @@ func (s *ChatService) requestApproval(ctx context.Context, streamID string, req 
 	st := &fixDecisionState{streamID: streamID, requiredScope: req.requiredScope, decided: make(chan fixDecision, 1)}
 	s.pendingFixDecisions.Store(req.id, st)
 	defer s.pendingFixDecisions.Delete(req.id)
+	// Other replicas learn of the approval (stream, owner replica, required scope) before the card is shown, so a
+	// decision that lands on one of them reaches this stream (DecideApproval). Best effort.
+	s.cluster.registerApproval(req.id, streamID, req.requiredScope, s.decisionWait())
+	defer s.cluster.dropApproval(req.id)
 
 	emit("fix_proposal", req.eventData())
 

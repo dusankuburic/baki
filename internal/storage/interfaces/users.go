@@ -12,6 +12,14 @@ import (
 // ErrEmailExists is returned by CreateUser for a duplicate email (map to HTTP 409).
 var ErrEmailExists = errors.New("email already in use")
 
+// UserAvatar is a user's uploaded avatar image: the re-encoded bytes the upload path produced (PNG or JPEG, never
+// the file as uploaded), their type, and the updated stamp the serving route's ETag comes from.
+type UserAvatar struct {
+	MimeType  string    `json:"mimeType"`
+	Data      []byte    `json:"data"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // User represents a system user in the storage backend.
 type User struct {
 	ID                  string     `json:"id"`
@@ -47,6 +55,13 @@ type UserStore interface {
 	UpdateUserPassword(ctx context.Context, id string, passwordHash string) error
 	// UpdateUserProfile updates the display name and avatar URL; an empty value clears it.
 	UpdateUserProfile(ctx context.Context, id string, displayName, avatarURL string) error
+	// SaveUserAvatar upserts the user's uploaded avatar image (already validated and re-encoded); ErrNotFound when
+	// the user does not exist.
+	SaveUserAvatar(ctx context.Context, userID, mimeType string, data []byte) error
+	// LoadUserAvatar reads any user's avatar for serving; ErrNotFound when they never uploaded one.
+	LoadUserAvatar(ctx context.Context, userID string) (*UserAvatar, error)
+	// DeleteUserAvatar removes the uploaded image; idempotent — a user without one is not an error.
+	DeleteUserAvatar(ctx context.Context, userID string) error
 
 	// DeleteUser performs GDPR erasure: deletes owned flows and per-user rows, anonymizes PII on shared rows (forensic trail retained); idempotent — a missing user is not an error.
 	DeleteUser(ctx context.Context, userID string) error

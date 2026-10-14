@@ -209,6 +209,7 @@ func TestMetrics_HistogramBuckets(t *testing.T) {
 		"http_request_duration_seconds":         defBuckets,
 		"pad_background_task_duration_seconds":  {0.01, 0.05, 0.25, 1, 5, 15, 60, 300, 1800},
 		"pad_blob_operation_duration_seconds":   defBuckets,
+		"pad_chat_command_seconds":              defBuckets,
 		"pad_event_subscriber_duration_seconds": {0.0001, 0.001, 0.01, 0.05, 0.25, 1, 5, 30},
 		"pad_job_duration_seconds":              {0.1, 1, 10, 60, 300, 900, 1800, 3600, 7200},
 	}

@@ -69,6 +69,61 @@ func (s *FlowService) ReimportFlow(ctx context.Context, doc *models.FlowDocument
 type FlowCacheSubscriber struct {
 	Name string
 	Fn   func(context.Context, events.FlowChanged)
+	// Options carry the subscriber's locality (eventbus.Local or eventbus.Replicated).
+	Options []eventbus.SubscribeOption
+}
+
+// flowViewInvalidations is what the other replicas drop when a flow's content changes: the owner's home and
+// analytics views and the analytics views spanning the flow's organisation (DashboardService.InvalidateFlowViews).
+func flowViewInvalidations(e events.FlowChanged) []eventbus.Invalidation {
+	if e.Kind == events.FlowSharingChanged {
+		return nil
+	}
+	scope, ok := flowViewScope(e.OwnerID, e.OrgID)
+	if !ok {
+		return nil
+	}
+	return []eventbus.Invalidation{{Key: "dashboard.home", Scope: scope}, {Key: "dashboard.analytics", Scope: scope}}
+}
+
+// flowViewScope names the views a change to a flow of ownerID in orgID drops, as the scope of dashboard.home and
+// dashboard.analytics; false when it names nobody (the local drop ignores that too, and an empty scope would mean
+// every view).
+func flowViewScope(ownerID, orgID string) (eventbus.Scope, bool) {
+	switch {
+	case ownerID != "" && orgID != "":
+		return eventbus.NewScope("owner", ownerID, "org", orgID), true
+	case ownerID != "":
+		return eventbus.NewScope("owner", ownerID), true
+	case orgID != "":
+		return eventbus.NewScope("org", orgID), true
+	}
+	return nil, false
+}
+
+// ApplyRemoteViewInvalidation is the applier of dashboard.home and dashboard.analytics (Bus.OnRemote): the drop a
+// peer's flow change or analysis made, for the owner and organisation its scope names. An empty scope (the
+// receiver's resync after a gap) drops every view; a scope that names neither drops nothing.
+func (s *DashboardService) ApplyRemoteViewInvalidation(scope eventbus.Scope) {
+	if len(scope) == 0 {
+		s.InvalidateDashboardCache("")
+		return
+	}
+	s.InvalidateFlowViews(scope["owner"], scope["org"])
+}
+
+// WithDashboardEvents lets the service announce the drops that are not a FlowChanged's (RecordAnalysis) to the
+// other replicas on bus.
+func WithDashboardEvents(bus *eventbus.Bus) DashboardOption {
+	return func(s *DashboardService) { s.bus = bus }
+}
+
+// SubscribeRemoteDashboard registers the applier of dashboard.home and dashboard.analytics: a peer's flow change or
+// analysis drops the views it names here (ApplyRemoteViewInvalidation). One applier serves both view caches.
+func SubscribeRemoteDashboard(bus *eventbus.Bus, d *DashboardService) {
+	for _, key := range []string{"dashboard.analytics", "dashboard.home"} {
+		bus.OnRemote(key, func(sc eventbus.Scope) { d.ApplyRemoteViewInvalidation(sc) })
+	}
 }
 
 // FlowCacheSubscribers lists the caches derived from flows, for internal/di to subscribe on the sync tier: the
@@ -90,19 +145,25 @@ func FlowCacheSubscribers(flows *FlowService, dashboard *DashboardService, chat 
 			}
 		}
 	}
+	local := func(reason string) []eventbus.SubscribeOption {
+		return []eventbus.SubscribeOption{eventbus.Local(reason)}
+	}
 	return []FlowCacheSubscriber{
-		{"dashboard-cache", content(func(e events.FlowChanged) { dashboard.InvalidateFlowViews(e.OwnerID, e.OrgID) })},
-		{"chat-context-cache", content(func(e events.FlowChanged) { chat.InvalidateChatContext(e.FlowID) })},
-		{"flow-search-index", content(func(e events.FlowChanged) { flows.InvalidateSearchIndex(e.FlowID) })},
+		{"dashboard-cache", content(func(e events.FlowChanged) { dashboard.InvalidateFlowViews(e.OwnerID, e.OrgID) }),
+			[]eventbus.SubscribeOption{eventbus.Replicated(flowViewInvalidations, "dashboard.analytics", "dashboard.home")}},
+		{"chat-context-cache", content(func(e events.FlowChanged) { chat.InvalidateChatContext(e.FlowID) }),
+			local("keys carry the flow version, so another replica misses on a new version; the drop is hygiene")},
+		{"flow-search-index", content(func(e events.FlowChanged) { flows.InvalidateSearchIndex(e.FlowID) }),
+			local("served only for the exact document object it was built from, which each replica resolves through its own version-checked read")},
 		// Not required for correctness (the cache checks the stored version on every read), but a row that
 		// reappears under the same id must not be served the deleted one's parse.
 		{"flow-document-cache", deleted(func(e events.FlowChanged) {
 			if p, ok := flows.DocProvider().(interface{ Invalidate(string) }); ok {
 				p.Invalidate(e.FlowID)
 			}
-		})},
+		}), local("every read re-checks the stored version, so another replica's change or delete is seen at once")},
 		{"analyzer-report-cache", deleted(func(e events.FlowChanged) {
 			flows.analyzer.InvalidateFlow(cmp.Or(e.StableID, e.FlowID))
-		})},
+		}), local("a report is a function of the document, rule profile and analyzer version; another replica recomputes on a miss")},
 	}
 }

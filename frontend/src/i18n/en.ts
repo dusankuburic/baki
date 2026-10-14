@@ -1,4 +1,3 @@
-
 export const common = {
   cancel: 'Cancel',
   save: 'Save',
@@ -669,6 +668,14 @@ export const auth = {
     avatarUrl: 'Avatar URL',
     avatarPlaceholder: 'https://…',
     avatarHint: 'A public http(s) image link. Leave empty to show your initials.',
+    avatarUrlHint: 'Optional: an external image link. Uploading a picture replaces it.',
+    avatarUpload: 'Upload picture',
+    avatarRemove: 'Remove picture',
+    avatarUpdated: 'Picture updated',
+    avatarRemoved: 'Picture removed',
+    avatarRemoveFailed: 'Failed to remove picture',
+    avatarWrongType: 'Pictures must be PNG or JPEG images',
+    avatarTooLarge: 'Pictures must be under {{max}} MB',
     displayName: 'Display name',
     displayNamePlaceholder: 'Enter a display name',
     email: 'Email',
@@ -681,6 +688,20 @@ export const auth = {
     orgCount_one: '{{count}} organisation',
     orgCount_other: '{{count}} organisations',
     logout: 'Sign out',
+  },
+  details: {
+    heading: 'About you',
+    description: 'A short introduction and how your times are shown.',
+    bio: 'Bio',
+    bioPlaceholder: 'A few words about you…',
+    bioTooLong: 'Bio must be at most {{max}} characters',
+    jobTitle: 'Job title',
+    jobTitlePlaceholder: 'e.g. RPA Developer',
+    jobTitleTooLong: 'Job title must be at most {{max}} characters',
+    timezone: 'Timezone',
+    timezoneDevice: 'Device default',
+    updated: 'Profile details updated',
+    updateFailed: 'Failed to update profile details',
   },
   organisations: {
     heading: 'Organisations',
@@ -1125,6 +1146,8 @@ export const chat = {
     secondsToDecide: '{{count}}s to decide',
     expiring: 'expiring…',
     decisionFailed: "Couldn't send your decision — try again.",
+    decisionUnreachable: "Couldn't reach the server running this response, so your decision wasn't sent.",
+    decisionRetry: 'Try again',
     aria: 'Proposed fix: {{fixType}}',
     ariaBatch_one: 'Proposed {{count}} fix: approval needed',
     ariaBatch_other: 'Proposed {{count}} fixes: approval needed',
@@ -1227,6 +1250,10 @@ export const chat = {
     stalled: 'The response stalled — the connection to the backend may have been lost.',
     serverRestarting: 'The server restarted — sending your message again',
     serverRestarted: 'The server restarted before this answer finished — use Retry to send it again.',
+    stopUnreachable: "Couldn't stop the response",
+    stopUnreachableBody:
+      'It runs on another server that did not answer. It will stop on its own, or you can try again.',
+    stopRetry: 'Try again',
     interrupted:
       'The connection to the server was lost and this answer could not be recovered — use Retry to send it again.',
     cannotConnect: 'Could not connect to the event stream — the backend may still be starting. Please try again.',
@@ -1235,6 +1262,8 @@ export const chat = {
     saveFailedBody: 'Recent messages may be missing after a reload.',
     clearFailed: "Couldn't clear the conversation — nothing was deleted.",
     compactFailed: "Couldn't compact the conversation — nothing was changed.",
+    changedElsewhere:
+      'This conversation changed in another tab or session, so it was reloaded. Nothing was changed; try again.',
     historyNotReady: "Earlier messages haven't loaded yet — try again once they have.",
   },
   export: {

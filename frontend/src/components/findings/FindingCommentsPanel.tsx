@@ -8,6 +8,7 @@ import {useAsync} from '@/hooks/useAsync'
 import {useAuthStore} from '@/stores/authStore'
 import {useFlowStore} from '@/stores/flowStore'
 import type {FindingComment} from '@/types'
+import {localDate} from '@/lib/time'
 
 interface Props {
   comments: FindingComment[] | null
@@ -70,7 +71,7 @@ export default function FindingCommentsPanel({
           <div key={c.id} className="text-2xs space-y-0.5">
             <div className="flex items-center gap-2">
               <span className="text-text-secondary font-medium">{c.authorName || c.authorId.slice(0, 8)}</span>
-              <span className="text-text-disabled">{new Date(c.createdAt).toLocaleDateString()}</span>
+              <span className="text-text-disabled">{localDate(c.createdAt)}</span>
               {userId !== null && (c.authorId === userId || canModerate) && (
                 <button
                   onClick={() => void handleDelete(c)}

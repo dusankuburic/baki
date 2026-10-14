@@ -1,6 +1,7 @@
-import {useState} from 'react'
+import {useEffect, useState} from 'react'
 import clsx from 'clsx'
 import {userInitials, userColor} from '@/lib/avatar'
+import {isInternalAvatarUrl, loadAvatar, onAvatarsChanged, resolveAvatarUrl} from '@/lib/avatarCache'
 
 const SIZE_CLASSES = {
   sm: 'w-7 h-7 text-2xs',
@@ -19,6 +20,8 @@ interface AvatarProps {
   className?: string
 }
 
+// An uploaded avatar's URL is the authenticated serving route, which an <img> tag cannot call: internal paths
+// render from the avatar cache (a bearer-fetched object URL) and fall back to the initials until it arrives.
 export default function Avatar({name, colorSeed, avatarUrl, size = 'md', className}: AvatarProps) {
   const [imgFailed, setImgFailed] = useState(false)
 
@@ -28,7 +31,23 @@ export default function Avatar({name, colorSeed, avatarUrl, size = 'md', classNa
     setImgFailed(false)
   }
 
-  const showImage = !!avatarUrl && !imgFailed
+  const internal = isInternalAvatarUrl(avatarUrl)
+  const [objectUrl, setObjectUrl] = useState<string | null>(() => resolveAvatarUrl(avatarUrl))
+  useEffect(() => {
+    if (!internal) return
+    let alive = true
+    void loadAvatar(avatarUrl!).then(url => {
+      if (alive) setObjectUrl(url)
+    })
+    return () => {
+      alive = false
+    }
+  }, [internal, avatarUrl])
+  // Another surface invalidated or re-fetched the avatar while this one is mounted.
+  useEffect(() => (internal ? onAvatarsChanged(() => setObjectUrl(resolveAvatarUrl(avatarUrl))) : undefined), [internal, avatarUrl])
+
+  const src = internal ? objectUrl : avatarUrl
+  const showImage = !!src && !imgFailed
 
   return (
     <div
@@ -40,7 +59,7 @@ export default function Avatar({name, colorSeed, avatarUrl, size = 'md', classNa
       style={showImage ? undefined : {background: userColor(colorSeed || name)}}
     >
       {showImage ? (
-        <img src={avatarUrl} alt={name} className="w-full h-full object-cover" onError={() => setImgFailed(true)} />
+        <img src={src} alt={name} className="w-full h-full object-cover" onError={() => setImgFailed(true)} />
       ) : (
         userInitials(name)
       )}

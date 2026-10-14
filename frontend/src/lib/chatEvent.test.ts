@@ -539,3 +539,37 @@ describe('parseChatEvent approvals', () => {
     expect(legacyItems[1]).not.toHaveProperty('id')
   })
 })
+
+describe('conversation version on the terminal events', () => {
+  it('reads the stored version and the version the turn began from off done', () => {
+    expect(
+      parseChatEvent({
+        streamId: 's1',
+        type: 'done',
+        data: {tokensOut: 1, tokensIn: 1, conversationVersion: 42, conversationBase: 40},
+      }),
+    ).toMatchObject({kind: 'done', conversationVersion: 42, conversationBase: 40})
+  })
+
+  it('reads them off an error, which keeps them in its meta with the rates', () => {
+    expect(
+      parseChatEvent({
+        streamId: 's1',
+        type: 'error',
+        data: {message: 'x', conversationVersion: 7, conversationBase: 0},
+      }),
+    ).toMatchObject({kind: 'error', meta: {conversationVersion: 7, conversationBase: 0}})
+  })
+
+  it('ignores a version that is not a non-negative whole number', () => {
+    for (const bad of [-1, 1.5, '7', null, Number.NaN]) {
+      const ev = parseChatEvent({
+        streamId: 's1',
+        type: 'done',
+        data: {tokensOut: 1, tokensIn: 1, conversationVersion: bad, conversationBase: bad},
+      })
+      expect(ev).not.toHaveProperty('conversationVersion')
+      expect(ev).not.toHaveProperty('conversationBase')
+    }
+  })
+})

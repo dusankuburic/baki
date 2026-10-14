@@ -59,6 +59,8 @@ type Router struct {
 
 	usedTicketsMu sync.Mutex
 	usedTickets   map[string]time.Time
+	// ticketRedis shares the single-use record of tickets across replicas (ws_ticket.go); nil keeps it per replica.
+	ticketRedis *redis.Client
 	// draining is the server's draining state, consulted before a WebSocket ticket is redeemed; nil is the
 	// process's (drain.Process), tests set their own.
 	draining *drain.State
@@ -113,6 +115,7 @@ func NewRouter(p RouterParams) (*Router, error) {
 		hub:         wshub.NewHubWithRedis(p.Redis),
 		flowChecker: p.FlowChecker,
 		usedTickets: make(map[string]time.Time),
+		ticketRedis: p.Redis,
 		shutdownCh:  p.ShutdownCh,
 		mux:         chi.NewRouter(),
 		policyMode:  routePolicyMode(cfg),
@@ -236,7 +239,7 @@ func (rt *Router) corsHeaders(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Expose-Headers", BuildVersionHeader+", "+idempotentReplayedHeader)
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key, Last-Event-ID")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -366,8 +369,8 @@ func (rt *Router) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}
-	// Local map fallback for local mode and defense-in-depth in cloud (belt-and-suspenders).
-	if !rt.consumeTicket(claims.ID, claims.ExpiresAt.Time) {
+	// Redis (when configured) and the local map: the fallback for local mode and defense-in-depth in cloud (belt-and-suspenders).
+	if !rt.consumeTicketEverywhere(r.Context(), claims.ID, claims.ExpiresAt.Time) {
 		render.Error(w, fmt.Errorf("unauthorized"), http.StatusUnauthorized)
 		return
 	}

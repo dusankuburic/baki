@@ -8,6 +8,8 @@ package audit
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +56,12 @@ type Config struct {
 	SpillDir string
 	// SpillMaxBytes caps the queue file; <= 0 means 10 MB.
 	SpillMaxBytes int64
+	// Instance names this replica in its spill file (audit-spill-<Instance>.jsonl), so replicas sharing a directory
+	// do not rewrite each other's file; "" is "unnamed".
+	Instance string
+	// AdoptAfter is how long another replica's spill file must have gone untouched before this one takes it over;
+	// <= 0 means two minutes.
+	AdoptAfter time.Duration
 }
 
 // Recorder writes audit rows. A Recorder without a store (desktop: no server-side store) records nothing, and so
@@ -74,14 +82,24 @@ type Recorder struct {
 	reaperStop          chan struct{}
 	reaper              sync.WaitGroup
 	shutdownBudget      time.Duration
+
+	// instance and adoptAfter come from Config; adopted holds the spill files of other replicas this one replays
+	// (claimOrphans), guarded by adoptMu.
+	instance   string
+	adoptAfter time.Duration
+	adoptMu    sync.Mutex
+	adopted    []*spillStore
 }
 
 // New returns a recorder writing to store; Start starts its pool. Until then, and for a recorder never started,
 // each event is a detached best-effort write of its own.
 func New(store storageif.AuditStore, cfg Config) *Recorder {
-	r := &Recorder{store: store, shutdownBudget: defaultShutdownBudget}
+	r := &Recorder{store: store, shutdownBudget: defaultShutdownBudget, instance: cfg.Instance, adoptAfter: cfg.AdoptAfter}
+	if r.adoptAfter <= 0 {
+		r.adoptAfter = defaultAdoptAfter
+	}
 	if cfg.SpillDir != "" {
-		s, err := newSpillStore(cfg.SpillDir, cfg.SpillMaxBytes)
+		s, err := newSpillStore(cfg.SpillDir, cfg.Instance, cfg.SpillMaxBytes)
 		if err != nil {
 			slog.Warn("audit spill queue disabled (using log fallback only)", "error", err)
 		} else {
@@ -124,6 +142,7 @@ func (r *Recorder) Start() {
 			go r.worker()
 		}
 		if r.spill != nil {
+			r.adoptOrphans()
 			r.reaperStop = make(chan struct{})
 			r.reaper.Add(1)
 			go r.reapSpill()
@@ -356,36 +375,94 @@ func (r *Recorder) worker() {
 	}
 }
 
+// adoptEvery is how often the reaper looks for spill files of replicas that are gone: a replica that dies while the
+// others run leaves a file nobody would otherwise see before a restart.
+const adoptEvery = time.Minute
+
 // reapSpill drains the on-disk spill queue back into the pool whenever there is capacity, on a 500 ms tick
-// (sub-second replay latency without contending with the hot write path).
+// (sub-second replay latency without contending with the hot write path), and looks for abandoned spill files of
+// other replicas once a minute.
 func (r *Recorder) reapSpill() {
 	defer r.reaper.Done()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	adopt := time.NewTicker(adoptEvery)
+	defer adopt.Stop()
 	for {
 		select {
 		case <-r.reaperStop:
 			return
+		case <-adopt.C:
+			r.adoptOrphans()
 		case <-ticker.C:
 			r.replaySpilled()
 		}
 	}
 }
 
+// adoptOrphans takes over the spill files of replicas that are gone, and the claims a previous run of this instance
+// left half replayed (claimOrphans decides what is abandoned). The files are replayed by the same reaper as our own.
+func (r *Recorder) adoptOrphans() {
+	if r.spill == nil {
+		return
+	}
+	dir := filepath.Dir(r.spill.path)
+	paths := append(ownClaims(dir, r.instance), claimOrphans(dir, r.instance, r.adoptAfter)...)
+	r.adoptMu.Lock()
+	defer r.adoptMu.Unlock()
+	for _, p := range paths {
+		if slices.ContainsFunc(r.adopted, func(s *spillStore) bool { return s.path == p }) {
+			continue
+		}
+		s, err := openAdopted(p, r.spill.gauge, r.spill.maxBytes)
+		if err != nil {
+			slog.Warn("audit: cannot read an adopted spill file; leaving it for the next scan", "file", filepath.Base(p), "error", err)
+			continue
+		}
+		r.adopted = append(r.adopted, s)
+		slog.Info("audit: replaying the spill file of another replica", "file", filepath.Base(p), "events", s.depth)
+	}
+}
+
+// spillStores is our own spill file and the claims we replay.
+func (r *Recorder) spillStores() []*spillStore {
+	r.adoptMu.Lock()
+	defer r.adoptMu.Unlock()
+	return append([]*spillStore{r.spill}, r.adopted...)
+}
+
 // replaySpilled moves drained spill events into the pool, only while it has ample room (< half full) so replay
 // never starves fresh events. A partial-batch failure re-spills the unconsumed remainder (without
-// double-counting the metric) and yields.
+// double-counting the metric) and yields. A claim that is drained is deleted.
 func (r *Recorder) replaySpilled() {
 	if r.spill == nil {
 		return
 	}
+	for _, s := range r.spillStores() {
+		if !r.replayFrom(s) {
+			return
+		}
+		if s != r.spill && s.removeIfDrained() {
+			r.dropAdopted(s)
+		}
+	}
+}
+
+func (r *Recorder) dropAdopted(s *spillStore) {
+	r.adoptMu.Lock()
+	defer r.adoptMu.Unlock()
+	r.adopted = slices.DeleteFunc(r.adopted, func(o *spillStore) bool { return o == s })
+}
+
+// replayFrom drains s into the pool; false: the pool has no more room, stop for this tick.
+func (r *Recorder) replayFrom(s *spillStore) bool {
 	for {
 		if len(r.queue) >= queueSize/2 {
-			return // leave headroom for fresh events
+			return false // leave headroom for fresh events
 		}
-		batch := r.spill.Drain(flushSize)
+		batch := s.Drain(flushSize)
 		if len(batch) == 0 {
-			return
+			return true
 		}
 		var failed []*storageif.AuditEvent
 		for _, ev := range batch {
@@ -398,8 +475,8 @@ func (r *Recorder) replaySpilled() {
 		if len(failed) > 0 {
 			// Pool filled/closed mid-batch — put the unconsumed remainder back (reSpill doesn't bump the
 			// spilled metric) and yield this tick.
-			r.spill.reSpill(failed)
-			return
+			s.reSpill(failed)
+			return false
 		}
 	}
 }

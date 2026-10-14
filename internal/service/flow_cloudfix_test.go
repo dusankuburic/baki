@@ -144,7 +144,7 @@ func TestCloudFolderFix_Batch(t *testing.T) {
 	}
 
 	// Undo: the pre-batch snapshot restores BOTH files' original state.
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) == 0 {
 		t.Fatal("no snapshot captured")
 	}

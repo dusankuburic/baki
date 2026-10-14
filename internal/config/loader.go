@@ -355,6 +355,8 @@ var envBindings = []envBinding{
 	// are pgvector-searchable; mismatched embeddings are excluded from the
 	// vector index rather than corrupting similarity search.
 	intEnv("PAD_EMBEDDING_DIM", func(c *Config, n int) { c.Storage.EmbeddingDim = n }),
+	// Org knowledge-base leases one replica holds at once (each pins a database connection).
+	intEnv("PAD_KNOWLEDGE_LEASE_CAP", func(c *Config, n int) { c.Storage.KnowledgeLeaseCap = n }),
 	// Knowledge-base embedding provider pin (the only way to embed the shared
 	// corpus with Azure AI Foundry). Validated against EmbeddingProviderIDs.
 	strEnv("PAD_EMBEDDING_PROVIDER", func(c *Config, v string) {
@@ -706,6 +708,15 @@ func Validate(cfg *Config) error {
 		if n.v < 0 {
 			return fmt.Errorf("config: %s (%s) must be 0 (unknown) or more, not %d", n.env, n.field, n.v)
 		}
+	}
+	if cfg.Storage.KnowledgeLeaseCap < 0 {
+		return fmt.Errorf("config: PAD_KNOWLEDGE_LEASE_CAP (Storage.KnowledgeLeaseCap) must be 0 (the default, %d) or more, not %d", DefaultKnowledgeLeaseCap, cfg.Storage.KnowledgeLeaseCap)
+	}
+	// Several replicas share their rate limits, WebSocket rooms, presence and stream resume only through Redis: without
+	// it each replica enforces N times the limit and a collaborator on another replica is invisible, silently. A
+	// single replica needs none (docs/adr/0029-redis-envelope-key-registry-and-health.md).
+	if cfg.Storage.MaxReplicas > 1 && !cfg.Redis.URL.IsSet() {
+		return fmt.Errorf("config: PAD_MAX_REPLICAS=%d needs PAD_REDIS_URL: replicas share rate limits, collaboration rooms and stream resume only through Redis (set PAD_REDIS_URL, or run a single replica)", cfg.Storage.MaxReplicas)
 	}
 	return validateRoutePolicy(cfg.Server.RoutePolicy)
 }

@@ -11,6 +11,8 @@ package settingsdoc
 // (ADR 0012), it carries every section at LegacyVersion, so a version bump must wait for the release that stops
 // writing it, or write the blob in the old shape.
 var Default = MustRegistry(
+	// The user's identity card: bio, job title, timezone. The profile page reads it through /api/auth/me.
+	Section{Key: "profile", Version: 1},
 	// The app shell: whether the first-run walkthrough was completed.
 	Section{Key: "general", Version: 1},
 	// The frontend's theme, density, motion and chat text size.

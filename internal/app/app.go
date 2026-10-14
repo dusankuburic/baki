@@ -16,6 +16,7 @@ import (
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/di"
+	"pad-analyzer/internal/invalidation"
 	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/service"
 )
@@ -57,6 +58,8 @@ func Options(build Build) []fx.Option {
 		di.ServiceModule,
 		di.APIModule,
 		redisx.Module,
+		// After the services and API modules, whose appliers it delivers to; before startServer, so it stops after it.
+		invalidation.Module,
 		fx.Invoke(
 			initAuditTrail,
 			initRetentionPurge,

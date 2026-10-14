@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"pad-analyzer/internal/storage/interfaces"
@@ -14,6 +15,8 @@ func init() {
 		tables: []tableClaim{
 			{table: "users", export: "user", erase: erasedByStep, org: orgNotKeyed,
 				noPurge: "accounts are erased on request, never aged out"},
+			{table: "user_avatars", export: "avatar", erase: erasedByCascade, org: orgNotKeyed,
+				noPurge: "an avatar lives until its owner removes it"},
 			{table: "refresh_tokens", export: "sessions", erase: erasedByStep, org: orgNotKeyed},
 			{table: "token_blacklist", noExport: "revoked token ids, no user identity",
 				erase: notPersonal, eraseWhy: "a token id (jti) and its expiry", org: orgNotKeyed},
@@ -36,6 +39,14 @@ func init() {
 			section("user", func(ctx context.Context, b *PostgresStorageBackend, x *exportRun) (*interfaces.User, error) {
 				return b.LoadUserByID(ctx, x.userID)
 			}, func(out *interfaces.UserDataExport, v *interfaces.User) { out.User = v }),
+			// The uploaded image is personal data; absent when the user never uploaded one (the section reads as null).
+			section("avatar", func(ctx context.Context, b *PostgresStorageBackend, x *exportRun) (*interfaces.UserAvatar, error) {
+				a, err := b.LoadUserAvatar(ctx, x.userID)
+				if errors.Is(err, interfaces.ErrNotFound) {
+					return nil, nil
+				}
+				return a, err
+			}, func(out *interfaces.UserDataExport, v *interfaces.UserAvatar) { out.Avatar = v }),
 			section("auditEvents", func(ctx context.Context, b *PostgresStorageBackend, x *exportRun) ([]interfaces.ExportedAuditEvent, error) {
 				events, err := b.exportAuditEvents(ctx, x.userID)
 				return interfaces.NewExportedAuditEvents(events), err

@@ -101,7 +101,7 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 			"default-src 'self'; "+
 				"script-src "+scriptSrc+"; "+
 				"style-src 'self' 'unsafe-inline'; "+
-				"img-src 'self' data:; "+
+				"img-src 'self' data: blob:; "+
 				"font-src 'self'; "+
 				"connect-src 'self' ws: wss:; "+
 				"object-src 'none'; "+

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"time"
 	"unicode/utf8"
 
 	"pad-analyzer/internal/ai"
@@ -22,6 +23,34 @@ var (
 	BuildDate = ""
 	GitCommit = ""
 )
+
+// ErrSettingsInvalid refuses a settings write whose document breaks a field rule — today the profile section's
+// length caps and its timezone's IANA name. The API maps it to 400.
+var ErrSettingsInvalid = errors.New("invalid settings")
+
+// The profile section's caps, mirrored by the frontend's constraints (frontend/src/lib/constraints.ts).
+const (
+	profileBioMaxChars      = 500
+	profileJobTitleMaxChars = 100
+)
+
+// validateProfileSection checks the user-editable identity fields before a settings write stores them; the
+// timezone must resolve like the analytics query's does (an unresolvable name would dead-render the dates that
+// honour it).
+func validateProfileSection(p models.ProfileSettings) error {
+	if n := utf8.RuneCountInString(p.Bio); n > profileBioMaxChars {
+		return fmt.Errorf("%w: profile.bio is %d characters, at most %d", ErrSettingsInvalid, n, profileBioMaxChars)
+	}
+	if n := utf8.RuneCountInString(p.JobTitle); n > profileJobTitleMaxChars {
+		return fmt.Errorf("%w: profile.jobTitle is %d characters, at most %d", ErrSettingsInvalid, n, profileJobTitleMaxChars)
+	}
+	if p.Timezone != "" {
+		if _, err := time.LoadLocation(p.Timezone); err != nil {
+			return fmt.Errorf("%w: profile.timezone %q is not an IANA zone name", ErrSettingsInvalid, p.Timezone)
+		}
+	}
+	return nil
+}
 
 // SystemService handles settings, info, error logging, and API keys.
 type SystemService struct {
@@ -96,6 +125,9 @@ func (s *SystemService) GetUserSettings(ctx context.Context, userID string) (set
 // UpdateUserSettings saves userID's own settings; an empty userID saves the deployment's (see GetUserSettings).
 func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, settings models.AppSettings) (err error) {
 	defer logger.Guard("SystemService.UpdateUserSettings", &err)
+	if err := validateProfileSection(settings.Profile); err != nil {
+		return err
+	}
 	if s.backend == nil || userID == "" {
 		return s.UpdateSettings(ctx, settings)
 	}

@@ -1,8 +1,84 @@
 # Backend refactoring proposal: making Baki extensible (revision 3, two review passes applied)
 
-## Status (2026-10-10)
+## Status (2026-10-13)
 
 **Fix first:** R1–R8 and S1–S3 are done (R7 and R8 with Phase 4c).
+
+**Phase 5b: done** (2026-10-13, uncommitted). Migrations 0044–0046, all `expand`. The repository still ships one replica
+(`maxReplicas` 1, `provisionRedis` false): this phase adds the capability, the guards and the proof, and the first deploy
+of it stays at one replica because a revision of the release before neither publishes nor subscribes.
+
+*Delivered:*
+- **Redis foundations** (ADR 0029): the `{v, kind}` envelope with a tolerant decode (a missing `v` is v0, unknown ones are
+  counted, nothing is deleted on a decode failure), a `Declare` registry of every key and channel with
+  `redis_keys.golden` and an archtest ratchet against key literals, previous-release fixtures (`testdata/redis/prev/0043`),
+  `redisx.Health` (`pad_redis_up`, `pad_redis_errors_total`, evictions), `/readyz` stays 200 with `"degraded":["redis"]`,
+  boot starts degraded when Redis is unreachable, `PAD_MAX_REPLICAS > 1` without `PAD_REDIS_URL` is refused (app boot, the
+  deploy workflow and a test), the rate-limit groups are frozen by a golden, and `internal/testutil/redisreplica` runs N
+  replicas on one miniredis.
+- **SSE across replicas** (ADR 0030): fan-out on one channel, event ids from a per-user Redis Stream with `Last-Event-ID`
+  replay (a `replay:gap` marker when a replay cannot be whole), subscriber presence so the chat watchdog sees a client on
+  another replica.
+- **Chat commands** (ADR 0033): stop, approval decision and reload reach the replica that owns the stream through
+  `baki:chat:cmd:<replica>`, HMAC-signed, with a first-decision-wins claim; Redis down answers 503 `REPLICA_UNREACHABLE`.
+- **Budget ledger** (ADR 0028 addendum): in-flight spend in Redis, fails closed, used only with `PAD_MAX_REPLICAS > 1`.
+- **Cache invalidation** (ADR 0032): `Replicated`/`Local` is a required choice per event subscriber
+  (`subscribers.golden`), seven caches are `Shared("redis-inval")`, access rechecks reach peers' sockets and streams, an
+  epoch gap check and a resync heal a lost message; `uploadIDs` and the WebSocket ticket guard moved to Redis;
+  `TestArch_PerProcessStateDeclared` makes every keyed in-memory collection declare replica-local or shared.
+- **Database side:** conversations carry a version (0044, ADR 0031: compare-and-swap, 409 `CONVERSATION_CONFLICT`, the
+  client merges by message id; the stream's `done` carries the stored version), the undo ring is a table (0045, 20 per flow,
+  24 h), the knowledge-base lock is a per-org lease across replicas (`PAD_KNOWLEDGE_LEASE_CAP`), the legacy migration status
+  is read from `job_runs` (0046), the audit spill is one file per replica with orphan adoption and an idempotent insert.
+- **Infrastructure:** Bicep scale rule, Standard C1 Redis with `volatile-lru` when `maxReplicas > 1`, alerts, repo variables,
+  `docker-compose.replicas.yml`, a Caddyfile for several replicas, `scripts/ci/two-replica-smoke.sh` and a `two-replica` CI
+  job, `docs/architecture/operations.md` "Running more than one replica", and an in-process two-replica test
+  (`internal/di/two_replicas_test.go`).
+
+*Found in review and fixed:* the reconcile after a streamed turn moved server-trimmed history to the end and re-saved it;
+the budget hold ran under the stream-cap lock and a Redis outage queued every stream start; an SSE replay could drop the
+middle silently; the loser of an approval claim answered ok without the decision having reached the owner; commands and
+replies were unauthenticated; two replicas with one instance id broke SSE, presence and commands; a flapping Redis caused a
+resync every 5 s; the budget ledger moved to Redis for a single replica too, so a Redis maintenance window failed every chat
+turn; unthrottled Redis warnings; several Lows.
+
+*Open:* the compose stack, the `two-replica` CI job and the Caddy `dynamic a` block have not run end to end, and the Azure
+alert queries are unchecked against a live workspace; the per-user caps (3 streams, 10 SSE/WS, 3 uploads) are per replica,
+so N replicas allow N times as many; a stop for a dead replica's stream is 503 until its snapshot expires; the
+`clientStreamId` dedup is per replica; undo snapshots have no cross-flow bound; the knowledge-base lease cap can let a few
+orgs fill a replica's slots; the audit spill still does not cover a database outage (only a full queue) and a torn last line
+can fuse with the next event; the scanner dedup maps and the analysis report pair are per replica (known gaps in the state
+registry); a replica of the release before takes no knowledge lease and keeps its own ledger, so mixed versions are safe only
+at one replica; event bodies cross Redis in plaintext (TLS, AUTH and a private network are required, ADR 0030); no conversation
+conflict counter beyond `pad_chat_blind_saves_total`; the blind-save contract step (refuse a save without `baseVersion`) is not
+scheduled yet.
+
+**Profile cycle: done** (2026-10-12, uncommitted, outside the phase numbering). Migration 0043, `expand`.
+
+*Delivered:*
+- **Avatar upload:** `user_avatars` (one re-encoded PNG or JPEG per user, bytea, RLS: read by any signed-in caller,
+  written by the owner). `POST`/`DELETE /api/auth/profile/avatar`, `GET /api/users/{id}/avatar` (ETag from the
+  updated stamp, `private` cache, no anonymous access). The server decodes, downscales to 512 px and re-encodes, so
+  EXIF/GPS and anything but pixels never reach the table; the decode caps are 4096 px a side and 16 M pixels. The
+  upload points `users.avatar_url` at the serving route; the export carries the image, erasure cascades.
+- **Profile section:** `profile` in the settings document (bio ≤ 500, job title ≤ 100, IANA timezone), validated on
+  write (`ErrSettingsInvalid`, 400). A typed `MeResponse`; login, register and SSO answer `displayName`/`avatarUrl`.
+- **Frontend:** `avatarCache` (bearer fetch to object URL; a 404 is the only cached miss; five-minute TTL; 200
+  entries), `Avatar` through it, the picker with a client-side downscale, the About-you card, and one display zone
+  (`setDisplayTimeZone`, fed from the settings store) used by `absoluteTime`, `localDate`, `formatDateTime`,
+  `formatTimeOfDay` and the analytics day buckets.
+
+*Found in review and fixed:* the SPA's CSP had `img-src 'self' data:`, so the browser refused every `blob:` avatar;
+saving the display name after an upload failed (the field held the relative route, which both the client's URL check,
+the input's `type="url"` and the server refused); a profile write with an external or empty URL left the old image
+stored, served and exported; the cache remembered any failure as "no image" for the session and never refreshed;
+the timezone applied to one screen only.
+
+*Open:* an older client that posts a settings document without `profile` clears it (every section is replaced
+wholesale, as before); the avatar upload shares the `upload` rate bucket with flow uploads; a server-side re-encode
+ignores a JPEG's EXIF orientation (the web client's canvas applies it before upload); no admin removal of another
+user's avatar; `/me.profile` has no web consumer (the settings store is the source); bio and job title are not shown
+to other users.
 
 **Phase 4b: done** (2026-10-10, uncommitted). Migration 0042, `expand`.
 

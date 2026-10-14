@@ -19,6 +19,7 @@ import AnalysisDiffView from './AnalysisDiffView'
 import SuppressionsPanel from './SuppressionsPanel'
 import {saveFindingsCSV, exportFindingsHTML, exportFindingsSARIF, exportFindingsJUnit} from '@/lib/findingsExport'
 import {buildBlockLookup, type BlockLookup} from '@/lib/tree'
+import {localDate} from '@/lib/time'
 
 const FindingsList = lazy(() => import('./FindingsList'))
 import {useTranslation} from 'react-i18next'
@@ -271,7 +272,7 @@ export default function FindingsTab() {
       const result = await flowApi.createShare(doc.id)
       const url = `${window.location.origin}/shared?token=${result.token}`
       await writeClipboard(url)
-      const expires = result.expiresAt ? ` · expires ${new Date(result.expiresAt).toLocaleDateString()}` : ''
+      const expires = result.expiresAt ? ` · expires ${localDate(result.expiresAt)}` : ''
       toast.success(t('toasts.shareLinkCopied'), {description: `${url}${expires}`})
     } catch (err) {
       toast.error(t('toasts.shareLinkFailed'), {description: getErrorMessage(err)})

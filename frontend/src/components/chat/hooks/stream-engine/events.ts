@@ -4,6 +4,7 @@ import i18n from '@/i18n'
 import {uuid} from '@/lib/uuid'
 import {useChatStore} from '@/stores/chatStore'
 import {classifyChatFailure, budgetDetail, providerErrorInfo} from '@/lib/chatErrors'
+import {adoptStreamVersion} from '@/lib/conversationSync'
 import type {DoneMeta, ErrorUsage} from '@/lib/chatEvent'
 import type {ChatMessage} from '@/types'
 import type {ChatStoreState, StreamAcc, ToastApi} from './types'
@@ -47,12 +48,14 @@ export function useStreamEvents({
       const acc = takeAcc(streamId)
       if (!acc) return
       const slot = useChatStore.getState().streams[acc.threadId]
+      // The server stored this turn (question and answer) and named the version it is at: nothing left to save.
+      const adopted = adoptStreamVersion(acc.threadId, meta)
       commitAssistantMessage(acc, slot?.messageId, acc.text, {
         tokensIn,
         tokensOut,
         finishReason: 'stop',
         meta,
-        save: !acc.serverOwned,
+        save: !acc.serverOwned && !adopted,
       })
       endStream(acc.threadId)
       const servedKey = `${acc.threadId}\u0000${acc.model ?? ''}\u0000${meta?.servedModel ?? ''}`
@@ -76,12 +79,15 @@ export function useStreamEvents({
       if (kind === 'serverRestarting') {
         const resendThread = autoResendRef.current(streamId)
         if (resendThread) {
+          // The question the server stored before it went down is in this version; the re-sent turn saves on it.
+          adoptStreamVersion(resendThread, usage?.meta)
           bumpThreadTokens(resendThread, usage?.tokensIn, usage?.tokensOut)
           return
         }
       }
       const acc = takeAcc(streamId)
       if (!acc) return
+      adoptStreamVersion(acc.threadId, usage?.meta)
       const slot = useChatStore.getState().streams[acc.threadId]
       let errorLine: string
       const providerError = providerErrorInfo(code)

@@ -22,6 +22,7 @@ import (
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/platform/lock"
 	"pad-analyzer/internal/rag"
+	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/storage"
 	storagedb "pad-analyzer/internal/storage/database"
@@ -229,7 +230,26 @@ func ProvideAnalysisService(notifier service.EventNotifier, settings service.Set
 // embedding run counts what running chat streams have committed. backend is nil on the desktop (no usage
 // store: spend reads $0, so only the in-flight ledger can trip there).
 func ProvideAIBudget(settings service.SettingsProvider, backend storageif.StorageBackend) *service.AIBudget {
-	return service.NewAIBudget(settings, backend)
+	return provideAIBudget(settings, backend, nil, nil, nil)
+}
+
+// provideAIBudget is ProvideAIBudget with the in-flight ledger in Redis when the deployment has more than one
+// replica configured (PAD_MAX_REPLICAS > 1) and a Redis client: only then does a stream run somewhere a budget
+// check on another replica cannot see. A single replica keeps the in-process ledger even with PAD_REDIS_URL set
+// (rate limits, rooms and resume use it), because the Redis ledger fails closed: with it, a Redis outage would
+// stop AI on a deployment that has nothing to share. With a daily budget set, an unreachable Redis then refuses new
+// turns and stops running ones at their next budget re-check (ADR 0028 addendum, docs/architecture/ai-providers.md).
+func provideAIBudget(settings service.SettingsProvider, backend storageif.StorageBackend, redisClient *redis.Client, health *redisx.Health, cfg *config.Config) *service.AIBudget {
+	return service.NewAIBudget(settings, backend, service.WithRedisLedger(sharedLedgerClient(redisClient, cfg), health))
+}
+
+// sharedLedgerClient is the client the budget ledger lives on: the shared one with several replicas, else nil (the
+// in-process ledger).
+func sharedLedgerClient(redisClient *redis.Client, cfg *config.Config) *redis.Client {
+	if cfg == nil || cfg.Storage.MaxReplicas <= 1 {
+		return nil
+	}
+	return redisClient
 }
 
 // ProvideProviderPolicy builds the provider policy every factory builder consults (ADR 0028): the
@@ -257,11 +277,13 @@ func ProvideProviderPolicy(settings service.SettingsProvider, backend storageif.
 // Foundry — through the model registry's "Use for knowledge base"
 // designation when azure (the registry) is wired. budget is the daily AI budget
 // a chat turn consults too (R-4); nil leaves billed runs unlimited.
-// leaser is the jobs' lease (nil on the desktop): the background re-embed job runs under it, one replica at a time.
+// leaser is the jobs' lease (nil on the desktop): the background re-embed job runs under it, one replica at a time, and
+// so does every org upload and re-index (a lease per org over the check -> embed -> write window, at most
+// PAD_KNOWLEDGE_LEASE_CAP held per replica).
 func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService, budget *service.AIBudget, bus *eventbus.Bus, leaser lock.Leaser) *rag.KnowledgeService {
 	opts := []rag.Option{rag.WithEmbeddingProvider(cfg.Storage.EmbeddingProvider), rag.WithEventBus(bus)}
 	if leaser != nil {
-		opts = append(opts, rag.WithJobLeaser(leaser))
+		opts = append(opts, rag.WithJobLeaser(leaser), rag.WithLeaseCap(cfg.Storage.EffectiveKnowledgeLeaseCap()))
 	}
 	if azure != nil {
 		opts = append(opts, rag.WithAzureEmbedder(azure))
@@ -458,7 +480,7 @@ var ServiceModule = fx.Options(
 		// from internal/app's provideKeyStore (plain fx values, not globals).
 		ProvideAzureRegistry,
 		ProvideAzureModelService,
-		ProvideAIBudget,
+		provideAIBudget,
 		ProvideProviderPolicy,
 		provideKnowledgeService,
 		// /api/keys/has and /api/keys/delete for azure-foundry act on the
@@ -474,8 +496,8 @@ var ServiceModule = fx.Options(
 		// DashboardService's constructor takes the narrower DashboardStore and
 		// the ScopeResolver interface; fx's reflection-based provider matching
 		// needs this bridge.
-		func(backend storageif.StorageBackend, analysis *service.AnalysisService, flowSvc *service.FlowService, scopes *service.FlowScopeResolver) *service.DashboardService {
-			return service.NewDashboardService(backend, analysis, flowSvc, scopes)
+		func(backend storageif.StorageBackend, analysis *service.AnalysisService, flowSvc *service.FlowService, scopes *service.FlowScopeResolver, bus *eventbus.Bus) *service.DashboardService {
+			return service.NewDashboardService(backend, analysis, flowSvc, scopes, service.WithDashboardEvents(bus))
 		},
 		service.NewExportService,
 		service.NewLibraryService,
@@ -535,8 +557,10 @@ var ServiceModule = fx.Options(
 			redisClient *redis.Client,
 			azure *service.AzureModelService,
 			budget *service.AIBudget,
+			cfg *config.Config,
+			lc fx.Lifecycle,
 		) *service.ChatService {
-			return service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode, service.ChatOptions{
+			chat := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode, service.ChatOptions{
 				Knowledge: knowledge,
 				// The budget the knowledge base consults too (R-4).
 				Budget: budget,
@@ -546,7 +570,16 @@ var ServiceModule = fx.Options(
 				Azure: azure,
 				// nil when PAD_REDIS_URL is unset → single-replica resume (local maps).
 				Resume: redisClient,
+				// The replica's name: stamped, with a boot suffix, in the resume snapshots and the address of its stream-command
+				// channel.
+				Instance: cfg.Runtime.InstanceID,
+				// The commands are signed with a key derived from the deployment's shared secret.
+				BusKey: commandBusKey(cfg, redisClient != nil),
 			})
+			// The replica listens for stream commands from start; Shutdown (the first stop hook) ends the subscriptions after
+			// the streams (ADR 0033). A no-op without Redis.
+			lc.Append(fx.Hook{OnStart: func(context.Context) error { chat.StartCommands(); return nil }})
+			return chat
 		},
 		func(
 			auth *ai.GitHubAuth,
@@ -556,6 +589,7 @@ var ServiceModule = fx.Options(
 			orgKeys service.OrgKeyStore,
 			azure *service.AzureModelService,
 			cfg *config.Config,
+			bus *eventbus.Bus,
 		) *service.ProviderService {
 			// orgKeys: organisation-shared credentials (G7), nil outside cloud
 			// mode, where the org routes report ORG_KEYSTORE_UNAVAILABLE. azure:
@@ -567,7 +601,7 @@ var ServiceModule = fx.Options(
 			if hook := service.AzureListing(azure, orgKeys); hook != nil {
 				ai.InstallListing(ai.AzureFoundryProviderID, hook)
 			}
-			return service.NewProviderService(auth, copilot, factory, secrets, orgKeys, azure, service.WithProfile(capability.Of(cfg).Profile()))
+			return service.NewProviderService(auth, copilot, factory, secrets, orgKeys, azure, service.WithProfile(capability.Of(cfg).Profile()), service.WithProviderEvents(bus))
 		},
 	),
 	// R4: the deployment custom-rule file is its OWN graph node rather than
@@ -619,4 +653,21 @@ func ProvideDeploymentCustomRules(cfg *config.Config) service.DeploymentCustomRu
 		logger.Warn(msg, "file", path, "index", p.Index, "rule", p.RuleID, "field", p.Field, "reason", p.Reason, "detail", p.Error())
 	}
 	return rules
+}
+
+// commandBusKey is the HMAC key of the stream commands between replicas, derived from the deployment's shared secret
+// (PAD_ENCRYPTION_KEY, else PAD_AUTH_SECRET). With none (auth off, or only a per-process secret) the commands go
+// unsigned and the boot says so: whoever can publish on the Redis channels can then stop streams and decide
+// approvals, which the private network and the Redis password are all that stands in front of.
+func commandBusKey(cfg *config.Config, hasRedis bool) []byte {
+	if !hasRedis {
+		return nil
+	}
+	shared := cfg.Auth.SharedSecret()
+	if !shared.IsSet() {
+		logger.Warn("redis: no PAD_ENCRYPTION_KEY or PAD_AUTH_SECRET shared by the replicas: stream commands between replicas are not signed; " +
+			"keep Redis on a private network with a password and TLS")
+		return nil
+	}
+	return redisx.DeriveBusKey(shared.Reveal())
 }

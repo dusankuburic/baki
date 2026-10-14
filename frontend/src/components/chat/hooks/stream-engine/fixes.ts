@@ -1,7 +1,8 @@
-import {useCallback} from 'react'
+import {useCallback, useEffect, useRef} from 'react'
 import type {MutableRefObject} from 'react'
 import i18n from '@/i18n'
 import {chatApi, flowApi, analysisApi, ApiError} from '@/api'
+import {isReplicaUnreachable} from '@/lib/chatErrors'
 import {logger} from '@/lib/logger'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
@@ -9,11 +10,12 @@ import type {ChatEvent, FixDecisionEventItem, FixProposalPayload} from '@/lib/ch
 import type {ToolCallRecord} from '@/types'
 import type {ApprovalCard} from '@/stores/chatStore'
 import {useChatStore} from '@/stores/chatStore'
-import type {ChatStoreState, StreamAcc} from './types'
+import type {ChatStoreState, StreamAcc, ToastApi} from './types'
 import {pendingCard, asCardStatus, asItemStatus, decisionTargets} from './helpers'
 
 interface FixDeps {
   streamAccRef: MutableRefObject<Map<string, StreamAcc>>
+  toastRef: MutableRefObject<ToastApi | null>
   setFixProposal: ChatStoreState['setFixProposal']
   patchFixProposal: ChatStoreState['patchFixProposal']
   replaceStreamTools: ChatStoreState['replaceStreamTools']
@@ -22,6 +24,7 @@ interface FixDeps {
 
 export function useFixEvents({
   streamAccRef,
+  toastRef,
   setFixProposal,
   patchFixProposal,
   replaceStreamTools,
@@ -106,6 +109,11 @@ export function useFixEvents({
     [streamAccRef, patchFixProposal, refreshAfterFix],
   )
 
+  // The retry action of the unreachable-server toast calls the latest respond (it cannot name itself).
+  const respondRef = useRef<(threadId: string, approved: boolean, proposalId?: string, excludedItemIndices?: number[]) => void>(
+    () => {},
+  )
+
   const respondFixProposal = useCallback(
     (threadId: string, approved: boolean, proposalId?: string, excludedItemIndices?: number[]) => {
       if (approved && useFlowStore.getState().readOnly) return
@@ -125,12 +133,28 @@ export function useFixEvents({
             })
           : chatApi.respondFixDecision(...args)
       respond.catch(err => {
+        if (isReplicaUnreachable(err)) {
+          // The server running the stream did not answer: nothing was decided, so the card goes back to pending and the
+          // decision can be sent again.
+          logger.warn('Approval decision could not reach the server running the stream', err)
+          patchFixProposal(threadId, card.proposalId, {status: 'pending'})
+          toastRef.current?.warning(i18n.t('chat:fixCard.decisionUnreachable'), {
+            action: {
+              label: i18n.t('chat:fixCard.decisionRetry'),
+              onClick: () => respondRef.current(threadId, approved, card.proposalId, excludedItemIndices),
+            },
+          })
+          return
+        }
         logger.warn('Approval decision failed', err)
         patchFixProposal(threadId, card.proposalId, {status: 'error', message: i18n.t('chat:fixCard.decisionFailed')})
       })
     },
-    [patchFixProposal],
+    [patchFixProposal, toastRef],
   )
+  useEffect(() => {
+    respondRef.current = respondFixProposal
+  }, [respondFixProposal])
 
   const onResumeState = useCallback(
     (events: ChatEvent[], streamId: string) => {

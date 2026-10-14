@@ -14,6 +14,7 @@ import (
 	"pad-analyzer/internal/mail"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/platform/reqtx"
+	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/service"
 	"pad-analyzer/internal/sso"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -61,20 +62,14 @@ func ProvideFlowAccessChecker(authz *service.AuthzService, backend storageif.Sto
 	return &authzFlowChecker{authz: authz}
 }
 
-// ProvideRedisPinger adapts the optional *redis.Client to the readiness-probe
-// interface. Returns nil when Redis isn't configured so SystemHandler skips
-// the check entirely in single-replica / local mode.
-func ProvideRedisPinger(client *redis.Client) api.RedisPinger {
-	if client == nil {
+// ProvideRedisPinger hands the Redis health to the system handler as the
+// probe interface. Returns nil when Redis isn't configured so SystemHandler
+// reports nothing about it in single-replica / local mode.
+func ProvideRedisPinger(health *redisx.Health) api.RedisPinger {
+	if !health.Configured() {
 		return nil
 	}
-	return redisPingerAdapter{client: client}
-}
-
-type redisPingerAdapter struct{ client *redis.Client }
-
-func (a redisPingerAdapter) Ping(ctx context.Context) error {
-	return a.client.Ping(ctx).Err()
+	return health
 }
 
 // ProvideSecurityConfig: requestTx and idem are the database's request transaction and Idempotency-Key store,
@@ -124,7 +119,7 @@ var APIModule = fx.Options(
 		ProvideSecurityConfig,
 		ProvideFlowAccessChecker,
 		ProvideEventManager,
-		// Adapter: *redis.Client (nil when PAD_REDIS_URL is unset) →
+		// Adapter: *redisx.Health (unconfigured when PAD_REDIS_URL is unset) →
 		// api.RedisPinger (see ProvideRedisPinger above).
 		ProvideRedisPinger,
 		api.NewSystemHandler,
@@ -159,24 +154,56 @@ var APIModule = fx.Options(
 )
 
 // ProvideEventManager is the SSE hub; EmitToOrg resolves an organisation's members from the store (none without
-// one: the desktop has no organisations).
-func ProvideEventManager(shutdownCh chan struct{}, backend storageif.StorageBackend) *api.EventManager {
-	if backend == nil {
-		return api.NewEventManager(shutdownCh)
+// one: the desktop has no organisations). A deployment with the shared Redis (capability shared-state) also gets the
+// fan-out: events, event ids with Last-Event-ID replay and subscriber presence across replicas.
+func ProvideEventManager(lc fx.Lifecycle, cfg *config.Config, shutdownCh chan struct{}, backend storageif.StorageBackend, client *redis.Client, health *redisx.Health) *api.EventManager {
+	var opts []api.EventManagerOption
+	if backend != nil {
+		opts = append(opts, api.WithOrgRoster(api.OrgRosterOf(backend)))
 	}
-	return api.NewEventManager(shutdownCh, api.WithOrgRoster(api.OrgRosterOf(backend)))
+	fanout := client != nil && capability.Of(cfg).Has(capability.SharedState)
+	if fanout {
+		opts = append(opts, api.WithFanout(redisx.NewSSEBackplane(client, health, redisx.BootOrigin(cfg.Runtime.InstanceID))))
+	}
+	m := api.NewEventManager(shutdownCh, opts...)
+	if !fanout {
+		return m
+	}
+	// Stopped after what emits through it (it is constructed first, so fx stops it last): the terminal events of
+	// the chat streams that end at shutdown are still published to the other replicas.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	lc.Append(fx.Hook{
+		OnStart: func(context.Context) error {
+			go func() { defer close(done); m.RunFanout(ctx) }()
+			return nil
+		},
+		OnStop: func(stop context.Context) error {
+			cancel()
+			select {
+			case <-done:
+			case <-stop.Done():
+			}
+			return nil
+		},
+	})
+	return m
 }
 
 // SubscribeRealtime subscribes what tells clients and people that something changed: all async, so each runs
 // once the write committed (a client refetching earlier read the old row) and never for a rolled-back one.
 func SubscribeRealtime(bus *eventbus.Bus, router *api.Router, analysis *api.AnalysisHandler, sse *api.EventManager) {
-	eventbus.Subscribe(bus, eventbus.Async, "ws-flow-changed", service.NotifyFlowViewers(router.FlowViewers()))
+	eventbus.Subscribe(bus, eventbus.Async, "ws-flow-changed", service.NotifyFlowViewers(router.FlowViewers()),
+		eventbus.Local("the hub broadcasts through the WebSocket room backplane, which already reaches every replica's viewers when Redis is configured"))
 	// An open socket whose access may have shrunk re-checks it at once, not at its 2-minute pass.
 	wshub.SubscribeAccessRechecks(bus, router.WebSocketHub())
 	// So does an event stream of a revoked token (a logout, a deleted API token): it ends at once.
 	sse.SubscribeRevocations(bus)
+	sse.SubscribeRemoteRevocations(bus)
 	// The bell rows of a comment or an assignment must not be lost: when the bus's runner is full, the hand-off to
 	// the handler's own alert runner runs inline instead.
-	eventbus.Subscribe(bus, eventbus.Async, "finding-comment-fanout", analysis.OnFindingCommented, eventbus.InlineWhenSaturated())
-	eventbus.Subscribe(bus, eventbus.Async, "finding-assignment-fanout", analysis.OnFindingAssigned, eventbus.InlineWhenSaturated())
+	eventbus.Subscribe(bus, eventbus.Async, "finding-comment-fanout", analysis.OnFindingCommented, eventbus.InlineWhenSaturated(),
+		eventbus.Local("sends an email and writes bell rows: a side effect that must happen once, and the comment text stays on this replica"))
+	eventbus.Subscribe(bus, eventbus.Async, "finding-assignment-fanout", analysis.OnFindingAssigned, eventbus.InlineWhenSaturated(),
+		eventbus.Local("sends an email and writes a bell row: a side effect that must happen once"))
 }

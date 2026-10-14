@@ -3,6 +3,14 @@ export interface DoneMeta {
   servedModel?: string
   inputCostPerM?: number
   outputCostPerM?: number
+  /**
+   * Where the server's own writes left the stored conversation (ADR 0031, addendum): the version it holds after
+   * this turn's question and answer, and the version the turn began from. A client still on the base version may
+   * move to the new one without a round trip; present only when the server stored the turn and nobody else wrote
+   * to the thread meanwhile.
+   */
+  conversationVersion?: number
+  conversationBase?: number
 }
 
 export interface ErrorUsage {
@@ -72,6 +80,10 @@ function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function asVersion(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+}
+
 function doneMeta(data: Record<string, unknown>): DoneMeta {
   const meta: DoneMeta = {}
   const servedModel = asString(data.servedModel)
@@ -80,6 +92,12 @@ function doneMeta(data: Record<string, unknown>): DoneMeta {
   if (inputCostPerM !== null) meta.inputCostPerM = inputCostPerM
   const outputCostPerM = asNumber(data.outputCostPerM)
   if (outputCostPerM !== null) meta.outputCostPerM = outputCostPerM
+  const conversationVersion = asVersion(data.conversationVersion)
+  const conversationBase = asVersion(data.conversationBase)
+  if (conversationVersion !== null && conversationBase !== null) {
+    meta.conversationVersion = conversationVersion
+    meta.conversationBase = conversationBase
+  }
   return meta
 }
 

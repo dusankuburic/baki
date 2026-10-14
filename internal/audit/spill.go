@@ -3,9 +3,12 @@ package audit
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -13,8 +16,79 @@ import (
 
 const (
 	defaultSpillMaxBytes = 10 * 1024 * 1024 // 10 MB
-	spillFileName        = "audit-spill.jsonl"
+
+	// A replica spills to audit-spill-<instance>.jsonl; the release before wrote one fixed name, adopted like any
+	// orphan. A replica that takes over another's file renames it to <file>.adopt-<claimant>-<unixnano> first.
+	spillFilePrefix     = "audit-spill-"
+	spillFileExt        = ".jsonl"
+	legacySpillFileName = "audit-spill.jsonl"
+	claimMarker         = ".jsonl.adopt-"
+	drainScratchSuffix  = ".drain.tmp"
+	claimingSuffix      = ".claiming"
+
+	// defaultAdoptAfter is how long a spill file must go untouched before another replica may take it over (see
+	// claimOrphans); emptyOrphanAge is how long an empty one lingers before it is deleted.
+	defaultAdoptAfter = 2 * time.Minute
+	emptyOrphanAge    = 24 * time.Hour
+
+	maxInstanceNameLen = 64
 )
+
+// spillInstanceName is the instance id as a file-name component: [A-Za-z0-9._-] only (anything else becomes "_"),
+// at most maxInstanceNameLen bytes, "unnamed" when empty.
+func spillInstanceName(instance string) string {
+	var sb strings.Builder
+	for i := 0; i < len(instance) && sb.Len() < maxInstanceNameLen; i++ {
+		c := instance[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.', c == '_', c == '-':
+			sb.WriteByte(c)
+		default:
+			sb.WriteByte('_')
+		}
+	}
+	if sb.Len() == 0 {
+		return "unnamed"
+	}
+	return sb.String()
+}
+
+// spillFileFor is the name of the spill file of the replica with this instance id.
+func spillFileFor(instance string) string {
+	return spillFilePrefix + spillInstanceName(instance) + spillFileExt
+}
+
+// depthGauge sums the depth of the spill files one recorder holds (its own and the claims it replays) into
+// pad_audit_spill_depth.
+type depthGauge struct {
+	mu sync.Mutex
+	by map[*spillStore]int
+}
+
+func (g *depthGauge) set(s *spillStore, n int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.by == nil {
+		g.by = map[*spillStore]int{}
+	}
+	g.by[s] = n
+	g.publish()
+}
+
+func (g *depthGauge) forget(s *spillStore) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.by, s)
+	g.publish()
+}
+
+func (g *depthGauge) publish() {
+	total := 0
+	for _, n := range g.by {
+		total += n
+	}
+	setAuditSpillDepth(total)
+}
 
 // spillStore is a bounded, on-disk FIFO of audit events that overflowed the in-memory pool. The reaper drains
 // it back into the pool when capacity returns, so a transient DB/throughput hiccup doesn't drop events.
@@ -23,10 +97,13 @@ const (
 // consumed prefix — O(n) per drain, but the file is size-capped (default 10 MB) and drains are throttled, so it
 // is cheap relative to the DB write it precedes.
 //
-// Durability trade-off: an event accepted by Spill survives a pool outage until the reaper replays it. Events
-// still in the file at process exit remain on disk and drain on the next boot's Start WHEN the spill dir is on
-// persistent storage; the default temp-dir location trades that cross-restart durability for zero-config
-// (operators wanting it set PAD_AUDIT_SPILL_DIR to a mounted volume).
+// Each replica owns one file, named after its instance id, so several replicas can share a directory without
+// rewriting each other's file; the mutex only has to cover this process. A replica that is gone leaves its file
+// behind, and a later replica takes it over (claimOrphans). Events still in the file at process exit remain on
+// disk and drain on the next boot's Start WHEN the spill dir is on persistent storage; the default temp-dir
+// location trades that cross-restart durability for zero-config (operators wanting it set PAD_AUDIT_SPILL_DIR to a
+// mounted volume). Events are written at least once: a replay after a crash between the insert and the file
+// rewrite is absorbed by the idempotent insert (ON CONFLICT (id) DO NOTHING).
 type spillStore struct {
 	path     string
 	maxBytes int64
@@ -34,16 +111,44 @@ type spillStore struct {
 	// depth is the count of events currently on the spill file, maintained under mu (cheap) so the
 	// pad_audit_spill_depth gauge is accurate without a file read on every observation.
 	depth int
+	// gauge sums this store with its recorder's other files into the metric; nil: the store alone.
+	gauge *depthGauge
 }
 
-func newSpillStore(dir string, maxBytes int64) (*spillStore, error) {
+// setDepth records the file's event count and publishes the gauge. The caller holds s.mu.
+func (s *spillStore) setDepth(n int) {
+	s.depth = n
+	if s.gauge == nil {
+		setAuditSpillDepth(n)
+		return
+	}
+	s.gauge.set(s, n)
+}
+
+// countEvents is the number of complete, non-empty lines in the file at path (what Drain would see).
+func countEvents(data []byte) int {
+	n := 0
+	for len(data) > 0 {
+		nl := bytes.IndexByte(data, '\n')
+		if nl < 0 {
+			break
+		}
+		if nl > 0 {
+			n++
+		}
+		data = data[nl+1:]
+	}
+	return n
+}
+
+func newSpillStore(dir, instance string, maxBytes int64) (*spillStore, error) {
 	if maxBytes <= 0 {
 		maxBytes = defaultSpillMaxBytes
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	p := filepath.Join(dir, spillFileName)
+	p := filepath.Join(dir, spillFileFor(instance))
 	// Ensure the file exists so HasItems/Stat don't error before the first spill.
 	if _, err := os.Stat(p); os.IsNotExist(err) {
 		f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- path is operator-configured, not user input
@@ -52,7 +157,51 @@ func newSpillStore(dir string, maxBytes int64) (*spillStore, error) {
 		}
 		_ = f.Close()
 	}
-	return &spillStore{path: p, maxBytes: maxBytes}, nil
+	s := &spillStore{path: p, maxBytes: maxBytes, gauge: &depthGauge{}}
+	// A file left by the previous boot counts from the start, not from the first drain.
+	if data, err := os.ReadFile(p); err == nil { //nolint:gosec // G304: path is operator-configured, not user input
+		s.mu.Lock()
+		s.setDepth(countEvents(data))
+		s.mu.Unlock()
+	}
+	return s, nil
+}
+
+// openAdopted opens a file this replica claimed (claimOrphans, ownClaims) as a store to replay and delete. gauge is
+// the recorder's, nil for the store alone.
+func openAdopted(path string, gauge *depthGauge, maxBytes int64) (*spillStore, error) {
+	if maxBytes <= 0 {
+		maxBytes = defaultSpillMaxBytes
+	}
+	data, err := os.ReadFile(path) // #nosec G304 -- a spill file this process renamed to its own claim name
+	if err != nil {
+		return nil, err
+	}
+	s := &spillStore{path: path, maxBytes: maxBytes, gauge: gauge}
+	s.mu.Lock()
+	s.setDepth(countEvents(data))
+	s.mu.Unlock()
+	return s, nil
+}
+
+// removeIfDrained deletes the file when no complete event is left in it (a torn last line, from a writer that died
+// mid-append, is unrecoverable) and reports whether it did.
+func (s *spillStore) removeIfDrained() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := os.ReadFile(s.path) // #nosec G304 -- a spill file of this process
+	if err == nil && bytes.IndexByte(data, '\n') >= 0 {
+		return false
+	}
+	if err == nil {
+		if rmErr := os.Remove(s.path); rmErr != nil {
+			return false
+		}
+	}
+	if s.gauge != nil {
+		s.gauge.forget(s)
+	}
+	return true
 }
 
 // Spill appends an event to the spill file. When the file is at capacity the event is NOT stored (the caller
@@ -80,8 +229,7 @@ func (s *spillStore) Spill(e *storageif.AuditEvent) bool {
 	if _, err := f.Write(line); err != nil {
 		return false
 	}
-	s.depth++
-	setAuditSpillDepth(s.depth)
+	s.setDepth(s.depth + 1)
 	recordAuditSpilled()
 	return true
 }
@@ -119,7 +267,7 @@ func (s *spillStore) Drain(max int) []*storageif.AuditEvent {
 	// so a mid-write failure would lose the unconsumed tail. With rename semantics, any failure leaves the
 	// ORIGINAL file (including the events counted in `out`) fully intact — we report nothing drained and let
 	// the reaper retry, rather than risk replaying duplicates or corrupting the queue.
-	tmp := s.path + ".drain.tmp"
+	tmp := s.path + drainScratchSuffix
 	// #nosec G703 -- s.path is the operator-configured spill file
 	// (PAD_AUDIT_SPILL_DIR, or a temp dir), fixed at boot. No request data
 	// reaches it; the only appended component is this constant suffix.
@@ -134,11 +282,7 @@ func (s *spillStore) Drain(max int) []*storageif.AuditEvent {
 		_ = os.Remove(tmp)
 		return nil
 	}
-	s.depth -= len(out)
-	if s.depth < 0 {
-		s.depth = 0 // defensive: file was mutated out-of-band
-	}
-	setAuditSpillDepth(s.depth)
+	s.setDepth(countEvents(remaining)) // not depth-len(out): a corrupt line is skipped without being replayed
 	return out
 }
 
@@ -172,6 +316,129 @@ func (s *spillStore) reSpill(events []*storageif.AuditEvent) {
 		line = append(line, '\n')
 		_, _ = f.Write(line)
 	}
-	s.depth += len(events)
-	setAuditSpillDepth(s.depth)
+	s.setDepth(s.depth + len(events))
+}
+
+// parseSpillName classifies a file name in the spill directory: base is the spill file it is (or was, for a claim),
+// owner and at the claimant and the time of a claim ("" and zero for a spill file proper). base is "" for anything
+// that is no spill file.
+func parseSpillName(name string) (base, owner string, at time.Time, claim bool) {
+	if i := strings.Index(name, claimMarker); i >= 0 {
+		base = name[:i+len(spillFileExt)]
+		if base != legacySpillFileName && !strings.HasPrefix(base, spillFilePrefix) {
+			return "", "", time.Time{}, false
+		}
+		rest := name[i+len(claimMarker):]
+		j := strings.LastIndexByte(rest, '-')
+		if j <= 0 || j == len(rest)-1 || strings.Trim(rest[j+1:], "0123456789") != "" {
+			return "", "", time.Time{}, false
+		}
+		var nanos int64
+		if _, err := fmt.Sscan(rest[j+1:], &nanos); err != nil {
+			return "", "", time.Time{}, false
+		}
+		return base, rest[:j], time.Unix(0, nanos), true
+	}
+	if name == legacySpillFileName || (strings.HasPrefix(name, spillFilePrefix) && strings.HasSuffix(name, spillFileExt)) {
+		return name, "", time.Time{}, false
+	}
+	return "", "", time.Time{}, false
+}
+
+// ownClaims lists the claims a previous run of this instance left in dir (it died while replaying them): they are
+// ours to continue, whatever their age.
+func ownClaims(dir, instance string) []string {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	me := spillInstanceName(instance)
+	var out []string
+	for _, e := range ents {
+		if _, owner, _, claim := parseSpillName(e.Name()); claim && owner == me && e.Type().IsRegular() {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
+}
+
+// claimOrphans takes over the spill files in dir that no live replica is writing, by renaming each to a claim name
+// of this instance (<file>.adopt-<instance>-<unixnano>), and returns the claims to replay. Rename is atomic and
+// fails for all but one of several replicas racing for a file, so a file is replayed by one replica, and only that
+// one, never read while its owner appends to it.
+//
+// Liveness has no lock file and no heartbeat: a file counts as abandoned when it holds events and has not been
+// modified for olderThan. Every spill, drain and re-spill of a live replica rewrites its file, and its reaper
+// drains it every 500 ms, so a live replica's non-empty file is touched far more often than that. The one live
+// replica that can lose its file is one whose reaper is stalled for olderThan (its queue stays over half full);
+// its events are then replayed by the claimant, and the idempotent insert absorbs the overlap. A file that is
+// empty is no work: it is left alone (an idle live replica has one) until it is emptyOrphanAge old, then deleted.
+// A claim counts from the later of its modification and the claim time in its name. Claims of this instance
+// (ownClaims) and our own spill file are never taken.
+func claimOrphans(dir, instance string, olderThan time.Duration) []string {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	me := spillInstanceName(instance)
+	now := time.Now()
+	var claimed []string
+	for _, e := range ents {
+		name := e.Name()
+		if !e.Type().IsRegular() || !strings.HasPrefix(name, strings.TrimSuffix(legacySpillFileName, spillFileExt)) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		age := now.Sub(info.ModTime())
+		src := filepath.Join(dir, name)
+		if strings.HasSuffix(name, drainScratchSuffix) || strings.HasSuffix(name, claimingSuffix) {
+			// The scratch file of a drain that died (the file it was to replace is intact), or the marker of a claim that died.
+			if age >= olderThan {
+				_ = os.Remove(src)
+			}
+			continue
+		}
+		base, owner, claimedAt, claim := parseSpillName(name)
+		if claim && claimedAt.After(info.ModTime()) {
+			// A rename keeps the modification time, so a fresh claim of an old file would look abandoned.
+			age = now.Sub(claimedAt)
+		}
+		switch {
+		case base == "", claim && owner == me, !claim && name == spillFileFor(me):
+			continue
+		case age < olderThan:
+			continue
+		case info.Size() == 0:
+			if claim || age >= emptyOrphanAge {
+				_ = os.Remove(src)
+			}
+			continue
+		}
+		dst := filepath.Join(dir, fmt.Sprintf("%s.adopt-%s-%d", base, me, time.Now().UnixNano()))
+		if takeFile(src, dst) {
+			claimed = append(claimed, dst)
+		}
+	}
+	return claimed
+}
+
+// takeFile renames src to dst if this caller is the only one trying. rename(2) is exclusive on Linux (the loser gets
+// ENOENT), but Windows renames through a handle opened by path first, so several racers can all succeed, one after
+// the other, and each believes it owns the file; the marker created with O_EXCL (also exclusive on network file
+// systems) makes the claim exclusive everywhere. A marker its claimant left behind by dying goes stale and is removed
+// by the next scan.
+func takeFile(src, dst string) bool {
+	marker, err := os.OpenFile(src+claimingSuffix, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- a spill file name in the configured directory
+	if err != nil {
+		return false // another replica is claiming it
+	}
+	_ = marker.Close()
+	defer func() { _ = os.Remove(src + claimingSuffix) }()
+	if _, err := os.Stat(src); err != nil {
+		return false // claimed (and renamed away) between the listing and now
+	}
+	return os.Rename(src, dst) == nil
 }

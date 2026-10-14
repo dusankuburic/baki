@@ -5,12 +5,19 @@ import {ProfileSection} from './ProfileSection'
 import {ToastProvider} from '@/components/shared'
 import {useAuthStore} from '@/stores/authStore'
 import {authApi} from '@/api/auth'
+import {downscaleImage} from '@/lib/imageResize'
 
 vi.mock('@/api/auth', () => ({
   authApi: {
     updateProfile: vi.fn(),
     logout: vi.fn(),
+    uploadAvatar: vi.fn(),
+    deleteAvatar: vi.fn(),
   },
+}))
+
+vi.mock('@/lib/imageResize', () => ({
+  downscaleImage: vi.fn(async (file: Blob) => file),
 }))
 
 function Harness({initialEditing = false}: {initialEditing?: boolean}) {
@@ -79,5 +86,81 @@ describe('ProfileSection', () => {
     expect(screen.queryByLabelText('Display name')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
     expect(screen.getByLabelText('Display name')).toHaveValue('Ada')
+  })
+
+  it('uploads a picture: downscaled, sent, and the profile follows the serving route', async () => {
+    useAuthStore.setState({user: {id: 'u1', email: 'ada@example.com', role: 'member', displayName: 'Ada'}})
+    vi.mocked(authApi.uploadAvatar).mockResolvedValue({
+      id: 'u1',
+      email: 'ada@example.com',
+      role: 'member',
+      displayName: 'Ada',
+      avatarUrl: '/api/users/u1/avatar',
+    })
+    const {container} = render(<Harness initialEditing />)
+    const file = new File(['png-bytes'], 'me.png', {type: 'image/png'})
+    fireEvent.change(container.querySelector('input[type=file]')!, {target: {files: [file]}})
+    await waitFor(() => expect(authApi.uploadAvatar).toHaveBeenCalled())
+    expect(downscaleImage).toHaveBeenCalledWith(file)
+    await waitFor(() => expect(useAuthStore.getState().user?.avatarUrl).toBe('/api/users/u1/avatar'))
+    // The URL field follows the upload, so saving the form keeps it.
+    expect(screen.getByLabelText('Avatar URL')).toHaveValue('/api/users/u1/avatar')
+    expect(screen.getByRole('button', {name: 'Remove picture'})).toBeInTheDocument()
+  })
+
+  it('refuses a non-PNG/JPEG file before anything is sent', async () => {
+    useAuthStore.setState({user: {id: 'u1', email: 'ada@example.com', role: 'member'}})
+    const {container} = render(<Harness initialEditing />)
+    fireEvent.change(container.querySelector('input[type=file]')!, {
+      target: {files: [new File(['gif!'], 'me.gif', {type: 'image/gif'})]},
+    })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Pictures must be PNG or JPEG images')
+    expect(authApi.uploadAvatar).not.toHaveBeenCalled()
+  })
+
+  it('removes the uploaded picture and clears the profile field', async () => {
+    useAuthStore.setState({
+      user: {id: 'u1', email: 'ada@example.com', role: 'member', avatarUrl: '/api/users/u1/avatar'},
+    })
+    vi.mocked(authApi.deleteAvatar).mockResolvedValue({
+      id: 'u1',
+      email: 'ada@example.com',
+      role: 'member',
+      avatarUrl: '',
+    })
+    render(<Harness initialEditing />)
+    fireEvent.click(screen.getByRole('button', {name: 'Remove picture'}))
+    await waitFor(() => expect(useAuthStore.getState().user?.avatarUrl).toBe(''))
+    expect(screen.getByLabelText('Avatar URL')).toHaveValue('')
+    expect(screen.queryByRole('button', {name: 'Remove picture'})).not.toBeInTheDocument()
+  })
+
+  it('saves a new display name while the uploaded picture stays: its route is a valid value', async () => {
+    useAuthStore.setState({
+      user: {id: 'u1', email: 'ada@example.com', role: 'member', avatarUrl: '/api/users/u1/avatar'},
+    })
+    vi.mocked(authApi.updateProfile).mockResolvedValue({
+      id: 'u1',
+      email: 'ada@example.com',
+      role: 'member',
+      displayName: 'Ada',
+      avatarUrl: '/api/users/u1/avatar',
+    })
+    render(<Harness initialEditing />)
+    fireEvent.change(screen.getByLabelText('Display name'), {target: {value: 'Ada'}})
+    expect(screen.queryByText('Enter a valid http(s) URL')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Save changes'}))
+    await waitFor(() =>
+      expect(authApi.updateProfile).toHaveBeenCalledWith({displayName: 'Ada', avatarUrl: '/api/users/u1/avatar'}),
+    )
+  })
+
+  it('still refuses a hand-typed relative path that is not the upload', () => {
+    useAuthStore.setState({
+      user: {id: 'u1', email: 'ada@example.com', role: 'member', avatarUrl: '/api/users/u1/avatar'},
+    })
+    render(<Harness initialEditing />)
+    fireEvent.change(screen.getByLabelText('Avatar URL'), {target: {value: '/api/users/u2/avatar'}})
+    expect(screen.getByText('Enter a valid http(s) URL')).toBeInTheDocument()
   })
 })

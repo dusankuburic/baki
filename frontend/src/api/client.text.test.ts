@@ -77,3 +77,26 @@ describe('requestBlob', () => {
     expect(init.body).toBe(JSON.stringify({id: 1}))
   })
 })
+
+describe('requestForm', () => {
+  it('posts the file as a multipart part under the field name, with the bearer and no JSON content type', async () => {
+    const fetchSpy = respond('{"id":"u1","avatarUrl":"/api/users/u1/avatar"}', 200, 'application/json')
+    const {requestForm} = await import('./client')
+    const out = await requestForm<{avatarUrl: string}>('/api/auth/profile/avatar', new Blob(['png'], {type: 'image/png'}))
+    expect(out.avatarUrl).toBe('/api/users/u1/avatar')
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('http://localhost:9999/api/auth/profile/avatar')
+    expect(init.method).toBe('POST')
+    const headers = init.headers as Record<string, string>
+    expect(headers['Authorization']).toBe('Bearer mock-token')
+    expect(Object.keys(headers).map(h => h.toLowerCase())).not.toContain('content-type')
+    expect(init.body).toBeInstanceOf(FormData)
+    expect((init.body as FormData).get('avatar')).toBeInstanceOf(Blob)
+  })
+
+  it('throws the server error instead of parsing its body as the result', async () => {
+    respond('{"error":"avatar upload exceeds the size limit"}', 413, 'application/json')
+    const {requestForm} = await import('./client')
+    await expect(requestForm('/api/auth/profile/avatar', new Blob(['x']))).rejects.toMatchObject({status: 413})
+  })
+})

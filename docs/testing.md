@@ -84,7 +84,7 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 `testutil.FakeBackend`; the RLS and transaction tests use Postgres (`DATABASE_URL`).
 
 - **audit*** (3): `audit_helpers_test.go`, `audit_record_sites_test.go`, `audit_record_test.go`
-- **auth*** (1): `auth_apitoken_test.go`
+- **auth*** (2): `auth_apitoken_test.go`, `auth_avatar_test.go`
 - **authz*** (3): `authz_header_first_test.go`, `authz_matrix_golden_test.go`, `authz_routes_test.go`
 - **azure_config*** (2): `azure_config_audit_test.go`, `azure_config_validation_test.go`
 - **azure_foundry*** (2): `azure_foundry_e2e_helpers_test.go`, `azure_foundry_e2e_test.go`
@@ -94,12 +94,12 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 - **dashboard*** (1): `dashboard_params_test.go`
 - **declared*** (1): `declared_policy_test.go`
 - **endpoint*** (1): `endpoint_test.go`
-- **events*** (4): `events_audience_test.go`, `events_deliver_test.go`, `events_revoke_test.go`, `events_test.go`
+- **events*** (8): `events_audience_test.go`, `events_deliver_test.go`, `events_fanout_gap_test.go`, `events_fanout_test.go`, `events_revoke_remote_test.go`, `events_revoke_replicas_test.go`, `events_revoke_test.go`, `events_test.go`
 - **export*** (1): `export_routes_test.go`
 - **f1*** (1): `f1_helpers_test.go`
 - **f2*** (1): `f2_helpers_test.go`
 - **finding*** (1): `finding_fanout_events_test.go`
-- **flow*** (2): `flow_authz_can_test.go`, `flow_record_writes_viewer_test.go`
+- **flow*** (3): `flow_authz_can_test.go`, `flow_record_writes_viewer_test.go`, `flow_snapshots_test.go`
 - **governance*** (1): `governance_notices_test.go`
 - **handlers_account*** (1): `handlers_account_test.go`
 - **handlers_admin*** (2): `handlers_admin_panic_test.go`, `handlers_admin_test.go`
@@ -110,7 +110,7 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 - **handlers_auth*** (7): `handlers_auth_changepw_test.go`, `handlers_auth_mail_async_test.go`, `handlers_auth_register_test.go`, `handlers_auth_reset_test.go`, `handlers_auth_sessions_test.go`, `handlers_auth_test.go`, `handlers_auth_validation_test.go`
 - **handlers_authz*** (1): `handlers_authz_test.go`
 - **handlers_azure*** (1): `handlers_azure_registry_test.go`
-- **handlers_chat*** (4): `handlers_chat_activestream_test.go`, `handlers_chat_approvals_test.go`, `handlers_chat_policy_test.go`, `handlers_chat_test.go`
+- **handlers_chat*** (6): `handlers_chat_activestream_test.go`, `handlers_chat_approvals_test.go`, `handlers_chat_commands_test.go`, `handlers_chat_policy_test.go`, `handlers_chat_test.go`, `handlers_chat_version_test.go`
 - **handlers_comments*** (2): `handlers_comments_email_test.go`, `handlers_comments_test.go`
 - **handlers_csp*** (1): `handlers_csp_test.go`
 - **handlers_dashboard*** (2): `handlers_dashboard_analytics_test.go`, `handlers_dashboard_test.go`
@@ -131,7 +131,7 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 - **handlers_sso*** (3): `handlers_sso_flow_test.go`, `handlers_sso_link_test.go`, `handlers_sso_test.go`
 - **handlers_static*** (2): `handlers_static_precompressed_test.go`, `handlers_static_share_test.go`
 - **handlers_suppressions*** (1): `handlers_suppressions_test.go`
-- **handlers_system*** (3): `handlers_system_authz_test.go`, `handlers_system_logerror_test.go`, `handlers_system_test.go`
+- **handlers_system*** (4): `handlers_system_authz_test.go`, `handlers_system_logerror_test.go`, `handlers_system_test.go`, `handlers_system_version_test.go`
 - **handlers_triage*** (1): `handlers_triage_test.go`
 - **handlers_wsticket*** (1): `handlers_wsticket_test.go`
 - **helpers*** (1): `helpers_test.go`
@@ -142,12 +142,14 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 - **metrics*** (1): `metrics_probe_test.go`
 - **middleware*** (2): `middleware_chain_panic_test.go`, `middleware_chain_test.go`
 - **migration_runner*** (1): `migration_runner_test.go`
+- **migration_status*** (1): `migration_status_shared_test.go`
 - **org*** (4): `org_ci_credentials_orphan_test.go`, `org_ci_credentials_test.go`, `org_credential_lifecycle_test.go`, `org_invite_email_test.go`
 - **org_knowledge*** (2): `org_knowledge_policy_unavailable_test.go`, `org_knowledge_test.go`
 - **params*** (1): `params_test.go`
 - **per*** (2): `per_user_limiter_wiring_test.go`, `per_user_ratelimit_test.go`
 - **perf_hotpath*** (1): `perf_hotpath_reads_test.go`
 - **pprof*** (1): `pprof_exposure_test.go`
+- **ratelimit*** (1): `ratelimit_groups_golden_test.go`
 - **request*** (1): `request_actor_test.go`
 - **rls*** (1): `rls_commit_test.go`
 - **rls_lazy*** (1): `rls_lazy_scope_test.go`
@@ -161,7 +163,7 @@ HTTP layer: handlers by route area, middleware chain, RLS, events/SSE, audit, se
 - **sse*** (1): `sse_byte_budget_test.go`
 - **version*** (1): `version_header_test.go`
 - **views*** (1): `views_wire_shape_test.go`
-- **ws*** (2): `ws_e2e_test.go`, `ws_recheck_e2e_test.go`
+- **ws*** (3): `ws_e2e_test.go`, `ws_recheck_e2e_test.go`, `ws_ticket_redis_test.go`
 
 ## internal/api/middleware
 
@@ -173,7 +175,7 @@ HTTP middleware: compression, rate limiting, access log, timeouts, metrics, reco
 - **metrics*** (1): `metrics_test.go`
 - **metricsguard*** (1): `metricsguard_test.go`
 - **middleware_metrics*** (1): `middleware_metrics_test.go`
-- **ratelimit*** (3): `ratelimit_redis_test.go`, `ratelimit_retry_after_test.go`, `ratelimit_test.go`
+- **ratelimit*** (4): `ratelimit_compat_test.go`, `ratelimit_redis_test.go`, `ratelimit_retry_after_test.go`, `ratelimit_test.go`
 - **recorder*** (1): `recorder_test.go`
 - **recovery*** (1): `recovery_test.go`
 - **request*** (1): `request_info_test.go`
@@ -197,12 +199,13 @@ Route declarations: the policy each route declares, the resolver that picks a re
 Domain services: chat streaming, flows, analysis, providers, dashboard, authz, settings.
 
 - **account*** (1): `account_lifecycle_test.go`
-- **ai*** (2): `ai_budget_reason_test.go`, `ai_budget_test.go`
+- **ai*** (4): `ai_budget_hardening_test.go`, `ai_budget_reason_test.go`, `ai_budget_redis_test.go`, `ai_budget_test.go`
 - **analysis*** (8): `analysis_batch_library_test.go`, `analysis_budget_gate_test.go`, `analysis_cache_tenant_test.go`, `analysis_fresh_claim_test.go`, `analysis_progress_scope_test.go`, `analysis_rules_options_test.go`, `analysis_rules_org_test.go`, `analysis_test.go`
 - **analysisdiff*** (1): `analysisdiff_test.go`
 - **apitokens*** (1): `apitokens_test.go`
 - **auth_mail*** (1): `auth_mail_test.go`
 - **authz*** (5): `authz_bench_test.go`, `authz_can_test.go`, `authz_flowperms_test.go`, `authz_memo_test.go`, `authz_test.go`
+- **avatar*** (1): `avatar_test.go`
 - **azure_knowledge*** (1): `azure_knowledge_embedder_policy_test.go`
 - **azure_models*** (12): `azure_models_import_pending_test.go`, `azure_models_kb_test.go`, `azure_models_legacy_test.go`, `azure_models_lifecycle_test.go`, `azure_models_picker_test.go`, `azure_models_policy_test.go`, `azure_models_probe_test.go`, `azure_models_resolve_test.go`, `azure_models_runtime_retention_test.go`, `azure_models_test.go`, `azure_models_text_test.go`, `azure_models_writes_test.go`
 - **channels*** (3): `channels_allowed_hosts_test.go`, `channels_org_kinds_test.go`, `channels_test.go`
@@ -212,8 +215,9 @@ Domain services: chat streaming, flows, analysis, providers, dashboard, authz, s
 - **chat_azure*** (2): `chat_azure_registry_test.go`, `chat_azure_setup_errors_test.go`
 - **chat_batch*** (1): `chat_batch_test.go`
 - **chat_budget*** (2): `chat_budget_alias_test.go`, `chat_budget_concurrent_test.go`
+- **chat_commands*** (3): `chat_commands_compat_test.go`, `chat_commands_hardening_test.go`, `chat_commands_test.go`
 - **chat_context*** (5): `chat_context_estimate_test.go`, `chat_context_roles_test.go`, `chat_context_scrub_cache_test.go`, `chat_context_scrub_test.go`, `chat_context_window_test.go`
-- **chat_conversation*** (2): `chat_conversation_cloud_test.go`, `chat_conversation_file_race_test.go`
+- **chat_conversation*** (4): `chat_conversation_adopt_test.go`, `chat_conversation_cloud_test.go`, `chat_conversation_file_race_test.go`, `chat_conversation_version_test.go`
 - **chat_convmutex*** (1): `chat_convmutex_test.go`
 - **chat_errors*** (1): `chat_errors_test.go`
 - **chat_failure*** (1): `chat_failure_copy_test.go`
@@ -232,7 +236,7 @@ Domain services: chat streaming, flows, analysis, providers, dashboard, authz, s
 - **chat_rag*** (1): `chat_rag_gate_test.go`
 - **chat_replay*** (1): `chat_replay_test.go`
 - **chat_residual*** (1): `chat_residual_test.go`
-- **chat_resume*** (1): `chat_resume_test.go`
+- **chat_resume*** (2): `chat_resume_compat_test.go`, `chat_resume_test.go`
 - **chat_scrubber*** (1): `chat_scrubber_ordering_test.go`
 - **chat_served*** (1): `chat_served_rates_test.go`
 - **chat_settings*** (1): `chat_settings_policy_test.go`
@@ -270,8 +274,8 @@ Domain services: chat streaming, flows, analysis, providers, dashboard, authz, s
 - **flow_searchlibrary*** (1): `flow_searchlibrary_test.go`
 - **flow_serialize*** (1): `flow_serialize_fallback_test.go`
 - **flow_snapshot*** (1): `flow_snapshot_budget_test.go`
-- **flow_snapshots*** (2): `flow_snapshots_retention_test.go`, `flow_snapshots_test.go`
-- **flow_upload*** (2): `flow_upload_cache_test.go`, `flow_upload_id_test.go`
+- **flow_snapshots*** (3): `flow_snapshots_retention_test.go`, `flow_snapshots_store_test.go`, `flow_snapshots_test.go`
+- **flow_upload*** (3): `flow_upload_cache_test.go`, `flow_upload_id_test.go`, `flow_upload_ids_redis_test.go`
 - **governance*** (1): `governance_alerts_test.go`
 - **health*** (1): `health_test.go`
 - **identity*** (1): `identity_test.go`
@@ -291,6 +295,8 @@ Domain services: chat streaming, flows, analysis, providers, dashboard, authz, s
 - **providers_org*** (3): `providers_org_lender_test.go`, `providers_org_lifecycle_test.go`, `providers_org_test.go`
 - **readsourcefiles*** (1): `readsourcefiles_test.go`
 - **realtime*** (1): `realtime_test.go`
+- **remote*** (1): `remote_appliers_test.go`
+- **replicated*** (1): `replicated_subscribers_test.go`
 - **rule_profile*** (4): `rule_profile_reader_test.go`, `rule_profile_rls_pg_test.go`, `rule_profile_singleflight_test.go`, `rule_profile_test.go`
 - **rulecatalog*** (1): `rulecatalog_test.go`
 - **ruleconfig*** (1): `ruleconfig_test.go`
@@ -310,7 +316,7 @@ The audit trail: the closed action set, the recorder and its spill file, the wri
 - **actions*** (1): `actions_test.go`
 - **backfill*** (1): `backfill_test.go`
 - **recorder*** (1): `recorder_test.go`
-- **spill*** (1): `spill_test.go`
+- **spill*** (2): `spill_adopt_test.go`, `spill_test.go`
 - **write*** (1): `write_test.go`
 
 ## internal/capability
@@ -403,10 +409,10 @@ Postgres backend: statement shapes, RLS policies, migrations, plans, the data li
 - **governance*** (1): `governance_tenancy_test.go`
 - **key*** (1): `key_rotation_test.go`
 - **keystore*** (2): `keystore_family_integration_test.go`, `keystore_test.go`
-- **knowledge*** (7): `knowledge_documents_paging_test.go`, `knowledge_identity_test.go`, `knowledge_ranking_test.go`, `knowledge_reindex_pages_integration_test.go`, `knowledge_reindex_test.go`, `knowledge_sample_integration_test.go`, `knowledge_search_parity_test.go`
+- **knowledge*** (8): `knowledge_documents_paging_test.go`, `knowledge_identity_test.go`, `knowledge_lease_test.go`, `knowledge_ranking_test.go`, `knowledge_reindex_pages_integration_test.go`, `knowledge_reindex_test.go`, `knowledge_sample_integration_test.go`, `knowledge_search_parity_test.go`
 - **lifecycle*** (3): `lifecycle_erase_test.go`, `lifecycle_export_test.go`, `lifecycle_test.go`
 - **main*** (1): `main_test.go`
-- **migration*** (2): `migration_0042_test.go`, `migration_checksums_golden_test.go`
+- **migration*** (3): `migration_0042_test.go`, `migration_0044_test.go`, `migration_checksums_golden_test.go`
 - **migration_v27*** (1): `migration_v27_test.go`
 - **migration_v28*** (1): `migration_v28_test.go`
 - **migration_v29*** (1): `migration_v29_test.go`
@@ -419,7 +425,7 @@ Postgres backend: statement shapes, RLS policies, migrations, plans, the data li
 - **plans_audit*** (1): `plans_audit_knowledge_test.go`
 - **plans_flows*** (1): `plans_flows_test.go`
 - **policy*** (2): `policy_timestamps_test.go`, `policy_waivers_test.go`
-- **postgres*** (34): `postgres_analytics_e2e_test.go`, `postgres_audit_backfill_test.go`, `postgres_audit_test.go`, `postgres_azure_registry_test.go`, `postgres_baselines_batch_test.go`, `postgres_blacklist_test.go`, `postgres_blob_e2e_test.go`, `postgres_blob_test.go`, `postgres_ci_credentials_test.go`, `postgres_ci_deliveries_test.go`, `postgres_dashboard_e2e_test.go`, `postgres_flowversion_test.go`, `postgres_idempotency_test.go`, `postgres_lock_lease_test.go`, `postgres_lock_release_test.go`, `postgres_lock_test.go`, `postgres_migrations_checksum_test.go`, `postgres_migrations_compat_test.go`, `postgres_migrations_down_test.go`, `postgres_migrations_guard_test.go`, `postgres_migrations_lock_test.go`, `postgres_migrations_test.go`, `postgres_migrations_v25_test.go`, `postgres_orgchannels_test.go`, `postgres_orgs_pgvector_test.go`, `postgres_orgs_test.go`, `postgres_pgvector_integration_test.go`, `postgres_retention_coverage_test.go`, `postgres_retention_test.go`, `postgres_statement_timeout_test.go`, `postgres_storage_boot_test.go`, `postgres_storage_test.go`, `postgres_users_test.go`, `postgres_vector_index_test.go`
+- **postgres*** (35): `postgres_analytics_e2e_test.go`, `postgres_audit_backfill_test.go`, `postgres_audit_test.go`, `postgres_azure_registry_test.go`, `postgres_baselines_batch_test.go`, `postgres_blacklist_test.go`, `postgres_blob_e2e_test.go`, `postgres_blob_test.go`, `postgres_ci_credentials_test.go`, `postgres_ci_deliveries_test.go`, `postgres_dashboard_e2e_test.go`, `postgres_flow_snapshots_test.go`, `postgres_flowversion_test.go`, `postgres_idempotency_test.go`, `postgres_lock_lease_test.go`, `postgres_lock_release_test.go`, `postgres_lock_test.go`, `postgres_migrations_checksum_test.go`, `postgres_migrations_compat_test.go`, `postgres_migrations_down_test.go`, `postgres_migrations_guard_test.go`, `postgres_migrations_lock_test.go`, `postgres_migrations_test.go`, `postgres_migrations_v25_test.go`, `postgres_orgchannels_test.go`, `postgres_orgs_pgvector_test.go`, `postgres_orgs_test.go`, `postgres_pgvector_integration_test.go`, `postgres_retention_coverage_test.go`, `postgres_retention_test.go`, `postgres_statement_timeout_test.go`, `postgres_storage_boot_test.go`, `postgres_storage_test.go`, `postgres_users_test.go`, `postgres_vector_index_test.go`
 - **retention_purge*** (1): `retention_purge_batches_test.go`
 - **rls*** (2): `rls_hook_runner_test.go`, `rls_test.go`
 - **rls_delegation*** (1): `rls_delegation_test.go`
@@ -481,13 +487,15 @@ The settings document stored as sections.
 
 RAG: document ingestion, embedding, search cache, reindex lifecycle, the embedding identity on chunks (ADR 0027:
 identity-filtered search and re-index paging, the legacy stamp, the empty-result metrics, the chunker geometry
-golden `testdata/chunker_v1.golden`) and the on-demand background re-embed job.
+golden `testdata/chunker_v1.golden`), the on-demand background re-embed job and the org lock of an upload or
+re-index across replicas (lease key space, lease released on error/cancel/loss, per-replica cap).
 
 - **adddoc*** (1): `adddoc_atomicity_test.go`
 - **azure_embedder*** (1): `azure_embedder_test.go`
 - **azure_refusal*** (1): `azure_refusal_policy_test.go`
 - **budget*** (1): `budget_test.go`
 - **identity*** (1): `identity_test.go`
+- **knowledge*** (2): `knowledge_lock_key_test.go`, `knowledge_lock_test.go`
 - **lifecycle*** (1): `lifecycle_test.go`
 - **model*** (1): `model_guard_test.go`
 - **org*** (1): `org_embedder_test.go`
@@ -495,6 +503,7 @@ golden `testdata/chunker_v1.golden`) and the on-demand background re-embed job.
 - **policy*** (1): `policy_org_test.go`
 - **reembed*** (2): `reembed_credential_test.go`, `reembed_job_test.go`
 - **reindex*** (2): `reindex_paging_test.go`, `reindex_resume_test.go`
+- **replicated*** (1): `replicated_subscribers_test.go`
 - **search_budget*** (1): `search_budget_test.go`
 - **search_cache*** (1): `search_cache_test.go`
 - **search_scrub*** (1): `search_scrub_test.go`
@@ -504,13 +513,13 @@ golden `testdata/chunker_v1.golden`) and the on-demand background re-embed job.
 
 WebSocket hub: presence, heartbeat, backplane, write authz, inbound limiting, access rechecks on access changes.
 
-- **backplane*** (2): `backplane_fake_test.go`, `backplane_redis_test.go`
+- **backplane*** (4): `backplane_compat_test.go`, `backplane_fake_test.go`, `backplane_redis_test.go`, `backplane_warn_test.go`
 - **handler*** (2): `handler_drain_test.go`, `handler_test.go`
 - **heartbeat*** (1): `heartbeat_test.go`
 - **hub*** (2): `hub_stress_test.go`, `hub_test.go`
 - **inbound*** (2): `inbound_limiter_test.go`, `inbound_needs_test.go`
 - **presence*** (2): `presence_test.go`, `presence_writer_test.go`
-- **recheck*** (1): `recheck_test.go`
+- **recheck*** (2): `recheck_replicas_test.go`, `recheck_test.go`
 - **write*** (1): `write_authz_test.go`
 
 ## internal/auth
@@ -520,7 +529,7 @@ JWT, API tokens, blacklist caching.
 - **actor*** (2): `actor_integration_test.go`, `actor_test.go`
 - **apitoken*** (2): `apitoken_scope_test.go`, `apitoken_test.go`
 - **auth*** (1): `auth_test.go`
-- **cached*** (1): `cached_blacklist_test.go`
+- **cached*** (2): `cached_blacklist_compat_test.go`, `cached_blacklist_test.go`
 - **middleware*** (1): `middleware_test.go`
 - **password*** (1): `password_cost_test.go`
 - **sso*** (1): `sso_flow_test.go`
@@ -534,10 +543,11 @@ the healthcheck port), `config.Duration`, the duration ranges, a config file of 
 list of secret fields is complete, `SecretEphemeral` cannot come from a file).
 
 - **channels*** (1): `channels_test.go`
-- **deploy*** (2): `deploy_passthrough_test.go`, `deploy_pool_test.go`
+- **deploy*** (3): `deploy_passthrough_test.go`, `deploy_pool_test.go`, `deploy_replicas_test.go`
 - **duration*** (1): `duration_test.go`
 - **encryption*** (1): `encryption_key_previous_test.go`
 - **env*** (1): `env_example_test.go`
+- **knowledge*** (1): `knowledge_lease_cap_test.go`
 - **load*** (1): `load_test.go`
 - **loader*** (4): `loader_azure_hosts_test.go`, `loader_ci_webhook_test.go`, `loader_notify_hosts_test.go`, `loader_test.go`
 - **resolve*** (1): `resolve_secrets_test.go`
@@ -546,27 +556,34 @@ list of secret fields is complete, `SecretEphemeral` cannot come from a file).
 
 ## internal/di
 
-Dependency wiring: service construction, AST cache budget, the declared-cache golden, deployment custom rules, the
+Dependency wiring: service construction, AST cache budget, the declared-cache golden, the event-subscriber golden
+(`testdata/subscribers.golden`: every subscriber, replicated or local), deployment custom rules, the
 Azure AI Foundry endpoints' egress policy by profile.
 
 - **analysis*** (1): `analysis_decorate_test.go`
 - **analyzer*** (1): `analyzer_wiring_test.go`
 - **azure_endpoint*** (1): `azure_endpoint_policy_test.go`
 - **azure_registry*** (1): `azure_registry_test.go`
+- **budget*** (1): `budget_ledger_test.go`
 - **cache*** (1): `cache_registry_test.go`
 - **catalog*** (1): `catalog_library_test.go`
 - **channels*** (1): `channels_allowed_hosts_test.go`
 - **deployment*** (1): `deployment_custom_rules_test.go`
 - **di*** (1): `di_test.go`
 - **embedding*** (1): `embedding_test.go`
+- **event_manager*** (1): `event_manager_test.go`
 - **events*** (2): `events_accounts_test.go`, `events_flow_test.go`
 - **factory_budget*** (1): `factory_budget_test.go`
-- **flow*** (1): `flow_checker_test.go`
+- **flow*** (2): `flow_checker_test.go`, `flow_snapshots_wiring_test.go`
+- **invalidation*** (1): `invalidation_replicas_test.go`
 - **knowledge*** (1): `knowledge_budget_test.go`
 - **main*** (1): `main_test.go`
 - **org*** (1): `org_keys_test.go`
 - **provide*** (1): `provide_ast_cache_budget_test.go`
+- **redis*** (1): `redis_registry_test.go`
 - **setters*** (1): `setters_test.go`
+- **subscribers*** (1): `subscribers_test.go`
+- **two_replicas*** (1): `two_replicas_test.go`
 - **wiring*** (1): `wiring_test.go`
 
 ## internal/egress
@@ -601,6 +618,7 @@ Legacy-server migration over the read-only filesystem source: steps, idempotent 
 Postgres destination (DB-gated), validator, rerun cost.
 
 - **migrator*** (3): `migrator_pg_test.go`, `migrator_rerun_cost_test.go`, `migrator_test.go`
+- **runstate*** (1): `runstate_test.go`
 - **validator*** (1): `validator_test.go`
 
 ## internal/mail
@@ -647,9 +665,11 @@ The draining state of the server's stop (ADR 0024): Begin, the stop's first step
 
 ## internal/platform/eventbus
 
-The in-process domain event bus.
+The in-process domain event bus, and its cross-replica seam (Phase 5b): the Local/Replicated choice every subscriber
+makes, publication of invalidation keys after the commit only, the remote entry point, the subscriber listing.
 
 - **bus*** (1): `bus_test.go`
+- **replicated*** (1): `replicated_test.go`
 
 ## internal/platform/hmacsig
 
@@ -702,12 +722,28 @@ Telemetry error sink.
 - **errsink*** (1): `errsink_test.go`
 - **telemetry*** (1): `telemetry_test.go`
 
+## internal/invalidation
+
+The cross-replica fan-out of cache invalidations and access rechecks over Redis pub/sub ([ADR 0032](adr/0032-cache-invalidation-fanout-and-state-registry.md)),
+on the `redisreplica` harness: two replicas with their own bus, cache and fan-out on one miniredis.
+
+- **fanout*** (2): `fanout_flap_test.go`, `fanout_test.go`
+- **queue*** (1): `queue_test.go`
+
 ## internal/redisx
 
-Redis client/pub-sub helpers.
+Redis client, pub/sub, the payload envelope, the key registry and the health ([ADR 0029](adr/0029-redis-envelope-key-registry-and-health.md)). Previous-release payloads: `testdata/redis/prev/<release>/`.
 
+- **command*** (3): `command_auth_test.go`, `command_export_test.go`, `command_test.go`
+- **envelope*** (1): `envelope_test.go`
+- **fixtures*** (1): `fixtures_test.go`
+- **hardening*** (1): `hardening_test.go`
+- **health*** (1): `health_test.go`
+- **inflight*** (1): `inflight_test.go`
 - **pubsub*** (1): `pubsub_test.go`
 - **redisx*** (2): `redisx_options_test.go`, `redisx_test.go`
+- **registry*** (1): `registry_test.go`
+- **sse*** (1): `sse_test.go`
 
 ## internal/errreport
 
@@ -720,7 +756,15 @@ Error aggregation reporting.
 Shared test fakes/fixtures (regular package imported by 130+ test files).
 
 - **fake*** (2): `fake_azure_registry_test.go`, `fake_idempotency_test.go`
-- **fakebackend*** (5): `fakebackend_cicredentials_test.go`, `fakebackend_cideliveries_test.go`, `fakebackend_contract_test.go`, `fakebackend_test.go`, `fakebackend_usage_test.go`
+- **fakebackend*** (6): `fakebackend_cicredentials_test.go`, `fakebackend_cideliveries_test.go`, `fakebackend_contract_test.go`, `fakebackend_flow_snapshots_test.go`, `fakebackend_test.go`, `fakebackend_usage_test.go`
+
+The conversation-version scenarios (compare-and-swap save and delete, no ABA after delete and re-create, a blind save invalidating a held version, ADR 0031) are `internal/storage/contract/conversations_version.go`, run by `TestFakeBackend_Contract` here and `TestPostgres_Contract` in `internal/storage/database`.
+
+## internal/testutil/redisreplica
+
+The two-replica harness (ADR 0029): N replicas sharing one miniredis, each with its own instance id, client and health.
+
+- **redisreplica*** (1): `redisreplica_test.go`
 
 ## internal/archtest
 
@@ -733,6 +777,8 @@ spelled only in their specs (see [architecture/safety-nets.md](architecture/safe
 - **channels*** (1): `channels_test.go`
 - **config*** (1): `config_test.go`
 - **providers*** (1): `providers_test.go`
+- **redis*** (1): `redis_test.go`
+- **state*** (1): `state_test.go`
 - **storageassert*** (1): `storageassert_test.go`
 - **storehandles*** (1): `storehandles_test.go`
 - **systemreads*** (1): `systemreads_test.go`

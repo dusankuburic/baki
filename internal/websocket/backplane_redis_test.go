@@ -143,7 +143,7 @@ func TestWritePresence_OneRoundTrip(t *testing.T) {
 		t.Fatalf("writePresence of %d records made %d round trips, want 1", len(records), n)
 	}
 
-	key := presenceKeyPrefix + "flow-1"
+	key := presenceKey.Key("flow-1")
 	for conn, rec := range records {
 		if got, err := client.HGet(context.Background(), key, conn).Result(); err != nil || got != string(rec) {
 			t.Fatalf("record %s not stored: %q, %v", conn, got, err)
@@ -173,7 +173,7 @@ func TestListPresence_PrunesExpired(t *testing.T) {
 		t.Fatalf("expected live entry, got %q", out[0].UserID)
 	}
 	// The expired member should have been pruned from the hash.
-	if n, _ := client.HLen(context.Background(), presenceKeyPrefix+"flow-1").Result(); n != 1 {
+	if n, _ := client.HLen(context.Background(), presenceKey.Key("flow-1")).Result(); n != 1 {
 		t.Fatalf("expired member not pruned: hash len = %d", n)
 	}
 }

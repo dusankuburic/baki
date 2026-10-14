@@ -362,11 +362,7 @@ func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) 
 	// Mirrors handleAuthLogin: the client's LoginResponseSchema requires the
 	// `user` object alongside the tokens.
 	render.JSON(w, map[string]any{
-		"user": map[string]any{
-			"id":    user.ID,
-			"email": user.Email,
-			"role":  user.Role,
-		},
+		"user":             authUserJSON(user),
 		"accessToken":      pair.AccessToken,
 		"refreshToken":     pair.RefreshToken,
 		"expiresAt":        pair.ExpiresAt,

@@ -5,12 +5,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 )
 
 // A revoked access token (a logout, a deleted API token) ends the SSE streams opened with it at once: they used to
@@ -110,5 +113,20 @@ func TestHandleEvents_LogoutEndsThatSessionsStream(t *testing.T) {
 	case <-secondStream:
 		t.Fatal("the other session's event stream ended")
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// A revocation tells the other replicas which token's streams to end (recheck.sse-revocation, the token id), and
+// nothing without one.
+func TestSubscribeRevocations_ReplicatesTheTokenID(t *testing.T) {
+	bus := eventbus.New(nil, time.Second)
+	rec := &eventbus.ReplicasRecorder{}
+	bus.SetReplicas(rec)
+	NewEventManager(make(chan struct{})).SubscribeRevocations(bus)
+
+	bus.Publish(context.Background(), events.AccessRevoked{UserID: "u1", JTI: "j1"})
+	bus.Publish(context.Background(), events.AccessRevoked{UserID: "u1"})
+	if got, want := rec.Published(), []string{"recheck.sse-revocation{jti=j1}"}; !slices.Equal(got, want) {
+		t.Errorf("published %v, want %v", got, want)
 	}
 }

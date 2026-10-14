@@ -100,6 +100,10 @@ const (
 	RateUpload   = "upload"
 	// RateChannelTest: the notification channel test, which makes the server POST to an admin-chosen URL.
 	RateChannelTest = "channel_test"
+	// RatePerUser: the per-user write limiter, a limiter group of its own but never a route's bucket (the Router
+	// charges every authenticated write to it, after the route's own). Keys: ratelimit:peruser:<sha256 of the user
+	// id> and ratelimit:peruser:ip:<address> for an anonymous write.
+	RatePerUser = "peruser"
 	// RateNone: not rate limited (content-hashed, immutable assets). An empty RateLimit means RateGeneral, so a
 	// policy built by hand fails toward the limiter.
 	RateNone = "none"

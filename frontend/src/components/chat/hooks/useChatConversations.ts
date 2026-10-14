@@ -4,6 +4,7 @@ import {chatApi, flowApi} from '@/api'
 import {logger} from '@/lib/logger'
 import type {SourceFileInfo, FlowDocument} from '@/types'
 import {conversationHistoryEnabled} from '@/lib/chatHistory'
+import {saveThreadConversation} from '@/lib/conversationSync'
 import {isTauri} from '@/platform/guards'
 
 const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
@@ -26,7 +27,7 @@ function loadThreadHistory(
   chatApi
     .getConversation(thread.flowId, conversationKey(thread))
     .then(load => {
-      if (!useChatStore.getState().finishHistoryLoad(threadId, token, load.messages)) return
+      if (!useChatStore.getState().finishHistoryLoad(threadId, token, load.messages, load.version)) return
       const now = useChatStore.getState()
       const inFlight = now.threads.find(t => t.id === threadId)?.inFlight
       if (inFlight && !now.streams[threadId] && inFlight.streamId !== load.activeStreamId) {
@@ -43,16 +44,18 @@ function loadThreadHistory(
 }
 
 function importLegacyConversation(flowId: string, threadId: string): void {
+  // What is read here is the flow's legacy conversation; the version belongs to the thread's own key, which the
+  // load does not touch, so the thread keeps the one it was created with.
+  const held = useChatStore.getState().getConversationVersion(threadId)
   const token = useChatStore.getState().beginHistoryLoad(threadId)
   chatApi
     .getConversation(flowId, LEGACY_FLOW_SCOPE)
     .then(load => {
       const messages = load.messages
-      if (!useChatStore.getState().finishHistoryLoad(threadId, token, messages)) return
+      if (!useChatStore.getState().finishHistoryLoad(threadId, token, messages, held)) return
       if (messages.length === 0 || !conversationHistoryEnabled() || useChatStore.getState().streams[threadId]) return
-      const merged = useChatStore.getState().getMessages(threadId)
-      chatApi
-        .saveConversation(flowId, conversationKey({id: threadId}), [...merged])
+      // Saves on the thread's version and adopts the one the server answers.
+      saveThreadConversation(threadId, flowId, conversationKey({id: threadId}))
         .then(() => chatApi.clearConversation(flowId, LEGACY_FLOW_SCOPE))
         .catch(err => {
           logger.warn('Failed to migrate legacy conversation to thread key', err)
@@ -62,6 +65,7 @@ function importLegacyConversation(flowId: string, threadId: string): void {
       logger.warn('Failed to load flow conversation', err)
       if (useChatStore.getState().historyStatus[threadId]?.token === token) {
         useChatStore.getState().markHistoryLoaded(threadId)
+        if (held !== undefined) useChatStore.getState().setConversationVersion(threadId, held)
       }
     })
 }

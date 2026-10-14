@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -298,5 +299,84 @@ func TestRecheck_ChangeDuringAdmissionIsCaughtUp(t *testing.T) {
 	defer conn.Close()
 	if !closedWithin(conn, 2*time.Second) {
 		t.Fatal("a socket admitted while its access was removed kept it until the periodic pass")
+	}
+}
+
+// TestRecheck_ReplicatesWhatEachChangeFlags: the nudge the other replicas get names the same target the local
+// recheck flags, and none is sent for a change that only widens access or touches content.
+func TestRecheck_ReplicatesWhatEachChangeFlags(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	bus := eventbus.New(nil, time.Second)
+	rec := &eventbus.ReplicasRecorder{}
+	bus.SetReplicas(rec)
+	SubscribeAccessRechecks(bus, h)
+	for _, tc := range []struct {
+		name  string
+		event eventbus.Event
+		want  []string
+	}{
+		{"sharing", events.FlowChanged{FlowID: "f1", Kind: events.FlowSharingChanged}, []string{"recheck.ws-access{id=f1,what=flow}"}},
+		{"flow deleted", events.FlowChanged{FlowID: "f1", Kind: events.FlowDeleted}, []string{"recheck.ws-access{id=f1,what=flow}"}},
+		{"content saved", events.FlowChanged{FlowID: "f1", Kind: events.FlowUpdated}, nil},
+		{"member removed", events.OrgMemberChanged{OrgID: "o1", UserID: "bob", Kind: events.OrgMemberRemoved}, []string{"recheck.ws-access{id=bob,what=user}"}},
+		{"role changed", events.OrgMemberChanged{OrgID: "o1", UserID: "bob", Kind: events.OrgMemberRoleChanged}, []string{"recheck.ws-access{id=bob,what=user}"}},
+		{"member added", events.OrgMemberChanged{OrgID: "o1", UserID: "bob", Kind: events.OrgMemberAdded}, nil},
+		{"org deleted", events.OrgMemberChanged{OrgID: "o1", Kind: events.OrgDeleted}, []string{"recheck.ws-access{id=o1,what=org}"}},
+		{"account erased", events.AccountErased{UserID: "carol"}, []string{"recheck.ws-access{id=carol,what=user}", "recheck.ws-access{id=carol,what=owner}"}},
+		{"credential revoked", events.AccessRevoked{UserID: "bob", JTI: "j-bob"}, []string{"recheck.ws-access{jti=j-bob,user=bob,what=credential}"}},
+	} {
+		rec.Reset()
+		bus.Publish(context.Background(), tc.event)
+		if got := rec.Published(); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: published %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A peer's nudge (recheck.ws-access) flags this replica's sockets exactly as the local change would; the peer did
+// its own. An empty scope is the receiver's resync after a gap: it may have missed any change, so every socket
+// re-checks. A scope that names nothing it knows flags nothing.
+func TestRecheck_AppliesAPeersNudge(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	bus := eventbus.New(nil, time.Second)
+	SubscribeAccessRechecks(bus, h)
+	sockets := map[string]*Client{
+		"alice@f1": joinWith(t, h, "f1", "alice", FlowOwner{UserID: "alice", OrgID: "o1"}, "j-alice"),
+		"bob@f1":   joinWith(t, h, "f1", "bob", FlowOwner{UserID: "alice", OrgID: "o1"}, "j-bob"),
+		"bob@f2":   joinWith(t, h, "f2", "bob", FlowOwner{UserID: "carol"}, "j-bob"),
+		"carol@f3": joinWith(t, h, "f3", "carol", FlowOwner{UserID: "carol", OrgID: "o2"}, "pat:t1"),
+	}
+	for _, tc := range []struct {
+		name  string
+		scope eventbus.Scope
+		want  []string
+	}{
+		{"flow", eventbus.NewScope("what", "flow", "id", "f1"), []string{"alice@f1", "bob@f1"}},
+		{"user", eventbus.NewScope("what", "user", "id", "bob"), []string{"bob@f1", "bob@f2"}},
+		{"org", eventbus.NewScope("what", "org", "id", "o1"), []string{"alice@f1", "bob@f1"}},
+		{"owner", eventbus.NewScope("what", "owner", "id", "carol"), []string{"bob@f2", "carol@f3"}},
+		{"credential", eventbus.NewScope("what", "credential", "user", "carol", "jti", "pat:t1"), []string{"carol@f3"}},
+		{"another user's credential: the user must match", eventbus.NewScope("what", "credential", "user", "alice", "jti", "j-bob"), nil},
+		{"a credential without its user", eventbus.NewScope("what", "credential", "jti", "j-bob"), nil},
+		{"unknown kind", eventbus.NewScope("what", "galaxy", "id", "f1"), nil},
+		{"no id", eventbus.NewScope("what", "flow"), nil},
+		{"resync: every socket", nil, []string{"alice@f1", "bob@f1", "bob@f2", "carol@f3"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !bus.DeliverRemote("recheck.ws-access", tc.scope) {
+				t.Fatal("no applier for recheck.ws-access")
+			}
+			want := map[string]bool{}
+			for _, s := range tc.want {
+				want[s] = true
+			}
+			for name, c := range sockets {
+				if got := flagged(c); got != want[name] {
+					t.Errorf("%s flagged = %v, want %v", name, got, want[name])
+				}
+			}
+		})
 	}
 }

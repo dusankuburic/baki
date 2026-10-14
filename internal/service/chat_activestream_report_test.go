@@ -146,6 +146,25 @@ type answerGateStore struct {
 }
 
 func (s *answerGateStore) SaveConversation(ctx context.Context, flowID, scope string, msgs []storageif.ChatMessage) error {
+	if err := s.gate(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.FakeBackend.SaveConversation(ctx, flowID, scope, msgs)
+}
+
+func (s *answerGateStore) SaveConversationIf(ctx context.Context, flowID, scope string, expected int64, msgs []storageif.ChatMessage) (int64, error) {
+	if err := s.gate(ctx); err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.FakeBackend.SaveConversationIf(ctx, flowID, scope, expected, msgs)
+}
+
+// gate counts a save and parks the second one (the answer) until release.
+func (s *answerGateStore) gate(ctx context.Context) error {
 	s.mu.Lock()
 	s.saves++
 	answer := s.saves == 2
@@ -158,9 +177,13 @@ func (s *answerGateStore) SaveConversation(ctx context.Context, flowID, scope st
 			return ctx.Err()
 		}
 	}
+	return nil
+}
+
+func (s *answerGateStore) LoadConversationVersioned(ctx context.Context, flowID, scope string) ([]storageif.ChatMessage, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.FakeBackend.SaveConversation(ctx, flowID, scope, msgs)
+	return s.FakeBackend.LoadConversationVersioned(ctx, flowID, scope)
 }
 
 func (s *answerGateStore) LoadConversation(ctx context.Context, flowID, scope string) ([]storageif.ChatMessage, error) {
@@ -169,10 +192,10 @@ func (s *answerGateStore) LoadConversation(ctx context.Context, flowID, scope st
 	return s.FakeBackend.LoadConversation(ctx, flowID, scope)
 }
 
-// The cleanup takes a finished stream out of the active set before it stores
-// the answer (up to persistAnswerTimeout under the conversation mutex): a
-// reload in that window saw neither the stream nor the answer. The finished
-// stream is reported until it settles.
+// A reload while the answer is being stored (up to persistAnswerTimeout under
+// the conversation mutex) must find the stream: the history does not carry
+// the answer yet. The answer is stored before "done" is emitted, so the stream
+// is still active then; the finished stream is reported until it settles.
 func TestActiveStream_ReportedWhileTheAnswerIsStored(t *testing.T) {
 	store := &answerGateStore{FakeBackend: testutil.NewFakeBackend(), saving: make(chan struct{}), release: make(chan struct{})}
 	var once sync.Once
@@ -197,8 +220,9 @@ func TestActiveStream_ReportedWhileTheAnswerIsStored(t *testing.T) {
 		t.Fatalf("StreamChatMessage: %v", err)
 	}
 	waitClosed(t, store.saving, "the answer's save")
-	if _, live := svc.activeStreams.Load(id); live {
-		t.Fatal("the stream is still live while its answer is stored")
+	// The answer is stored before "done" leaves, so the stream is still in the active set while it is written.
+	if _, live := svc.activeStreams.Load(id); !live {
+		t.Fatal("the stream left the active set before its answer was stored")
 	}
 	msgs, sid, err := svc.ConversationWithActiveStream(ctx, "u1", doc.ID, conv)
 	if err != nil {

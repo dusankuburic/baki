@@ -74,7 +74,7 @@ func TestApplyFixBatch_DesktopFolder_PatchesSubflowFile(t *testing.T) {
 
 	// One undo entry covering the touched member; restoring it puts the
 	// original bytes back and re-parses the folder.
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != 1 {
 		t.Fatalf("expected exactly one folder snapshot, got %d", len(snaps))
 	}

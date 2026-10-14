@@ -14,6 +14,8 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"pad-analyzer/internal/api/render"
+	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/redisx"
 	"pad-core/logger"
 )
 
@@ -66,7 +68,7 @@ func newRateLimiter(rps, burst float64, trustedProxies []string, store bucketSto
 		capacity: burst,
 		proxies:  parseProxySet(trustedProxies),
 		store:    store,
-		group:    "general",
+		group:    route.RateGeneral,
 	}
 }
 
@@ -115,10 +117,28 @@ func (rl *RateLimiter) LimitByKey(h http.Handler, keyFn func(*http.Request) stri
 	})
 }
 
+// bucketKey declares the token-bucket hash a limiter keeps per client. The group namespaces the key so limiters
+// sharing one Redis instance never collide (the per-user limiter is the group "peruser", whose addr part is a hash of
+// the user or "ip:"+address: see BucketKey). The names are shipped: renaming a group in a two-release fleet splits
+// its buckets, which doubles the limit. While Redis is down the limiter falls back to a per-replica bucket with the
+// same rate, so the limit becomes N times the rate until the breaker closes.
+var bucketKey = redisx.Declare(redisx.Spec{
+	Name:    "ratelimit.bucket",
+	Kind:    redisx.KindHash,
+	Pattern: "ratelimit:{group}:{addr}",
+	TTL:     redisBucketTTL,
+	OnDown:  redisx.OnDownDegrade,
+	Owner:   "internal/api/middleware",
+})
+
+// BucketKey is the Redis key of group's bucket for addr (a client address as RateLimitAddr returns it, or the
+// per-user forms the api package builds).
+func BucketKey(group, addr string) string { return bucketKey.Key(group, addr) }
+
 // key namespaces the bucket by group so limiters sharing one Redis instance
 // never collide; for the in-memory store the prefix is harmless.
 func (rl *RateLimiter) key(ip string) string {
-	return "ratelimit:" + rl.group + ":" + RateLimitAddr(ip)
+	return BucketKey(rl.group, RateLimitAddr(ip))
 }
 
 // RateLimitAddr is the part of a client address a per-IP rate-limit bucket is keyed on: an IPv6 client by its /64 (one host is routinely handed a whole /64, so per-address buckets let it rotate for a fresh burst every time).

@@ -24,8 +24,10 @@ export interface ChatState {
   drafts: Record<string, string>
   historyStatus: Record<string, HistoryStatus>
   beginHistoryLoad: (threadId: string) => number
-  finishHistoryLoad: (threadId: string, token: number, loaded: ChatMessage[] | null) => boolean
+  finishHistoryLoad: (threadId: string, token: number, loaded: ChatMessage[] | null, version?: number) => boolean
   markHistoryLoaded: (threadId: string) => void
+  getConversationVersion: (threadId: string) => number | undefined
+  setConversationVersion: (threadId: string, version: number) => void
   isHistorySynced: (threadId: string) => boolean
 
   getMessages: (threadId: string) => readonly ChatMessage[]

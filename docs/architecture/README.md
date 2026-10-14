@@ -7,7 +7,7 @@ lasting consequences are recorded as ADRs in [`../adr/`](../adr/).
 | Topic | Where |
 |---|---|
 | Deployment profiles and what each can do | [modes.md](modes.md) |
-| Operating a deployment: database connections, pooling, the stop budget, alerts | [operations.md](operations.md) |
+| Operating a deployment: database connections, pooling, the stop budget, running more than one replica, alerts | [operations.md](operations.md) |
 | Schema migrations (format, compat, rollback) | [`internal/storage/database/migrations/README.md`](../../internal/storage/database/migrations/README.md) |
 | Test safety nets (goldens, ratchets, isolated databases, benchmark) | [safety-nets.md](safety-nets.md) |
 | DI wiring and the post-construction setters that remain | [di-wiring.md](di-wiring.md) |
@@ -57,10 +57,26 @@ and when it shrinks, so the pinned numbers keep going down.
   from an `fx.Invoke`. Cache invalidation is a sync subscriber, and the cache's fills are generation-checked
   (`eventbus.Gen`); side effects (email, realtime, notifications) are async subscribers, which run only after the
   commit. Never call into another service to tell it something changed, and never add a hook setter for it.
+  Every subscriber states whether another replica must reproduce its effect: `eventbus.Local(reason)` (a side
+  effect that must happen once, or nothing that can go stale across replicas) or `eventbus.Replicated(...)` (it
+  publishes invalidation keys once the write is durable). There is no default; every subscriber is listed in
+  `internal/di/testdata/subscribers.golden` ([safety-nets.md](safety-nets.md#event-subscribers-internalditestdatasubscribersgolden)).
+  With Redis configured, `internal/invalidation` carries a replicated subscriber's keys (never typed events) to the other
+  replicas on `baki:inval`, where each key's applier (`Bus.OnRemote`) runs the cache owner's own drop; a change that is
+  not a domain event (an analysis recorded) announces itself with `Bus.Invalidate`. A missed message is healed by an
+  epoch gap check, a resync after every resubscription and the cache's TTL (ADR 0032).
+- **Server-sent events.** `api.EventManager` delivers to this replica's clients and, when the deployment has the
+  shared Redis, to the other replicas' through `api.EventFanout` (`redisx.SSEBackplane`; ADR 0030): an event is
+  delivered locally, then published once, and a receiver delivers locally without publishing. Durable events get an SSE
+  `id:` from a short per-user Redis Stream and a reconnect with `Last-Event-ID` is replayed from it; chat chunks and
+  progress ticks are published only for users another replica holds. `HasSubscriber` consults the per-replica presence
+  records and answers true when it cannot read them. Without Redis none of this exists and nothing changes.
 - **Caches.** A cache is declared once, as a package-level `cache.Declare(name, cache.Keys(...), ...)`: its key
   parts include a tenant unless `cache.Global(reason)` says why not, and it states where its entries live
-  (`cache.ReplicaLocal(reason)`). Build its storage with `cache.New` and fill it through `GetOrFill`, which flies
-  on the full key. Raw LRU constructions and `singleflight.Group`s are pinned per file (`internal/archtest`), and
+  (`cache.ReplicaLocal(reason)`, or `cache.Shared(cache.MechanismInvalidation, reason)` when the invalidation fan-out
+  drops it on every replica). Build its storage with `cache.New` and fill it through `GetOrFill`, which flies
+  on the full key. Any other per-process map, list or cache beside a lock is declared in `stateRegistry`
+  (`TestArch_PerProcessStateDeclared`, ADR 0032). Raw LRU constructions and `singleflight.Group`s are pinned per file (`internal/archtest`), and
   every declaration is in `internal/di/testdata/caches.golden` (ADR 0017).
 - **Background work.** Anything that must not hold up the request runs on a `lifecycle.NewBounded` runner,
   which is capped, reports panics and is drained at shutdown, never a bare `go func`.
@@ -107,6 +123,21 @@ and when it shrinks, so the pinned numbers keep going down.
   refresh with `-update-tools`). The stream's `ai.ToolGate` decides what is offered AND is asked again in
   `ExecuteTool`; never test a tool name in the service, ask `ai.ToolRequiresApproval`. A tool that must ask the user
   goes through `ChatService.requestApproval` (`chat_approvals.go`) and the one decision endpoint (ADR 0026).
+- **Chat conversations.** In cloud mode a stored conversation has a `version` the database moves on every change of its
+  messages (migration 0044, a trigger and one sequence, never reused). The server's own writers (the user turn at
+  stream start, the assistant answer at stream end) go through `ChatService.mutateConversation`: read with the
+  version, change, write with `SaveConversationIf`, and read again on a conflict, so a second replica's turn lands
+  next to the first instead of replacing it. A client save may carry `baseVersion` for the same check (409
+  `CONVERSATION_CONFLICT`); one that sends none stays a blind replace, counted in `pad_chat_blind_saves_total`. The
+  per-conversation mutex stays as a queue for one replica's writers, not as the correctness mechanism; local modes
+  keep files and have no versions (ADR 0031).
+- **Chat stream commands.** A chat stream lives on the replica that started it. A stop or an approval decision that lands on
+  another replica goes through `ChatService.CancelStreamAs` / `DecideApproval` (`chat_commands.go`): the resume snapshot
+  names the owner (`replica`), the request is published on the owner's `baki:chat:cmd:<instance>` channel through
+  `redisx.CommandBus` and answered on the asker's reply channel, and the owner repeats the ownership and scope checks
+  before it acts. With Redis unreachable the answer is 503 `REPLICA_UNREACHABLE`, never an ok; a stream on the replica
+  that got the request uses no Redis (ADR 0033). New stream-scoped endpoints that mutate a running stream take the same
+  path: never read `activeStreams` for a stream that may belong to another replica.
 - **Storage capabilities.** Never type-assert a store to learn what it can do (`internal/archtest`, ADR 0010). A
   method any store could offer joins its role interface, and every backend implements it under the storage
   contract. What only the database offers (the cross-replica lock, the request transaction, the keystore, …) is an

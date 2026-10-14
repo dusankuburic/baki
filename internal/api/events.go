@@ -122,6 +122,10 @@ type EventManager struct {
 
 	// draining is the server's draining state; nil is the process's (drain.Process), tests set their own.
 	draining *drain.State
+
+	// fan is the cross-replica backplane (WithFanout); nil is today's behaviour: this process's clients only, no
+	// event ids, no replay.
+	fan *eventFan
 }
 
 // dropWarnInterval is the minimum gap between two "send buffer full" warnings; the drops in
@@ -181,7 +185,14 @@ func (m *EventManager) Revoke(jti string) int {
 func (m *EventManager) SubscribeRevocations(bus *eventbus.Bus) {
 	eventbus.Subscribe(bus, eventbus.Async, "sse-access-revoked", func(_ context.Context, e events.AccessRevoked) {
 		m.Revoke(e.JTI)
-	}, eventbus.InlineWhenSaturated())
+	}, eventbus.InlineWhenSaturated(), eventbus.Replicated(func(e events.AccessRevoked) []eventbus.Invalidation {
+		// The other replicas' streams of the token end from the nudge (recheck.sse-revocation), not at their
+		// periodic blacklist check; the scope is the token id, as Revoke takes it.
+		if e.JTI == "" {
+			return nil
+		}
+		return []eventbus.Invalidation{{Key: "recheck.sse-revocation", Scope: eventbus.NewScope("jti", e.JTI)}}
+	}, "recheck.sse-revocation"))
 }
 
 // watchRevocation registers a stream of the token jti; the returned channel closes when Revoke ends it, and stop
@@ -261,11 +272,16 @@ func (m *EventManager) EmitToOrg(ctx context.Context, orgID, name string, data a
 
 // HasSubscriber satisfies the service.EventNotifier interface: whether EmitTo(userID, …) would reach
 // a connected client. Services use it to detect abandoned work — e.g. a chat stream whose tab closed
-// without /cancel.
+// without /cancel. With the Redis fan-out a stream held by another replica counts, and a presence that cannot be read
+// counts as "has a subscriber": a stream is never cancelled for a lookup that failed.
 func (m *EventManager) HasSubscriber(userID string) bool {
 	m.rlockIndexed()
-	defer m.clientsMu.RUnlock()
-	return len(m.byUser[userID]) > 0
+	local := len(m.byUser[userID]) > 0
+	m.clientsMu.RUnlock()
+	if local || m.fan == nil {
+		return local
+	}
+	return m.fan.otherReplicaHolds(userID)
 }
 
 // rlockIndexed takes the read lock with byUser guaranteed to cover clients; the index only falls
@@ -370,14 +386,27 @@ func (m *EventManager) deliverTo(ev Event, users []string) {
 	if !ok {
 		return
 	}
+	if m.fan == nil {
+		m.offer(ev.Name, frame, ev.all, users, nil)
+		return
+	}
+	// With the backplane: log first (the entry id is the frame's SSE id), deliver here, then hand the event to the
+	// other replicas, which deliver to their own clients without publishing again.
+	ids := m.fan.log(ev, frame, users)
+	m.offer(ev.Name, frame, ev.all, users, ids)
+	m.fan.publish(ev, frame, users, ids)
+}
 
-	droppable := sheddable(ev.Name)
+// offer hands frame to this process's clients: every client when all is set, else those of users. ids, when not
+// nil, holds the event id of each user's copy (aligned with users; "" for none), written as the frame's id line.
+func (m *EventManager) offer(name string, frame []byte, all bool, users, ids []string) {
+	droppable := sheddable(name)
 
 	// Only the map walk runs under the READ lock (a channel send is safe from any number of readers).
 	// Drops are counted here and logged after the release — the synchronous log write would stall
 	// every delivery and connect if run inside the lock.
 	dropped := 0
-	if ev.all {
+	if all {
 		m.clientsMu.RLock()
 		for ch := range m.clients {
 			if !m.offerFrame(ch, frame, droppable) {
@@ -388,9 +417,17 @@ func (m *EventManager) deliverTo(ev Event, users []string) {
 	} else {
 		// Targeted: only the target users' own channels.
 		m.rlockIndexed()
-		for _, user := range users {
-			for ch := range m.byUser[user] {
-				if !m.offerFrame(ch, frame, droppable) {
+		for i, user := range users {
+			set := m.byUser[user]
+			if len(set) == 0 {
+				continue
+			}
+			f := frame
+			if ids != nil && ids[i] != "" {
+				f = frameWithID(ids[i], frame)
+			}
+			for ch := range set {
+				if !m.offerFrame(ch, f, droppable) {
 					dropped++
 				}
 			}
@@ -398,7 +435,7 @@ func (m *EventManager) deliverTo(ev Event, users []string) {
 		m.clientsMu.RUnlock()
 	}
 	if dropped > 0 {
-		m.noteDropped(ev.Name, dropped)
+		m.noteDropped(name, dropped)
 	}
 }
 
@@ -523,9 +560,10 @@ func flushQueued(w http.ResponseWriter, flusher http.Flusher, rc *http.ResponseC
 
 // HandleEvents is the HTTP handler for the SSE endpoint.
 // @Summary      Server-sent events stream
-// @Description  Long-lived SSE channel for analysis, chat, and collaboration events. Chunks stream incrementally; reconnect with Last-Event-ID to resume. While the server is stopping a new stream is refused with 503 and code SERVER_RESTARTING (Retry-After); one already open stays open until the server has delivered the chat streams' terminal events.
+// @Description  Long-lived SSE channel for analysis, chat, and collaboration events. Chunks stream incrementally. On a deployment with a shared Redis (several replicas) every event except chat chunks, heartbeats and progress ticks carries an `id:` line, and a client that reconnects with Last-Event-ID is replayed the frames it missed (at most 200, from the last 5 minutes) before the live stream continues. A reconnect the log cannot replay whole (more frames missed, a cursor older than the log, or the log unreadable) gets one `replay:gap` event instead of a partial replay, which tells the client to refetch what it shows; without Redis the frames carry no id and the header is ignored, so a client refetches what it needs after a reconnect. While the server is stopping a new stream is refused with 503 and code SERVER_RESTARTING (Retry-After); one already open stays open until the server has delivered the chat streams' terminal events.
 // @Tags         realtime
 // @Produce      text/event-stream
+// @Param        Last-Event-ID header string false "The id of the last frame the client received; replays what followed it (needs the shared Redis, else ignored)"
 // @Success      200 {string} string "Event stream"
 // @Failure      503 {object} render.ErrorResponse "The server is restarting (code SERVER_RESTARTING; reconnect after Retry-After), or too many connections"
 // @Router       /api/events [get]
@@ -579,6 +617,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := make(chan []byte, 512)
 	m.addClientLocked(ch, userID)
 	m.clientsMu.Unlock()
+	m.fan.notePresence(userID)
 
 	defer func() {
 		m.clientsMu.Lock()
@@ -588,6 +627,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			delete(m.sseConnCount, key)
 		}
 		m.clientsMu.Unlock()
+		m.fan.notePresence(userID)
 		sseClientEnd()
 	}()
 
@@ -659,6 +699,17 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		expiryC = expiryTimer.C
 	}
 
+	// A reconnect that names the last frame it saw is replayed what followed it before the live frames: this
+	// stream is already registered, so nothing emitted from here on is missed, and a frame that is both in the
+	// replay and queued live is written once (replayed below).
+	replayed := ""
+	if lastID := strings.TrimSpace(r.Header.Get("Last-Event-ID")); lastID != "" && m.fan != nil {
+		var ok bool
+		if replayed, ok = m.fan.replay(ctx, w, flusher, armWriteDeadline, userID, lastID); !ok {
+			return
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -691,6 +742,9 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			// Frame arrives pre-encoded by deliver (one encode per event).
 			if queuedBytes != nil {
 				queuedBytes.Add(-int64(len(frame)))
+			}
+			if replayed != "" && frameIDNotAfter(frame, replayed) {
+				continue
 			}
 			armWriteDeadline()
 			if _, err := w.Write(frame); err != nil {

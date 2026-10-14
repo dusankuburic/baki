@@ -114,7 +114,7 @@ export function useTurnLifecycle({
       const modelLabel = storableModelLabel(opts.modelLabel, opts.model)
       const meta: StreamMeta = {provider: opts.provider, model: opts.model, ...(modelLabel ? {modelLabel} : {})}
       const userMsg: ChatMessage = {
-        id: uuid(),
+        id: opts.userMessageId ?? uuid(),
         role: 'user',
         content: text,
         timestamp: new Date().toISOString(),
@@ -345,6 +345,7 @@ export function useTurnLifecycle({
           pinThread: false,
           restore: before,
           autoRetry: true,
+          userMessageId: resend.userMessageId,
         })
         if (!accepted) now.setThreadMessages(threadId, before)
       }, serverRestartDelayMs())

@@ -14,6 +14,7 @@ import {useAsync} from '@/hooks/useAsync'
 import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
 import {emailErrorKey} from '@/lib/validators'
 import {EMAIL_MAX_LENGTH} from '@/lib/constraints'
+import {localDate} from '@/lib/time'
 
 export function shareLinkURL(token: string): string {
   const base = (import.meta.env.BASE_URL || '/').replace(/\/?$/, '/')
@@ -331,8 +332,7 @@ function ShareLinksSection({flowId}: {flowId: string}) {
 
   const formatDate = (iso?: string) => {
     if (!iso) return ''
-    const d = new Date(iso)
-    return d.toLocaleDateString(undefined, {month: 'short', day: 'numeric', year: 'numeric'})
+    return localDate(iso, {month: 'short', day: 'numeric', year: 'numeric'})
   }
 
   return (

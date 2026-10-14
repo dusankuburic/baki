@@ -6,6 +6,7 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import {analysisApi} from '@/api'
 import {logger} from '@/lib/logger'
 import type {AnalysisSnapshot} from '@/types'
+import {localDateTime} from '@/lib/time'
 
 export default function HealthTrend() {
   const {t} = useTranslation('inspector')
@@ -50,7 +51,7 @@ export default function HealthTrend() {
           {t('trend.title')}
         </span>
         <span className="text-xs text-text-tertiary tabular-nums">
-          {new Date(active.timestamp).toLocaleString()} · {t('trend.score', {score: active.healthScore})} ·{' '}
+          {localDateTime(active.timestamp)} · {t('trend.score', {score: active.healthScore})} ·{' '}
           <span className="text-red-400">{t('trend.errorsShort', {value: active.errors})}</span>{' '}
           <span className="text-amber-400">{t('trend.warningsShort', {value: active.warnings})}</span>{' '}
           <span className="text-blue-400">{t('trend.infoShort', {value: active.info})}</span>

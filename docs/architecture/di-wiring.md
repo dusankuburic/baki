@@ -37,7 +37,7 @@ through `SetAzureModels`, so it became a constructor parameter.
 | `ChatService.SetAzureModels(azure)` | `ChatOptions.Azure` | No cycle |
 | `ProviderService.SetAzureModels(azure)` | `NewProviderService(..., orgKeys, azure)` | No cycle |
 | `ProviderService.SetOrgKeyStore(orgKeys)` | `NewProviderService(..., orgKeys, azure)` | No cycle |
-| `ChatService.SetResumeBackplane(redis)` | `ChatOptions.Resume` | No cycle |
+| `ChatService.SetResumeBackplane(redis)` | `ChatOptions.Resume` (+ `ChatOptions.Instance`; the provider also starts the replica's command subscriptions in an OnStart hook, `Shutdown` ends them) | No cycle |
 | `AnalysisService.SetCustomRules` / `SetRuleProfileResolver` / `SetAuthEnabled` (`decorateAnalysisService`) | `NewAnalysisService(..., AnalysisOptions{...})` via `di.ProvideAnalysisService` | No cycle (the resolver takes the rules, not the service) |
 | `factory.SetOrgKeyLookup` (an `fx.Decorate` on `*ai.ProviderFactory`) | Called inside `ProvideAI`, which now takes the `OrgKeyStore` | No cycle. It configures the factory where it is built. |
 | `factory.SetEmbeddingDimensions` (in `ProvideAI`) | Unchanged | Configures the object its own provider builds. `ai.NewProviderFactory` has about 65 test call sites. |
@@ -82,7 +82,7 @@ Everything else is `internal/app`, one file per concern:
 
 | File | Holds |
 |---|---|
-| `app.go` | `Build`, `Options` (the stop timeout, the providers, `di.ServiceModule`, `di.APIModule`, `redisx.Module`, the ordered Invoke list), `initAuditTrail` |
+| `app.go` | `Build`, `Options` (the stop timeout, the providers, `di.ServiceModule`, `di.APIModule`, `redisx.Module` (the optional `*redis.Client` and the `*redisx.Health` that watches it: a boot ping that does not refuse, a 5 s ping loop on the lifecycle; `di.ProvideRedisPinger` hands the health to the system handler as `api.RedisPinger`, nil without Redis), `invalidation.Module` (with a Redis client: installs the fan-out as the bus's `Replicas` hook and runs it; invoked after the modules whose subscribers register the appliers it delivers to, stopped after the HTTP server so a draining replica's last writes are still sent), the ordered Invoke list), `initAuditTrail` |
 | `config.go` | `loadConfig`, the provider of `config.Load` (`PAD_CONFIG`, else the `PAD_*` environment, else the defaults; durations parsed, everything validated, secrets, aliases and the instance id resolved once) |
 | `observability.go` | `initLogger`, `initTelemetry` |
 | `storage.go` | `StorageResult`, `provideStorageBackend`, `storageConfig` (the `PAD_DB_*` pool settings, the pool check's replica count and server cap, the `application_name`, blob), the pool-metrics loop and the background HNSW build |

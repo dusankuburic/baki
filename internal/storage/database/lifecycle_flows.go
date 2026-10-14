@@ -25,6 +25,8 @@ func init() {
 				noPurge: "user content: it goes with its flow, never on a timer", legacy: "conversations"},
 			{table: "flow_versions", noExport: "earlier versions of the exported flows (open: the bundle carries current content only)",
 				erase: erasedByStep | erasedByCascade, org: orgNotKeyed, noPurge: "pruned per flow on every save"},
+			{table: "flow_snapshots", noExport: "pre-mutation copies of the exported flows' source, an undo ring kept for 24 hours",
+				erase: erasedByCascade, org: orgNotKeyed},
 			{table: "flow_analysis", noExport: "derived from the flow's content",
 				erase: erasedByCascade, org: orgNotKeyed, noPurge: "one row per flow"},
 			{table: "flow_analysis_history", noExport: "derived from the flow's content",
@@ -84,6 +86,10 @@ func init() {
 			{phase: orgDetach, table: "flows", sql: `UPDATE flows SET org_id = '' WHERE org_id = $1`},
 		},
 		purge: []purgeStep{
+			// The undo ring is a 24 hour affordance: reads hide an older snapshot at once, the sweep frees its space.
+			// Batched because a long-idle deployment can hold many large rows; the count bound is per flow only.
+			{table: "flow_snapshots", cond: fmt.Sprintf(`created_at < NOW() - INTERVAL '%d seconds'`, int(interfaces.FlowSnapshotTTL.Seconds())), batched: true,
+				count: func(r *interfaces.PurgeResult) *int { return &r.FlowSnapshots }},
 			// An expired share link can never be redeemed again, so its row is dead weight — and one that still
 			// names a flow. No-expiry rows are permanent links; kept.
 			{table: "share_tokens", cond: `expires_at IS NOT NULL AND expires_at < NOW()`,

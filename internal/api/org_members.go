@@ -58,7 +58,8 @@ func lendsSharedCredential(ctx context.Context, providers *service.ProviderServi
 func SubscribeLentCredentialRevocation(bus *eventbus.Bus, providers *service.ProviderService, rec *audit.Recorder) {
 	eventbus.Subscribe(bus, eventbus.Async, "lent-credential-revocation", func(ctx context.Context, e events.OrgMemberChanged) {
 		revokeLentCredentials(ctx, rec, providers, e)
-	}, eventbus.InlineWhenSaturated())
+	}, eventbus.InlineWhenSaturated(),
+		eventbus.Local("a keystore write with audit rows: it must happen once, and the shared keystore makes it visible to every replica"))
 }
 
 // revokeLentCredentials is SubscribeLentCredentialRevocation's delivery.

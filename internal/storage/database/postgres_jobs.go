@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -63,10 +64,11 @@ func (j jobRuns) JobLastSuccess(ctx context.Context, name string) (time.Time, er
 
 func (j jobRuns) GetJobRun(ctx context.Context, name string) (*interfaces.JobRun, error) {
 	var started, success, failed sql.NullTime
+	var detail []byte
 	r := interfaces.JobRun{Name: name}
 	err := j.db.QueryRowContext(ctx, `
-		SELECT last_started_at, holder_instance, last_success_at, last_error_at, last_error
-		  FROM job_runs WHERE name = $1`, name).Scan(&started, &r.Holder, &success, &failed, &r.LastError)
+		SELECT last_started_at, holder_instance, last_success_at, last_error_at, last_error, last_detail
+		  FROM job_runs WHERE name = $1`, name).Scan(&started, &r.Holder, &success, &failed, &r.LastError, &detail)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, interfaces.ErrNotFound
@@ -74,7 +76,23 @@ func (j jobRuns) GetJobRun(ctx context.Context, name string) (*interfaces.JobRun
 		return nil, fmt.Errorf("read job run: %w", err)
 	}
 	r.LastStartedAt, r.LastSuccessAt, r.LastErrorAt = utcOrZero(started), utcOrZero(success), utcOrZero(failed)
+	if len(detail) > 0 {
+		r.Detail = json.RawMessage(detail)
+	}
 	return &r, nil
+}
+
+func (j jobRuns) RecordJobDetail(ctx context.Context, name string, detail json.RawMessage) error {
+	var doc any // NULL clears
+	if len(detail) > 0 {
+		doc = string(detail)
+	}
+	if _, err := j.db.ExecContext(ctx, `
+		INSERT INTO job_runs (name, last_detail) VALUES ($1, $2::jsonb)
+		ON CONFLICT (name) DO UPDATE SET last_detail = EXCLUDED.last_detail`, name, doc); err != nil {
+		return fmt.Errorf("record job detail: %w", err)
+	}
+	return nil
 }
 
 func utcOrZero(t sql.NullTime) time.Time {
@@ -102,4 +120,9 @@ func (b *PostgresStorageBackend) JobLastSuccess(ctx context.Context, name string
 // GetJobRun implements interfaces.JobRunStore.
 func (b *PostgresStorageBackend) GetJobRun(ctx context.Context, name string) (*interfaces.JobRun, error) {
 	return jobRuns{b.db}.GetJobRun(ctx, name)
+}
+
+// RecordJobDetail implements interfaces.JobRunStore.
+func (b *PostgresStorageBackend) RecordJobDetail(ctx context.Context, name string, detail json.RawMessage) error {
+	return jobRuns{b.db}.RecordJobDetail(ctx, name, detail)
 }

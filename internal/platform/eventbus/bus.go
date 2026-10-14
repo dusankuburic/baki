@@ -12,6 +12,9 @@
 //     rolled-back write), on the bus's bounded background runner, each delivery with its own timeout and panic
 //     recovery, on a context without the request's cancellation or row-level-security scope.
 //
+// Every subscriber also states its locality (replicated.go): Local, its effect stays on this replica, or Replicated,
+// the bus tells the other replicas what to invalidate once the write is durable, through the Replicas hook.
+//
 // Delivery is in process and at most once: a crash between the commit and an async delivery loses it (no
 // outbox).
 package eventbus
@@ -56,7 +59,8 @@ type Pass uint8
 const (
 	// Immediate: inside Publish, before the publisher's transaction (if any) has ended.
 	Immediate Pass = iota
-	// Committed: after the publisher's transaction committed. Fan-out to other replicas belongs here only.
+	// Committed: after the publisher's transaction committed. Fan-out to other replicas belongs here only (the bus
+	// does it for Replicated subscribers, with this pass in the context).
 	Committed
 	// RolledBack: after the publisher's transaction rolled back.
 	RolledBack
@@ -81,6 +85,14 @@ type subscriber struct {
 	tier   Tier
 	fn     func(context.Context, Event)
 	inline bool
+
+	// event and evType name the event type subscribed to; the rest is the locality choice (replicated.go).
+	event       string
+	evType      reflect.Type
+	locality    Locality
+	reason      string
+	keys        []string
+	invalidates func(Event) []Invalidation
 }
 
 // SubscribeOption tunes one subscription.
@@ -100,6 +112,10 @@ type Bus struct {
 	subs map[reflect.Type][]*subscriber
 	taps []func(Event)
 
+	// replicas and appliers are the cross-replica seam (replicated.go); both are empty on a single replica.
+	replicas Replicas
+	appliers map[string]func(Scope)
+
 	runner  Runner
 	timeout time.Duration
 }
@@ -110,14 +126,17 @@ func New(runner Runner, timeout time.Duration) *Bus {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &Bus{subs: map[reflect.Type][]*subscriber{}, runner: runner, timeout: timeout}
+	return &Bus{subs: map[reflect.Type][]*subscriber{}, appliers: map[string]func(Scope){}, runner: runner, timeout: timeout}
 }
 
 // Subscribe registers fn for events of type E on tier. name labels the subscriber in metrics and logs and must be
-// a code literal. Subscribe at boot (an fx.Invoke), before the first Publish.
+// a code literal. Subscribe at boot (an fx.Invoke), before the first Publish. Every subscriber states whether
+// other replicas must reproduce its effect, with Local or Replicated (replicated.go); a registration that states
+// neither is listed as unclassified and fails internal/di's subscribers golden.
 func Subscribe[E Event](b *Bus, tier Tier, name string, fn func(ctx context.Context, e E), opts ...SubscribeOption) {
 	t := reflect.TypeFor[E]()
-	s := &subscriber{name: name, tier: tier, fn: func(ctx context.Context, e Event) { fn(ctx, e.(E)) }}
+	var zero E
+	s := &subscriber{name: name, tier: tier, fn: func(ctx context.Context, e Event) { fn(ctx, e.(E)) }, event: zero.EventName(), evType: t}
 	for _, o := range opts {
 		o(s)
 	}
@@ -143,8 +162,11 @@ func (b *Bus) Publish(ctx context.Context, e Event) {
 		tap(e)
 	}
 
-	var syncs, asyncs []*subscriber
+	var syncs, asyncs, reps []*subscriber
 	for _, s := range all {
+		if s.locality == LocalityReplicated {
+			reps = append(reps, s)
+		}
 		if s.tier == Async {
 			asyncs = append(asyncs, s)
 		} else {
@@ -165,6 +187,10 @@ func (b *Bus) Publish(ctx context.Context, e Event) {
 				b.deliverAsync(base, s, e)
 			}
 		})
+	}
+	// Last, so this replica's own caches are already dropped when the others are told.
+	if len(reps) > 0 {
+		b.replicate(ctx, reps, e)
 	}
 }
 

@@ -26,12 +26,21 @@ export type ThemeMode =
 
 export interface AppSettings {
   version: number
+  profile: ProfileSettings
   general: GeneralSettings
   appearance: AppearanceSettings
   layout: LayoutSettings
   ai: AISettings
   parser: ParserSettings
   analysis: AnalysisRulesSettings
+}
+
+/** The user's identity card beyond the account row; all fields optional (core/models/settings.go ProfileSettings). */
+export interface ProfileSettings {
+  bio?: string
+  jobTitle?: string
+  /** IANA zone name; empty keeps the device's. */
+  timezone?: string
 }
 
 export interface GeneralSettings {

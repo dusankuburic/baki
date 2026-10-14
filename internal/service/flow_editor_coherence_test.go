@@ -119,7 +119,7 @@ func TestEditorMutations_InvalidateDerivedCaches(t *testing.T) {
 			t.Fatalf("setup remove: %v", err)
 		}
 		fired := record(svc)
-		snaps := svc.ListSourceSnapshots(doc)
+		snaps := snapshotsOf(t, svc, doc)
 		if len(snaps) == 0 {
 			t.Fatal("no snapshot to restore")
 		}

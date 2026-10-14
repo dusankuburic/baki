@@ -271,7 +271,7 @@ func TestSnapshots_CloudSaveSourceRecordsOnlyOnCommit(t *testing.T) {
 	if _, err := svc.SaveSource(ctx, doc, edited, ""); !errors.Is(err, storageif.ErrVersionConflict) {
 		t.Fatalf("SaveSource err = %v, want the OCC conflict", err)
 	}
-	if n := len(svc.ListSourceSnapshots(doc)); n != 0 {
+	if n := len(snapshotsOf(t, svc, doc)); n != 0 {
 		t.Fatalf("a rejected save recorded %d snapshot(s), want 0", n)
 	}
 
@@ -279,7 +279,7 @@ func TestSnapshots_CloudSaveSourceRecordsOnlyOnCommit(t *testing.T) {
 	if _, err := svc.SaveSource(ctx, doc, edited, ""); err != nil {
 		t.Fatalf("SaveSource: %v", err)
 	}
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != 1 || snaps[0].Label != "before source save" || snaps[0].source != snapshotFlowSrc {
 		t.Fatalf("want one 'before source save' snapshot of the original source, got %+v", snaps)
 	}
@@ -300,7 +300,7 @@ func TestSnapshots_CloudFixRecordsOnlyOnCommit(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "parse errors") {
 		t.Fatalf("ApplyFix err = %v, want the parse-error gate", err)
 	}
-	if n := len(svc.ListSourceSnapshots(gated)); n != 0 {
+	if n := len(snapshotsOf(t, svc, gated)); n != 0 {
 		t.Fatalf("a gate-rejected fix recorded %d snapshot(s), want 0", n)
 	}
 
@@ -313,7 +313,7 @@ func TestSnapshots_CloudFixRecordsOnlyOnCommit(t *testing.T) {
 	if _, _, err := svc.ApplyFixBatch(ctx, doc, nil, 10); !errors.Is(err, storageif.ErrVersionConflict) {
 		t.Fatalf("ApplyFixBatch err = %v, want the OCC conflict", err)
 	}
-	if n := len(svc.ListSourceSnapshots(doc)); n != 0 {
+	if n := len(snapshotsOf(t, svc, doc)); n != 0 {
 		t.Fatalf("OCC-rejected fixes recorded %d snapshot(s), want 0", n)
 	}
 
@@ -321,7 +321,7 @@ func TestSnapshots_CloudFixRecordsOnlyOnCommit(t *testing.T) {
 	if _, err := svc.ApplyFix(ctx, doc, firstHTTPBlock(t, doc), "wrap-error-handler", "unhandled-error", "", "", false); err != nil {
 		t.Fatalf("ApplyFix: %v", err)
 	}
-	if snaps := svc.ListSourceSnapshots(doc); len(snaps) != 1 || snaps[0].Label != "before fix" {
+	if snaps := snapshotsOf(t, svc, doc); len(snaps) != 1 || snaps[0].Label != "before fix" {
 		t.Fatalf("want exactly one 'before fix' snapshot, got %+v", snaps)
 	}
 	assertSnapshotAccounting(t, svc.snapshots)
@@ -344,7 +344,7 @@ func TestSnapshots_CloudFolderFixRecordsOnlyOnCommit(t *testing.T) {
 	if _, applied, err := svc.ApplyFixBatch(ctx, doc, map[string]bool{"no-such-rule": true}, 10); err != nil || applied != 0 {
 		t.Fatalf("no-op batch = %d, %v; want 0, nil", applied, err)
 	}
-	if n := len(svc.ListSourceSnapshots(doc)); n != 0 {
+	if n := len(snapshotsOf(t, svc, doc)); n != 0 {
 		t.Fatalf("rejected/no-op folder mutations recorded %d snapshot(s), want 0", n)
 	}
 
@@ -352,7 +352,7 @@ func TestSnapshots_CloudFolderFixRecordsOnlyOnCommit(t *testing.T) {
 	if _, applied, err := svc.ApplyFixBatch(ctx, doc, nil, 10); err != nil || applied == 0 {
 		t.Fatalf("ApplyFixBatch = %d, %v", applied, err)
 	}
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != 1 || snaps[0].Files == nil {
 		t.Fatalf("want exactly one folder snapshot, got %+v", snaps)
 	}
@@ -362,7 +362,7 @@ func TestSnapshots_CloudFolderFixRecordsOnlyOnCommit(t *testing.T) {
 	if _, err := svc.RestoreSourceSnapshot(ctx, doc, snaps[0].ID); !errors.Is(err, storageif.ErrVersionConflict) {
 		t.Fatalf("RestoreSourceSnapshot err = %v, want the OCC conflict", err)
 	}
-	if n := len(svc.ListSourceSnapshots(doc)); n != 1 {
+	if n := len(snapshotsOf(t, svc, doc)); n != 1 {
 		t.Fatalf("a rejected folder restore left %d snapshot(s), want 1", n)
 	}
 	assertSnapshotAccounting(t, svc.snapshots)
@@ -377,7 +377,7 @@ func TestSnapshots_CloudRestoreRecordsOnlyOnCommit(t *testing.T) {
 	if _, err := svc.SaveSource(ctx, doc, strings.Replace(snapshotFlowSrc, "https://x", "https://y", 1), ""); err != nil {
 		t.Fatalf("SaveSource: %v", err)
 	}
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != 1 {
 		t.Fatalf("want 1 snapshot after the save, got %d", len(snaps))
 	}
@@ -386,7 +386,7 @@ func TestSnapshots_CloudRestoreRecordsOnlyOnCommit(t *testing.T) {
 	if _, err := svc.RestoreSourceSnapshot(ctx, doc, snaps[0].ID); !errors.Is(err, storageif.ErrVersionConflict) {
 		t.Fatalf("RestoreSourceSnapshot err = %v, want the OCC conflict", err)
 	}
-	if n := len(svc.ListSourceSnapshots(doc)); n != 1 {
+	if n := len(snapshotsOf(t, svc, doc)); n != 1 {
 		t.Fatalf("a rejected restore left %d snapshot(s), want 1", n)
 	}
 
@@ -394,7 +394,7 @@ func TestSnapshots_CloudRestoreRecordsOnlyOnCommit(t *testing.T) {
 	if _, err := svc.RestoreSourceSnapshot(ctx, doc, snaps[0].ID); err != nil {
 		t.Fatalf("RestoreSourceSnapshot: %v", err)
 	}
-	if got := svc.ListSourceSnapshots(doc); len(got) != 2 || got[1].Label != "before restore" {
+	if got := snapshotsOf(t, svc, doc); len(got) != 2 || got[1].Label != "before restore" {
 		t.Fatalf("want the committed restore to add one 'before restore' entry, got %+v", got)
 	}
 	assertSnapshotAccounting(t, svc.snapshots)
@@ -445,7 +445,7 @@ func TestSnapshots_DesktopFailedWriteRecordsNothing(t *testing.T) {
 	if _, _, err := svc.ApplyFixBatch(ctx, doc, nil, 10); err == nil {
 		t.Fatal("ApplyFixBatch should fail on the blocked write")
 	}
-	if n := len(svc.ListSourceSnapshots(doc)); n != 0 {
+	if n := len(snapshotsOf(t, svc, doc)); n != 0 {
 		t.Fatalf("failed desktop writes recorded %d snapshot(s), want 0", n)
 	}
 
@@ -453,7 +453,7 @@ func TestSnapshots_DesktopFailedWriteRecordsNothing(t *testing.T) {
 	if _, err := svc.SaveSource(ctx, doc, edited, ""); err != nil {
 		t.Fatalf("SaveSource: %v", err)
 	}
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != 1 || snaps[0].source != snapshotFlowSrc {
 		t.Fatalf("want exactly one snapshot of the original bytes, got %+v", snaps)
 	}
@@ -462,7 +462,7 @@ func TestSnapshots_DesktopFailedWriteRecordsNothing(t *testing.T) {
 	if _, err := svc.RestoreSourceSnapshot(ctx, doc, snaps[0].ID); err == nil {
 		t.Fatal("RestoreSourceSnapshot should fail on the blocked write")
 	}
-	if n := len(svc.ListSourceSnapshots(doc)); n != 1 {
+	if n := len(snapshotsOf(t, svc, doc)); n != 1 {
 		t.Fatalf("a failed restore left %d snapshot(s), want 1", n)
 	}
 	assertSnapshotAccounting(t, svc.snapshots)
@@ -480,7 +480,7 @@ func TestSnapshots_DesktopFolderFailedWriteRecordsNothing(t *testing.T) {
 	if _, _, err := svc.ApplyFixBatch(ctx, doc, filter, 10); err == nil {
 		t.Skip("this platform/user lets writes through the read-only guard")
 	}
-	if n := len(svc.ListSourceSnapshots(doc)); n != 0 {
+	if n := len(snapshotsOf(t, svc, doc)); n != 0 {
 		t.Fatalf("a failed folder batch recorded %d snapshot(s), want 0", n)
 	}
 
@@ -488,7 +488,7 @@ func TestSnapshots_DesktopFolderFailedWriteRecordsNothing(t *testing.T) {
 	if _, applied, err := svc.ApplyFixBatch(ctx, doc, filter, 10); err != nil || applied == 0 {
 		t.Fatalf("ApplyFixBatch = %d, %v", applied, err)
 	}
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != 1 {
 		t.Fatalf("want exactly one folder snapshot, got %d", len(snaps))
 	}
@@ -497,7 +497,7 @@ func TestSnapshots_DesktopFolderFailedWriteRecordsNothing(t *testing.T) {
 	if _, err := svc.RestoreSourceSnapshot(ctx, doc, snaps[0].ID); err == nil {
 		t.Fatal("RestoreSourceSnapshot should fail on the blocked write")
 	}
-	if n := len(svc.ListSourceSnapshots(doc)); n != 1 {
+	if n := len(snapshotsOf(t, svc, doc)); n != 1 {
 		t.Fatalf("a failed folder restore left %d snapshot(s), want 1", n)
 	}
 	assertSnapshotAccounting(t, svc.snapshots)

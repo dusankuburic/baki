@@ -231,7 +231,7 @@ func (s *FlowService) applyCloudPatch(ctx context.Context, doc *models.FlowDocum
 		if err != nil {
 			return nil, err
 		}
-		s.pushSnapshot(doc, snap)
+		s.pushSnapshot(ctx, doc, snap)
 		return updated, nil
 	}
 
@@ -248,7 +248,7 @@ func (s *FlowService) applyCloudPatch(ctx context.Context, doc *models.FlowDocum
 	if err != nil {
 		return nil, err
 	}
-	s.pushSnapshot(doc, snap)
+	s.pushSnapshot(ctx, doc, snap)
 	return persisted, nil
 }
 
@@ -334,7 +334,7 @@ func (s *FlowService) applyFixBatchCloudFolder(ctx context.Context, doc *models.
 	if err != nil {
 		return FixBatchResult{Applied: total}, err
 	}
-	s.pushSnapshot(doc, snap)
+	s.pushSnapshot(persistCtx, doc, snap)
 	return FixBatchResult{Doc: updated, Applied: total, Partial: cutShort != nil, Reason: cutShort}, nil
 }
 

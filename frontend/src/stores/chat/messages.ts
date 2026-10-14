@@ -50,7 +50,8 @@ export const createMessagesSlice: StateCreator<ChatState, [], [], MessagesSlice>
       next.set(threadId, [])
       return {
         conversations: next,
-        historyStatus: {...state.historyStatus, [threadId]: {state: 'loaded', token: nextHistoryToken()}},
+        // The server has no conversation after a clear, whose version is 0.
+        historyStatus: {...state.historyStatus, [threadId]: {state: 'loaded', token: nextHistoryToken(), version: 0}},
       }
     }),
 

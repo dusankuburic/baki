@@ -294,9 +294,35 @@ jobs:
       # job. Parameter VALUES ARE QUOTED: the previous unquoted `>`-folded form
       # split any secret containing a space into two arguments.
       #
-      # maxReplicas stays 1 deliberately — internal/api/events.go is an
-      # in-process SSE hub, so a second replica silently breaks chat streaming.
-      # See the header of infra/main.bicep.
+      # The replica count and Redis come from repository variables, and the
+      # repository default stays ONE replica without Redis: PAD_MIN_REPLICAS and
+      # PAD_MAX_REPLICAS (default 1 each), PAD_PROVISION_REDIS (default false),
+      # PAD_SCALE_CONCURRENT_REQUESTS (default 100, the HTTP concurrency per replica
+      # that adds one; open SSE streams and sockets count). More than one replica
+      # shares events, stream commands, the AI budget ledger, cache invalidation
+      # and rate limits only through Redis, so the step below refuses
+      # PAD_MAX_REPLICAS above 1 without PAD_PROVISION_REDIS=true. How to raise it:
+      # docs/architecture/operations.md, "Running more than one replica".
+      - name: Refuse several replicas without Redis
+        env:
+          MIN_REPLICAS: ${{ vars.PAD_MIN_REPLICAS || 1 }}
+          MAX_REPLICAS: ${{ vars.PAD_MAX_REPLICAS || 1 }}
+          PROVISION_REDIS: ${{ vars.PAD_PROVISION_REDIS == 'true' }}
+        run: |
+          set -euo pipefail
+          case "$MIN_REPLICAS$MAX_REPLICAS" in *[!0-9]*)
+            echo "::error::PAD_MIN_REPLICAS ('$MIN_REPLICAS') and PAD_MAX_REPLICAS ('$MAX_REPLICAS') must be whole numbers."
+            exit 1;;
+          esac
+          if [ "$MAX_REPLICAS" -lt 1 ] || [ "$MIN_REPLICAS" -gt "$MAX_REPLICAS" ]; then
+            echo "::error::PAD_MIN_REPLICAS ($MIN_REPLICAS) must not exceed PAD_MAX_REPLICAS ($MAX_REPLICAS), and PAD_MAX_REPLICAS must be at least 1."
+            exit 1
+          fi
+          if [ "$MAX_REPLICAS" -gt 1 ] && [ "$PROVISION_REDIS" != true ]; then
+            echo "::error::PAD_MAX_REPLICAS=$MAX_REPLICAS needs PAD_PROVISION_REDIS=true: the replicas share events, stream commands, the AI budget ledger and caches only through Redis, and the app refuses to start with PAD_MAX_REPLICAS above 1 and no PAD_REDIS_URL."
+            exit 1
+          fi
+
       - name: Deploy infrastructure
         id: deploy
         uses: azure/arm-deploy@a1361c2c2cd398621955b16ca32e01c65ea340f5  # v2
@@ -340,13 +366,19 @@ jobs:
             dbServerMaxConnections=${{ vars.PAD_DB_SERVER_MAX_CONNS || 0 }}
             dbReservedConnections=${{ vars.DB_RESERVED_CONNECTIONS || 20 }}
             alertEmails="${{ secrets.ALERT_EMAILS }}"
-            minReplicas=1
-            maxReplicas=1
+            minReplicas=${{ vars.PAD_MIN_REPLICAS || 1 }}
+            maxReplicas=${{ vars.PAD_MAX_REPLICAS || 1 }}
+            provisionRedis=${{ vars.PAD_PROVISION_REDIS == 'true' }}
+            scaleConcurrentRequests=${{ vars.PAD_SCALE_CONCURRENT_REQUESTS || 100 }}
 
       # Probe /readyz (not /healthz): /healthz is an unconditional 200 liveness
       # marker, so it would pass even with the database or blob unreachable.
-      # /readyz gates on backend + blob + Redis reachability, so a deploy with a
-      # broken connection fails this gate instead of silently accepting traffic.
+      # /readyz gates on backend + blob reachability, so a deploy with a broken
+      # connection fails this gate instead of silently accepting traffic. Redis
+      # is reported, not gated: an unreachable Redis leaves /readyz at 200 with
+      # "degraded":["redis"] in the body (every mechanism that uses it degrades
+      # on its own), so the probe passes; it prints a warning when it sees the
+      # word, and the redis-degraded alert (pad_redis_up == 0) is the signal.
       #
       # The hostname comes from the template's own `fqdn` output. It used to be
       # a hand-maintained secret, which meant an unset value made this curl
@@ -366,8 +398,12 @@ jobs:
           # least as long as the template's startup-probe window (~5 minutes by
           # default), or a slow but healthy migration reads as a failed deploy.
           for i in $(seq 1 66); do
-            if curl -sf --max-time 10 "https://${FQDN}/readyz" > /dev/null 2>&1; then
+            if BODY=$(curl -sf --max-time 10 "https://${FQDN}/readyz" 2>/dev/null); then
               echo "Readiness check passed on attempt $i"
+              # Ready, but a dependency that only degrades the app is down (today: redis).
+              case "$BODY" in
+                *'"degraded"'*) echo "::warning::/readyz is ready but reports degraded: ${BODY}" ;;
+              esac
               exit 0
             fi
             echo "Attempt $i failed, waiting 5s..."

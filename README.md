@@ -214,6 +214,9 @@ Backend env vars (the common ones; `.env.example` is annotated and lists every v
 | `PAD_EMAIL_FROM` | From address for outbound email, `addr` or `Name <addr>` (enables email when set with host) | — |
 | `PAD_APP_BASE_URL` | Public origin used to build links in emails | — |
 | `PAD_INSTANCE_ID` | This replica's name in logs, traces, the Postgres `application_name` (`baki-backend/<id>`) and job locks | ACA's replica name, else the host name |
+| `PAD_KNOWLEDGE_LEASE_CAP` | Org knowledge-base uploads and re-indexes run one at a time per org across all replicas, each holding a pinned database connection (an advisory lock) for the operation; this caps how many orgs one replica holds at once. The operation beyond it answers `409 KNOWLEDGE_BUSY`. Keep it well below `PAD_DB_MAX_OPEN_CONNS` (database backend) | `4` |
+| `PAD_REDIS_URL` | Shared Redis for more than one replica: the rate limiter's buckets, collaboration rooms and presence, server-sent events between replicas and their replay, chat-stream resume and the stop and approval commands, the AI budget's in-flight ledger (only with `PAD_MAX_REPLICAS` above 1), cache invalidation and token-revocation fan-out. Unset keeps everything in-process (right for one replica). An unreachable Redis does not stop the boot or fail `/readyz`: the app runs degraded (`"degraded":["redis"]` in the `/readyz` body, `pad_redis_up` 0) and each mechanism falls back as [ADR 0029](docs/adr/0029-redis-envelope-key-registry-and-health.md) lists. A URL that does not parse refuses to boot. For several replicas use `rediss://` with a password on a private network ([operations](docs/architecture/operations.md)) | — (off) |
+| `PAD_MAX_REPLICAS` | How many replicas share the database at most (`infra/main.bicep` sets it): sizes the pool check. Above 1 it requires `PAD_REDIS_URL`, or the app refuses to boot | `0` (unknown, counts as one) |
 | `PAD_SHUTDOWN_DRAIN_DELAY` | On stop, how long the server answers "draining" (readiness 503, new streams refused) before it ends the open chat streams ([ADR 0024](docs/adr/0024-graceful-shutdown-and-server-restarting.md)); at most `10s` | `3s` in cloud mode, else `0s` |
 
 Frontend env var: `VITE_API_URL` — the backend origin (e.g. `http://localhost:8080`), **without** a trailing `/api`. Only needed in web mode; the desktop app discovers the sidecar automatically.
@@ -401,17 +404,19 @@ What the template sets up, and what still needs a human:
 > for embeddings that were already paid for, and the document may not be
 > stored. Split large documents into smaller files.
 
-> **Single replica.** `minReplicas` and `maxReplicas` are both 1, and that is a
-> correctness bound rather than a cost default. `internal/api/events.go` is an
-> in-process SSE hub with no cross-replica backplane, so with a second replica a
-> chat stream started on one replica never reaches an SSE client connected to
-> the other, and the subscriber watchdog cancels it for lack of a local
-> subscriber. Cancel-stream, AI budget accounting and the WebSocket ticket
-> replay guard are per-process too (the scanner and the retention purge are
-> not: both take a Postgres advisory lock, so only one replica sweeps at a
-> time). The WebSocket hub (`internal/websocket/backplane.go`) already has the
-> Redis backplane the SSE hub needs; scale out after that pattern is applied
-> there.
+> **Replicas.** The deployment ships one replica and no Redis (`minReplicas`,
+> `maxReplicas` 1, `provisionRedis` false), and the CI deploy takes the three from the
+> repository variables `PAD_MIN_REPLICAS`, `PAD_MAX_REPLICAS` and
+> `PAD_PROVISION_REDIS`. More than one replica works (events and their replay, stop
+> and approval decisions for a stream another replica runs, the AI budget, cache
+> invalidation, collaboration and rate limits are shared through Redis, conversations
+> and the undo ring through Postgres) but needs Redis: `maxReplicas` above 1 without
+> `provisionRedis` is refused by the app at boot and by the deploy workflow. Open event
+> streams and sockets count as load for the scale rule (`scaleConcurrentRequests`). The
+> checklist, what each mechanism does when Redis is down or a replica dies, and how to
+> raise the count safely are in
+> [docs/architecture/operations.md](docs/architecture/operations.md#running-more-than-one-replica);
+> `docker-compose.replicas.yml` runs two replicas locally.
 
 > **Replica size.** `cpu`/`memory` default to `1.0`/`2.0Gi`, the smallest ACA
 > pair that is not permanently over its CPU quota: Go 1.25 floors `GOMAXPROCS`

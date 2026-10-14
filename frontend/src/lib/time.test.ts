@@ -1,5 +1,14 @@
 import {describe, it, expect, vi, afterEach} from 'vitest'
-import {relativeTime, absoluteTime, relativeTimeText} from './time'
+import {
+  relativeTime,
+  absoluteTime,
+  relativeTimeText,
+  localDate,
+  localDateTime,
+  setDisplayTimeZone,
+  displayTimeZone,
+} from './time'
+import {formatDateTime, formatTimeOfDay} from './format'
 
 const NOW = new Date('2026-01-15T12:00:00.000Z')
 
@@ -80,5 +89,35 @@ describe('relativeTimeText', () => {
   it('is empty for an unparseable timestamp', () => {
     expect(relativeTimeText('', now, 'en')).toBe('')
     expect(relativeTimeText('not a date', now, 'en')).toBe('')
+  })
+})
+
+describe('display time zone', () => {
+  afterEach(() => setDisplayTimeZone(undefined))
+
+  // 23:30 UTC on 2 March is already 3 March in Belgrade (UTC+1) and still 2 March in Los Angeles.
+  const ISO = '2026-03-02T23:30:00Z'
+
+  it('defaults to the device and ignores a blank name', () => {
+    expect(displayTimeZone()).toBeUndefined()
+    setDisplayTimeZone('  ')
+    expect(displayTimeZone()).toBeUndefined()
+  })
+
+  it('moves every formatter at once, and an explicit zone still wins', () => {
+    setDisplayTimeZone('Europe/Belgrade')
+    expect(localDate(ISO, {day: 'numeric'})).toBe('3')
+    expect(formatTimeOfDay(ISO, 'en-GB')).toBe('00:30')
+    expect(formatDateTime(ISO, 'en-GB')).toContain('00:30')
+    expect(absoluteTime(ISO, 'America/Los_Angeles')).not.toBe(absoluteTime(ISO))
+
+    setDisplayTimeZone('America/Los_Angeles')
+    expect(localDate(ISO, {day: 'numeric'})).toBe('2')
+    expect(formatTimeOfDay(ISO, 'en-GB')).toBe('15:30')
+  })
+
+  it('answers an empty string for an unparseable value', () => {
+    expect(localDate('not a date')).toBe('')
+    expect(localDateTime('not a date')).toBe('')
   })
 })

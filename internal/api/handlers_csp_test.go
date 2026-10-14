@@ -46,3 +46,26 @@ func TestServeStaticCSPHashQuoted(t *testing.T) {
 		}
 	}
 }
+
+// TestServeStaticCSPAllowsAvatarObjectURLs guards img-src: uploaded avatars sit behind an authenticated route, so
+// the SPA fetches the bytes and renders them from a blob: object URL (frontend/src/lib/avatarCache.ts). Without
+// blob: in img-src the browser refuses every uploaded avatar and the UI quietly shows initials.
+func TestServeStaticCSPAllowsAvatarObjectURLs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html><html><body></body></html>"), 0o600); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	rt := newTestRouter(nil, false)
+	rt.staticDir = dir
+
+	rr := httptest.NewRecorder()
+	rt.serveStatic(rr, httptest.NewRequest(http.MethodGet, "/", nil), "/")
+
+	m := regexp.MustCompile(`img-src ([^;]+);`).FindStringSubmatch(rr.Header().Get("Content-Security-Policy"))
+	if m == nil {
+		t.Fatalf("no img-src directive in %q", rr.Header().Get("Content-Security-Policy"))
+	}
+	if !strings.Contains(" "+m[1]+" ", " blob: ") {
+		t.Errorf("img-src %q lacks blob: — uploaded avatars render from object URLs", m[1])
+	}
+}

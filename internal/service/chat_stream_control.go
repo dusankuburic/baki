@@ -108,6 +108,9 @@ type streamCtl struct {
 	// userTurnStored is set once the turn's question is in the stored conversation; ActiveStreamFor reports only
 	// such streams — a client re-attaching earlier would save over (and erase) the question the server stored.
 	userTurnStored atomic.Bool
+	// convWrite is where this turn's own conversation writes left the stored version (the question at stream start,
+	// then the answer), kept only while no other writer got in between; the terminal event carries it. nil: unknown.
+	convWrite atomic.Pointer[convWrite]
 	// sharedCredential records that the turn runs on the org's shared credential (ai.UsedOrgCredential): an auth
 	// or permission failure is then the org admin's to fix, and classifyFailure says so.
 	sharedCredential atomic.Bool

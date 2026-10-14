@@ -7,6 +7,7 @@ export const CHAT_ERROR_CODES = {
   modelNotAvailable: 'MODEL_NOT_AVAILABLE',
   serverRestarting: 'SERVER_RESTARTING',
   interrupted: 'STREAM_INTERRUPTED',
+  replicaUnreachable: 'REPLICA_UNREACHABLE',
 } as const
 
 export function classifyChatFailure(message: string, code?: string | null): ChatFailureKind {
@@ -23,6 +24,13 @@ export function classifyChatFailure(message: string, code?: string | null): Chat
 export function budgetDetail(message: string): string {
   const amounts = message.match(/\$[0-9.]+\s*\/\s*\$[0-9.]+/)
   return amounts ? ` (${amounts[0]})` : ''
+}
+
+/** The server running the stream could not be reached by the one that got the request (503): nothing was stopped or decided, so the request may be sent again. */
+export function isReplicaUnreachable(err: unknown): boolean {
+  return (
+    typeof err === 'object' && err !== null && (err as {code?: unknown}).code === CHAT_ERROR_CODES.replicaUnreachable
+  )
 }
 
 export function isStreamGone(err: unknown): boolean {

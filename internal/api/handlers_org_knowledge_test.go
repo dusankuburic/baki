@@ -360,6 +360,7 @@ func TestRenderKnowledgeEmbeddingError_Ladder(t *testing.T) {
 		// key store unreadable): transient and masked, no configuration gap.
 		{"setup unavailable", fmt.Errorf("embedding provider unavailable: %w", rag.ErrEmbeddingSetupUnavailable), http.StatusServiceUnavailable, "EMBEDDING_PROVIDER_UNAVAILABLE"},
 		{"busy", rag.ErrKnowledgeBusy, http.StatusConflict, "KNOWLEDGE_BUSY"},
+		{"lock unavailable", rag.ErrKnowledgeLockUnavailable, http.StatusServiceUnavailable, "KNOWLEDGE_LOCK_UNAVAILABLE"},
 		{"failed: rate limited", fmt.Errorf("%w: %w", rag.ErrEmbeddingFailed, &ai.RateLimitError{}), http.StatusTooManyRequests, "EMBEDDING_RATE_LIMITED"},
 		{"failed: permission denied", fmt.Errorf("%w: %w", rag.ErrEmbeddingFailed, errors.Join(ai.ErrProviderPermissionDenied, ai.ErrApiKeyInvalid)), http.StatusBadRequest, "EMBEDDING_PERMISSION_DENIED"},
 		{"failed: invalid key", fmt.Errorf("%w: %w", rag.ErrEmbeddingFailed, ai.ErrApiKeyInvalid), http.StatusBadRequest, "EMBEDDING_AUTH_FAILED"},

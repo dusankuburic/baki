@@ -1,8 +1,8 @@
 import {useCallback, useRef} from 'react'
 import type {MutableRefObject} from 'react'
 import i18n from '@/i18n'
-import {chatApi} from '@/api'
 import {logger} from '@/lib/logger'
+import {saveThreadConversation} from '@/lib/conversationSync'
 import {uuid} from '@/lib/uuid'
 import {useChatStore} from '@/stores/chatStore'
 import {conversationKey} from '@/stores/chatStore'
@@ -27,9 +27,7 @@ export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
       const st = useChatStore.getState()
       const thread = st.threads.find(t => t.id === threadId)
       if (!thread || !st.isHistorySynced(threadId)) return
-      const persistable = st.getMessages(threadId).filter(m => m.finishReason !== 'error')
-      chatApi
-        .saveConversation(flowId, conversationKey(thread), persistable)
+      saveThreadConversation(threadId, flowId, conversationKey(thread))
         .then(() => {
           saveFailedRef.current.delete(threadId)
         })

@@ -9,6 +9,7 @@ vi.mock('@/api', () => ({
   chatApi: {
     saveConversation: vi.fn().mockResolvedValue(undefined),
     clearConversation: vi.fn().mockResolvedValue(undefined),
+    getConversation: vi.fn(),
   },
 }))
 
@@ -47,7 +48,7 @@ describe('useChatThreads server-side history', () => {
     await act(async () => result.current.handleClearContext())
 
     expect(useChatStore.getState().getMessages(id)).toHaveLength(0)
-    expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', id)
+    expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', id, 0)
   })
 
   it('clear targets the thread key even for a block-scoped thread', async () => {
@@ -56,7 +57,7 @@ describe('useChatThreads server-side history', () => {
 
     await act(async () => result.current.handleClearContext())
 
-    expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', id)
+    expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', id, 0)
     expect(useChatStore.getState().threads.find(t => t.id === id)?.contextBlockId).toBeNull()
   })
 
@@ -160,5 +161,51 @@ describe('compact keeps whole exchanges', () => {
     ]
     expect(lastExchanges(list, 2).map(m => m.id)).toEqual(['u1', 'a1', 'u2'])
     expect(lastExchanges(list, 9)).toHaveLength(5)
+  })
+})
+
+describe('useChatThreads when the conversation changed elsewhere (ADR 0031)', () => {
+  const conflict = () => Object.assign(new Error('changed'), {status: 409, code: 'CONVERSATION_CONFLICT'})
+
+  it('a clear refused as stale keeps the conversation and shows what the server holds', async () => {
+    const id = seedThread(2)
+    vi.mocked(chatApi.clearConversation).mockRejectedValueOnce(conflict())
+    vi.mocked(chatApi.getConversation).mockResolvedValueOnce({
+      messages: [msg('u0', 'user'), msg('a0', 'assistant'), msg('s1', 'user')],
+      version: 7,
+    })
+    const {result} = renderThreads(id)
+
+    await act(async () => result.current.handleClearContext())
+
+    expect(
+      useChatStore
+        .getState()
+        .getMessages(id)
+        .map(m => m.id),
+    ).toEqual(['u0', 'a0', 's1'])
+    expect(useChatStore.getState().getConversationVersion(id)).toBe(7)
+    expect(chatApi.clearConversation).toHaveBeenCalledTimes(1)
+  })
+
+  it('a compaction refused as stale is not retried and leaves the server list in place', async () => {
+    const id = seedThread(6)
+    vi.mocked(chatApi.saveConversation).mockRejectedValueOnce(conflict())
+    vi.mocked(chatApi.getConversation).mockResolvedValueOnce({
+      messages: [msg('u0', 'user'), msg('s1', 'user')],
+      version: 8,
+    })
+    const {result} = renderThreads(id)
+
+    await act(async () => result.current.handleCompact())
+
+    expect(chatApi.saveConversation).toHaveBeenCalledTimes(1)
+    expect(
+      useChatStore
+        .getState()
+        .getMessages(id)
+        .map(m => m.id),
+    ).toEqual(['u0', 's1'])
+    expect(useChatStore.getState().getConversationVersion(id)).toBe(8)
   })
 })

@@ -396,6 +396,55 @@ func (b *PostgresStorageBackend) UpdateUserProfile(ctx context.Context, id strin
 	return nil
 }
 
+// ---- Uploaded avatars ----
+// The write is a pool autocommit like every user write (the profile updates above); the read goes through
+// b.query(ctx) so a request's row-level-security policy holds: rls_user_avatars_read admits any authenticated
+// caller, because avatars are shown cross-user (comment authors, the admin list).
+
+// SaveUserAvatar upserts the image; a missing user is the foreign key's violation, reported as ErrNotFound.
+func (b *PostgresStorageBackend) SaveUserAvatar(ctx context.Context, userID, mimeType string, data []byte) error {
+	_, err := b.db.ExecContext(ctx, `
+		INSERT INTO user_avatars (user_id, mime_type, bytes, byte_size, updated_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (user_id) DO UPDATE SET
+			mime_type  = EXCLUDED.mime_type,
+			bytes      = EXCLUDED.bytes,
+			byte_size  = EXCLUDED.byte_size,
+			updated_at = NOW()`,
+		userID, mimeType, data, len(data),
+	)
+	if err != nil {
+		if isPgErrCode(err, pgErrForeignKeyViolation) {
+			return interfaces.ErrNotFound
+		}
+		return fmt.Errorf("save user avatar: %w", err)
+	}
+	return nil
+}
+
+// LoadUserAvatar reads one user's image for the serving route; ErrNotFound when they never uploaded one.
+func (b *PostgresStorageBackend) LoadUserAvatar(ctx context.Context, userID string) (*interfaces.UserAvatar, error) {
+	var a interfaces.UserAvatar
+	err := b.query(ctx).QueryRowContext(ctx,
+		`SELECT mime_type, bytes, updated_at FROM user_avatars WHERE user_id = $1`, userID,
+	).Scan(&a.MimeType, &a.Data, &a.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, interfaces.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load user avatar: %w", err)
+	}
+	return &a, nil
+}
+
+// DeleteUserAvatar removes the image; a user without one is not an error.
+func (b *PostgresStorageBackend) DeleteUserAvatar(ctx context.Context, userID string) error {
+	if _, err := b.db.ExecContext(ctx, `DELETE FROM user_avatars WHERE user_id = $1`, userID); err != nil {
+		return fmt.Errorf("delete user avatar: %w", err)
+	}
+	return nil
+}
+
 // ---- Refresh-token rotation store ----
 // These back the auth refresh-token rotation/revocation flow in cloud mode.
 
@@ -535,7 +584,7 @@ func (b *PostgresStorageBackend) SaveAuditEvent(ctx context.Context, event *inte
 	}
 	_, err = b.db.ExecContext(ctx,
 		`INSERT INTO audit_events (`+auditInsertColumns+`)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''))`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''))`+auditInsertOnConflict,
 		auditInsertArgs(event, meta)...,
 	)
 	if err != nil {
@@ -548,6 +597,11 @@ func (b *PostgresStorageBackend) SaveAuditEvent(ctx context.Context, event *inte
 // empty, like the rows written before them.
 const auditInsertColumns = "id, user_id, email, action, resource_type, resource_id, ip, meta, created_at, " +
 	"org_id, actor_kind, token_id, actor_job, user_agent"
+
+// auditInsertOnConflict makes every audit INSERT idempotent: an event is written at least once (a spill file is
+// replayed after a crash between the insert and the file rewrite, or adopted by another replica), and the first write
+// of an id stays.
+const auditInsertOnConflict = " ON CONFLICT (id) DO NOTHING"
 
 // auditInsertArgs is the bind arguments of one row, in auditInsertColumns order.
 func auditInsertArgs(e *interfaces.AuditEvent, meta []byte) []any {
@@ -599,6 +653,7 @@ func buildAuditInsert(batch []*interfaces.AuditEvent) (string, []any) {
 			base+9, base+10, base+11, base+12, base+13)
 		args = append(args, auditInsertArgs(e, meta)...)
 	}
+	sb.WriteString(auditInsertOnConflict)
 	return sb.String(), args
 }
 

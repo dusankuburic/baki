@@ -78,7 +78,7 @@ func TestApplyFixBatchResult_CloudFolderKeepsMembersFixedBeforeDeadline(t *testi
 	if out.Doc == nil || !out.Doc.IsFolder || out.Doc.Metadata.BlockCount != doc.Metadata.BlockCount-2 {
 		t.Fatalf("returned doc = %+v, want the re-merged folder with 2 blocks fewer", out.Doc)
 	}
-	if n := len(svc.ListSourceSnapshots(doc)); n != 1 {
+	if n := len(snapshotsOf(t, svc, doc)); n != 1 {
 		t.Fatalf("want one undo entry for the partial batch, got %d", n)
 	}
 

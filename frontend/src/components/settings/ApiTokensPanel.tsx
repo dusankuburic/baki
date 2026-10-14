@@ -8,6 +8,7 @@ import {Button, Input, Spinner, useToast, useConfirm} from '@/components/shared'
 import {useAsync} from '@/hooks/useAsync'
 import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
 import {TOKEN_MAX_EXPIRY_DAYS} from '@/lib/constraints'
+import {localDate} from '@/lib/time'
 
 const DEFAULT_SCOPES: ApiTokenScope[] = ['read', 'write']
 
@@ -218,10 +219,10 @@ export default function ApiTokensPanel() {
               <div className="min-w-0">
                 <p className="text-sm font-medium text-text-primary truncate">{tok.name || tok.id}</p>
                 <p className="text-xs text-text-tertiary mt-0.5">
-                  {t('tokens.createdOn', {date: new Date(tok.createdAt).toLocaleDateString()})}
+                  {t('tokens.createdOn', {date: localDate(tok.createdAt)})}
                   {' · '}
                   {tok.expiresAt
-                    ? t('tokens.expiresOn', {date: new Date(tok.expiresAt).toLocaleDateString()})
+                    ? t('tokens.expiresOn', {date: localDate(tok.expiresAt)})
                     : t('tokens.neverExpires')}
                   {' · '}
                   <span title={t('tokens.scopesLabel')}>{scopeLabel(tok)}</span>

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 	"unicode/utf8"
@@ -11,11 +12,27 @@ import (
 	"pad-core/models"
 
 	"github.com/redis/go-redis/v9"
+
+	"pad-analyzer/internal/redisx"
 )
 
 // resumeRetention is how long a finished stream's buffer is kept so a client disconnected when the stream ended
 // can still fetch the final text on reconnect.
 const resumeRetention = 2 * time.Minute
+
+// resumeKey names a stream's resume snapshot: a string, rewritten at most once a second while the buffer grows. A
+// snapshot is v1 from the commands on (ADR 0033: {"v":1,"kind":"chat.resume"} and the owner "replica", all additive,
+// so a release before them reads it as it read v0); while Redis is down the mirror is skipped and resuming from
+// another replica answers "stream not found".
+var resumeKey = redisx.Declare(redisx.Spec{
+	Name:    "chat.resume",
+	Kind:    redisx.KindString,
+	Pattern: "chat:resume:{stream}",
+	TTL:     maxChatStreamDuration + resumeRetention,
+	Version: 1,
+	OnDown:  redisx.OnDownOpen,
+	Owner:   "internal/service",
+})
 
 // resumeMirrorInterval is how often the growing buffer is snapshotted to the resume backplane: bounds Redis
 // writes to ~1/sec/stream; a tick with nothing new writes nothing (mirrorStream). A var for tests.
@@ -59,6 +76,11 @@ type ResumeResult struct {
 // resumeSnapshot is the cross-replica-persistable form of a stream's resumable state, plus the owner so a
 // resume/authz request landing on a different replica can be authorized.
 type resumeSnapshot struct {
+	// V and Kind are the Redis envelope (redisx.Envelope), Replica the instance running the stream, where its
+	// commands go. The store stamps all three on the way out; a v0 snapshot has none and cannot be commanded.
+	V              int            `json:"v,omitempty"`
+	Kind           string         `json:"kind,omitempty"`
+	Replica        string         `json:"replica,omitempty"`
 	Owner          string         `json:"owner"`
 	Text           string         `json:"text"`
 	Done           bool           `json:"done"`
@@ -94,19 +116,22 @@ func (noopResumeStore) Load(context.Context, string) (resumeSnapshot, bool) {
 	return resumeSnapshot{}, false
 }
 
-// redisResumeStore mirrors resumable stream state into Redis under a per-stream key with a TTL.
+// redisResumeStore mirrors resumable stream state into Redis under a per-stream key with a TTL. instance names this
+// replica in every snapshot it writes ("" in a test that does not care).
 type redisResumeStore struct {
-	c *redis.Client
+	c        *redis.Client
+	instance string
 }
 
 func (redisResumeStore) enabled() bool { return true }
 
-func (redisResumeStore) key(streamID string) string { return "chat:resume:" + streamID }
+func (redisResumeStore) key(streamID string) string { return resumeKey.Key(streamID) }
 
 // resumeStoreOpTimeout bounds a single backplane round-trip so it can't stall the stream or a resume request.
 const resumeStoreOpTimeout = 2 * time.Second
 
 func (r redisResumeStore) Save(ctx context.Context, streamID string, snap resumeSnapshot, ttl time.Duration) bool {
+	snap.V, snap.Kind, snap.Replica = resumeKey.Spec().Version, resumeKey.Name(), r.instance
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return false
@@ -115,25 +140,36 @@ func (r redisResumeStore) Save(ctx context.Context, streamID string, snap resume
 	defer cancel()
 	if err := r.c.Set(ctx, r.key(streamID), b, ttl).Err(); err != nil {
 		// Fail open: resume degrades to same-replica-only; warn, not error — expected during a Redis blip.
-		logger.Warn("chat resume mirror failed", "streamID", streamID, "err", err)
+		redisx.LimitedWarn("chat_resume_mirror", "chat resume mirror failed", err)
 		return false
 	}
 	return true
 }
 
 func (r redisResumeStore) Load(ctx context.Context, streamID string) (resumeSnapshot, bool) {
+	// redis.Nil (miss) or any transport error → treat as not found.
+	snap, found, _ := r.Lookup(ctx, streamID)
+	return snap, found
+}
+
+// Lookup is Load that tells a miss (found false, err nil) from a backplane that could not answer (err): for the
+// commands an unreadable snapshot is "retry", not "no such stream". See lookupSnapshot.
+func (r redisResumeStore) Lookup(ctx context.Context, streamID string) (resumeSnapshot, bool, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resumeStoreOpTimeout)
 	defer cancel()
 	b, err := r.c.Get(ctx, r.key(streamID)).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return resumeSnapshot{}, false, nil
+	}
 	if err != nil {
-		// redis.Nil (miss) or any transport error → treat as not found.
-		return resumeSnapshot{}, false
+		return resumeSnapshot{}, false, err
 	}
+	// A snapshot another release wrote in a shape this one does not know is a miss, and stays in place.
 	var snap resumeSnapshot
-	if err := json.Unmarshal(b, &snap); err != nil {
-		return resumeSnapshot{}, false
+	if redisx.Decode(resumeKey.Name(), resumeKey.Spec().Version, b, &snap) != redisx.ResultOK {
+		return resumeSnapshot{}, false, nil
 	}
-	return snap, true
+	return snap, true, nil
 }
 
 // watchdogTick returns the subscriber-check interval, honouring the test override.
@@ -225,13 +261,18 @@ func (s *ChatService) watchStream(ctx context.Context, streamID, scope string, c
 func (s *ChatService) mirrorStream(ctx context.Context, streamID string, ctl *streamCtl, finished <-chan struct{}, published mirrorMark) {
 	t := time.NewTicker(resumeMirrorInterval)
 	defer t.Stop()
+	pointed := false // the conversation's active-stream pointer is written
 	for {
 		select {
 		case <-finished:
 			// Detached context: the stream ctx is done, but the final buffer must still be published.
 			s.resumeBackplane().Save(context.WithoutCancel(ctx), streamID, ctl.snapshot(), resumeRetention)
+			if s.pointActive(ctl, pointed) {
+				s.cluster.clearActiveWhenSettled(ctl)
+			}
 			return
 		case <-t.C:
+			pointed = s.pointActive(ctl, pointed)
 			snap, mark, changed := ctl.snapshotIfChanged(published)
 			if !changed {
 				continue
@@ -335,6 +376,8 @@ func (s *ChatService) Shutdown(ctx context.Context) error {
 	s.streamCapMu.Lock()
 	s.closing = true
 	s.streamCapMu.Unlock()
+	// The command subscriptions end last, so a stop another replica relays while the streams wind down is still answered.
+	defer s.StopCommands()
 	active := s.cancelAll()
 
 	budget := chatShutdownBudget
@@ -405,7 +448,9 @@ func (s *ChatService) OwnerOf(ctx context.Context, streamID string) string {
 // the stored history yet — what GET conversation reports as activeStreamId. Reported: a live stream whose
 // question is already stored (userTurnStored); failing that, a finished stream whose cleanup has not settled
 // (its answer is still being stored). A settled finished stream is not reported (its answer is in the history,
-// and resuming would commit it twice), nor is a stream whose client sent its own history.
+// and resuming would commit it twice), nor is a stream whose client sent its own history. This is the local
+// answer; ReadConversation (what GET conversation calls) also asks the shared pointer for a stream another replica
+// runs (chat_commands.go).
 func (s *ChatService) ActiveStreamFor(scope, flowID, convKey string) string {
 	if c := s.activeStreamCtl(scope, flowID, convKey); c != nil {
 		return c.streamID
@@ -450,18 +495,11 @@ func (s *ChatService) activeStreamCtl(scope, flowID, convKey string) *streamCtl 
 // a reload racing the stream's two writes neither loses nor duplicates a turn. The stream is looked up BEFORE the
 // history; a stream whose answer the history already ends with is dropped (the client would show it twice).
 func (s *ChatService) ConversationWithActiveStream(ctx context.Context, scope, flowID, convKey string) ([]models.ChatMessage, string, error) {
-	var ctl *streamCtl
-	if flowID != "" {
-		ctl = s.activeStreamCtl(scope, flowID, convKey)
-	}
-	msgs, err := s.GetConversation(ctx, flowID, convKey)
+	read, err := s.ReadConversation(ctx, scope, flowID, convKey)
 	if err != nil {
 		return nil, "", err
 	}
-	if ctl == nil || answerStored(ctl, msgs) {
-		return msgs, "", nil
-	}
-	return msgs, ctl.streamID, nil
+	return read.Messages, read.ActiveStreamID, nil
 }
 
 // answerStored reports whether history already ends with ctl's finished answer.

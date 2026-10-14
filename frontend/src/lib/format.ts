@@ -1,3 +1,4 @@
+import {displayTimeZone} from '@/lib/time'
 
 export function formatCompact(n: number): string {
   if (n < 1000) return String(n)
@@ -57,12 +58,12 @@ export function formatDateTime(value: string, locale?: string): string {
   const d = new Date(value)
   return Number.isNaN(d.getTime())
     ? value
-    : new Intl.DateTimeFormat(locale, {dateStyle: 'medium', timeStyle: 'short'}).format(d)
+    : new Intl.DateTimeFormat(locale, {dateStyle: 'medium', timeStyle: 'short', timeZone: displayTimeZone()}).format(d)
 }
 
 export function formatTimeOfDay(value: number | string, locale?: string): string {
   const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat(locale, {timeStyle: 'short'}).format(d)
+  return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat(locale, {timeStyle: 'short', timeZone: displayTimeZone()}).format(d)
 }
 
 export function formatSize(bytes: number): string {

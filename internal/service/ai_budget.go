@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/redis/go-redis/v9"
+
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/redisx"
 )
 
 // DailyUsageReader reads the AI spend recorded today: the caller's total (orgID "") or the org's. The user total
@@ -23,13 +26,16 @@ type inFlightSpend interface {
 }
 
 // spendLedger holds the running spends (chat streams) between admission and their usage rows. memLedger is the
-// one in-process ledger; the seam is for a shared one (Redis, Phase 5b): a ledger that cannot answer makes the
-// check fail closed (ErrAIBudgetUnavailable), the same as an unreadable spend.
+// in-process ledger of a single replica; redisLedger is the shared one (ai_budget_redis.go). A ledger that cannot
+// answer makes the check fail closed (ErrAIBudgetUnavailable), the same as an unreadable spend: a hold that fails
+// refuses the stream, an others that fails refuses the check. release is best effort (an entry that is not
+// released ages out of a shared ledger; a stream that has ended must not fail).
 type spendLedger interface {
-	hold(e inFlightSpend)
-	release(e inFlightSpend)
-	// others sums the ledger except self: orgSum for orgID, userSum for scope.
-	others(scope, orgID string, self inFlightSpend) (orgSum, userSum float64, err error)
+	hold(e inFlightSpend) error
+	release(e inFlightSpend) error
+	// others sums the ledger except self: orgSum for orgID, userSum for scope. A shared ledger also publishes
+	// self's current cost in the same round trip, so two overlapping checks see each other.
+	others(ctx context.Context, scope, orgID string, self inFlightSpend) (orgSum, userSum float64, err error)
 }
 
 // memLedger is the in-process spendLedger: a set of inFlightSpend. It never errs.
@@ -37,10 +43,10 @@ type memLedger struct {
 	entries sync.Map // inFlightSpend → struct{}
 }
 
-func (l *memLedger) hold(e inFlightSpend)    { l.entries.Store(e, struct{}{}) }
-func (l *memLedger) release(e inFlightSpend) { l.entries.Delete(e) }
+func (l *memLedger) hold(e inFlightSpend) error    { l.entries.Store(e, struct{}{}); return nil }
+func (l *memLedger) release(e inFlightSpend) error { l.entries.Delete(e); return nil }
 
-func (l *memLedger) others(scope, orgID string, self inFlightSpend) (orgSum, userSum float64, err error) {
+func (l *memLedger) others(_ context.Context, scope, orgID string, self inFlightSpend) (orgSum, userSum float64, err error) {
 	l.entries.Range(func(k, _ any) bool {
 		e, ok := k.(inFlightSpend)
 		if !ok || e == self {
@@ -71,22 +77,68 @@ type AIBudget struct {
 	settings SettingsProvider
 	usage    DailyUsageReader
 	ledger   spendLedger
+	// shared: the ledger lives outside the process (Redis). It is then touched only while a daily budget is
+	// configured: with none, nothing is held, nothing is read, and a Redis outage costs the chat nothing.
+	shared bool
 }
 
-// NewAIBudget builds the budget gate on the in-process ledger. A nil settings provider means unlimited; a nil
-// usage reader reads $0 (no usage store: the desktop).
-func NewAIBudget(settings SettingsProvider, usage DailyUsageReader) *AIBudget {
-	return newAIBudgetWithLedger(settings, usage, &memLedger{})
+// AIBudgetOption configures NewAIBudget.
+type AIBudgetOption func(*AIBudget)
+
+// WithRedisLedger puts the in-flight ledger in Redis, so replicas see each other's running streams. A nil client
+// keeps the in-process ledger (no PAD_REDIS_URL, or a single replica: the caller decides). health is the client's
+// Health: while it says Redis is away the ledger refuses without sending anything.
+func WithRedisLedger(client *redis.Client, health *redisx.Health) AIBudgetOption {
+	return func(b *AIBudget) {
+		if client != nil {
+			b.ledger, b.shared = newRedisLedger(client, health), true
+		}
+	}
 }
 
-// newAIBudgetWithLedger is NewAIBudget on a ledger of the caller's choosing (tests; the shared ledger of 5b).
+// NewAIBudget builds the budget gate, on the in-process ledger unless WithRedisLedger names a client. A nil
+// settings provider means unlimited; a nil usage reader reads $0 (no usage store: the desktop).
+func NewAIBudget(settings SettingsProvider, usage DailyUsageReader, opts ...AIBudgetOption) *AIBudget {
+	b := newAIBudgetWithLedger(settings, usage, &memLedger{})
+	for _, o := range opts {
+		o(b)
+	}
+	return b
+}
+
+// newAIBudgetWithLedger is NewAIBudget on a ledger of the caller's choosing (tests).
 func newAIBudgetWithLedger(settings SettingsProvider, usage DailyUsageReader, ledger spendLedger) *AIBudget {
 	return &AIBudget{settings: settings, usage: usage, ledger: ledger}
 }
 
-// hold enters a running spend in the ledger; release takes it out when the stream ends.
-func (b *AIBudget) hold(e inFlightSpend)    { b.ledger.hold(e) }
-func (b *AIBudget) release(e inFlightSpend) { b.ledger.release(e) }
+// capped reports whether a daily budget is configured. Only then is the shared ledger consulted: the budget is the
+// one thing it protects, and it fails closed.
+func (b *AIBudget) capped() bool {
+	if b.settings == nil {
+		return false
+	}
+	s := b.settings.Get()
+	return s != nil && s.AI.DailyBudget > 0
+}
+
+// hold enters a running spend in the ledger; release takes it out when the stream ends. A hold that fails is
+// ErrAIBudgetUnavailable (the caller refuses the stream); a release that fails is logged and left to age out.
+func (b *AIBudget) hold(e inFlightSpend) error {
+	if b.shared && !b.capped() {
+		return nil
+	}
+	if err := b.ledger.hold(e); err != nil {
+		scope, _ := e.spender()
+		return ledgerUnavailable(scope, err)
+	}
+	return nil
+}
+
+func (b *AIBudget) release(e inFlightSpend) {
+	if err := b.ledger.release(e); err != nil {
+		logLedgerFailure("release", err)
+	}
+}
 
 type streamSpendKey struct{}
 
@@ -157,9 +209,9 @@ func (b *AIBudget) check(ctx context.Context, memo *ai.BudgetMemo, scope, orgID 
 		return budgetUnavailable(scope, err)
 	}
 	// Concurrent streams' in-flight spend; usage rows land only after each turn.
-	orgOthers, userOthers, err := b.ledger.others(scope, orgID, self)
+	orgOthers, userOthers, err := b.ledger.others(ctx, scope, orgID, self)
 	if err != nil {
-		return budgetUnavailable(scope, fmt.Errorf("in-flight spend ledger: %w", err))
+		return ledgerUnavailable(scope, err)
 	}
 	concurrent := userOthers
 	if orgID != "" {
@@ -190,6 +242,6 @@ func (b *AIBudget) check(ctx context.Context, memo *ai.BudgetMemo, scope, orgID 
 
 // othersInFlight sums the ledger except self: orgSum for orgID, userSum for scope (tests).
 func (b *AIBudget) othersInFlight(scope, orgID string, self inFlightSpend) (orgSum, userSum float64) {
-	orgSum, userSum, _ = b.ledger.others(scope, orgID, self)
+	orgSum, userSum, _ = b.ledger.others(context.Background(), scope, orgID, self)
 	return orgSum, userSum
 }

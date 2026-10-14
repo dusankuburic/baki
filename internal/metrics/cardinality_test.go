@@ -32,7 +32,8 @@ var unboundedLabels = map[string]string{
 // packages own are checked beside their recorders (the HTTP method label in
 // internal/api/middleware, the CI webhook labels in internal/service).
 var closedLabelValues = map[string]map[string]struct{}{
-	"result": {cacheResultHit: {}, cacheResultMiss: {}, cacheResultRejected: {}},
+	// The cache result values, and pad_redis_msgs_total's (internal/redisx.Result).
+	"result": {cacheResultHit: {}, cacheResultMiss: {}, cacheResultRejected: {}, "ok": {}, "unknown": {}, "bad": {}},
 }
 
 // closedLabelSets is closedLabelValues plus the sets fixed at init: the cache label takes the declared cache names

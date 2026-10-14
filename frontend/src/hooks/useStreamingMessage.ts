@@ -3,7 +3,7 @@ import {useEffect, useRef, useCallback} from 'react'
 import {chatApi} from '@/api'
 import {logger} from '@/lib/logger'
 import {utf8ByteLength} from '@/lib/utf8'
-import {CHAT_ERROR_CODES, isStreamGone} from '@/lib/chatErrors'
+import {CHAT_ERROR_CODES, isReplicaUnreachable, isStreamGone} from '@/lib/chatErrors'
 import {
   parseChatEvent,
   chatEventStreamId,
@@ -15,7 +15,13 @@ import {
   DoneMeta,
   ErrorUsage,
 } from '@/lib/chatEvent'
-import {subscribeToEvents, subscribeConnectionState, EventConnectionState, getEventConnectionState} from '@/api/client'
+import {
+  subscribeToEvents,
+  subscribeConnectionState,
+  subscribeEventGap,
+  EventConnectionState,
+  getEventConnectionState,
+} from '@/api/client'
 
 const OPEN_WAIT_TIMEOUT_MS = 15_000
 
@@ -40,6 +46,8 @@ export interface StreamHandler {
   ) => void
   onAppend?: (delta: string, streamId: string) => void
   getAccLength?: (streamId: string) => number
+  /** A stop could not reach the server running the stream, after the api layer's retries; the stream is torn down here but still runs there. */
+  onStopUnreachable?: (streamId: string) => void
 }
 
 function rateOf(v: unknown): number | undefined {
@@ -54,6 +62,10 @@ function doneArg(src: DoneMeta, resumed?: DoneMeta): DoneMeta | undefined {
     if (inRate !== undefined) meta.inputCostPerM = inRate
     const outRate = rateOf(from.outputCostPerM)
     if (outRate !== undefined) meta.outputCostPerM = outRate
+    if (from.conversationVersion !== undefined && from.conversationBase !== undefined) {
+      meta.conversationVersion = from.conversationVersion
+      meta.conversationBase = from.conversationBase
+    }
   }
   return Object.keys(meta).length > 0 ? meta : undefined
 }
@@ -183,6 +195,7 @@ export function useStreamingMessage(handler: StreamHandler) {
     (streamId: string) => {
       chatApi.cancelStream(streamId).catch(err => {
         logger.warn('Failed to cancel stream', err)
+        if (isReplicaUnreachable(err)) handlerRef.current.onStopUnreachable?.(streamId)
       })
       teardownStream(streamId)
     },
@@ -253,18 +266,28 @@ export function useStreamingMessage(handler: StreamHandler) {
   const registerStream = useCallback(
     async (streamId: string, begin = true) => {
       if (!unregisterConnRef.current) {
+        // What a reconnect does for the streams it may have cut off: the chunks that arrived during the gap are lost, so each
+        // stream resumes by offset. A replay gap (the server could not replay what was missed) is the same situation.
+        const resumeAll = () => {
+          for (const [sid, s] of subsRef.current) {
+            s.countsInvalid = true
+            resumeInto(sid, {mode: 'delta', onGone: err => reportLost(sid, err)})
+          }
+        }
         let wasReconnecting = false
-        unregisterConnRef.current = subscribeConnectionState((state: EventConnectionState) => {
+        const offState = subscribeConnectionState((state: EventConnectionState) => {
           if (state === 'reconnecting') {
             wasReconnecting = true
           } else if (state === 'open' && wasReconnecting) {
             wasReconnecting = false
-            for (const [sid, s] of subsRef.current) {
-              s.countsInvalid = true
-              resumeInto(sid, {mode: 'delta', onGone: err => reportLost(sid, err)})
-            }
+            resumeAll()
           }
         })
+        const offGap = subscribeEventGap(resumeAll)
+        unregisterConnRef.current = () => {
+          offState()
+          offGap()
+        }
       }
 
       const sub: StreamSub = {

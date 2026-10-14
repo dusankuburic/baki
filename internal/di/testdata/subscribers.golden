@@ -1,0 +1,22 @@
+access.revoked | async | committed | ws-access-recheck | replicated: recheck.ws-access
+access.revoked | async | committed | sse-access-revoked | replicated: recheck.sse-revocation
+account.erased | sync | immediate+committed+rolled-back | provider-model-cache | replicated: providers.model-listings
+account.erased | async | committed | ws-access-recheck | replicated: recheck.ws-access
+credential.changed | sync | immediate+committed+rolled-back | provider-model-cache | replicated: providers.model-listings
+finding.assigned | async | committed | finding-assignment-fanout | local: sends an email and writes a bell row: a side effect that must happen once
+finding.commented | async | committed | finding-comment-fanout | local: sends an email and writes bell rows: a side effect that must happen once, and the comment text stays on this replica
+flow.changed | sync | immediate+committed+rolled-back | dashboard-cache | replicated: dashboard.analytics, dashboard.home
+flow.changed | sync | immediate+committed+rolled-back | chat-context-cache | local: keys carry the flow version, so another replica misses on a new version; the drop is hygiene
+flow.changed | sync | immediate+committed+rolled-back | flow-search-index | local: served only for the exact document object it was built from, which each replica resolves through its own version-checked read
+flow.changed | sync | immediate+committed+rolled-back | flow-document-cache | local: every read re-checks the stored version, so another replica's change or delete is seen at once
+flow.changed | sync | immediate+committed+rolled-back | analyzer-report-cache | local: a report is a function of the document, rule profile and analyzer version; another replica recomputes on a miss
+flow.changed | async | committed | ws-flow-changed | local: the hub broadcasts through the WebSocket room backplane, which already reaches every replica's viewers when Redis is configured
+flow.changed | async | committed | ws-access-recheck | replicated: recheck.ws-access
+knowledge_doc.changed | sync | immediate+committed+rolled-back | knowledge-corpus-count | replicated: rag.corpus-counts
+org_member.changed | sync | immediate+committed+rolled-back | rule-profiles | replicated: rules.profiles
+org_member.changed | sync | immediate+committed+rolled-back | provider-model-cache | replicated: providers.model-listings
+org_member.changed | sync | immediate+committed+rolled-back | knowledge-corpus-count | replicated: rag.corpus-counts
+org_member.changed | async | committed | lent-credential-revocation | local: a keystore write with audit rows: it must happen once, and the shared keystore makes it visible to every replica
+org_member.changed | async | committed | ws-access-recheck | replicated: recheck.ws-access
+settings.changed | sync | immediate+committed+rolled-back | settings-cache | replicated: settings.deployment
+settings.changed | sync | immediate+committed+rolled-back | rule-profiles | replicated: rules.deployment-profile, rules.profiles

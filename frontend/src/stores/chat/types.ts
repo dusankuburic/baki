@@ -118,4 +118,6 @@ export type HistoryState = 'loading' | 'loaded' | 'error'
 export interface HistoryStatus {
   state: HistoryState
   token: number
+  /** The server's version of the thread's stored conversation; unknown (absent) sends saves without a base version. */
+  version?: number
 }

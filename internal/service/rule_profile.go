@@ -35,10 +35,10 @@ const ruleProfileCacheMax = 1024
 var (
 	ruleProfiles = cache.Declare("rules.profiles",
 		cache.Keys(cache.KindTenant),
-		cache.ReplicaLocal("30 s TTL bounds another replica's rule change; this replica's changes invalidate at once"))
+		cache.Shared(cache.MechanismInvalidation, "a rule or membership change on any replica drops it on every replica once committed; the 30 s TTL bounds a lost message"))
 	deploymentProfile = cache.Declare("rules.deployment-profile",
 		cache.Global("the deployment layer alone (no org): deployment settings and the operator's rule file, the same for every reader"),
-		cache.ReplicaLocal("30 s TTL bounds another replica's settings change; this replica's changes invalidate at once"))
+		cache.Shared(cache.MechanismInvalidation, "a deployment settings change on any replica drops it on every replica once committed; the 30 s TTL bounds a lost message"))
 )
 
 // DeploymentCustomRules are the PAD_CUSTOM_RULES rules compiled once at boot — a
@@ -150,7 +150,16 @@ func SubscribeRuleProfiles(bus *eventbus.Bus, r *RuleProfileResolver) {
 				r.Invalidate(e.ID)
 			}
 		}
-	})
+	}, eventbus.Replicated(func(e events.SettingsChanged) []eventbus.Invalidation {
+		switch {
+		case e.Scope == events.DeploymentSettings:
+			// Every org inherits the deployment layer: both caches, whole.
+			return []eventbus.Invalidation{{Key: "rules.deployment-profile"}, {Key: "rules.profiles"}}
+		case e.Scope == events.OrgSettings && e.ID != "":
+			return []eventbus.Invalidation{{Key: "rules.profiles", Scope: eventbus.NewScope("org", e.ID)}}
+		}
+		return nil
+	}, "rules.deployment-profile", "rules.profiles"))
 	eventbus.Subscribe(bus, eventbus.Sync, "rule-profiles", func(_ context.Context, e events.OrgMemberChanged) {
 		switch {
 		case e.OrgID == "":
@@ -159,6 +168,30 @@ func SubscribeRuleProfiles(bus *eventbus.Bus, r *RuleProfileResolver) {
 		case e.Kind == events.OrgMemberAdded || e.Kind == events.OrgMemberRemoved:
 			r.invalidateReader(e.OrgID, e.UserID)
 		}
+	}, eventbus.Replicated(func(e events.OrgMemberChanged) []eventbus.Invalidation {
+		switch {
+		case e.OrgID == "":
+		case e.Kind == events.OrgDeleted:
+			return []eventbus.Invalidation{{Key: "rules.profiles", Scope: eventbus.NewScope("org", e.OrgID)}}
+		case e.Kind == events.OrgMemberAdded || e.Kind == events.OrgMemberRemoved:
+			// With the reader when there is one: a member's own entry decides what their membership shows.
+			scope := eventbus.NewScope("org", e.OrgID)
+			if e.UserID != "" {
+				scope["user"] = e.UserID
+			}
+			return []eventbus.Invalidation{{Key: "rules.profiles", Scope: scope}}
+		}
+		return nil
+	}, "rules.profiles"))
+	// What a peer dropped. The deployment profile only ever goes whole, and Invalidate("") drops both caches (every
+	// org inherits the deployment layer), so a message for either key does that. A resync (empty scope) drops all.
+	bus.OnRemote("rules.deployment-profile", func(eventbus.Scope) { r.Invalidate("") })
+	bus.OnRemote("rules.profiles", func(s eventbus.Scope) {
+		if org := s["org"]; org != "" {
+			r.invalidateReader(org, s["user"])
+			return
+		}
+		r.Invalidate("")
 	})
 }
 

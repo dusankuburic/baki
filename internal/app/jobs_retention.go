@@ -103,7 +103,7 @@ func purgeExpiredData(ctx context.Context, backend storageif.StorageBackend, aud
 		"usage_metrics", res.UsageMetrics, "token_blacklist", res.TokenBlacklist,
 		"share_tokens", res.ShareTokens, "gov_alerts", res.GovAlerts,
 		"idempotency_keys", res.IdempotencyKeys, "ci_credentials", res.CICredentials,
-		"ci_deliveries", res.CIDeliveries)
+		"ci_deliveries", res.CIDeliveries, "flow_snapshots", res.FlowSnapshots)
 	padmetrics.RecordBackgroundLoopTick("retention_purge")
 	return nil
 }

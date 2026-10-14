@@ -2,7 +2,9 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +102,29 @@ func TestToModel_NilReturnsDefaults(t *testing.T) {
 func TestFromModel_NilReturnsNil(t *testing.T) {
 	if got := settingsFromModel(nil); got != nil {
 		t.Errorf("settingsFromModel(nil) = %+v, want nil", got)
+	}
+}
+
+func TestValidateProfileSection(t *testing.T) {
+	long := func(n int) string { return strings.Repeat("é", n) } // counted in characters, not bytes
+	cases := []struct {
+		name string
+		in   models.ProfileSettings
+		ok   bool
+	}{
+		{"empty", models.ProfileSettings{}, true},
+		{"at the caps", models.ProfileSettings{Bio: long(500), JobTitle: long(100), Timezone: "Europe/Belgrade"}, true},
+		{"bio over", models.ProfileSettings{Bio: long(501)}, false},
+		{"job title over", models.ProfileSettings{JobTitle: long(101)}, false},
+		{"not a zone", models.ProfileSettings{Timezone: "Mars/Olympus"}, false},
+	}
+	for _, c := range cases {
+		err := validateProfileSection(c.in)
+		if c.ok && err != nil {
+			t.Errorf("%s: %v, want nil", c.name, err)
+		}
+		if !c.ok && !errors.Is(err, ErrSettingsInvalid) {
+			t.Errorf("%s: %v, want ErrSettingsInvalid", c.name, err)
+		}
 	}
 }

@@ -191,11 +191,7 @@ func (h *AuthHandler) handleAuthRegister(w http.ResponseWriter, r *http.Request)
 	}
 
 	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionRegister, ResourceType: "user", ResourceID: user.ID})
-	userJSON := map[string]any{
-		"id":    user.ID,
-		"email": user.Email,
-		"role":  user.Role,
-	}
+	userJSON := authUserJSON(user)
 	if user.EmailVerified {
 		// No verification round trip pending (bootstrap admin is created verified): issue the session directly.
 		pair, ok := h.issueSession(w, r, user.ID, user.Email, user.Role, remember)
@@ -311,17 +307,25 @@ func (h *AuthHandler) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// The client validates against LoginResponseSchema, which requires a `user` object — tokens alone failed validation.
 	render.JSON(w, map[string]any{
-		"user": map[string]any{
-			"id":    user.ID,
-			"email": user.Email,
-			"role":  user.Role,
-		},
+		"user":             authUserJSON(user),
 		"accessToken":      pair.AccessToken,
 		"refreshToken":     pair.RefreshToken,
 		"expiresAt":        pair.ExpiresAt,
 		"refreshId":        pair.RefreshID,
 		"refreshExpiresAt": pair.RefreshExpiresAt,
 	})
+}
+
+// authUserJSON is the user object of the login and register responses: the claims' core plus the profile fields,
+// so a client that just signed in can render the user without a /me round trip.
+func authUserJSON(user *storageif.User) map[string]any {
+	return map[string]any{
+		"id":          user.ID,
+		"email":       user.Email,
+		"role":        user.Role,
+		"displayName": user.DisplayName,
+		"avatarUrl":   user.AvatarURL,
+	}
 }
 
 // @Summary      Refresh access token
@@ -420,21 +424,35 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 	render.JSON(w, pair)
 }
 
+// MeResponse is the caller's identity as GET /api/auth/me returns it: the claims' core, the profile the store
+// holds (display name, avatar, the account's stamps) and the settings document's profile section. The local-mode
+// branch carries no profile: the local user has no account row and no user settings.
+type MeResponse struct {
+	ID            string                     `json:"id"`
+	Email         string                     `json:"email"`
+	Role          string                     `json:"role"`
+	DisplayName   string                     `json:"displayName"`
+	AvatarURL     string                     `json:"avatarUrl"`
+	CreatedAt     string                     `json:"createdAt,omitempty"`
+	EmailVerified bool                       `json:"emailVerified,omitempty"`
+	Profile       *storageif.ProfileSettings `json:"profile,omitempty"`
+}
+
 // @Summary      Get current user info
-// @Description  Returns information about the currently authenticated user.
+// @Description  Returns information about the currently authenticated user: the claims' core, the stored profile (display name, avatar URL, account stamps) and, in cloud mode, the settings document's profile section (bio, job title, timezone). The web client reads that section from its settings store; it is here for other clients (the CLI, scripts) so they need no second call.
 // @Tags         auth
 // @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
+// @Success      200 {object} MeResponse "OK"
 // @Failure      401 {object} map[string]string "Unauthorized"
 // @Router       /api/auth/me [get]
 func (h *AuthHandler) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	claims := auth.ClaimsFromContext(r.Context())
 	if claims == nil {
 		if !h.security.JWTEnabled {
-			render.JSON(w, map[string]string{
-				"id":    h.security.LocalUserID,
-				"email": h.security.LocalName,
-				"role":  string(auth.RoleAdmin),
+			render.JSON(w, MeResponse{
+				ID:    h.security.LocalUserID,
+				Email: h.security.LocalName,
+				Role:  string(auth.RoleAdmin),
 			})
 			return
 		}
@@ -442,23 +460,29 @@ func (h *AuthHandler) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := map[string]string{
-		"id":    claims.UserID,
-		"email": claims.Email,
-		"role":  string(claims.Role),
+	resp := MeResponse{
+		ID:    claims.UserID,
+		Email: claims.Email,
+		Role:  string(claims.Role),
 	}
 	if h.backend != nil {
 		if user, err := h.authSvc.User(r.Context(), claims.UserID); err == nil {
-			resp["displayName"] = user.DisplayName
-			resp["avatarUrl"] = user.AvatarURL
-			resp["createdAt"] = user.CreatedAt.UTC().Format(time.RFC3339)
+			resp.DisplayName = user.DisplayName
+			resp.AvatarURL = user.AvatarURL
+			resp.CreatedAt = user.CreatedAt.UTC().Format(time.RFC3339)
+			resp.EmailVerified = user.EmailVerified
+		}
+		// The identity-card fields ride the user's own settings document; a read failure keeps the response
+		// without them rather than failing an endpoint whose core (the claims) is already known.
+		if profile, err := h.authSvc.ProfileFields(r.Context(), claims.UserID); err == nil {
+			resp.Profile = &profile
 		}
 	}
 	render.JSON(w, resp)
 }
 
 // @Summary      Update profile
-// @Description  handleAuthUpdateProfile lets a user set their own display name and avatar URL. Both fields are optional and may be cleared by sending an empty string.
+// @Description  handleAuthUpdateProfile lets a user set their own display name and avatar URL. Both fields are optional and may be cleared by sending an empty string. The avatar URL is an http(s) URL, or the caller's own avatar route (/api/users/{id}/avatar) to keep an uploaded picture while changing the name; any other value, an empty one included, replaces the uploaded picture and deletes the stored image. The route without an upload behind it is a 400.
 // @Tags         auth
 // @Accept       json
 // @Produce      json
@@ -489,7 +513,8 @@ func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Req
 		render.Error(w, fmt.Errorf("avatar URL must be at most 2048 characters"), http.StatusBadRequest)
 		return
 	}
-	if req.AvatarURL != "" {
+	// The caller's own serving route is what an upload left in the profile; saving the name must be able to send it back.
+	if req.AvatarURL != "" && req.AvatarURL != userAvatarRoute(claims.UserID) {
 		parsedURL, err := url.Parse(req.AvatarURL)
 		if err != nil || (parsedURL.Scheme != "https" && parsedURL.Scheme != "http") {
 			render.Error(w, fmt.Errorf("avatar URL must be a valid http(s) URL"), http.StatusBadRequest)
@@ -502,7 +527,11 @@ func (h *AuthHandler) handleAuthUpdateProfile(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if err := h.authSvc.UpdateProfile(r.Context(), claims.UserID, req.DisplayName, req.AvatarURL); err != nil {
+	if err := h.authSvc.UpdateProfile(r.Context(), claims.UserID, req.DisplayName, req.AvatarURL, userAvatarRoute(claims.UserID)); err != nil {
+		if errors.Is(err, service.ErrAvatarImage) {
+			render.Error(w, err, http.StatusBadRequest)
+			return
+		}
 		if errors.Is(err, storageif.ErrNotFound) {
 			render.Error(w, err, http.StatusNotFound)
 			return
@@ -628,6 +657,7 @@ func (h *AuthHandler) Mount(rb *route.Builder) {
 		// nothing beyond the caller.
 		rb.Get("/me", h.handleAuthMe, route.Scopes(auth.ScopeRead))
 		rb.Put("/profile", h.handleAuthUpdateProfile)
+		h.mountAvatarProfileRoutes(rb)
 		// Works on an expired session: it revokes whatever tokens the request carries.
 		rb.Post("/logout", h.handleAuthLogout, route.Public())
 		rb.Post("/change-password", h.handleAuthChangePassword, route.RateLimit(route.RateAuth))
@@ -641,6 +671,7 @@ func (h *AuthHandler) Mount(rb *route.Builder) {
 		h.registerTokenRoutes(rb)
 		h.registerSSORoutes(rb)
 	}, route.DenyTokens())
+	h.mountAvatarServeRoute(rb)
 	// The ticket is the entry to live updates: read-level.
 	rb.Post("/api/ws-ticket", h.handleWSTicket, route.Scopes(auth.ScopeRead))
 }

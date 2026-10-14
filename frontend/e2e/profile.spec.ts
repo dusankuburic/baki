@@ -45,6 +45,9 @@ function sessions() {
   ]
 }
 
+// savedSettings collects the settings documents the page persists (the about-you card saves through them).
+const savedSettings: Record<string, unknown>[] = []
+
 async function stubProfile(page: Page) {
   await setupAuthenticatedPage(page)
   await page.addInitScript(
@@ -93,9 +96,43 @@ async function stubProfile(page: Page) {
       case '/api/auth/change-password':
       case '/api/auth/logout':
         return route.fulfill({status: 200, json: {status: 'ok'}})
+      case '/api/auth/profile/avatar':
+        if (route.request().method() === 'DELETE') {
+          return route.fulfill({
+            status: 200,
+            json: {id: 'user-1', email: 'tester@example.com', role: 'admin', displayName: 'Tester', avatarUrl: ''},
+          })
+        }
+        return route.fulfill({
+          status: 200,
+          json: {
+            id: 'user-1',
+            email: 'tester@example.com',
+            role: 'admin',
+            displayName: 'Tester',
+            avatarUrl: '/api/users/user-1/avatar',
+          },
+        })
+      case '/api/users/user-1/avatar':
+        return route.fulfill({
+          status: 200,
+          contentType: 'image/png',
+          // A real 1×1 PNG: the client downscales through createImageBitmap before uploading, which refuses
+          // bytes that are not a decodable image.
+          body: Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+            'base64',
+          ),
+        })
       case '/api/dashboard/home':
       case '/api/analysis/dashboard':
         return route.fulfill({status: 200, json: mockDashboardHome()})
+      case '/api/system/settings':
+        if (route.request().method() === 'POST') {
+          savedSettings.push(route.request().postDataJSON() as Record<string, unknown>)
+          return route.fulfill({status: 200, json: {status: 'ok'}})
+        }
+        return route.fallback()
       default:
         return route.fallback()
     }
@@ -232,5 +269,49 @@ test.describe('User Profile', () => {
       () => localStorage.getItem('auth_refresh_token') ?? sessionStorage.getItem('auth_refresh_token'),
     )
     expect(stored).toBeNull()
+  })
+
+  test('uploads a picture, removes it, and saves the about-you card', async ({page}) => {
+    await page.setViewportSize({width: 1400, height: 900})
+    savedSettings.length = 0
+    await stubProfile(page)
+    await openProfile(page)
+
+    // The about-you card is on the page with honest empty values.
+    const about = page.locator('#profile-details')
+    await expect(about.getByRole('heading', {level: 3, name: 'About you'})).toBeVisible()
+    await expect(about.getByText('Not set').first()).toBeVisible()
+
+    // Upload: the serving route takes over the profile, and Remove appears.
+    await page.getByRole('button', {name: 'Edit profile'}).click()
+    await page.locator('input[type=file]').setInputFiles({
+      name: 'me.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        'base64',
+      ),
+    })
+    await expect(page.getByRole('button', {name: 'Remove picture'})).toBeVisible({timeout: 10_000})
+    await expect(page.getByLabel('Avatar URL')).toHaveValue('/api/users/user-1/avatar')
+
+    // Removal clears it again.
+    await page.getByRole('button', {name: 'Remove picture'}).click()
+    await expect(page.getByLabel('Avatar URL')).toHaveValue('')
+    await expect(page.getByRole('button', {name: 'Remove picture'})).toHaveCount(0)
+
+    // The about-you card saves through the settings document's profile section.
+    await about.getByRole('button', {name: 'Edit'}).click()
+    await about.getByLabel('Bio').fill('Automating the boring parts.')
+    await about.getByLabel('Job title').fill('RPA Developer')
+    await about.getByLabel('Timezone').selectOption('Europe/Belgrade')
+    await about.getByRole('button', {name: 'Save changes'}).click()
+    await expect(about.getByText('Automating the boring parts.')).toBeVisible({timeout: 10_000})
+    await expect
+      .poll(async () => {
+        const last = savedSettings[savedSettings.length - 1]
+        return (last?.profile as Record<string, string>) ?? null
+      })
+      .toEqual({bio: 'Automating the boring parts.', jobTitle: 'RPA Developer', timezone: 'Europe/Belgrade'})
   })
 })

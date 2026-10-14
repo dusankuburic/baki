@@ -30,13 +30,14 @@ type Typed[V any] struct {
 
 // New builds a cache of spec whose entries' summed cost stays within budget: bytes by convention, or an entry
 // count when every entry is stored at cost 1. opts are the SizedLRU options (WithMaxEntryCost, WithMaxEntries,
-// WithTTL). It panics for a Shared spec: Typed is replica-local storage.
+// WithTTL). It panics for a Shared spec other than MechanismInvalidation: Typed is replica-local storage, and only
+// the invalidation fan-out shares what such storage holds.
 func New[V any](spec *Spec, budget int64, opts ...SizedOption) *Typed[V] {
 	if spec == nil {
 		panic("cache: New with a nil spec")
 	}
-	if spec.locality != LocalityReplica {
-		panic(fmt.Sprintf("cache %q: declared %s, but New builds replica-local storage", spec.name, spec.locality))
+	if spec.locality != LocalityReplica && spec.mechanism != MechanismInvalidation {
+		panic(fmt.Sprintf("cache %q: declared shared by %q, but New builds in-process storage (only %q shares that)", spec.name, spec.mechanism, MechanismInvalidation))
 	}
 	lru := NewSizedLRU(budget, opts...)
 	lru.onEvict = spec.RecordEviction
@@ -92,6 +93,10 @@ func (c *Typed[V]) Delete(k Key) {
 		c.lru.Delete(context.Background(), k.enc)
 	}
 }
+
+// Clear drops every entry, counted as deletions: what an invalidation fan-out resync does to a cache that cannot
+// tell which of its entries a lost message concerned. A fill in flight is fenced by its owner's guard, as for Delete.
+func (c *Typed[V]) Clear() { c.lru.Clear() }
 
 // Len is the number of entries held (expired ones included until touched).
 func (c *Typed[V]) Len() int { return c.lru.Len() }

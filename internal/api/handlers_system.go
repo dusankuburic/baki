@@ -16,6 +16,7 @@ import (
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/audit"
+	"pad-analyzer/internal/lifecycle"
 	"pad-analyzer/internal/platform/drain"
 	"pad-analyzer/internal/service"
 	"pad-core/models"
@@ -32,9 +33,9 @@ type SystemHandler struct {
 	security *SecurityConfig
 	audit    *audit.Recorder
 
-	// redisPinger pings the optional Redis backplane (rate limiter, hub presence, stream resume).
-	// When non-nil, readiness gates on it: all three subsystems fail open, so a Redis outage
-	// would silently degrade multi-replica correctness.
+	// redisPinger is the optional Redis backplane (rate limiter, hub presence, stream resume). Readiness only
+	// reports it: every mechanism that uses it has a declared on-down behaviour, so an outage degrades the
+	// deployment and does not take it out of rotation; pad_redis_up is the signal to alert on.
 	redisPinger RedisPinger
 
 	authz *service.AuthzService
@@ -49,10 +50,13 @@ type SystemHandler struct {
 	draining *drain.State
 }
 
-// RedisPinger is the subset of the Redis client the readiness probe needs;
+// RedisPinger is the subset of the Redis backplane's health the probes need;
 // defined here so a nil sentinel works without pulling redis into API.
 type RedisPinger interface {
+	// Ping asks Redis now (the admin health page).
 	Ping(ctx context.Context) error
+	// Degraded reports, from state and without a round trip, whether Redis is configured and unreachable.
+	Degraded() bool
 }
 
 func NewSystemHandler(sysSvc *service.SystemService, security *SecurityConfig, recorder *audit.Recorder, redisPinger RedisPinger, authz *service.AuthzService, health *service.HealthService) *SystemHandler {
@@ -94,6 +98,10 @@ func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Requ
 
 	userID := h.security.CallerID(r)
 	if err := h.sysSvc.UpdateUserSettings(r.Context(), h.security.KeyScope(r), req); err != nil {
+		if errors.Is(err, service.ErrSettingsInvalid) {
+			render.Error(w, err, http.StatusBadRequest)
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -377,10 +385,10 @@ func (h *SystemHandler) handleLiveness(w http.ResponseWriter, r *http.Request) {
 }
 
 // @Summary      Readiness probe
-// @Description  Returns 200 when downstream dependencies (DB) are reachable, 503 otherwise. While the server is stopping it answers 503 {"status":"draining"} from the first probe on, whatever its dependencies say.
+// @Description  Returns 200 when downstream dependencies (DB) are reachable, 503 otherwise. While the server is stopping it answers 503 {"status":"draining"} from the first probe on, whatever its dependencies say. A dependency that is down but not needed to serve (the Redis backplane) does not fail the probe: the 200 body then lists it as {"status":"ok","degraded":["redis"]}.
 // @Tags         system
 // @Produce      json
-// @Success      200 {object} map[string]string "OK"
+// @Success      200 {object} map[string]interface{} "OK; degraded lists the optional dependencies that are down"
 // @Failure      503 {object} map[string]string "Service Unavailable (status draining while the server stops)"
 // @Router       /readyz [get]
 // @Router       /api/health [get]
@@ -403,14 +411,6 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 		if checkErr == nil && h.health.HasBlob() {
 			checkErr = h.health.CheckBlob(ctx)
 		}
-		// H21: when Redis is configured, gate readiness on it — the rate limiter, hub presence and
-		// stream resume all fail open, so an outage silently degrades multi-replica correctness.
-		if checkErr == nil && h.redisPinger != nil {
-			redisCtx, redisCancel := context.WithTimeout(r.Context(), 2*time.Second)
-			checkErr = h.redisPinger.Ping(redisCtx)
-			redisCancel()
-		}
-
 		if checkErr != nil {
 			h.readyMu.Lock()
 			h.readyFailures++
@@ -419,7 +419,7 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 			if failed {
 				render.Error(w, fmt.Errorf("backend unavailable: %w", checkErr), http.StatusServiceUnavailable)
 			} else {
-				render.JSON(w, map[string]string{"status": "ok"})
+				render.JSON(w, h.readyBody())
 			}
 			return
 		}
@@ -428,7 +428,17 @@ func (h *SystemHandler) handleReadiness(w http.ResponseWriter, r *http.Request) 
 		h.readyFailures = 0
 		h.readyMu.Unlock()
 	}
-	render.JSON(w, map[string]string{"status": "ok"})
+	render.JSON(w, h.readyBody())
+}
+
+// readyBody is the 200 answer: {"status":"ok"}, plus "degraded":["redis"] while the backplane is down. The key is
+// additive; a probe that reads status alone is unaffected.
+func (h *SystemHandler) readyBody() map[string]any {
+	body := map[string]any{"status": "ok"}
+	if h.redisPinger != nil && h.redisPinger.Degraded() {
+		body["degraded"] = []string{"redis"}
+	}
+	return body
 }
 
 // classifyHealthErr reduces a dependency error to a coarse, non-leaking
@@ -463,19 +473,28 @@ type adminHealthResponse struct {
 	Blob     componentStatus `json:"blob"`
 	Redis    componentStatus `json:"redis"`
 	Overall  string          `json:"overall"` // "ok" | "degraded" | "down"
+	deployInfo
+}
+
+// deployInfo says which build and schema this replica runs. During a rolling deploy the replicas differ, and the page
+// answers for the one that served it; instanceId names it. The schema version is left out when the backend cannot tell.
+type deployInfo struct {
+	SchemaVersion int    `json:"schemaVersion,omitempty"`
+	BinaryVersion string `json:"binaryVersion"`
+	InstanceID    string `json:"instanceId,omitempty"`
 }
 
 // handleAdminSystemHealth returns a per-subsystem health breakdown. Admin-only; each probe is
 // reported independently, without the consecutive-failure smoothing — the live picture.
 // @Summary      Detailed system health
-// @Description  handleAdminSystemHealth returns a structured per-subsystem health breakdown. Admin-only (the public /readyz is the orchestrator-facing verdict). Reuses the same probes as readiness but reports each independently rather than collapsing to one pass/fail, and does NOT apply the consecutive-failure smoothing — an admin querying health wants the live picture, not a flap-dampened one.
+// @Description  handleAdminSystemHealth returns a structured per-subsystem health breakdown. Admin-only (the public /readyz is the orchestrator-facing verdict). Reuses the same probes as readiness but reports each independently rather than collapsing to one pass/fail, and does NOT apply the consecutive-failure smoothing — an admin querying health wants the live picture, not a flap-dampened one. Also says which build (binaryVersion), schema migration (schemaVersion) and replica (instanceId) answered, which differ between replicas during a rolling deploy.
 // @Tags         admin
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "Health detail"
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Router       /api/admin/system/health [get]
 func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.Request) {
-	resp := adminHealthResponse{Overall: "ok"}
+	resp := adminHealthResponse{Overall: "ok", deployInfo: deployInfo{BinaryVersion: service.Version, InstanceID: lifecycle.InstanceID()}}
 
 	if !h.health.HasStore() {
 		// Local/filesystem mode: no DB, no blob, no Redis.
@@ -498,6 +517,11 @@ func (h *SystemHandler) handleAdminSystemHealth(w http.ResponseWriter, r *http.R
 		resp.Overall = "down"
 	} else {
 		resp.Database = componentStatus{Status: "ok"}
+		if v, err := h.health.SchemaVersion(ctx); err != nil {
+			slog.Warn("health: schema version unreadable", "err", err)
+		} else {
+			resp.SchemaVersion = v
+		}
 	}
 
 	// Blob (optional)

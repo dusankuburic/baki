@@ -34,7 +34,25 @@
 	@operator path /metrics /debug/pprof /debug/pprof/*
 	respond @operator 404
 
-	reverse_proxy app:8080 {
+	reverse_proxy {
+		# Every address the service name `app` resolves to, looked up again every
+		# two seconds, so `docker compose up --scale app=2` (or deploy.replicas)
+		# sends traffic to all replicas and follows one that is replaced. A static
+		# `app:8080` is resolved when Caddy loads its config and, with several
+		# replicas, would keep sending to the one it found first. Several replicas
+		# also need Redis and distinct replica names, see "Running more than one
+		# replica" in docs/architecture/operations.md and docker-compose.replicas.yml.
+		dynamic a {
+			name app
+			port 8080
+			refresh 2s
+		}
+		lb_policy round_robin
+		# A replica that is just gone refuses the connection before any byte is
+		# sent, which is safe to retry on another replica whatever the method.
+		lb_try_duration 5s
+		lb_try_interval 250ms
+
 		# Write responses through as they arrive instead of buffering. Caddy
 		# does this automatically for text/event-stream, which covers
 		# /api/events — the channel that carries chat tokens and analysis

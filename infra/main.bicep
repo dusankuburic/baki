@@ -13,15 +13,28 @@
 //        --parameters @infra/main.parameters.json \
 //        --parameters authSecret=<...> databaseUrl=<...>
 //
-// SINGLE REPLICA. minReplicas = maxReplicas = 1 is not a cost default, it is a
-// correctness bound: internal/api/events.go is an in-process SSE hub with no
-// Redis backplane, so with more than one replica a chat stream started on
-// replica A never reaches an SSE client on replica B, and the subscriber
-// watchdog in internal/service/chat_resume.go cancels the stream for lack of a
-// local subscriber. Cancel-stream, AI budget accounting, the WS ticket replay
-// guard and the retention purge are per-process too. Raise maxReplicas only
-// after internal/api/events.go grows the backplane that
-// internal/websocket/backplane.go already demonstrates.
+// REPLICAS. The repository default is ONE replica (minReplicas = maxReplicas = 1,
+// no Redis). The release that introduced the cross-replica mechanisms ships at one
+// replica, and the count is raised afterwards, by repository variable, once the
+// deployment runs that release (docs/architecture/operations.md, "Running more than
+// one replica"). The capability is in this template; the default is not raised.
+//
+// More than one replica needs the Redis backplane: provisionRedis = true goes with
+// maxReplicas > 1. Without it every replica is an island (its own SSE hub, rate
+// limits, stream registry, AI budget ledger and caches), and the app refuses to
+// start with PAD_MAX_REPLICAS above 1 and no PAD_REDIS_URL
+// (internal/config/loader.go). With it, SSE events and their replay, the commands
+// on a running chat stream (stop, approval decision), the AI budget's in-flight
+// ledger, cache invalidation, collaboration presence and rate limits are shared
+// (ADRs 0029 to 0033). A maxReplicas above minReplicas does not scale by itself, so
+// the template adds an HTTP concurrency scale rule (scaleConcurrentRequests).
+// Each replica names itself with the replica name ACA injects
+// (CONTAINER_APP_REPLICA_NAME), which is what stream commands are routed by: do NOT
+// set PAD_INSTANCE_ID here, one value would be the name of every replica.
+//
+// Guards: internal/config/deploy_replicas_test.go keeps this file,
+// main.parameters.json and deploy.yml from shipping maxReplicas above 1 without
+// provisionRedis, and the deploy workflow refuses the combination before it deploys.
 //
 // Note on container hardening: this template used to set a `securityContext`
 // block (runAsNonRoot / cap-drop / readOnlyRootFilesystem). That property does
@@ -42,11 +55,17 @@ param image string
 @description('Tags applied to every resource this template creates.')
 param tags object = {}
 
-@description('Minimum replica count. Keep 1 — see the single-replica note at the top of this file.')
+@description('Minimum replica count. 1 is the repository default; 2 or more keeps the app up through the loss of a replica and also needs provisionRedis (see the header of this file).')
+@minValue(0)
 param minReplicas int = 1
 
-@description('Maximum replica count. Keep 1 until internal/api/events.go has a cross-replica backplane.')
+@description('Maximum replica count. 1 is the repository default. Above 1 needs provisionRedis = true (the app refuses to start with PAD_MAX_REPLICAS above 1 and no Redis, and the deploy workflow refuses the combination); raise it only after the deployment has run a release with the cross-replica mechanisms at one replica (docs/architecture/operations.md). It also sizes the database pools (dbServerMaxConnections) and the Redis SKU (redisSku).')
+@minValue(1)
 param maxReplicas int = 1
+
+@description('HTTP concurrency one replica carries before ACA adds another (an http scale rule, emitted when maxReplicas is above minReplicas). Open server-sent event streams and WebSockets count as concurrent requests for as long as they are open (a browser tab holds one or two), so size it above the open streams a replica should carry, or the rule scales out on idle tabs.')
+@minValue(1)
+param scaleConcurrentRequests int = 100
 
 // cpu/memory must be one of ACA's allowed pairs (Consumption: 0.25/0.5Gi,
 // 0.5/1.0Gi, 0.75/1.5Gi, 1.0/2.0Gi, 1.25/2.5Gi, ... 4.0/8.0Gi — memory is
@@ -118,19 +137,26 @@ param blobContainerName string = 'flow-content'
 @maxValue(365)
 param blobRetentionDays int = 14
 
-// ── Redis (off by default; single-replica deployment) ──────────────────────
+// ── Redis (off by default: one replica needs none) ─────────────────────────
 
-@description('Provision an Azure Cache for Redis (the shared backplane for rate-limiting, WS presence and chat-resume across replicas). OFF by default because this template is single-replica AND the app refuses to boot when PAD_REDIS_URL is set but unreachable — a Redis blip would be a hard startup failure for a backplane the deployment does not use.')
+@description('Provision an Azure Cache for Redis, the shared backplane of a deployment with more than one replica: SSE fan-out and replay, stream commands, the AI budget ledger, cache invalidation, presence and rate limits. OFF by default because one replica needs none. Required when maxReplicas is above 1 (the app refuses to start with PAD_MAX_REPLICAS above 1 and no PAD_REDIS_URL). A Redis that becomes unreachable later does not stop the app: it starts and runs degraded (/readyz stays 200 and lists redis under degraded), each mechanism in its declared on-down mode; the redis-degraded alert below fires on a Redis that stays down, and pad_redis_up == 0 is the metric.')
 param provisionRedis bool = false
 
-@description('Redis SKU.')
-param redisSku string = 'Basic'
+@description('Redis SKU: Basic, Standard or Premium. Empty picks Standard when maxReplicas is above 1 (a replica node and an SLA; on Basic a Redis restart is a full outage of every cross-replica mechanism) and Basic otherwise.')
+@allowed([
+  ''
+  'Basic'
+  'Standard'
+  'Premium'
+])
+param redisSku string = ''
 
 @description('Redis family (C = Basic/Standard, P = Premium).')
 param redisFamily string = 'C'
 
-@description('Redis capacity (0 = 250MB Basic; size up for production).')
-param redisCapacity int = 0
+@description('Redis capacity. -1 picks 1 (a 1 GB cache, C1) for Standard and Premium and 0 (250 MB, C0) for Basic. The keys are small and all expire (docs/architecture/operations.md); size up for the SSE replay logs of many concurrent users.')
+@minValue(-1)
+param redisCapacity int = -1
 
 // ── Request handling / proxy ───────────────────────────────────────────────
 
@@ -470,17 +496,27 @@ resource blobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (pro
 
 // ── Azure Cache for Redis (cross-replica backplane; off by default) ────────
 
+// Several replicas get Standard (a replica node and an SLA); one replica keeps Basic, so a deployment that only
+// turns provisionRedis on is not repriced. Capacity 1 of the C family is a 1 GB cache.
+var redisEffectiveSku = !empty(redisSku) ? redisSku : (maxReplicas > 1 ? 'Standard' : 'Basic')
+var redisEffectiveCapacity = redisCapacity >= 0 ? redisCapacity : (redisEffectiveSku == 'Basic' ? 0 : 1)
+
 resource redis 'Microsoft.Cache/redis@2023-08-01' = if (provisionRedis) {
   name: redisName
   location: location
   tags: tags
   properties: {
-    sku: { name: redisSku, family: redisFamily, capacity: redisCapacity }
+    sku: { name: redisEffectiveSku, family: redisFamily, capacity: redisEffectiveCapacity }
     enableNonSslPort: false
     minimumTlsVersion: '1.2'
     publicNetworkAccess: 'Enabled' // no VNet on this deployment; access is key-gated over TLS
     redisConfiguration: {
-      'maxmemory-policy': 'allkeys-lru'
+      // Only keys with an expiry are evicted, and every key the app writes has one (the registry in
+      // internal/redisx, internal/di/testdata/redis_keys.golden; a channel is not a key). allkeys-lru would
+      // evict a live in-flight-budget entry or a stream snapshot under memory pressure just as readily as a
+      // cache entry; with volatile-lru a full Redis evicts the soonest-to-expire first and, were a key ever
+      // written without a TTL, fails the write instead of silently dropping other keys.
+      'maxmemory-policy': 'volatile-lru'
     }
   }
 }
@@ -544,6 +580,8 @@ var coreEnv = [
   { name: 'PAD_AUTH_ENABLED', value: 'true' }
   { name: 'PAD_STORAGE', value: 'database' }
   // How many replicas share the database: the boot check compares the pool with the server's max_connections.
+  // Above 1 the app also refuses to start without PAD_REDIS_URL. There is no PAD_INSTANCE_ID here on purpose: each
+  // replica takes its name from CONTAINER_APP_REPLICA_NAME, which ACA sets per replica.
   { name: 'PAD_MAX_REPLICAS', value: string(maxReplicas) }
   // ACA terminates TLS and presents a public HTTPS URL; the app runs HTTP
   // behind it.
@@ -699,7 +737,8 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
               failureThreshold: 3
             }
             {
-              // /readyz gates on Postgres, blob and (when configured) Redis.
+              // /readyz gates on Postgres and blob. A Redis outage does not
+              // fail it: the answer stays 200 and lists redis under "degraded".
               // A cold start runs schema migrations before it can answer, so
               // the failure threshold is generous.
               type: 'Readiness'
@@ -719,6 +758,14 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
       scale: {
         minReplicas: minReplicas
         maxReplicas: maxReplicas
+        // Without a rule ACA never scales between min and max. Open SSE streams and WebSockets count as
+        // concurrent requests (see scaleConcurrentRequests).
+        rules: maxReplicas > minReplicas ? [
+          {
+            name: 'http-concurrency'
+            http: { metadata: { concurrentRequests: string(scaleConcurrentRequests) } }
+          }
+        ] : []
       }
     }
   }
@@ -831,7 +878,7 @@ resource readinessAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-previ
   tags: tags
   properties: {
     displayName: '${appName}: readiness probe failing'
-    description: 'A replica failed its readiness probe ${readinessAlertMinFailures} or more times in 10 minutes: enough to take it out of rotation, and more than a replica stopping for a deploy can log while it drains (503) and exits. With one replica the app is out of rotation: check /readyz (Postgres, blob, Redis) and the ERROR log.'
+    description: 'A replica failed its readiness probe ${readinessAlertMinFailures} or more times in 10 minutes: enough to take it out of rotation, and more than a replica stopping for a deploy can log while it drains (503) and exits. With one replica the app is out of rotation: check /readyz (Postgres, blob) and the ERROR log. A Redis outage does not fail readiness; it shows as pad_redis_up == 0.'
     severity: 1
     enabled: true
     evaluationFrequency: 'PT5M'
@@ -945,6 +992,130 @@ resource logMessageAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-prev
   }
 }]
 
+// ── Alerts for a deployment with Redis and several replicas ────────────────
+// The app's Prometheus metrics are not scraped (see above), so these read the signals that exist as log lines or as
+// ACA platform metrics. The metric each one stands for is named in its description, for a deployment that does
+// scrape /metrics (docs/architecture/operations.md has the rules). Same gate as the others: alertEmails.
+
+var appLogs = 'ContainerAppConsoleLogs_CL | where ContainerAppName_s == "${appName}"'
+// The replica a console log line came from (not verified against a live workspace, see operations.md).
+var replicaColumn = 'tostring(column_ifexists("ContainerGroupName_s", ""))'
+
+var redisAlerts = !provisionRedis ? [] : [
+  {
+    name: 'redis-degraded'
+    displayName: 'Redis degraded for 5 minutes'
+    description: 'A replica has logged "redis degraded" and not "redis recovered" for more than 5 minutes (pad_redis_up == 0 for 5 minutes): the cross-replica mechanisms run in their on-down mode (rate limits per replica, events reach only the clients of the replica that emitted them, stop and approval decisions for a stream on another replica answer 503 REPLICA_UNREACHABLE, caches go stale until their TTL) and, with a daily AI budget set, new chat turns are refused. The app stays ready, so only this alert shows it. Check the Redis resource (a restart or a failover takes a minute or two on Standard) and pad_redis_errors_total{mechanism}. Only replicas that logged something in the last 15 minutes count, so a replaced replica does not keep the alert open.'
+    severity: 2
+    evaluationFrequency: 'PT5M'
+    windowSize: 'P1D'
+    threshold: 0
+    query: '${appLogs} | where Log_s contains \'"msg":"redis degraded: the cross-replica mechanisms run in their on-down mode until it answers"\' or Log_s contains \'"msg":"redis recovered"\' | summarize arg_max(TimeGenerated, Log_s) by replica = ${replicaColumn} | where Log_s contains \'"msg":"redis degraded\' and TimeGenerated < ago(5m) | join kind=inner (${appLogs} | where TimeGenerated > ago(15m) | summarize by replica = ${replicaColumn}) on replica'
+  }
+  {
+    name: 'invalidation-channel'
+    displayName: 'cache invalidation messages failing'
+    description: 'More than 4 warnings in 15 minutes that a replica could not publish an invalidation or lost its subscription to the invalidation channel (each is logged at most every 30 seconds per replica). The other replicas then serve stale settings, rule profiles, dashboards and model listings until their TTL (30 seconds to 10 minutes) and drop everything when the channel is back. The metric is pad_inval_gap_total (a sustained rate) with pad_inval_dropped_total{reason}.'
+    severity: 3
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    threshold: 4
+    query: '${appLogs} | where Log_s contains \'"msg":"invalidation publish failed; the peers keep their caches until the next resync or their TTL"\' or Log_s contains \'"msg":"invalidation subscription lost; resubscribing"\''
+  }
+]
+
+resource redisAlert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = [for alert in redisAlerts: if (!empty(alertEmails)) {
+  name: '${appName}-${alert.name}'
+  location: location
+  tags: tags
+  properties: {
+    displayName: '${appName}: ${alert.displayName}'
+    description: alert.description
+    severity: alert.severity
+    enabled: true
+    evaluationFrequency: alert.evaluationFrequency
+    windowSize: alert.windowSize
+    scopes: [workspace.id]
+    criteria: {
+      allOf: [
+        {
+          query: alert.query
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: alert.threshold
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    actions: {
+      actionGroups: [actionGroup.id]
+    }
+  }
+}]
+
+// Replica count, from the platform's Replicas metric (not verified against a live resource: the existing restarts
+// alert uses a lowercase metric name of its own). At the ceiling for a quarter of an hour means the scale rule wants
+// more than maxReplicas allows (there is no ceiling to hit when min equals max); below the floor means a replica is
+// missing or not starting.
+var replicaCeilingAlert = [
+  {
+    name: 'replicas-at-ceiling'
+    description: 'The replica count has been at maxReplicas (${maxReplicas}) for 15 minutes: the concurrency scale rule (${scaleConcurrentRequests} concurrent requests per replica, open event streams and sockets included) wants more replicas than the template allows. Raise maxReplicas, or scaleConcurrentRequests if the load is idle tabs.'
+    severity: 3
+    aggregation: 'Minimum'
+    operator: 'GreaterThanOrEqual'
+    threshold: maxReplicas
+  }
+]
+
+var replicaFloorAlert = [
+  {
+    name: 'replicas-below-min'
+    description: 'Fewer replicas than minReplicas (${minReplicas}) for 15 minutes: a replica failed to start or keeps being replaced. Look at the readiness and restart alerts and the system log of the new revision.'
+    severity: 2
+    aggregation: 'Maximum'
+    operator: 'LessThan'
+    threshold: max(minReplicas, 1)
+  }
+]
+
+var replicaAlerts = maxReplicas <= 1 ? [] : concat(minReplicas < maxReplicas ? replicaCeilingAlert : [], replicaFloorAlert)
+
+resource replicaAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = [for alert in replicaAlerts: if (!empty(alertEmails)) {
+  name: '${appName}-${alert.name}'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: alert.description
+    severity: alert.severity
+    enabled: true
+    scopes: [containerApp.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M' // a metric alert accepts 1, 5, 15, 30 minutes and up, not 10
+    targetResourceType: 'Microsoft.App/containerApps'
+    criteria: {
+      allOf: [
+        {
+          name: 'replicas'
+          metricNamespace: 'Microsoft.App/containerApps'
+          metricName: 'Replicas'
+          operator: alert.operator
+          threshold: alert.threshold
+          timeAggregation: alert.aggregation
+          criterionType: 'StaticThresholdCriterion'
+        }
+      ]
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+    }
+    actions: [
+      { actionGroupId: actionGroup.id }
+    ]
+  }
+}]
+
 output fqdn string = containerApp.properties.configuration.ingress.fqdn
 output appUrl string = 'https://${containerApp.properties.configuration.ingress.fqdn}'
 output containerAppName string = containerApp.name
@@ -953,5 +1124,7 @@ output managedIdentityPrincipalId string = identity.properties.principalId
 output storageAccountName string = effectiveStorageAccount
 output blobContainerName string = blobContainerName
 output redisName string = provisionRedis ? redisName : ''
+// The Redis host for alerts and for an operator's redis-cli; the connection string (with its key) is only in the redis-url secret.
+output redisHostName string = provisionRedis ? redis!.properties.hostName : ''
 output appInsightsName string = appInsights.name
 output logAnalyticsWorkspaceId string = workspace.id

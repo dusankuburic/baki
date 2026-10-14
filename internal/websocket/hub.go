@@ -484,6 +484,8 @@ func (h *Hub) writePresenceLocked(c *Client) {
 func (c *Client) presenceRecord() presenceRecord {
 	sel, selAt := c.selection()
 	return presenceRecord{
+		V:               payloadVersion1,
+		Kind:            presenceKind,
 		UserID:          c.UserID,
 		DisplayName:     c.DisplayName,
 		SelectedBlockID: sel,

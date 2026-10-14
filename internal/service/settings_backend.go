@@ -19,7 +19,7 @@ import (
 // counts: a hit is a fresh Get, a miss a Get that refreshed, a store a refresh no invalidation overlapped.
 var deploymentSettingsCache = cache.Declare("settings.deployment",
 	cache.Global("one deployment-wide settings row, the same for every caller"),
-	cache.ReplicaLocal("30 s TTL bounds another replica's write; this replica's writes invalidate at once"))
+	cache.Shared(cache.MechanismInvalidation, "a write on any replica drops it on every replica once committed; the 30 s TTL bounds a lost message"))
 
 // settingsToModel and settingsFromModel convert between the storage-layer and domain representations via a
 // JSON round-trip: the structs are separate so storage does not depend on pad-core/models, and a hand-written
@@ -159,7 +159,14 @@ func SubscribeSettingsCache(bus *eventbus.Bus, p *BackendSettingsProvider) {
 		if e.Scope == events.DeploymentSettings {
 			p.Invalidate()
 		}
-	})
+	}, eventbus.Replicated(func(e events.SettingsChanged) []eventbus.Invalidation {
+		if e.Scope != events.DeploymentSettings {
+			return nil
+		}
+		return []eventbus.Invalidation{{Key: "settings.deployment"}}
+	}, "settings.deployment"))
+	// A peer's deployment write (or a resync after a gap): the same drop, whole (the settings are one row).
+	bus.OnRemote("settings.deployment", func(eventbus.Scope) { p.Invalidate() })
 }
 
 // Get returns the current deployment settings: never blocks longer than backendSettingsTimeout, and on failure

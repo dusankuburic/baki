@@ -2,6 +2,8 @@ package testutil
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -94,6 +96,10 @@ func (m *FakeBackend) GetJobRun(_ context.Context, name string) (*interfaces.Job
 		return nil, interfaces.ErrNotFound
 	}
 	out := *r
+	out.Detail = append(json.RawMessage(nil), r.Detail...)
+	if len(r.Detail) == 0 {
+		out.Detail = nil
+	}
 	return &out, nil
 }
 
@@ -103,4 +109,24 @@ func pgTime(t time.Time) time.Time {
 		return t
 	}
 	return t.UTC().Truncate(time.Microsecond)
+}
+
+// RecordJobDetail mirrors the upsert of last_detail: a document that is not JSON is refused as the jsonb column
+// refuses it, and nil or empty clears it.
+func (m *FakeBackend) RecordJobDetail(_ context.Context, name string, detail json.RawMessage) error {
+	j := &m.jobRuns
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.err != nil {
+		return j.err
+	}
+	if len(detail) > 0 && !json.Valid(detail) {
+		return fmt.Errorf("record job detail: invalid JSON")
+	}
+	r := j.record(name)
+	r.Detail = append(json.RawMessage(nil), detail...)
+	if len(detail) == 0 {
+		r.Detail = nil
+	}
+	return nil
 }

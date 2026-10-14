@@ -49,7 +49,8 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
       nextConversations.set(id, [])
       const historyStatus: Record<string, HistoryStatus> = {
         ...state.historyStatus,
-        [id]: {state: 'loaded', token: nextHistoryToken()},
+        // A new thread has nothing stored: version 0 is what its first save is compared against.
+        [id]: {state: 'loaded', token: nextHistoryToken(), version: 0},
       }
       let threads = [...state.threads, thread]
       if (threads.length > MAX_THREADS) {

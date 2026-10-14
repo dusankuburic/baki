@@ -2,6 +2,7 @@ package interfaces
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -18,6 +19,9 @@ type JobRun struct {
 	// LastErrorAt and LastError are the last failed run's end and error; a later success leaves them as history.
 	LastErrorAt time.Time
 	LastError   string
+	// Detail is the document the job last left with RecordJobDetail (for the legacy data migration, its result); nil
+	// when it left none or cleared it. Valid JSON, as the store holds it (Postgres normalises the layout).
+	Detail json.RawMessage
 }
 
 // JobRunStore keeps the background jobs' run state, one record per job name (the jobs' declared names, a closed
@@ -32,4 +36,7 @@ type JobRunStore interface {
 	JobLastSuccess(ctx context.Context, name string) (time.Time, error)
 	// GetJobRun returns the job's whole record; ErrNotFound when none was ever written.
 	GetJobRun(ctx context.Context, name string) (*JobRun, error)
+	// RecordJobDetail stores detail as the job's last-run document, replacing the previous one, and leaves the run
+	// fields alone; nil or empty clears it. detail must be valid JSON. The write creates the record when there is none.
+	RecordJobDetail(ctx context.Context, name string, detail json.RawMessage) error
 }

@@ -8,8 +8,11 @@
 //
 // A key is built from typed parts (Org, User, Local, RuleProfile, Content, ...) through the spec, so a key without
 // its tenant cannot be built: (*Spec).Key refuses it, and the caller computes without the cache. A cache that is
-// deliberately tenant-less says why with Global(reason). New builds the default storage for a spec, a typed LRU
-// bounded by cost, with GetOrFill for fills deduplicated on the full key. Every spec keeps hit, miss, store and
+// deliberately tenant-less says why with Global(reason). A spec also says where its entries live: ReplicaLocal(reason),
+// each replica holds its own and the reason says why that is acceptable, or Shared(MechanismInvalidation, reason), each
+// replica holds its own but a change on any replica drops the entry on every replica (the invalidation fan-out, ADR 0032).
+// New builds the default storage for a spec, a typed LRU bounded by cost, with GetOrFill for fills deduplicated on the
+// full key. Every spec keeps hit, miss, store and
 // eviction counts, which internal/metrics exports, and Specs lists the declarations for the registry golden
 // (docs/adr/0017-declared-caches.md).
 //

@@ -3,7 +3,7 @@ import {useFlowStore, beginDocLoad, isDocLoadCurrent} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import {useGovernanceStore} from '@/stores/governanceStore'
 import {useSettingsStore} from '@/stores/settingsStore'
-import {subscribeToEvents} from '@/api/client'
+import {subscribeToEvents, subscribeEventGap} from '@/api/client'
 import {flowApi} from '@/api'
 import {libraryApi} from '@/api/library'
 import type {FlowDocument as DomainFlowDocument} from '@/types'
@@ -28,6 +28,21 @@ export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | nul
     let unsub: (() => void) | null = null
     let cancelled = false
     let settingsRefetch: ReturnType<typeof setTimeout> | null = null
+    const refetchSettings = () => {
+      if (settingsRefetch) clearTimeout(settingsRefetch)
+      settingsRefetch = setTimeout(() => {
+        settingsRefetch = null
+        if (!cancelled) void useSettingsStore.getState().loadFromBackend()
+      }, SETTINGS_REFETCH_DELAY_MS)
+    }
+    // The server could not replay what a reconnect missed: the durable events that matter here (governance alerts,
+    // settings changes) may be among them, so refetch what they would have updated.
+    const offGap = subscribeEventGap(() => {
+      const gs = useGovernanceStore.getState()
+      void gs.refreshUnread()
+      if (gs.panelOpen) void gs.reloadList()
+      refetchSettings()
+    })
     void subscribeToEvents(ev => {
       const d = ev.data as Record<string, unknown> | undefined
       if (ev.name === 'flow:parse-progress') {
@@ -76,11 +91,7 @@ export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | nul
         void gs.refreshUnread()
         if (gs.panelOpen) void gs.reloadList()
       } else if (ev.name === 'settings:changed') {
-        if (settingsRefetch) clearTimeout(settingsRefetch)
-        settingsRefetch = setTimeout(() => {
-          settingsRefetch = null
-          if (!cancelled) void useSettingsStore.getState().loadFromBackend()
-        }, SETTINGS_REFETCH_DELAY_MS)
+        refetchSettings()
       }
     }).then(fn => {
       if (!cancelled) unsub = fn
@@ -88,6 +99,7 @@ export function useAppEvents(deps: {openDocument: (doc: DomainFlowDocument | nul
     })
     return () => {
       cancelled = true
+      offGap()
       if (settingsRefetch) clearTimeout(settingsRefetch)
       unsub?.()
     }

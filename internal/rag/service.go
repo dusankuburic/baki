@@ -40,8 +40,8 @@ var (
 	// ErrDocumentTooLarge: the document chunks to more passages than one upload may index
 	// (maxKnowledgeChunks) — the byte cap alone cannot track how a text chunks (HTTP 413).
 	ErrDocumentTooLarge = errors.New("document too large to index")
-	// ErrKnowledgeBusy: another upload or re-index of the same org is in flight in this process
-	// (lockOrg; HTTP 409), or a background re-embed runs on some replica (ReindexInBackground).
+	// ErrKnowledgeBusy: another upload or re-index of the same org is in flight on some replica (lockOrg; HTTP
+	// 409), this replica is at its lease cap, or a background re-embed runs on some replica (ReindexInBackground).
 	ErrKnowledgeBusy = errors.New("the knowledge base is being updated — try again in a moment")
 	// ErrEmbeddingOrgCredentialRequired: a background re-embed runs unattended under the organisation's
 	// shared embedding credential only; the caller's embedder is their own key (HTTP 400, the org admin's
@@ -99,7 +99,7 @@ type KnowledgeService struct {
 	embeddingProvider string
 	// embedOverride substitutes the resolved embedder when set — a test hook; nil in production.
 	embedOverride ai.Provider
-	// orgLocks serialises corpus mutations per org (lockOrg): orgID → *sync.Mutex.
+	// orgLocks is the in-process level of lockOrg: orgID → *sync.Mutex.
 	orgLocks sync.Map
 	// budget gates billed embedding runs on the daily AI budget; nil = unlimited (local mode, tests).
 	budget BudgetChecker
@@ -111,9 +111,13 @@ type KnowledgeService struct {
 	searchOnce sync.Once
 	// bus announces corpus changes (KnowledgeDocChanged); the corpus count cache drops on them. nil publishes nothing.
 	bus *eventbus.Bus
-	// jobLeaser is the deployment's cross-replica job lock (WithJobLeaser); nil runs the background re-embed
-	// without one, in this process alone.
+	// jobLeaser is the deployment's cross-replica lock (WithJobLeaser): the background re-embed's job lease and
+	// the per-org lease of an upload or re-index (lockOrg); nil runs both without one, in this process alone.
 	jobLeaser lock.Leaser
+	// leaseCap bounds the org leases this replica holds at once (WithLeaseCap); leaseSlots is its semaphore,
+	// built with a jobLeaser only.
+	leaseCap   int
+	leaseSlots chan struct{}
 	// reembed runs the on-demand background re-embed (reembed_job.go); built on first use, under reembedMu
 	// with the request the next run takes.
 	reembed        *lifecycle.Singleton
@@ -183,7 +187,8 @@ func WithEventBus(bus *eventbus.Bus) Option {
 }
 
 // WithJobLeaser runs the background re-embed (ReindexInBackground) under the deployment's job lease, one run
-// across every replica (ADR 0023); without it the process runs it alone.
+// across every replica (ADR 0023), and holds an org's lease over each upload and re-index (lockOrg); without it
+// the process runs them alone.
 func WithJobLeaser(l lock.Leaser) Option {
 	return func(s *KnowledgeService) { s.jobLeaser = l }
 }
@@ -200,6 +205,12 @@ func NewKnowledgeService(store interfaces.StorageBackend, factory *ai.ProviderFa
 	s := &KnowledgeService{store: store, factory: factory, settings: settings}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if s.jobLeaser != nil {
+		if s.leaseCap <= 0 {
+			s.leaseCap = DefaultLeaseCap
+		}
+		s.leaseSlots = make(chan struct{}, s.leaseCap)
 	}
 	return s
 }
@@ -463,18 +474,6 @@ func (s *KnowledgeService) corpusStranded(ctx context.Context, orgID string) boo
 	return err != nil || indexed == 0
 }
 
-// lockOrg serialises corpus mutations per org in this process: an upload landing mid-re-index would carry
-// the pre-switch model and be missed by the re-index. Non-blocking (second admin gets ErrKnowledgeBusy);
-// Search never takes it. Process-local only — multi-replica needs a database lock (pg_advisory_xact_lock).
-func (s *KnowledgeService) lockOrg(orgID string) (func(), error) {
-	v, _ := s.orgLocks.LoadOrStore(orgID, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	if !mu.TryLock() {
-		return nil, ErrKnowledgeBusy
-	}
-	return mu.Unlock, nil
-}
-
 // cosineSimilarity of two equal-length vectors; ok=false when either is all zeros (undefined).
 func cosineSimilarity(a, b []float32) (float64, bool) {
 	var dot, na, nb float64
@@ -492,7 +491,7 @@ func cosineSimilarity(a, b []float32) (float64, bool) {
 
 // AddDocument chunks content, embeds in the caller's scope, then persists document + chunks.
 // Embedding happens before the document row is written so a failure leaves no orphan "indexed" document.
-func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filename, content string) error {
+func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filename, content string) (err error) {
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("document is empty")
 	}
@@ -516,16 +515,19 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 		return fmt.Errorf("%w: %d passages exceed the limit of %d", ErrDocumentTooLarge, len(chunks), maxKnowledgeChunks)
 	}
 
-	// Taken after the cheap validation, so a bad request never waits on a running re-index.
-	unlock, err := s.lockOrg(orgID)
+	// Taken after the cheap validation, so a bad request never waits on a running re-index. It holds the org's
+	// lease over every replica for the check -> embed -> write window; ctx is cancelled if the lease is lost.
+	callerCtx := ctx
+	ctx, unlock, err := s.lockOrg(ctx, orgID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	defer func() { err = lostOr(ctx, err) }()
 	// Whatever the outcome, the org's cached corpus size is stale once this returns.
 	var docID string
 	defer func() {
-		s.bus.Publish(ctx, events.KnowledgeDocChanged{OrgID: orgID, DocID: docID, Kind: events.KnowledgeDocAdded})
+		s.bus.Publish(callerCtx, events.KnowledgeDocChanged{OrgID: orgID, DocID: docID, Kind: events.KnowledgeDocAdded})
 	}()
 
 	// Replace semantics: re-uploading a filename supersedes the old version (chunks cascade). Superseded
@@ -789,14 +791,16 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 	if err := s.checkBudget(ctx, provider, scope, orgID); err != nil {
 		return ReindexResult{}, err
 	}
-	unlock, err := s.lockOrg(orgID)
+	// The org's lease over every replica spans the whole page loop; ctx is cancelled if it is lost.
+	callerCtx := ctx
+	ctx, unlock, err := s.lockOrg(ctx, orgID)
 	if err != nil {
 		return ReindexResult{}, err
 	}
 	defer unlock()
-	defer s.bus.Publish(ctx, events.KnowledgeDocChanged{OrgID: orgID, Kind: events.KnowledgeDocReindexed})
+	defer s.bus.Publish(callerCtx, events.KnowledgeDocChanged{OrgID: orgID, Kind: events.KnowledgeDocReindexed})
 	if err := s.reindexGuard(ctx, provider, orgID, force, after); err != nil {
-		return ReindexResult{}, err
+		return ReindexResult{}, lostOr(ctx, err)
 	}
 
 	userID := ""
@@ -817,13 +821,15 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 	// stop after at least one committed page reports a NextCursor: the request deadline answers
 	// 200-with-cursor, any other failure returns BOTH the partial result and the error.
 	stopped := func(err error) (ReindexResult, error) {
+		err = lostOr(ctx, err)
 		if res.Chunks == 0 {
 			return ReindexResult{}, err
 		}
 		res.Docs = len(docs)
 		next := cursor
 		res.NextCursor, res.Truncated = &next, true
-		if ctx.Err() == nil {
+		// A lost lease is a failure (busy), not a deadline: the caller must not read it as "200, resume later".
+		if ctx.Err() == nil || lockLost(ctx) {
 			logger.Warn("knowledge base re-index stopped after committed pages; resumable",
 				"org_id", orgID, "chunks", res.Chunks, "error", err)
 			return res, err

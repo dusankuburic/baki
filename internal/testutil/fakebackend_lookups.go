@@ -106,21 +106,13 @@ func (m *FakeBackend) ListFlowsWithTotal(ctx context.Context, filter interfaces.
 	return docs, total, nil
 }
 
-// SaveAuditEvents keeps every row through SaveAuditEvent, all or none: as the primary key does on Postgres, an id
-// already saved, or twice in the batch, fails the whole batch.
+// SaveAuditEvents keeps every row through SaveAuditEvent, all or none: a nil row fails the whole batch. An id
+// already saved, or twice in the batch, is skipped like the Postgres ON CONFLICT (id) DO NOTHING does.
 func (m *FakeBackend) SaveAuditEvents(ctx context.Context, events []*interfaces.AuditEvent) error {
-	ids := map[string]bool{}
-	for _, e := range m.SavedAuditEvents() {
-		ids[e.ID] = true
-	}
 	for i, e := range events {
 		if e == nil {
 			return fmt.Errorf("save audit events: event %d is nil", i)
 		}
-		if ids[e.ID] {
-			return fmt.Errorf("save audit events: duplicate id %q", e.ID)
-		}
-		ids[e.ID] = true
 	}
 	for _, e := range events {
 		if err := m.SaveAuditEvent(ctx, e); err != nil {

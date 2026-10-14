@@ -86,7 +86,9 @@ and `AuthorizedFlow` is nil.
 **What stays hand-written.** Some routes do not fit the adapter: streams (SSE, chat), multipart uploads, file and
 blob downloads, the WebSocket, and webhooks that read the raw body. `TestArch_RoutesUseTheTypedAdapter` in
 `internal/archtest` pins the routes registered with a hand-written handler, per file. A new file starts at zero,
-and a file's number only goes down.
+and a file's number only goes down. `auth_avatar.go` holds two: the avatar upload (multipart) and the serving route
+(a blob download, which the frontend fetches with the bearer and renders from an object URL, so the SPA's `img-src`
+needs `blob:`); the removal beside them is a typed `Query` endpoint.
 
 ## Errors
 
@@ -156,6 +158,29 @@ every deploy.
 | `AI_BUDGET_EXCEEDED`, `AI_BUDGET_UNAVAILABLE` | `{ok: false, code}` (200) on `POST /api/providers/test` and the org test (the stream codes are unchanged) | the daily AI budget gate in the provider chain refused the test's billed call (ADR 0028); nothing was sent |
 
 `ProviderTestResult.code` is optional and empty for the free-text failures the test has always reported.
+
+### Conversation codes (ADR 0031)
+
+| Code | Where | Meaning |
+|---|---|---|
+| `CONVERSATION_CONFLICT` | 409 on `POST /api/chat/save` and `POST /api/chat/clear` that send `baseVersion` | the stored conversation is no longer at `baseVersion` (another tab, another replica or the server's own turn changed it); nothing was written. `details.version` is the current version. The client reloads with `POST /api/chat/get`, merges by message id and sends again, once |
+
+`POST /api/chat/get` returns `version` (0 for a conversation not stored yet; absent where conversations are files),
+and a versioned save answers `{status, version}`. A save or clear without `baseVersion` is unconditional, as before.
+
+A turn the server stores itself (cloud mode, the request carried no history) stores its answer **before** it emits
+`done`, and the `done` and `error` events of the stream then also carry `conversationVersion` (the version after the
+server's own writes) and `conversationBase` (the version the turn began from), additive fields that older clients
+ignore. They are absent for a client-owned turn, in file storage, when "Save conversation history" is off, and when
+another writer changed the thread between the question and the answer. A client still holding `conversationBase`
+adopts `conversationVersion` and has nothing to save; otherwise it keeps its version and the next write conflicts
+and reconciles (ADR 0031, addendum).
+
+### Stream command codes (ADR 0033)
+
+| Code | Where | Meaning |
+|---|---|---|
+| `REPLICA_UNREACHABLE` | 503 on `POST /api/chat/cancel` and `POST /api/chat/fix-decision`; `Retry-After` and `details.retryAfterSeconds` say when | the stream runs on another server of a multi-server deployment and this one could not get an answer from it (Redis is down, the owner is gone or did not answer in time). Nothing is known to have been stopped or decided; the request is safe to send again. A stop or decision for a stream on the server that got the request never answers it. A stop for a stream mirrored by a server of the release before multi-server stop (its snapshot names no server) answers 403 `STREAM_NOT_FOUND` instead, which clients take as gone. The message is masked like any 5xx; switch on the code |
 
 ## Lists
 

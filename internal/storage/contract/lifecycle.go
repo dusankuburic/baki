@@ -69,6 +69,9 @@ func runLifecycleScenarios(ctx context.Context, b interfaces.StorageBackend, run
 		if err := b.UpdateUserProfile(ctx, u, name, ""); err != nil {
 			t.Fatalf("UpdateUserProfile: %v", err)
 		}
+		if err := b.SaveUserAvatar(ctx, u, "image/png", []byte("contract-avatar")); err != nil {
+			t.Fatalf("SaveUserAvatar: %v", err)
+		}
 		ownedOrg, otherOrg := "contract-lc-erase-org-"+runID, "contract-lc-erase-orgp-"+runID
 		saveOrg(t, &interfaces.Organisation{ID: ownedOrg, Name: "Owned", OwnerID: u, Members: []interfaces.OrgMember{
 			{UserID: u, Role: auth.RoleAdmin}, {UserID: v, Role: auth.RoleAdmin},
@@ -170,6 +173,9 @@ func runLifecycleScenarios(ctx context.Context, b interfaces.StorageBackend, run
 
 		if _, err := b.LoadUserByID(ctx, u); !errors.Is(err, interfaces.ErrNotFound) {
 			t.Errorf("the erased user loads: %v", err)
+		}
+		if _, err := b.LoadUserAvatar(ctx, u); !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("the erased user's avatar loads: %v", err)
 		}
 		if _, err := b.LoadFlow(ctx, own); !errors.Is(err, interfaces.ErrNotFound) {
 			t.Errorf("the erased user's flow loads: %v", err)

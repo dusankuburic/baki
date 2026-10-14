@@ -1,7 +1,7 @@
 import {useTranslation} from 'react-i18next'
 import {useCallback} from 'react'
 import {useChatStore, conversationKey} from '@/stores/chatStore'
-import {chatApi} from '@/api'
+import {clearThreadConversation, replaceThreadConversation} from '@/lib/conversationSync'
 import {logger} from '@/lib/logger'
 import {useOptionalToast} from '@/components/shared/Toast'
 import type {ChatMessage, FlowDocument, SourceFileInfo} from '@/types'
@@ -60,9 +60,12 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
     const threadId = activeThreadId
     const thread = useChatStore.getState().threads.find(th => th.id === threadId)
     if (!thread) return
-    chatApi
-      .clearConversation(thread.flowId, conversationKey(thread))
-      .then(() => {
+    clearThreadConversation(threadId, thread.flowId, conversationKey(thread))
+      .then(cleared => {
+        if (!cleared) {
+          toast?.warning(t('errors.changedElsewhere'))
+          return
+        }
         const st = useChatStore.getState()
         if (!st.threads.some(th => th.id === threadId) || st.streams[threadId]) return
         clearThreadMessages(threadId)
@@ -95,9 +98,11 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
       toast?.warning(t('errors.historyNotReady'))
       return
     }
-    chatApi
-      .saveConversation(thread.flowId, conversationKey(thread), kept)
-      .then(() => setThreadMessages(threadId, kept))
+    replaceThreadConversation(threadId, thread.flowId, conversationKey(thread), kept)
+      .then(stored => {
+        if (stored) setThreadMessages(threadId, kept)
+        else toast?.warning(t('errors.changedElsewhere'))
+      })
       .catch(err => {
         logger.warn('Failed to persist compacted conversation', err)
         toast?.error(t('errors.compactFailed'))

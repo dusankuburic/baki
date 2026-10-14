@@ -12,7 +12,7 @@ import {CI_CREDENTIAL_MAX_EXPIRY_DAYS, CI_CREDENTIAL_MAX_NAME} from '@/lib/const
 import {writeClipboard} from '@/lib/clipboard'
 import {getErrorMessage} from '@/lib/getErrorMessage'
 import {logger} from '@/lib/logger'
-import {absoluteTime, relativeTimeText} from '@/lib/time'
+import {absoluteTime, relativeTimeText, localDate} from '@/lib/time'
 
 const isExpired = (iso?: string | null): boolean => !!iso && new Date(iso).getTime() <= Date.now()
 
@@ -134,7 +134,7 @@ function CredentialRow({
           {cred.expiresAt ? (
             <span title={absoluteTime(cred.expiresAt)}>
               {t(expired ? 'ciCredentials.expiredOn' : 'ciCredentials.expiresOn', {
-                date: new Date(cred.expiresAt).toLocaleDateString(),
+                date: localDate(cred.expiresAt),
               })}
             </span>
           ) : (

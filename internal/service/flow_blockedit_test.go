@@ -137,7 +137,7 @@ func TestRemoveBlock_Desktop(t *testing.T) {
 		t.Errorf("block count %d, want %d", got, before-1)
 	}
 	// Undo: the pre-edit snapshot restores the removed block.
-	snaps := svc.ListSourceSnapshots(doc)
+	snaps := snapshotsOf(t, svc, doc)
 	if len(snaps) != 1 {
 		t.Fatalf("want 1 snapshot, got %d", len(snaps))
 	}
@@ -325,7 +325,7 @@ func TestUpdateBlockProperties_Desktop(t *testing.T) {
 		t.Error("re-parse did not see the new value")
 	}
 	// Snapshot exists for undo.
-	if snaps := svc.ListSourceSnapshots(doc); len(snaps) != 1 {
+	if snaps := snapshotsOf(t, svc, doc); len(snaps) != 1 {
 		t.Errorf("snapshots = %d, want 1", len(snaps))
 	}
 }

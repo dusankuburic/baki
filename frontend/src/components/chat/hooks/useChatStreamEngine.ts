@@ -1,4 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef} from 'react'
+import i18n from '@/i18n'
+import {chatApi} from '@/api'
+import {isReplicaUnreachable} from '@/lib/chatErrors'
 import {useChatStore} from '@/stores/chatStore'
 import {useOptionalToast} from '@/components/shared/Toast'
 import {useStreamingMessage} from '@/hooks/useStreamingMessage'
@@ -10,6 +13,22 @@ import {useTurnLifecycle} from './stream-engine/lifecycle'
 import type {StreamAcc, ToastApi} from './stream-engine/types'
 
 export type {StreamMeta, SendOptions, TurnModel} from './stream-engine/types'
+
+// A stop the server could not relay to the replica running the stream: the stream keeps running there until it ends
+// by itself, so say so and offer the stop again (which offers itself again while the replica stays out of reach).
+function offerStopRetry(toast: ToastApi | null, streamId: string): void {
+  toast?.warning(i18n.t('chat:errors.stopUnreachable'), {
+    description: i18n.t('chat:errors.stopUnreachableBody'),
+    action: {
+      label: i18n.t('chat:errors.stopRetry'),
+      onClick: () => {
+        chatApi.cancelStream(streamId).catch(err => {
+          if (isReplicaUnreachable(err)) offerStopRetry(toast, streamId)
+        })
+      },
+    },
+  })
+}
 
 export function useChatStreamEngine() {
   const toast = useOptionalToast()
@@ -54,11 +73,14 @@ export function useChatStreamEngine() {
 
   const {onFixProposal, onFixDecision, respondFixProposal, onResumeState} = useFixEvents({
     streamAccRef,
+    toastRef,
     setFixProposal,
     patchFixProposal,
     replaceStreamTools,
     replaceStreamFixes,
   })
+
+  const onStopUnreachable = useCallback((streamId: string) => offerStopRetry(toastRef.current, streamId), [toastRef])
 
   const handler = useMemo(
     () => ({
@@ -73,6 +95,7 @@ export function useChatStreamEngine() {
       onResumeState,
       onAppend,
       getAccLength,
+      onStopUnreachable,
     }),
     [
       onChunk,
@@ -86,6 +109,7 @@ export function useChatStreamEngine() {
       onResumeState,
       onAppend,
       getAccLength,
+      onStopUnreachable,
     ],
   )
 

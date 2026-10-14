@@ -14,6 +14,8 @@ var ErrRLSUnavailable = errors.New("rls: scoped transaction unavailable")
 // HealthChecker covers backend liveness/lifecycle; every backend must support it regardless of role.
 type HealthChecker interface {
 	Ping(ctx context.Context) error
+	// CurrentSchemaVersion is the highest schema migration the database has applied (0 for a backend without one).
+	CurrentSchemaVersion(ctx context.Context) (int, error)
 	Close() error
 }
 
@@ -24,6 +26,7 @@ type StorageBackend interface {
 	CICredentialStore
 	OrgCustomRuleStore
 	FlowVersionStore
+	FlowSnapshotStore
 	AppSettingsStore
 	ConversationStore
 	UserStore

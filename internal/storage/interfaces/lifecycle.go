@@ -4,7 +4,9 @@ import "time"
 
 // UserDataExport is the data-subject access/portability bundle returned by ExportUserData: the user's own data only; collaborator content on shared flows is out of scope.
 type UserDataExport struct {
-	User        *User                `json:"user"`
+	User *User `json:"user"`
+	// Avatar is the user's uploaded avatar image (nil when they never uploaded one); Data is base64 in the JSON.
+	Avatar      *UserAvatar          `json:"avatar"`
 	Flows       []*FlowDocument      `json:"flows"`
 	Settings    *AppSettings         `json:"settings"`
 	AuditEvents []ExportedAuditEvent `json:"auditEvents"`
@@ -72,4 +74,5 @@ type PurgeResult struct {
 	IdempotencyKeys     int `json:"idempotencyKeys"`
 	CICredentials       int `json:"ciCredentials"`
 	CIDeliveries        int `json:"ciDeliveries"`
+	FlowSnapshots       int `json:"flowSnapshots"`
 }

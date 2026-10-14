@@ -34,6 +34,8 @@ export interface SendOptions extends StreamMeta {
   pinnedAs?: string
   restore?: readonly ChatMessage[]
   autoRetry?: boolean
+  /** Ask again under this question id: a re-sent turn is the question the server may already hold, not a second one. */
+  userMessageId?: string
 }
 
 export type TurnModel = Pick<SendOptions, 'provider' | 'model' | 'modelLabel' | 'pinThread'>

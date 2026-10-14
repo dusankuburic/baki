@@ -1,0 +1,1 @@
+{"owner":"user-42","text":"Partial answer ✅","done":false,"error":"","tokensIn":11,"tokensOut":22,"servedModel":"gpt-test","inputCostPerM":1.5,"outputCostPerM":6,"events":[{"type":"tool","data":{"name":"analyze_flow"}}]}

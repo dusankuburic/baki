@@ -15,12 +15,13 @@ import (
 // Spec is a declared cache kind: its name, the parts every key carries, why it may be tenant-less, where it lives,
 // and the statistics of every cache built on it. Declare one per kind, at package level.
 type Spec struct {
-	name     string
-	kinds    []PartKind
-	global   string
-	locality Locality
-	where    string
-	stats    stats
+	name      string
+	kinds     []PartKind
+	global    string
+	locality  Locality
+	mechanism string // how a Shared spec is shared; empty for a replica-local one
+	where     string // the ReplicaLocal reason, or the Shared mechanism and reason
+	stats     stats
 }
 
 // Locality is where a cache's entries live, which decides what another replica sees (Phase 5b).
@@ -30,7 +31,9 @@ const (
 	// LocalityReplica: each replica holds its own entries; Declare records why serving one replica's possibly stale
 	// entry is acceptable.
 	LocalityReplica Locality = iota + 1
-	// LocalityShared: the entries are shared across replicas by a named mechanism (reserved for Phase 5b).
+	// LocalityShared: the entries are shared across replicas by a named mechanism (Shared). MechanismInvalidation
+	// leaves them in each replica's memory and tells the others to drop them; any other mechanism is the owner's
+	// own storage, which New does not build.
 	LocalityShared
 )
 
@@ -53,6 +56,7 @@ type specConfig struct {
 	global    string
 	globals   int
 	locality  Locality
+	mechanism string
 	where     string
 	locations int
 }
@@ -82,10 +86,19 @@ func ReplicaLocal(reason string) SpecOption {
 	}
 }
 
-// Shared declares a cache shared across replicas by mechanism (reserved for Phase 5b; New refuses such a spec).
-func Shared(mechanism string) SpecOption {
+// MechanismInvalidation is the Shared mechanism of a cache whose entries stay in each replica's memory and are dropped
+// on every replica when one of them changes the data: the invalidation fan-out of Phase 5b (a pub/sub message per
+// change, internal/invalidation; docs/adr/0032-cache-invalidation-fanout-and-state-registry.md). The declared TTL stays
+// the backstop for a lost message, and with no fan-out installed (one replica, no Redis) the cache behaves as a
+// ReplicaLocal one, so New builds its storage either way.
+const MechanismInvalidation = "redis-inval"
+
+// Shared declares a cache shared across replicas by mechanism, with why that keeps another replica from serving a
+// stale entry. New builds the storage of a MechanismInvalidation spec only; a spec shared any other way (entries in
+// a store of their own) is built by its owner.
+func Shared(mechanism, reason string) SpecOption {
 	return func(c *specConfig) {
-		c.locality, c.where = LocalityShared, mechanism
+		c.locality, c.mechanism, c.where = LocalityShared, mechanism, reason
 		c.locations++
 	}
 }
@@ -158,13 +171,19 @@ func newSpec(name string, opts ...SpecOption) (*Spec, error) {
 	case c.globals == 0 && tenants == 0:
 		return nil, bad("keys carry no KindTenant: add the tenant part, or declare Global(reason) if the cache is deliberately tenant-less")
 	case c.locations == 0:
-		return nil, bad("no locality: declare ReplicaLocal(reason) or Shared(mechanism)")
+		return nil, bad("no locality: declare ReplicaLocal(reason) or Shared(mechanism, reason)")
 	case c.locations > 1:
 		return nil, bad("more than one locality")
+	case c.locality == LocalityShared && strings.TrimSpace(c.mechanism) == "":
+		return nil, bad("Shared needs a mechanism")
 	case strings.TrimSpace(c.where) == "":
 		return nil, bad("%s needs a reason", c.locality)
 	}
-	return &Spec{name: name, kinds: c.kinds, global: c.global, locality: c.locality, where: c.where}, nil
+	where := c.where
+	if c.locality == LocalityShared {
+		where = c.mechanism + ": " + c.where
+	}
+	return &Spec{name: name, kinds: c.kinds, global: c.global, locality: c.locality, mechanism: c.mechanism, where: where}, nil
 }
 
 // Name is the declared name.
@@ -343,19 +362,23 @@ type SpecInfo struct {
 	Kinds    []PartKind
 	Global   string // why the cache is deliberately tenant-less; empty when its keys carry the tenant
 	Locality Locality
-	Where    string // the ReplicaLocal reason or the Shared mechanism
-	Stats    Stats
+	// Mechanism is how a Shared cache is shared ("" for a replica-local one); Where is the ReplicaLocal reason, or the
+	// Shared mechanism and reason as "mechanism: reason".
+	Mechanism string
+	Where     string
+	Stats     Stats
 }
 
 // Info is s's declaration and live statistics.
 func (s *Spec) Info() SpecInfo {
 	return SpecInfo{
-		Name:     s.name,
-		Kinds:    append([]PartKind(nil), s.kinds...),
-		Global:   s.global,
-		Locality: s.locality,
-		Where:    s.where,
-		Stats:    s.stats.snapshot(),
+		Name:      s.name,
+		Kinds:     append([]PartKind(nil), s.kinds...),
+		Global:    s.global,
+		Locality:  s.locality,
+		Mechanism: s.mechanism,
+		Where:     s.where,
+		Stats:     s.stats.snapshot(),
 	}
 }
 

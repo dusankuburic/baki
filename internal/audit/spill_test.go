@@ -11,7 +11,7 @@ import (
 
 func newTestSpill(t *testing.T, maxBytes int64) *spillStore {
 	t.Helper()
-	s, err := newSpillStore(t.TempDir(), maxBytes)
+	s, err := newSpillStore(t.TempDir(), "test", maxBytes)
 	if err != nil {
 		t.Fatalf("newSpillStore: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestSpill_DepthGauge(t *testing.T) {
 // TestSpill_DrainRewriteFailureKeepsFileIntact: a failed rewrite must leave the original file fully intact and
 // Drain report nothing drained — returning events still on disk would replay them twice.
 func TestSpill_DrainRewriteFailureKeepsFileIntact(t *testing.T) {
-	srcPath := filepath.Join(t.TempDir(), spillFileName)
+	srcPath := filepath.Join(t.TempDir(), spillFileFor("test"))
 	if err := os.WriteFile(srcPath, []byte("{\"ID\":\"a\"}\n{\"ID\":\"b\"}\n"), 0o600); err != nil {
 		t.Fatalf("seed spill file: %v", err)
 	}

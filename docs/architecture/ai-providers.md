@@ -100,3 +100,61 @@ the factory with one; the codes are listed in [api-conventions.md](api-conventio
 5. The literal ratchet (`TestArch_ProviderIDLiteralsOutsideSpecs`) refuses a new `== "<id>"` branch outside the
    spec files: ask the spec (`Caps`, `Keys`, `Modes`, `Listing`) instead. Its id list is `ai.Specs()`, so a new
    spec is counted the moment it registers.
+
+## The in-flight budget ledger across replicas (addendum to ADR 0028, Phase 5b)
+
+[ADR 0028](../adr/0028-ai-budget-hook-and-provider-policy.md) made the in-flight ledger a seam (`spendLedger`) and
+pinned one rule: a ledger that cannot answer makes the check fail closed. With more than one replica the ledger has to
+be shared, and this addendum records how, and what the rule means once it can fail. The ADR itself is unchanged.
+
+- **Which ledger.** `PAD_MAX_REPLICAS > 1` and `PAD_REDIS_URL` set: `redisLedger` (`internal/service/ai_budget_redis.go`, on
+  `redisx.InflightLedger`). Anything else: `memLedger`, exactly as before. In particular **a single replica keeps the
+  in-process ledger even with `PAD_REDIS_URL` set** (rate limits, rooms and stream resume use that Redis): the Redis
+  ledger fails closed, and giving it to a deployment that has nothing to share would turn every Redis blip, such as a
+  managed cache patched for ten minutes, into `AI_BUDGET_UNAVAILABLE` for a replica that had a perfectly good
+  ledger of its own (`provideAIBudget`, `internal/di/services.go`). `hold` and `release` now return an error; `hold`
+  failing refuses the stream with `ErrAIBudgetUnavailable` before a worker is counted (`tryStartStream`), `release`
+  failing is logged and left to age out.
+- **Keys.** `baki:ai:inflight:user:<scope>` and `baki:ai:inflight:org:<orgID>`, hashes, one field per running stream
+  (a random handle, never the user or the client's stream ID), value `{"v":1,"kind":"ai.inflight","cost":x,"exp":ms}`.
+  The cost is the stream's spend so far plus the reservation of one more maximum response, rewritten every second by
+  the ledger's own refresh goroutine (it runs only while this replica holds a stream) and published in the same round
+  trip as every budget check's read, so of two checks that overlap in time one sees the other. Readers sum the other
+  streams' fields and skip their own, fields past `exp` (a 30 s lease: a replica that dies stops counting after it) and
+  fields that do not decode (never deleted: another release may have written them). The hash TTL is 11 minutes, the
+  stream cap plus slack. Both keys are declared in the redisx registry (`on-down: closed`).
+- **The bound.** A stream is admitted while the others' in-flight spend is under the budget, as in one process, so the
+  admitted reservations total less than the budget plus one reservation, whichever replicas the starts land on. A start
+  stampede can refuse all of its members, which costs a retry, not budget. Between refreshes a stream's cost can grow
+  by at most what its reservation already covers. Replica clocks are compared for the lease, so a skew of seconds
+  shifts when an orphan stops counting, not the bound.
+- **Where the write happens.** `tryStartStream` reserves the stream's slot (the per-caller cap and the stream-id check)
+  under the stream-cap lock and writes the ledger entry after releasing it, then takes the lock again to count the
+  worker, refusing the start (and giving the entry back) if the server began stopping meanwhile. A slow Redis therefore
+  delays only the start that waits for it, never the other starts or `Shutdown`; with Redis marked degraded the
+  ledger does not ask at all (`hold`, `others` and the refresh refuse or skip at once), which is the same fail-closed
+  answer without the up-to-2-second wait.
+- **What an evicted record does.** Every ledger key has a TTL, so `volatile-lru` can evict one when Redis reaches
+  `maxmemory`, and nothing errors when it does: the budget would under-count. Two things bound that. A held stream
+  rewrites its record every second, and a write that has to create a record that was written before (the field was
+  not there) is recognised (the `HSET` reply says so): the next budget check on that replica fails closed once
+  (`AI_BUDGET_UNAVAILABLE`, counted `pad_ai_ledger_errors_total{op="lost"}`) and the record is whole again for the
+  check after. Peers' records are rewritten by their owners within a second, so the under-count lasts one refresh
+  interval at most. The server's `evicted_keys` is exported as `pad_redis_evicted_keys_total` (polled every 30 s with
+  the health ping) and a WARN names it; alert on any increase, and size `maxmemory` with headroom (the SSE logs are
+  the large tenant: up to 200 frames per active user). The policy itself is the operator's (`volatile-lru` or
+  `noeviction`); the app warns at boot if INFO reports an `allkeys-*` policy.
+- **Redis down.** Only while a daily budget is configured (`AI.DailyBudget > 0`): with none, nothing is held, read or
+  released, and a Redis outage costs the chat nothing. With one, every entry point refuses with `ErrAIBudgetUnavailable`
+  (`AI_BUDGET_UNAVAILABLE`, the existing code and the existing 503 on the knowledge routes): a new turn at admission,
+  the turn's start check, every tool-loop re-check, and the audited wrapper's per-call hook. A running stream stops at
+  its next re-check or provider call with "response stopped: couldn't verify today's AI budget: the shared usage
+  counter is unreachable — try again in a moment". There is no grace period and no last-known-sum cache: the rule is
+  the one the ADR pins ("unreadable means refuse"), applied to a stream that is already running. A stream whose provider
+  call is in progress finishes that call. Recovery is automatic; nothing needs a restart.
+- **Mixed versions.** A replica of the release before keeps its in-process ledger and neither reads nor writes these
+  keys, so it does not see the others' streams. That is acceptable only at one replica, which is the first deploy's
+  `maxReplicas`; roll the fleet to this release before raising it.
+- **Metrics.** `pad_ai_ledger_errors_total{op}` (hold, refresh, read, release, lost), `pad_ai_ledger_held` (streams this
+  replica holds), `pad_ai_ledger_expired_total` (orphans found past their lease). Refusals are counted where they
+  always were, `pad_ai_budget_refusals_total{reason="unavailable"}`.

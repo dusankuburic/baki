@@ -66,7 +66,12 @@ func (h *FlowHandler) handleListSourceSnapshots(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	render.JSON(w, map[string]any{"snapshots": h.flowSvc.ListSourceSnapshots(doc)})
+	snaps, err := h.flowSvc.ListSourceSnapshots(r.Context(), doc)
+	if err != nil {
+		render.Error(w, err, http.StatusInternalServerError)
+		return
+	}
+	render.JSON(w, map[string]any{"snapshots": snaps})
 }
 
 // handleRestoreSourceSnapshot writes a snapshot's bytes back (undo for the last fix/batch/save),

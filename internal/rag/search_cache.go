@@ -36,7 +36,7 @@ const (
 var (
 	corpusCounts = cache.Declare("rag.corpus-counts",
 		cache.Keys(cache.KindTenant),
-		cache.ReplicaLocal("30 s TTL bounds another replica's upload; this replica's uploads and deletes invalidate at once"))
+		cache.Shared(cache.MechanismInvalidation, "an upload, delete or re-index on any replica drops the count on every replica once committed; the 30 s TTL bounds a lost message"))
 	// The caller is part of an embedding's key on purpose: a shared entry would let one user time whether another
 	// had asked the same question. The query is in the key only as its SHA-256.
 	queryEmbeddings = cache.Declare("rag.query-embeddings",
@@ -84,17 +84,49 @@ func (s *KnowledgeService) InvalidateCorpus(orgID string) {
 	c.counts.Set(k, corpusUnknown, 1, corpusSettleTTL)
 }
 
+// InvalidateAllCorpora drops every org's cached count and refuses the fills in flight: what a replica does when it
+// cannot tell which org a lost invalidation concerned.
+func (s *KnowledgeService) InvalidateAllCorpora() {
+	c := s.caches()
+	c.gen.BumpAll()
+	c.counts.Clear()
+}
+
 // SubscribeCorpusCache drops s's cached chunk count of an org whenever its corpus changes, and when the
 // organisation is deleted.
 func SubscribeCorpusCache(bus *eventbus.Bus, s *KnowledgeService) {
 	eventbus.Subscribe(bus, eventbus.Sync, "knowledge-corpus-count", func(_ context.Context, e events.KnowledgeDocChanged) {
 		s.InvalidateCorpus(e.OrgID)
-	})
+	}, eventbus.Replicated(func(e events.KnowledgeDocChanged) []eventbus.Invalidation {
+		return corpusInvalidation(e.OrgID)
+	}, "rag.corpus-counts"))
 	eventbus.Subscribe(bus, eventbus.Sync, "knowledge-corpus-count", func(_ context.Context, e events.OrgMemberChanged) {
 		if e.Kind == events.OrgDeleted && e.OrgID != "" {
 			s.InvalidateCorpus(e.OrgID)
 		}
+	}, eventbus.Replicated(func(e events.OrgMemberChanged) []eventbus.Invalidation {
+		if e.Kind != events.OrgDeleted {
+			return nil
+		}
+		return corpusInvalidation(e.OrgID)
+	}, "rag.corpus-counts"))
+	// A peer's corpus change: the same drop for the org it names, every org's for an empty scope (a resync).
+	bus.OnRemote("rag.corpus-counts", func(sc eventbus.Scope) {
+		if org := sc["org"]; org != "" {
+			s.InvalidateCorpus(org)
+			return
+		}
+		s.InvalidateAllCorpora()
 	})
+}
+
+// corpusInvalidation is what the other replicas drop when orgID's corpus changes; nothing without an org (the
+// local drop ignores it too, and an empty scope would mean every org's count).
+func corpusInvalidation(orgID string) []eventbus.Invalidation {
+	if orgID == "" {
+		return nil
+	}
+	return []eventbus.Invalidation{{Key: "rag.corpus-counts", Scope: eventbus.NewScope("org", orgID)}}
 }
 
 // corpusEmpty reports whether the org has no knowledge chunks at all, from
