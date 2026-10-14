@@ -59,7 +59,7 @@ jobs:
     steps:
       # fetch-depth: 0 so `git describe` can see tags — the build stamp below
       # needs them to produce a human-meaningful version.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           fetch-depth: 0
 
@@ -219,7 +219,7 @@ jobs:
     steps:
       # Full history: the rollback guard below diffs the migration sources between the serving image's commit
       # and this one.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           fetch-depth: 0
 
