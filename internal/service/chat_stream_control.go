@@ -114,6 +114,12 @@ type streamCtl struct {
 	// sharedCredential records that the turn runs on the org's shared credential (ai.UsedOrgCredential): an auth
 	// or permission failure is then the org admin's to fix, and classifyFailure says so.
 	sharedCredential atomic.Bool
+	// shareHold is what the stream holds across the replicas, its id claim and its cap slot (chat_replicas.go): written
+	// by the start before the worker runs, given back by the worker's cleanup. nil with one replica.
+	shareHold *streamHold
+	// published is set once another replica can know of the stream (its snapshot or an approval of it is in Redis): a
+	// replica that cannot keep its liveness key stops such streams (fencePublishedStreams).
+	published atomic.Bool
 	// inflightCost is THIS stream's spend-so-far plus one more maximum response, for OTHER streams' budget
 	// checks — usage rows land asynchronously, so N streams started together would all pass the same read.
 	inflightCost float64
@@ -140,6 +146,9 @@ type streamCtl struct {
 	journalSeq uint64
 	// noticesShown holds provider status lines already shown this turn; guarded by mu. See firstNotice.
 	noticesShown map[string]bool
+	// terminalSent: the stream's one done or error event has gone out (claimTerminalEvent, recordTerminal); guarded
+	// by mu.
+	terminalSent bool
 }
 
 // firstNotice reports whether a provider status line named name is new this turn, and records it: a retried
@@ -275,13 +284,17 @@ func (c *streamCtl) cancelWithCode(code, reason string) {
 
 // setFailure records the stream's terminal error message under lock with its code and shared-credential flag
 // (see chat_errors.go), so resume/begin can hand them to a client that missed the live error event. Shared by
-// every failure path so the buffer/errMsg invariant has one implementation.
+// every failure path so the buffer/errMsg invariant has one implementation. The first terminal state recorded
+// stays (terminalLocked): it is the one the stream's terminal event reports.
 func (c *streamCtl) setFailure(code, msg string, shared bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.terminalLocked() {
+		return
+	}
 	c.errMsg = msg
 	c.errCode = code
 	c.errShared = shared
-	c.mu.Unlock()
 }
 
 // setFailureUsage is setFailure for a turn the provider BILLED (an output-limit failure with Done usage in
@@ -289,23 +302,47 @@ func (c *streamCtl) setFailure(code, msg string, shared bool) {
 // failures. done stays false: there is no answer to persist.
 func (c *streamCtl) setFailureUsage(code, msg string, shared bool, tokensIn, tokensOut int, servedModel string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.terminalLocked() {
+		return
+	}
 	c.errMsg = msg
 	c.errCode = code
 	c.errShared = shared
 	c.tokensIn = tokensIn
 	c.tokensOut = tokensOut
 	c.servedModel = servedModel
-	c.mu.Unlock()
 }
 
-// markDone records a successful terminal chunk's tokens and answering model under lock.
+// markDone records a successful terminal chunk's tokens and answering model under lock, unless a terminal state
+// is recorded already (a worker that outlived Shutdown, which ended the stream in its place).
 func (c *streamCtl) markDone(tokensIn, tokensOut int, servedModel string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.terminalLocked() {
+		return
+	}
 	c.done = true
 	c.tokensIn = tokensIn
 	c.tokensOut = tokensOut
 	c.servedModel = servedModel
-	c.mu.Unlock()
+}
+
+// terminalLocked reports whether the stream recorded its terminal state; caller holds c.mu.
+func (c *streamCtl) terminalLocked() bool { return c.done || c.errMsg != "" }
+
+// claimTerminalEvent reports whether the stream's terminal event (done or error) may go out now, and marks it sent:
+// one per stream, whoever sends it. A done is refused once a failure is recorded, so the event the client acts on
+// is the state a resume reports. A worker stuck past Shutdown's budget, which ended the stream in its place, used to
+// send its own done or error when it finally returned.
+func (c *streamCtl) claimTerminalEvent(eventType string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.terminalSent || (eventType == "done" && c.errMsg != "") {
+		return false
+	}
+	c.terminalSent = true
+	return true
 }
 
 // ensureTerminal records a failure when the worker exits without done/error recorded (a terminal chunk dropped
@@ -328,15 +365,17 @@ func (c *streamCtl) ensureTerminal(ctx context.Context) (code, msg string, set b
 	return code, msg, true
 }
 
-// recordTerminal records a failure with code and msg unless the stream already recorded a terminal state, and
-// reports whether it did: Shutdown's way of ending a stream whose worker is stuck past its cancellation.
+// recordTerminal records a failure with code and msg unless the stream already recorded a terminal state or sent
+// its terminal event, and reports whether it did: Shutdown's way of ending a stream whose worker is stuck past its
+// cancellation. It claims the terminal event in the same step, so the stuck worker sends none when it returns.
 func (c *streamCtl) recordTerminal(code, msg string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.done || c.errMsg != "" {
+	if c.terminalLocked() || c.terminalSent {
 		return false
 	}
 	c.errCode, c.errMsg = code, msg
+	c.terminalSent = true
 	return true
 }
 

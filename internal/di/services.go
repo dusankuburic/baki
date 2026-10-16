@@ -210,8 +210,9 @@ func ProvideAnalyzer() *analyzer.CachedAnalyzer {
 }
 
 // ProvideAnalysisService builds the AnalysisService on the deployment's custom rules and the per-org rule
-// resolver (the resolver takes the same compiled slice, ProvideDeploymentCustomRules).
-func ProvideAnalysisService(notifier service.EventNotifier, settings service.SettingsProvider, history *analyzer.HistoryStore, cfg *config.Config, rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver, bus *eventbus.Bus, a *analyzer.CachedAnalyzer) (*service.AnalysisService, error) {
+// resolver (the resolver takes the same compiled slice, ProvideDeploymentCustomRules). With more than one replica
+// the report pair and the record claims are shared through Redis (replicatedClient).
+func ProvideAnalysisService(notifier service.EventNotifier, settings service.SettingsProvider, history *analyzer.HistoryStore, cfg *config.Config, rules service.DeploymentCustomRules, resolver *service.RuleProfileResolver, bus *eventbus.Bus, a *analyzer.CachedAnalyzer, redisClient *redis.Client) (*service.AnalysisService, error) {
 	return service.NewAnalysisService(notifier, settings, history, service.AnalysisOptions{
 		CustomRules: rules,
 		Profiles:    resolver,
@@ -222,7 +223,19 @@ func ProvideAnalysisService(notifier service.EventNotifier, settings service.Set
 		Analyzer:    a,
 		// Folder batch analysis, which runs the library rules, is refused with accounts.
 		LibraryRules: !capability.Of(cfg).Has(capability.Accounts),
+		Shared:       replicatedClient(redisClient, cfg),
 	})
+}
+
+// replicatedClient is the client of state that only needs Redis across replicas (the analysis report pair and
+// record claims): the shared one when the deployment can run more than one replica (PAD_MAX_REPLICAS > 1), else nil,
+// so a single replica keeps it in memory and a Redis maintenance window costs it nothing. Gated like the budget
+// ledger (sharedLedgerClient).
+func replicatedClient(redisClient *redis.Client, cfg *config.Config) *redis.Client {
+	if cfg == nil || cfg.Storage.MaxReplicas <= 1 {
+		return nil
+	}
+	return redisClient
 }
 
 // ProvideAIBudget builds the daily AI budget gate chat turns, the knowledge base's billed embedding runs and
@@ -246,6 +259,14 @@ func provideAIBudget(settings service.SettingsProvider, backend storageif.Storag
 // sharedLedgerClient is the client the budget ledger lives on: the shared one with several replicas, else nil (the
 // in-process ledger).
 func sharedLedgerClient(redisClient *redis.Client, cfg *config.Config) *redis.Client {
+	return multiReplicaClient(redisClient, cfg)
+}
+
+// multiReplicaClient is the Redis client of a deployment that can run more than one replica (PAD_MAX_REPLICAS > 1),
+// else nil. The mechanisms that exist only to make the replicas agree use it, and nothing else: the budget ledger, the
+// per-user caps across the replicas, the clientStreamId claim and the replica liveness key. With one replica they stay
+// in process even when PAD_REDIS_URL is set, so a Redis maintenance window costs that deployment nothing.
+func multiReplicaClient(redisClient *redis.Client, cfg *config.Config) *redis.Client {
 	if cfg == nil || cfg.Storage.MaxReplicas <= 1 {
 		return nil
 	}
@@ -558,6 +579,7 @@ var ServiceModule = fx.Options(
 			azure *service.AzureModelService,
 			budget *service.AIBudget,
 			cfg *config.Config,
+			health *redisx.Health,
 			lc fx.Lifecycle,
 		) *service.ChatService {
 			chat := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode, service.ChatOptions{
@@ -575,6 +597,10 @@ var ServiceModule = fx.Options(
 				Instance: cfg.Runtime.InstanceID,
 				// The commands are signed with a key derived from the deployment's shared secret.
 				BusKey: commandBusKey(cfg, redisClient != nil),
+				// Several replicas: the stream cap and the clientStreamId check hold across them, and the replica keeps a
+				// liveness key (a stop for a dead replica's stream is then an ended stream, not 503).
+				MultiReplica: multiReplicaClient(redisClient, cfg) != nil,
+				Health:       health,
 			})
 			// The replica listens for stream commands from start; Shutdown (the first stop hook) ends the subscriptions after
 			// the streams (ADR 0033). A no-op without Redis.

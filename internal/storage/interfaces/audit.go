@@ -43,4 +43,7 @@ type AuditFilter struct {
 	Since  *time.Time
 	// IncludeSubject also matches events whose subject is UserID (sign-ins carry no actor); the GDPR export must not set it — a user's export must never carry a failed sign-in's IP.
 	IncludeSubject bool
+	// After is a keyset cursor (the CreatedAt and ID of the last event of the page before): only the events after it
+	// in the log's order (created_at desc, id asc) match, and Offset is ignored.
+	After *PageCursor
 }

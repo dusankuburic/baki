@@ -24,15 +24,10 @@ var duplicateActionMinRepeats = OptionSpec{Key: "minRepeats", Default: 3, Min: 2
 func (r *DuplicateActionRule) Check(block *models.Block, ctx *RuleContext) []models.Finding {
 	minRepeats := ruleOption(ctx.Settings, r.ID(), duplicateActionMinRepeats)
 
-	siblings := GetSiblings(ctx, block)
-	if len(siblings) < minRepeats {
-		return nil
-	}
-
 	// BlockIndex already holds this block's position within its sibling group
 	// (computed once in collectBlocks), so use it instead of re-scanning.
-	myIdx, ok := ctx.BlockIndex[block.ID]
-	if !ok {
+	siblings, myIdx, ok := siblingPosition(ctx, block)
+	if !ok || len(siblings) < minRepeats {
 		return nil
 	}
 

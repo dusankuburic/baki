@@ -92,3 +92,61 @@ func TestDuration_MarshalJSONAndString(t *testing.T) {
 		t.Errorf("String() = %q", got)
 	}
 }
+
+// TestOptionalDuration_UnsetDiffersFromZero: an OptionalDuration keeps "not set" apart from an explicit "0s", which
+// a Duration cannot. "" and null leave it unset, as they leave a Duration's default; it marshals back as null when
+// unset and as the string form when set, so a configuration written out and read back keeps the difference; a bad
+// value names the field.
+func TestOptionalDuration_UnsetDiffersFromZero(t *testing.T) {
+	for _, tc := range []struct {
+		in    string
+		want  time.Duration
+		isSet bool
+	}{
+		{`{}`, 0, false},
+		{`{"D":null}`, 0, false},
+		{`{"D":""}`, 0, false},
+		{`{"D":"0s"}`, 0, true},
+		{`{"D":0}`, 0, true},
+		{`{"D":"90s"}`, 90 * time.Second, true},
+	} {
+		var v struct{ D OptionalDuration }
+		if err := json.Unmarshal([]byte(tc.in), &v); err != nil {
+			t.Errorf("%s: %v", tc.in, err)
+			continue
+		}
+		if got, set := v.D.Get(); got != tc.want || set != tc.isSet {
+			t.Errorf("%s = (%v, %v), want (%v, %v)", tc.in, got, set, tc.want, tc.isSet)
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back struct{ D OptionalDuration }
+		if err := json.Unmarshal(b, &back); err != nil || back.D != v.D {
+			t.Errorf("%s: round trip through %s = %+v, %v", tc.in, b, back.D, err)
+		}
+	}
+	if b, _ := json.Marshal(struct{ D OptionalDuration }{}); string(b) != `{"D":null}` {
+		t.Errorf("unset marshals as %s, want null", b)
+	}
+	if b, _ := json.Marshal(struct{ D OptionalDuration }{ExplicitDuration(0)}); string(b) != `{"D":"0s"}` {
+		t.Errorf(`an explicit 0 marshals as %s, want "0s"`, b)
+	}
+	var v struct {
+		Storage struct{ DBIdleTxTimeout OptionalDuration }
+	}
+	if err := json.Unmarshal([]byte(`{"Storage":{"DBIdleTxTimeout":"soon"}}`), &v); err == nil || !strings.Contains(err.Error(), "Storage.DBIdleTxTimeout") {
+		t.Errorf("a bad value: %v; want an error naming Storage.DBIdleTxTimeout", err)
+	}
+	var o OptionalDuration
+	if err := o.UnmarshalText(nil); err != nil || o.IsSet() {
+		t.Errorf("empty text: %+v, %v; want unset", o, err)
+	}
+	if err := o.UnmarshalText([]byte("2m")); err != nil {
+		t.Fatal(err)
+	}
+	if got, set := o.Get(); got != 2*time.Minute || !set {
+		t.Errorf("2m = (%v, %v)", got, set)
+	}
+}

@@ -20,7 +20,7 @@ func TestProvideScanner_SweepsUnderTheLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := &leaseLocker{held: true} // another replica sweeps: the attempt asks, then skips
-	s := provideScanner(serverStoreConfig(config.ModeCloud, true), testutil.NewFakeBackend(), l, analysis, nil, nil, nil, nil, nil)
+	s := provideScanner(serverStoreConfig(config.ModeCloud, true), testutil.NewFakeBackend(), l, analysis, nil, nil, nil, nil, nil, nil)
 	defer s.Stop()
 	s.ScanOnce(context.Background())
 	onlyLeases(t, l, jobKey(t, "scanner"))

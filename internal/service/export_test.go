@@ -174,3 +174,30 @@ func TestExportService_CompareCurrentWith_ValidFile(t *testing.T) {
 		t.Error("expected non-nil diff")
 	}
 }
+
+// TestExportService_Export_PathValidationBoundsTheWrite: the desktop write
+// path must be absolute with a report extension — the native save dialog
+// always returns that shape, and anything else is a caller (or a drive-by
+// cross-origin POST) trying to plant a file somewhere interesting.
+func TestExportService_Export_PathValidationBoundsTheWrite(t *testing.T) {
+	svc := NewExportService(NilNotifier{}, nil, nil)
+	doc := &models.FlowDocument{ID: "test", Name: "T"}
+	report := &models.AnalysisReport{FlowID: "test"}
+
+	dir := t.TempDir()
+	for name, path := range map[string]string{
+		"relative path":            "report.md",
+		"wrong extension":          filepath.Join(dir, "report.bat"),
+		"no extension":             filepath.Join(dir, "report"),
+		"dotfile in the home root": filepath.Join(dir, ".bashrc"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := svc.Export("markdown", doc, report, path); !errors.Is(err, ErrInvalidInput) {
+				t.Errorf("Export path %q: err = %v, want ErrInvalidInput", path, err)
+			}
+		})
+	}
+	if _, _, err := svc.Export("markdown", doc, report, filepath.Join(dir, "ok.MD")); err != nil {
+		t.Errorf("uppercase extension must be accepted: %v", err)
+	}
+}

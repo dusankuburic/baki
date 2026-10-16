@@ -11,7 +11,8 @@ import (
 )
 
 // Every membership change and the deletion is announced once it is stored, with the organisation, the member
-// and the role (the new one; the one held, for a removal); a refused change announces nothing.
+// and the role (the new one; the one held, for a removal); a refused change announces nothing. The owner's
+// membership, which Create stores with the organisation, is announced like any other added member.
 func TestOrgService_AnnouncesMembershipChanges(t *testing.T) {
 	bus := eventbus.New(nil, 0)
 	rec := eventbus.NewRecorder(bus)
@@ -38,6 +39,7 @@ func TestOrgService_AnnouncesMembershipChanges(t *testing.T) {
 	must(svc.Delete(ctx, org.ID))
 
 	want := []events.OrgMemberChanged{
+		{OrgID: org.ID, UserID: "owner", Role: string(auth.RoleAdmin), Kind: events.OrgMemberAdded},
 		{OrgID: org.ID, UserID: "u1", Role: string(auth.RoleAdmin), Kind: events.OrgMemberAdded},
 		{OrgID: org.ID, UserID: "u1", Role: string(auth.RoleMember), Kind: events.OrgMemberRoleChanged},
 		{OrgID: org.ID, UserID: "u1", Role: string(auth.RoleMember), Kind: events.OrgMemberRemoved},
@@ -65,6 +67,7 @@ func TestOrgService_AcceptInviteAnnouncesTheMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rec.Reset() // the owner's announcement (TestOrgService_AnnouncesMembershipChanges)
 	if _, err := svc.AcceptInvite(ctx, token, "u-new", "new@example.com", true); err != nil {
 		t.Fatal(err)
 	}

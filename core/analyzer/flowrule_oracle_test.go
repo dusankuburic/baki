@@ -507,20 +507,6 @@ func randomGraphDocs(n int, seed int64) []*models.FlowDocument {
 	return docs
 }
 
-// hasDuplicateSubflowIDs: such a document (never parser output) makes the
-// duplicate-action block rule panic (its subflow-keyed sibling group is
-// overwritten); tests that run the whole rule set skip it to keep the log quiet.
-func hasDuplicateSubflowIDs(doc *models.FlowDocument) bool {
-	seen := map[string]bool{}
-	for i := range doc.Subflows {
-		if seen[doc.Subflows[i].ID] {
-			return true
-		}
-		seen[doc.Subflows[i].ID] = true
-	}
-	return false
-}
-
 func oracleSettings() []*models.AppSettings {
 	low := models.DefaultSettings()
 	rc := low.Analysis.Rules["large-subflow"]
@@ -570,9 +556,6 @@ func TestFlowRules_MatchLegacyPerBlockChecks(t *testing.T) {
 // the final progress event).
 func TestFlowRules_EngineMatchesLegacyRuleSet(t *testing.T) {
 	for _, d := range oracleDocs(t, 150) {
-		if hasDuplicateSubflowIDs(d.doc) {
-			continue
-		}
 		for si, settings := range oracleSettings() {
 			type progress struct{ events, cur, total int }
 			run := func(rules []Rule) (*models.AnalysisReport, progress) {

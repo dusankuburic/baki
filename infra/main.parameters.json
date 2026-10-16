@@ -25,7 +25,7 @@
 
     "authSecret":         { "value": "<openssl rand -hex 32>" },
     "encryptionKey":      { "value": "<openssl rand -hex 32, DIFFERENT from authSecret; set it before users store provider keys — changing it later makes them unreadable>" },
-    "databaseUrl":        { "value": "postgres://baki_app:<app-password>@<server>.postgres.database.azure.com:5432/baki?sslmode=require" },
+    "databaseUrl":        { "value": "postgres://baki_app:<app-password>@<server>.postgres.database.azure.com:5432/baki?sslmode=verify-full" },
     "metricsToken":       { "value": "<openssl rand -hex 32; without it GET /metrics is public, because PAD_BEHIND_PROXY makes the private-IP allowlist vacuous>" },
 
     "_email_comment":     "Without SMTP the app falls back to a log-only mailer: password-reset and email-verification links are written to Log Analytics instead of being delivered.",
@@ -42,14 +42,18 @@
     "ssoClientSecret":    { "value": "" },
     "ssoRedirectUrl":     { "value": "" },
 
+    "_retention_comment": "auditRetentionDays empty uses the app's cloud default of 400 days; \"0\" keeps everything forever.",
     "auditRetentionDays": { "value": "365" },
     "dbMaxOpenConns":     { "value": "" },
     "scanInterval":       { "value": "" },
 
-    "_ai_knobs_comment":  "Azure Foundry / knowledge-base operator knobs (see .env.example); the CI deploy (.github/workflows/deploy.yml) passes them from repository variables, not secrets — none is sensitive. aiAllowPrivateEgress needs VNet integration, which this template does not provision.",
+    "_ai_knobs_comment":  "Azure Foundry / knowledge-base operator knobs (see .env.example); the CI deploy (.github/workflows/deploy.yml) passes them from repository variables, not secrets — none is sensitive. aiAllowPrivateEgress needs the environment in a virtual network (infrastructureSubnetId).",
     "azureFoundryAllowedHosts": { "value": "" },
     "aiAllowPrivateEgress":     { "value": false },
     "embeddingProvider":        { "value": "" },
-    "embeddingDim":             { "value": "" }
+    "embeddingDim":             { "value": "" },
+
+    "_network_comment":   "Private networking (docs/architecture/operations.md): infra/postgres.bicep's acaInfrastructureSubnetId output, from a deployment with privateAccess true. Empty keeps the environment off any network; an existing environment cannot join one (deploy a new one under a new appName).",
+    "infrastructureSubnetId":   { "value": "" }
   }
 }

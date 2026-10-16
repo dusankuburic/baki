@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/auth"
@@ -22,6 +24,9 @@ type SecurityConfig struct {
 	Backend        storageif.StorageBackend
 	OrgSvc         *collaboration.OrgService
 	TrustedProxies []string
+	// AllowedOrigins mirrors server.allowed_origins for rejectForeignOrigin;
+	// the CORS middleware keeps its own copy for response headers.
+	AllowedOrigins []string
 	// RequestTx opens each authenticated request's row-level-security transaction and Idempotency keeps the
 	// Idempotency-Key responses inside it; both are nil without row-level security (desktop, auth off).
 	RequestTx   reqtx.Opener
@@ -43,6 +48,40 @@ type FeatureFlags struct {
 
 func (c *SecurityConfig) CallerID(r *http.Request) string {
 	return c.CallerIDFromContext(r.Context())
+}
+
+// rejectForeignOrigin guards local-mode MUTATING requests against drive-by
+// cross-origin "simple" POSTs. Local mode runs unauthenticated behind the
+// loopback bind by design; CORS already stops a foreign page from READING the
+// response (no Access-Control-Allow-Origin is reflected), but a text/plain
+// cross-origin POST executes without a preflight — a malicious page could make
+// the app parse an arbitrary local file into the session, overwrite the loaded
+// flow's source, or write an export to any path. When the browser reports an
+// Origin this deployment does not serve — not a localhost/Tauri webview
+// origin, not in allowed_origins, not this server's own origin — refuse the
+// request; non-browser callers (curl, tests) send no Origin and pass.
+func (c *SecurityConfig) rejectForeignOrigin(w http.ResponseWriter, r *http.Request) bool {
+	if c.JWTEnabled {
+		return false // authenticated routes carry their own CSRF posture
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" || isLocalhostOrigin(origin) {
+		return false
+	}
+	// Same-origin requests (the SPA this server itself served, whatever
+	// hostname it was reached under): the Origin's host:port equals the Host
+	// the browser connected to. A cross-site fetch cannot forge that equality —
+	// its Origin names the attacker's site while Host names this server.
+	if o, err := url.Parse(origin); err == nil && o.Host != "" && o.Host == r.Host {
+		return false
+	}
+	for _, o := range c.AllowedOrigins {
+		if strings.EqualFold(o, origin) {
+			return false
+		}
+	}
+	render.Error(w, fmt.Errorf("origin not allowed"), http.StatusForbidden)
+	return true
 }
 
 // CallerIDFromContext is CallerID for a typed endpoint, which has the request's context rather than the request.

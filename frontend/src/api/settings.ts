@@ -8,8 +8,12 @@ export const settingsApi = {
 
   updateSettings: (settings: AppSettings): Promise<void> => request('/api/system/settings', {body: settings}),
 
-  getOrgSettings: async (orgId: string): Promise<AppSettings> =>
-    requestValidated(`/api/system/settings/org/${orgId}`, await getAppSettingsSchema(), {method: 'GET'}),
+  // noDedup reads past the client's GET cache, for a read-modify-write of the document.
+  getOrgSettings: async (orgId: string, opts?: {noDedup?: boolean}): Promise<AppSettings> =>
+    requestValidated(`/api/system/settings/org/${orgId}`, await getAppSettingsSchema(), {
+      method: 'GET',
+      ...(opts?.noDedup ? {noDedup: true} : {}),
+    }),
 
   updateOrgSettings: (orgId: string, settings: AppSettings): Promise<void> =>
     request(`/api/system/settings/org/${orgId}`, {body: settings}),

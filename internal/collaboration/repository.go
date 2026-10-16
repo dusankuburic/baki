@@ -136,13 +136,22 @@ func (s *memOrgStore) MutateOrg(_ context.Context, id string, fn func(*interface
 func (s *memOrgStore) SaveOrgInvite(_ context.Context, invite *interfaces.OrgInvite) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var stale []string
 	for _, existing := range s.invites {
 		if existing.ID == invite.ID {
 			continue
 		}
 		if existing.OrgID == invite.OrgID && existing.Email == invite.Email && existing.AcceptedAt == nil {
+			// An expired one gives way, as on the database.
+			if invite.AcceptedAt == nil && existing.ExpiresAt.Before(time.Now()) {
+				stale = append(stale, existing.ID)
+				continue
+			}
 			return interfaces.ErrOrgInviteExists
 		}
+	}
+	for _, id := range stale {
+		delete(s.invites, id)
 	}
 	stored := *invite
 	s.invites[invite.ID] = &stored

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -119,6 +122,31 @@ func TestFlowFilesAtRev_ReconstructsTheHistoricalSet(t *testing.T) {
 	if _, ok := got["Added.txt"]; ok {
 		t.Errorf("a file added since the revision was included in the historical set — its "+
 			"findings would be treated as pre-existing: %v", keysOf(got))
+	}
+}
+
+// TestFlowFilesAtRev_ThroughASymlinkedRoot: git reports its top level as the physical path, so a target named
+// through a link to the work tree (a linked CI workspace, macOS's /var -> /private/var) must still map onto
+// repository paths; it made every file look absent at the revision, so every finding counted as new.
+func TestFlowFilesAtRev_ThroughASymlinkedRoot(t *testing.T) {
+	root := newGitRepo(t, map[string]string{"flows/Main.txt": miniFlow})
+	link := filepath.Join(t.TempDir(), "checkout")
+	if err := os.Symlink(root, link); err != nil {
+		const errPrivilegeNotHeld = syscall.Errno(1314) // ERROR_PRIVILEGE_NOT_HELD
+		if runtime.GOOS == "windows" && errors.Is(err, errPrivilegeNotHeld) {
+			t.Skipf("this process may not create symlinks (enable Developer Mode or run elevated): %v", err)
+		}
+		t.Fatal(err)
+	}
+
+	for _, target := range []string{filepath.Join(link, "flows"), filepath.Join(link, "flows", "Main.txt")} {
+		got, err := flowFilesAtRev(target, "HEAD")
+		if err != nil {
+			t.Fatalf("flowFilesAtRev(%s): %v", target, err)
+		}
+		if _, ok := got["Main.txt"]; !ok {
+			t.Errorf("flowFilesAtRev(%s) through a symlinked root found no committed flow: %v", target, keysOf(got))
+		}
 	}
 }
 

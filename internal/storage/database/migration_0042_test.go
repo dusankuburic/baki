@@ -74,6 +74,7 @@ func TestMigration0042_ColumnsAndDefaults(t *testing.T) {
 	}
 
 	const docID = "m42-default-doc"
+	seedOrgRow(t, b.db, "m42-org")
 	t.Cleanup(func() { _, _ = b.db.ExecContext(ctx, `DELETE FROM knowledge_documents WHERE id = $1`, docID) })
 	if _, err := b.db.ExecContext(ctx, `INSERT INTO knowledge_documents (id, org_id, filename) VALUES ($1, 'm42-org', 'd.md')`, docID); err != nil {
 		t.Fatalf("insert without chunker_version: %v", err)

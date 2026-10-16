@@ -34,7 +34,7 @@ func NewGitHubModelsProvider(token string) *GitHubModelsProvider {
 	return &GitHubModelsProvider{
 		openaiBase: openaiBase{
 			apiKey:                token,
-			client:                sharedHTTPClient,
+			client:                fixedHostClient(),
 			baseURL:               &githubModelsBaseURL,
 			providerLabel:         "github models",
 			embeddingModel:        "text-embedding-3-small",

@@ -31,7 +31,8 @@ type OrgChannel struct {
 // OrgChannelStore covers per-org notification channel management.
 type OrgChannelStore interface {
 	// SaveOrgChannel upserts a channel (ID-keyed, scoped to its org); an update keeps the row's created_at. Kind and
-	// URL validation and an edit's keep-on-omit are service.ChannelService's.
+	// URL validation and an edit's keep-on-omit are service.ChannelService's. An organisation that does not exist is
+	// ErrOrgNotFound.
 	SaveOrgChannel(ctx context.Context, ch *OrgChannel) error
 	DeleteOrgChannel(ctx context.Context, orgID, id string) error
 	// ListOrgChannels returns the org's channels; enabledOnly for dispatch. A row whose sealed values cannot be opened

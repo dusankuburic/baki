@@ -26,6 +26,7 @@ func (s failingRuleStore) DeleteOrgCustomRule(context.Context, string, string) e
 // next analysis re-resolves); a failed one leaves it, and other orgs' profiles are untouched.
 func TestOrgRuleService_InvalidatesProfileOnChange(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("org-a") // a rule needs its organisation
 	resolver := NewRuleProfileResolver(b, deploymentSettings(nil), nil)
 	bus := eventbus.New(nil, 0)
 	SubscribeRuleProfiles(bus, resolver)
@@ -49,6 +50,28 @@ func TestOrgRuleService_InvalidatesProfileOnChange(t *testing.T) {
 	}
 	if got, err := svc.List(ctx, "org-a", false); err != nil || len(got) != 1 {
 		t.Fatalf("List = %v, %v", got, err)
+	}
+
+	// Pausing and resuming (a toggle of the stored flag) change the profile too; a toggle of no such rule does not.
+	for _, enabled := range []bool{false, true} {
+		warm()
+		if _, err := svc.SaveRule(ctx, "org-a", OrgRuleSave{RowID: "r1", Enabled: &enabled}); err != nil {
+			t.Fatalf("toggle to enabled=%v: %v", enabled, err)
+		}
+		if resolver.cachedFor("org-a") != nil {
+			t.Errorf("a toggle to enabled=%v left org-a's profile cached", enabled)
+		}
+		if resolver.cachedFor("org-b") == nil {
+			t.Errorf("a toggle to enabled=%v dropped another org's profile", enabled)
+		}
+	}
+	warm()
+	off := false
+	if _, err := svc.SaveRule(ctx, "org-a", OrgRuleSave{RowID: "no-such-row", Enabled: &off}); err == nil {
+		t.Fatal("a toggle of no such rule succeeded")
+	}
+	if resolver.cachedFor("org-a") == nil {
+		t.Error("a failed toggle invalidated the profile")
 	}
 
 	warm()

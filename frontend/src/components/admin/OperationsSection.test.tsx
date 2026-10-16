@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import {OperationsSection} from './OperationsSection'
 import {ToastProvider} from '@/components/shared/Toast'
+import {ApiError} from '@/api/client'
 
 const systemHealth = vi.fn()
 const triggerScannerScan = vi.fn()
@@ -47,6 +48,27 @@ describe('OperationsSection (R2-6)', () => {
     await screen.findByText('Database')
     fireEvent.click(screen.getByRole('button', {name: /run governance scan/i}))
     await waitFor(() => expect(triggerScannerScan).toHaveBeenCalledTimes(1))
+  })
+
+  it('says a scan is already running when the server reports one (409 SCAN_ALREADY_RUNNING)', async () => {
+    triggerScannerScan.mockRejectedValue(
+      new ApiError('a governance scan is already running', 409, 'SCAN_ALREADY_RUNNING'),
+    )
+    renderSection()
+    await screen.findByText('Database')
+    fireEvent.click(screen.getByRole('button', {name: /run governance scan/i}))
+    expect(await screen.findByText(/already running/i)).toBeInTheDocument()
+    expect(screen.queryByText('Trigger failed')).not.toBeInTheDocument()
+  })
+
+  it('says the scan could not start when the server cannot start one (503 SCAN_UNAVAILABLE)', async () => {
+    triggerScannerScan.mockRejectedValue(new ApiError('internal server error', 503, 'SCAN_UNAVAILABLE'))
+    renderSection()
+    await screen.findByText('Database')
+    fireEvent.click(screen.getByRole('button', {name: /run governance scan/i}))
+    expect(await screen.findByText('Trigger failed')).toBeInTheDocument()
+    expect(screen.getByText(/could not start/i)).toBeInTheDocument()
+    expect(screen.queryByText(/internal server error/i)).not.toBeInTheDocument()
   })
 
   it('refresh re-fetches health', async () => {

@@ -66,6 +66,9 @@ func (b *PostgresStorageBackend) SaveOrgChannel(ctx context.Context, ch *storage
 	if errors.Is(err, sql.ErrNoRows) {
 		return storageif.ErrNotFound
 	}
+	if isUnknownOrg(err, "org_channels_org_id_fkey") {
+		return storageif.ErrOrgNotFound
+	}
 	return err
 }
 

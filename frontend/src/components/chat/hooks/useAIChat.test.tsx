@@ -1426,6 +1426,82 @@ describe('useChatStreamEngine SERVER_RESTARTING', () => {
     expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
     expect(useChatStore.getState().getMessages(threadId)[1]).toMatchObject({finishReason: 'error'})
   })
+
+  it('resumes the stream a retried create finds already started (409 STREAM_ID_IN_USE)', async () => {
+    vi.mocked(chatApi.streamChatMessage)
+      .mockRejectedValueOnce(new ApiError('Service Unavailable', 503, 'SERVER_RESTARTING'))
+      .mockRejectedValueOnce(new ApiError('clientStreamId already in use', 409, 'STREAM_ID_IN_USE'))
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'the answer',
+      done: true,
+      error: '',
+      tokensOut: 3,
+      tokensIn: 2,
+    })
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+
+    vi.useFakeTimers()
+    await act(async () => {
+      result.current.handleSend('hello', [])
+    })
+    await advance(3_100)
+    vi.useRealTimers()
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
+    const sid = callAt(1).clientStreamId!
+    expect(sid).toBe(callAt(0).clientStreamId)
+
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    expect(chatApi.resumeStream).toHaveBeenCalledWith(sid, 0)
+    expect(useChatStore.getState().getMessages(threadId)[1]).toMatchObject({
+      role: 'assistant',
+      content: 'the answer',
+      finishReason: 'stop',
+    })
+    expect(useChatStore.getState().streams[threadId]).toBeUndefined()
+  })
+
+  it('follows a stream it resumed after STREAM_ID_IN_USE while it still runs', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockRejectedValue(
+      new ApiError('clientStreamId already in use', 409, 'STREAM_ID_IN_USE'),
+    )
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({text: 'part', done: false, error: '', tokensOut: 0, tokensIn: 0})
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+    await act(async () => {
+      result.current.handleSend('hello', [])
+    })
+    await waitFor(() => expect(chatApi.resumeStream).toHaveBeenCalledTimes(1))
+    const sid = callAt(0).clientStreamId!
+    await waitFor(() => expect(useChatStore.getState().streams[threadId]?.text).toBe('part'))
+
+    act(() => {
+      capturedCb!(chunkEvent(sid, ' and the rest'))
+    })
+    act(() => {
+      capturedCb!(doneEvent(sid))
+    })
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    expect(useChatStore.getState().getMessages(threadId)[1]).toMatchObject({finishReason: 'stop'})
+    expect(useChatStore.getState().getMessages(threadId)[1]!.content).toContain('part')
+  })
+
+  it('shows the error bubble when the stream a STREAM_ID_IN_USE named cannot be resumed', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockRejectedValue(
+      new ApiError('clientStreamId already in use', 409, 'STREAM_ID_IN_USE'),
+    )
+    vi.mocked(chatApi.resumeStream).mockRejectedValue(new ApiError('stream not found', 403, 'STREAM_NOT_FOUND'))
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+    await act(async () => {
+      result.current.handleSend('hello', [])
+    })
+
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
+    expect(useChatStore.getState().getMessages(threadId)[1]).toMatchObject({role: 'assistant', finishReason: 'error'})
+    expect(useChatStore.getState().getMessages(threadId)[1]!.content).toMatch(/no response stream was created/i)
+    expect(useChatStore.getState().streams[threadId]).toBeUndefined()
+  })
 })
 
 describe('useAIChat adopts the version a finished turn names (ADR 0031, addendum)', () => {

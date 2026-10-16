@@ -22,6 +22,7 @@ func TestServiceModule_RuleProfilesFollowOrgRuleChanges(t *testing.T) {
 	cfg.Mode = config.ModeCloud
 	cfg.Auth.Enabled = true
 	backend := testutil.NewFakeBackend()
+	backend.SeedOrgs("org-1") // a rule needs its organisation
 	var (
 		rules    *service.OrgRuleService
 		resolver *service.RuleProfileResolver

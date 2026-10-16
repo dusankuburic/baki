@@ -3,6 +3,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -69,23 +70,49 @@ func cloneInvite(inv *interfaces.OrgInvite) *interfaces.OrgInvite {
 	return &cp
 }
 
-// SaveOrgInvite inserts the invite, stamping a zero CreatedAt (on invite): a taken id or a second pending invite
-// for the organisation and email is ErrOrgInviteExists (the primary key and the partial unique index), and the
-// organisation must exist (the foreign key).
+// SeedOrgs stores an organisation without members for each id the fake does not hold yet, and leaves the others as
+// they are: a test's policies, channels, custom rules and knowledge base need their organisation, as the foreign keys
+// of migration 0048 make Postgres ask.
+func (m *FakeBackend) SeedOrgs(ids ...string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.Orgs == nil {
+		m.Orgs = make(map[string]*interfaces.Organisation)
+	}
+	now := time.Now().UTC()
+	for _, id := range ids {
+		if _, ok := m.Orgs[id]; !ok {
+			m.Orgs[id] = &interfaces.Organisation{ID: id, Name: id, CreatedAt: now, UpdatedAt: now}
+		}
+	}
+}
+
+// SaveOrgInvite inserts the invite, stamping a zero CreatedAt (on invite): a taken id or token hash, or a second
+// pending invite for the organisation and email, is ErrOrgInviteExists (the primary key and the unique indexes), and
+// the organisation must exist (the foreign key). A pending invite for the organisation and email that has expired
+// gives way: it is deleted, but only when the new one is stored, as the Postgres transaction rolls the delete back.
 func (m *FakeBackend) SaveOrgInvite(_ context.Context, invite *interfaces.OrgInvite) error {
 	if invite.CreatedAt.IsZero() {
 		invite.CreatedAt = time.Now().UTC()
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.OrgInvites[invite.ID]; ok {
-		return interfaces.ErrOrgInviteExists
-	}
+	now := time.Now()
+	var stale []string
 	if invite.AcceptedAt == nil {
-		for _, inv := range m.OrgInvites {
-			if inv.OrgID == invite.OrgID && inv.Email == invite.Email && inv.AcceptedAt == nil {
-				return interfaces.ErrOrgInviteExists
+		for id, inv := range m.OrgInvites {
+			if inv.OrgID == invite.OrgID && inv.Email == invite.Email && inv.AcceptedAt == nil && inv.ExpiresAt.Before(now) {
+				stale = append(stale, id)
 			}
+		}
+	}
+	for id, inv := range m.OrgInvites {
+		if slices.Contains(stale, id) {
+			continue
+		}
+		if id == invite.ID || inv.TokenHash == invite.TokenHash ||
+			(invite.AcceptedAt == nil && inv.OrgID == invite.OrgID && inv.Email == invite.Email && inv.AcceptedAt == nil) {
+			return interfaces.ErrOrgInviteExists
 		}
 	}
 	if _, ok := m.Orgs[invite.OrgID]; !ok {
@@ -93,6 +120,9 @@ func (m *FakeBackend) SaveOrgInvite(_ context.Context, invite *interfaces.OrgInv
 	}
 	if m.OrgInvites == nil {
 		m.OrgInvites = make(map[string]*interfaces.OrgInvite)
+	}
+	for _, id := range stale {
+		delete(m.OrgInvites, id)
 	}
 	m.OrgInvites[invite.ID] = cloneInvite(invite)
 	return nil

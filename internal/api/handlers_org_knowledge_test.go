@@ -104,6 +104,7 @@ func newKnowledgeGuardRouter(t *testing.T, callerVec []float32) (http.Handler, *
 		t.Fatalf("create org: %v", err)
 	}
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs(org.ID) // the knowledge base needs its organisation
 	_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", []storageif.KnowledgeChunk{
 		{ID: "c1", DocID: "doc-1", Content: "retry every call", Embedding: []float32{1, 0}},
@@ -183,6 +184,7 @@ func TestKnowledgeUpload_AzureWithoutEmbeddingDeployment400(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs(org.ID) // the knowledge base needs its organisation
 	knowledge := rag.NewKnowledgeService(store, factory, nil, rag.WithEmbeddingProvider("azure-foundry"))
 	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
 	r := mountedAs(h, "u-admin")
@@ -211,6 +213,7 @@ func TestKnowledgeUpload_AzureRegistryFailureIs503Masked(t *testing.T) {
 	}
 	for _, cause := range []error{errors.New(driver), rag.ErrEmbeddingSetupUnavailable} {
 		store := &testutil.FakeBackend{}
+		store.SeedOrgs(org.ID) // the knowledge base needs its organisation
 		knowledge := rag.NewKnowledgeService(store, ai.NewProviderFactory(nil, nil, nil, nil), nil,
 			rag.WithEmbeddingProvider("azure-foundry"), rag.WithAzureEmbedder(failingAzureEmbedderSource{err: cause}))
 		h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
@@ -266,6 +269,7 @@ func newKnowledgeErrorRouter(t *testing.T, embedErr error) (http.Handler, string
 		t.Fatalf("create org: %v", err)
 	}
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs(org.ID) // the knowledge base needs its organisation
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(failingEmbedder{err: embedErr}))
 	h := NewOrgHandler(orgSvc, store, knowledge, &SecurityConfig{LocalUserID: "u-admin"}, mail.NewService(config.EmailConfig{}, capability.NewSet(capability.Desktop)), service.NewOrgRuleService(store, store, nil), nil, service.NewAuthzService(store, orgSvc), service.NewChannelService(store), service.NewUserDirectory(store), testAuditRecorder(store), nil)
 	return mountedAs(h, "u-admin"), org.ID
@@ -431,6 +435,7 @@ func TestKnowledgeReindex_TruncatedSurfacesInBodyAndAudit(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	store := &auditRecordingBackend{FakeBackend: &testutil.FakeBackend{}}
+	store.SeedOrgs(org.ID) // the knowledge base needs its organisation
 	const docs, ceiling = 3, 10000
 	for d := range docs {
 		_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: fmt.Sprintf("doc-%d", d), OrgID: org.ID, Filename: fmt.Sprintf("doc-%d.md", d)})

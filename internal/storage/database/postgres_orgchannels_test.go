@@ -21,6 +21,7 @@ func TestOrgChannels_UnreadableRowIsListedNotFatal(t *testing.T) {
 	if err := b.EnableFieldEncryption([]byte(testFieldKey)); err != nil {
 		t.Fatal(err)
 	}
+	seedOrgRow(t, b.db, "org-ur")
 	other := rotationReplica(t, dsn, "another-field-encryption-key-0123456789abcdef")
 	save := func(b *PostgresStorageBackend, id, url string, created time.Time) {
 		t.Helper()
@@ -98,6 +99,7 @@ func TestOrgChannels_UnreadableRowIsListedNotFatal(t *testing.T) {
 func TestOrgChannels_FieldsRoundTripSealedAndResealed(t *testing.T) {
 	b, dsn := openIsolatedMigrationDB(t)
 	ctx := context.Background()
+	seedOrgRow(t, b.db, "org-fld")
 	jira := &storageif.OrgChannel{ID: "fld-1", OrgID: "org-fld", Name: "jira", Kind: "jira", URL: "https://acme.atlassian.net",
 		Config: map[string]string{"email": "bot@acme.io", "project": "PAD"}, Secrets: map[string]string{"token": "XXXXTOKEN"},
 		Events: []string{"drift"}, Enabled: true, CreatedAt: time.Now().UTC().Add(-time.Minute)}

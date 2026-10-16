@@ -254,3 +254,78 @@ func TestChatService_ShutdownBudgetEndsAStuckStream(t *testing.T) {
 		t.Errorf("resume = %+v, %v; want %s", res, rerr, ChatErrServerRestarting)
 	}
 }
+
+// lateProvider streams a first chunk, then ignores its stream's cancellation until released, and ends the way a
+// provider call that finally returns does: with its done chunk, or with an error.
+type lateProvider struct {
+	*testutil.FakeProvider
+	done    bool
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *lateProvider) Stream(_ context.Context, _ ai.Request, onChunk func(ai.Chunk)) error {
+	onChunk(ai.Chunk{Text: "partial"})
+	<-p.release
+	if p.done {
+		onChunk(ai.Chunk{Done: true, FinishReason: "stop", TokensIn: 1, TokensOut: 1})
+		return nil
+	}
+	return errors.New("provider call failed")
+}
+
+func (p *lateProvider) unpark() { p.once.Do(func() { close(p.release) }) }
+
+// terminalEvents lists the types of the stream's done and error events, in emission order.
+func terminalEvents(n *testutil.CountingNotifier, streamID string) []string {
+	var types []string
+	for _, ev := range n.Events() {
+		env, ok := ev.Data.(map[string]interface{})
+		if !ok || ev.Name != "chat:event" || env["streamId"] != streamID {
+			continue
+		}
+		if typ, _ := env["type"].(string); typ == "done" || typ == "error" {
+			types = append(types, typ)
+		}
+	}
+	return types
+}
+
+// A worker stuck past the stop's budget that ends later, with its provider's done or with an error, emits no second
+// terminal event: Shutdown sent SERVER_RESTARTING in its place, and that stays the stream's state, so a resume tells
+// the client what the event did and the late answer is not stored.
+func TestChatService_ALateWorkerEmitsNoSecondTerminalEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		done bool
+	}{{"a late done", true}, {"a late error", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &lateProvider{FakeProvider: &testutil.FakeProvider{}, done: tc.done, release: make(chan struct{})}
+			t.Cleanup(p.unpark)
+			provider := "shutdown-late-error"
+			if tc.done {
+				provider = "shutdown-late-done"
+			}
+			svc, n := shutdownTestService(t, provider, p)
+			svc.shutdownBudget = 50 * time.Millisecond
+			id := startLiveStream(t, svc, n, provider)
+
+			if err := svc.Shutdown(context.Background()); err == nil {
+				t.Fatal("Shutdown reported no error with a worker still running")
+			}
+			p.unpark()
+			waitStreamFinished(t, svc, id)
+
+			if got := terminalEvents(n, id); len(got) != 1 || got[0] != "error" {
+				t.Errorf("terminal events %v, want the one error Shutdown emitted", got)
+			}
+			if codes := errorCodes(n, id); len(codes) != 1 || codes[0] != ChatErrServerRestarting {
+				t.Errorf("error events %v, want one %s", codes, ChatErrServerRestarting)
+			}
+			res, err := svc.ResumeStream(context.Background(), id, 0)
+			if err != nil || res.ErrorCode != ChatErrServerRestarting || res.Done {
+				t.Errorf("resume after the late worker = %+v, %v; want %s and not done", res, err, ChatErrServerRestarting)
+			}
+		})
+	}
+}

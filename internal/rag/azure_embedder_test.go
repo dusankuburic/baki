@@ -38,6 +38,7 @@ func TestEmbedder_AzureRegistryDesignation(t *testing.T) {
 	t.Run("the designated model embeds", func(t *testing.T) {
 		src := &fakeAzureSource{p: emb}
 		store := testutil.NewFakeBackend()
+		store.SeedOrgs("org-1") // the knowledge base needs its organisation
 		svc := NewKnowledgeService(store, newKeysFactory(nil), stubSettings{&models.AppSettings{}},
 			WithEmbeddingProvider("azure-foundry"), WithAzureEmbedder(src))
 		if !svc.AzureEmbedderEnabled() {

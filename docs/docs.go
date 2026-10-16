@@ -40,14 +40,20 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Page size",
+                        "description": "Page size (default 100, max 500)",
                         "name": "limit",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "description": "Rows to skip",
+                        "description": "Rows to skip, at most 10 000 without a cursor (a larger one is a 400; ignored with a cursor)",
                         "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "The X-Next-Cursor of the previous page",
+                        "name": "cursor",
                         "in": "query"
                     }
                 ],
@@ -60,10 +66,16 @@ const docTemplate = `{
                                 "type": "object",
                                 "additionalProperties": true
                             }
+                        },
+                        "headers": {
+                            "X-Next-Cursor": {
+                                "type": "string",
+                                "description": "When events follow the page: the ?cursor= of the next page, with the same filters"
+                            }
                         }
                     },
                     "400": {
-                        "description": "Invalid limit or offset",
+                        "description": "Invalid limit, offset (above 10 000 without a cursor) or cursor",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -206,9 +218,7 @@ const docTemplate = `{
         },
         "/api/admin/scanner/scan": {
             "post": {
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Starts a governance sweep now (admin only): the scanner's periodic pass, run in the background; its alerts arrive as a scheduled sweep's do. 200 {started: true} once it has started. A sweep already running on this or another replica is a 409 with code SCAN_ALREADY_RUNNING (its results are the ones asked for). A server that is stopping answers 503 SERVER_RESTARTING with Retry-After; no server store to sweep, or the sweep's cross-replica lock unavailable, is a 503 SCAN_UNAVAILABLE (try again).",
                 "produces": [
                     "application/json"
                 ],
@@ -218,18 +228,11 @@ const docTemplate = `{
                 "summary": "Run environment scanner",
                 "responses": {
                     "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
+                        "description": "Started: {started: true}",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
-                                "type": "string"
+                                "type": "boolean"
                             }
                         }
                     },
@@ -242,13 +245,25 @@ const docTemplate = `{
                             }
                         }
                     },
-                    "500": {
-                        "description": "Error",
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "409": {
+                        "description": "A sweep is already running (code SCAN_ALREADY_RUNNING)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "The sweep could not start (code SCAN_UNAVAILABLE), or the server is stopping (code SERVER_RESTARTING)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -286,7 +301,7 @@ const docTemplate = `{
         },
         "/api/admin/users/list": {
             "get": {
-                "description": "Returns one page of registered users, newest first, with the number of users matching the filters (total). Only available to system admins.",
+                "description": "Returns one page of registered users, newest first, with the number of users matching the filters (total). hasMore reports users after the page, and nextCursor (absent on the last page) is the ?cursor= of the next one, with the same filters; a page with a cursor ignores offset. Only available to system admins.",
                 "produces": [
                     "application/json"
                 ],
@@ -303,13 +318,19 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Rows to skip",
+                        "description": "Rows to skip, at most 10 000 without a cursor (a larger one is a 400; ignored with a cursor)",
                         "name": "offset",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Case-insensitive substring of the email or display name",
+                        "description": "The previous page's nextCursor",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Case-insensitive substring of the email or display name; without a run of 3 letters or digits, a prefix of either",
                         "name": "q",
                         "in": "query"
                     },
@@ -328,7 +349,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid limit, offset, q or role",
+                        "description": "Invalid limit, offset (above 10 000 without a cursor), q, role or cursor",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -940,7 +961,7 @@ const docTemplate = `{
         },
         "/api/analysis/custom-rules/test": {
             "post": {
-                "description": "Runs one unsaved rule, checked strictly, against a flow and returns the findings it would produce. The body is {rule, flowId} and nothing else; a rule the strict check refuses is a 400 with details.field (\"rule.\u003cfield\u003e\") and details.reason.",
+                "description": "Runs one unsaved rule, checked strictly, against a flow and returns the findings it would produce. The body is {rule, flowId} and nothing else; a rule the strict check refuses is a 400 with details.field (\"rule.\u003cfield\u003e\") and details.reason. A built-in rule's id is not refused here (a legacy rule saved under one stays testable): it comes back in problems (reason RESERVED_ID, not a warning, since a save refuses it for a new rule), next to the strict check's warnings.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1664,6 +1685,7 @@ const docTemplate = `{
         },
         "/api/analysis/policy/save": {
             "post": {
+                "description": "Upserts the policy on (id, orgId). A policy sent without an id gets a generated id, returned in the body with the stored timestamps; send that id back to update it. It is a new policy, unless the organisation still has one stored under the empty id (by a server of the release before, which stored every id-less policy of an organisation there, each overwriting the last): then it is that policy, under the new id.",
                 "produces": [
                     "application/json"
                 ],
@@ -1686,6 +1708,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found (no such organisation)",
                         "schema": {
                             "type": "object"
                         }
@@ -2467,7 +2495,7 @@ const docTemplate = `{
         },
         "/api/auth/profile/avatar": {
             "post": {
-                "description": "Re-encodes the uploaded PNG or JPEG (metadata stripped, downscaled to at most 512 px, at most 512 KB stored), stores it as the caller's avatar and points the profile's avatar URL at the serving route. A multipart/form-data body with one \"avatar\" file part; the declared content type is never trusted — the bytes decide.",
+                "description": "Re-encodes the uploaded PNG or JPEG (metadata stripped, a JPEG turned upright by its EXIF orientation, downscaled to at most 512 px, at most 512 KB stored), stores it as the caller's avatar and points the profile's avatar URL at the serving route. A multipart/form-data body with one \"avatar\" file part; the declared content type is never trusted — the bytes decide.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -3249,7 +3277,7 @@ const docTemplate = `{
         },
         "/api/chat/cancel": {
             "post": {
-                "description": "Cancels an active streaming session. A stream that runs on another server of a multi-server deployment is stopped through that server; when it cannot be reached the answer is 503 with code REPLICA_UNREACHABLE (retry), never an ok that stopped nothing.",
+                "description": "Cancels an active streaming session. A stream that runs on another server of a multi-server deployment is stopped through that server; when it cannot be reached the answer is 503 with code REPLICA_UNREACHABLE (retry), never an ok that stopped nothing. A stream whose server has stopped running (it no longer renews its liveness record, about 15 seconds after it died) ended with it, and is answered like any ended stream (ok).",
                 "consumes": [
                     "application/json"
                 ],
@@ -3368,7 +3396,7 @@ const docTemplate = `{
         },
         "/api/chat/fix-decision": {
             "post": {
-                "description": "Approval decision: delivers the user's approve/decline (with per-item opt-outs for a batch) for a tool request — a fix_proposal event — pending in one of the caller's chat streams. The stream must be the caller's, and a scoped API token must hold the scope the tool requires (write for the fix tools). First decision wins; unknown or already-decided proposals return 404.",
+                "description": "Approval decision: delivers the user's approve/decline (with per-item opt-outs for a batch) for a tool request — a fix_proposal event — pending in one of the caller's chat streams. The stream must be the caller's, and a scoped API token must hold the scope the tool requires (write for the fix tools). First decision wins; unknown or already-decided proposals return 404, and so does a proposal whose server has stopped running (its stream ended with it).",
                 "consumes": [
                     "application/json"
                 ],
@@ -3666,7 +3694,7 @@ const docTemplate = `{
         },
         "/api/chat/stream": {
             "post": {
-                "description": "Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). When the server stored the turn itself (cloud mode, the request carried no history) the answer is in the store before done is sent, and done and error also carry conversationVersion (the stored conversation's version after the server's own writes) and conversationBase (the version the turn began from), only while no other writer changed the thread in between; a client still at conversationBase can adopt conversationVersion without saving or reloading. An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, AI_BUDGET_UNAVAILABLE, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, PROVIDER_UNKNOWN when the turn names a provider no spec describes, PROVIDER_NOT_ALLOWED when the provider policy refused it — disabled in the deployment or off the organisation's allowed-provider list (ADR 0028), MODEL_NOT_AVAILABLE, SERVER_RESTARTING when the server's stop ended the stream, …). A provider id the registry does not know is refused before any stream starts with 400 and code PROVIDER_UNKNOWN. For provider azure-foundry the model is a model registry id (\"m/\u003centryId\u003e\"; \"\" for the server default; a pre-registry deployment, \"claude:\" or \"agent:\" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE. While the server is stopping no stream starts: 503 with code SERVER_RESTARTING, a Retry-After header and details.retryAfterSeconds; the request may be sent again once after that wait.",
+                "description": "Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). When the server stored the turn itself (cloud mode, the request carried no history) the answer is in the store before done is sent, and done and error also carry conversationVersion (the stored conversation's version after the server's own writes) and conversationBase (the version the turn began from), only while no other writer changed the thread in between; a client still at conversationBase can adopt conversationVersion without saving or reloading. An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, AI_BUDGET_UNAVAILABLE, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, PROVIDER_UNKNOWN when the turn names a provider no spec describes, PROVIDER_NOT_ALLOWED when the provider policy refused it — disabled in the deployment or off the organisation's allowed-provider list (ADR 0028), MODEL_NOT_AVAILABLE, SERVER_RESTARTING when the server's stop ended the stream, …). A provider id the registry does not know is refused before any stream starts with 400 and code PROVIDER_UNKNOWN. For provider azure-foundry the model is a model registry id (\"m/\u003centryId\u003e\"; \"\" for the server default; a pre-registry deployment, \"claude:\" or \"agent:\" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE. While the server is stopping no stream starts: 503 with code SERVER_RESTARTING, a Retry-After header and details.retryAfterSeconds; the request may be sent again once after that wait. A clientStreamId that already names a stream (running, or finished within the resume window, on any replica) is refused with 409 and code STREAM_ID_IN_USE: a resent start whose first send went through gets it, and resumes that stream (POST /api/chat/resume) instead of starting another.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3697,6 +3725,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request: malformed body, code MODEL_NOT_AVAILABLE (the Azure AI Foundry model is not available to the caller) or PROVIDER_UNKNOWN (no provider spec describes the id)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "The clientStreamId already names a stream (code STREAM_ID_IN_USE): resume it",
                         "schema": {
                             "$ref": "#/definitions/render.ErrorResponse"
                         }
@@ -5086,7 +5120,7 @@ const docTemplate = `{
         },
         "/api/flow/search-library": {
             "post": {
-                "description": "handleSearchLibrary runs a query across every flow the caller can access (cross-flow / org-wide search), merging per-flow hits into one result set. Each hit is stamped with its source flowId/flowName so the UI can group them.",
+                "description": "handleSearchLibrary runs a query across every flow the caller can access (cross-flow / org-wide search), merging per-flow hits into one result set. Each hit is stamped with its source flowId/flowName so the UI can group them. The text needs a run of at least 3 letters or digits; an empty text answers no results.",
                 "consumes": [
                     "application/json"
                 ],
@@ -5106,12 +5140,9 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "BAD_REQUEST, or QUERY_TOO_SHORT (no run of 3 letters or digits; details.minLength)",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "401": {
@@ -6001,7 +6032,7 @@ const docTemplate = `{
         },
         "/api/integrations/ci": {
             "post": {
-                "description": "Analyzes a stored flow for a CI runner. Authenticated by an HMAC-SHA256 of \"\u003cX-Baki-Timestamp\u003e.\" + body, sent as X-Baki-Signature: sha256=\u003chex\u003e; the timestamp must be within 5 minutes. The key is an organisation CI credential (baki_ci_\u003ckeyId\u003e_\u003csecret\u003e, minted under /api/orgs/{id}/ci-credentials; send X-Baki-Key-Id: \u003ckeyId\u003e), which reaches that organisation's flows only, or the deprecated deployment-wide PAD_CI_WEBHOOK_SECRET (answered with Deprecation and Link headers where organisations exist). Instead of a signature, Authorization: Bearer \u003cAPI token\u003e with the ci scope reaches the flows the token's user can read, an organisation's flow only when the user is a member of it; an unscoped token or one without ci is a 401, and another user's flow is a 404 like an unknown one. Body: {flowId, failOn, format, deliveryId}. failOn is error (default), warning, info or none; findings of preview rules never fail the gate and are counted in ` + "`" + `preview` + "`" + `. format \"summary\" (default) returns {flowId, flowName, passed, gate, errors, warnings, info, preview}, \"report\" adds the findings, \"sarif\" returns the SARIF 2.1.0 document instead (application/sarif+json); any other format is a 400. deliveryId (16 to 128 characters of A-Z, a-z, 0-9, - and _; bakicli sends 128 random bits) makes the call run once per key: a call whose key sent the same deliveryId before is a 409 CI_REPLAYED and runs nothing. It is optional for now.",
+                "description": "Analyzes a stored flow for a CI runner. Authenticated by an HMAC-SHA256 of \"\u003cX-Baki-Timestamp\u003e.\" + body, sent as X-Baki-Signature: sha256=\u003chex\u003e; the timestamp must be within 5 minutes. The key is an organisation CI credential (baki_ci_\u003ckeyId\u003e_\u003csecret\u003e, minted under /api/orgs/{id}/ci-credentials; send X-Baki-Key-Id: \u003ckeyId\u003e), which reaches that organisation's flows only, or the deprecated deployment-wide PAD_CI_WEBHOOK_SECRET (answered with Deprecation and Link headers where organisations exist). Instead of a signature, Authorization: Bearer \u003cAPI token\u003e with the ci scope reaches the flows the token's user can read, an organisation's flow only when the user is a member of it; an unscoped token or one without ci is a 401, and another user's flow is a 404 like an unknown one. Body: {flowId, failOn, format, deliveryId}. failOn is error (default), warning, info or none; findings of preview rules never fail the gate and are counted in ` + "`" + `preview` + "`" + `. format \"summary\" (default) returns {flowId, flowName, passed, gate, errors, warnings, info, preview}, \"report\" adds the findings, \"sarif\" returns the SARIF 2.1.0 document instead (application/sarif+json); a missing or empty format is \"summary\", any other is a 400 with code UNKNOWN_FORMAT and details.formats listing the three. deliveryId (16 to 128 characters of A-Z, a-z, 0-9, - and _; bakicli sends 128 random bits) makes the call run once per key: a call whose key sent the same deliveryId before is a 409 CI_REPLAYED and runs nothing. It is optional for now.",
                 "consumes": [
                     "application/json"
                 ],
@@ -6057,12 +6088,9 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Bad Request (no flowId, unknown format, malformed deliveryId)",
+                        "description": "Bad Request (no flowId, malformed deliveryId; code UNKNOWN_FORMAT with details.formats for an unknown format)",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "401": {
@@ -6313,7 +6341,7 @@ const docTemplate = `{
         },
         "/api/library": {
             "get": {
-                "description": "Returns a list of flow documents stored in the library, with optional filtering by organization and search query.",
+                "description": "Returns one page of the flows visible to the caller, with optional filtering by organization, scope, name and tags. total counts the matching flows up to 10 000; totalCapped is true when more match. A page reached by cursor reports the total the first page counted (its cursor carries it). hasMore reports flows after the page that the client can reach. With the updated-at sorts the page carries nextCursor (absent on the last page, and on a page reached by offset whose flows' ids are all too long for a cursor: then page on by offset): pass it as ?cursor= with the same filters and sort for the next page, which then ignores offset; cursors reach every flow. Without a cursor the page starts at offset, at most 10 000 (hasMore is false where the next offset would pass it), so the name and block sorts reach offsets up to and including 10 000 (so 10 000 + one page by offset).",
                 "produces": [
                     "application/json"
                 ],
@@ -6330,32 +6358,58 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "q",
+                        "description": "all (default), mine or shared",
+                        "name": "scope",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "name filter: a case-insensitive substring, a prefix without a run of 3 letters or digits",
                         "name": "q",
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "comma-separated tags; a flow with any of them matches",
+                        "name": "tags",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "updated_desc (default), updated_asc, name_asc, name_desc or blocks_desc",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
-                        "description": "limit",
+                        "description": "page size (default and maximum 200)",
                         "name": "limit",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "description": "offset",
+                        "description": "rows to skip, at most 10 000 (ignored with a cursor)",
                         "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "the previous page's nextCursor",
+                        "name": "cursor",
                         "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "One page of flows",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": true
-                            }
+                            "$ref": "#/definitions/render.PagedResponse-api_libraryFlow"
+                        }
+                    },
+                    "400": {
+                        "description": "BAD_REQUEST: a malformed limit or offset, an offset above 10 000 without a cursor, or a cursor not issued for these filters and sort",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "500": {
@@ -7890,6 +7944,24 @@ const docTemplate = `{
                         "description": "Updated; sharedCredentialDisabled is true when the demoted member was the lender of the org's shared Azure AI Foundry credential and it was disabled",
                         "schema": {
                             "$ref": "#/definitions/api.orgMemberMutationResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown organisation, or the user is not a member of it",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "The change would leave the organisation without an admin",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -10308,7 +10380,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Updates the application settings.",
+                "description": "Updates the application settings. Each top-level section the body names (profile, appearance, ai, ...) replaces the stored one, and an explicit {} or null clears it; a section the body leaves out keeps its stored value.",
                 "consumes": [
                     "application/json"
                 ],
@@ -10391,7 +10463,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "handleUpdateOrgSettings overwrites org-wide settings. Writing requires org admin. The organisation's allowed-provider list (ai.allowedProviders, ADR 0028) is replaced only when the body names it — an explicit [] clears it (every provider allowed); a body without the field keeps the stored list. Each listed id must be a registered provider.",
+                "description": "handleUpdateOrgSettings writes org-wide settings. Writing requires org admin. Each top-level section the body names replaces the stored one; a section the body leaves out keeps its stored value. The organisation's allowed-provider list (ai.allowedProviders, ADR 0028) is replaced only when the body names it — an explicit [] clears it (every provider allowed); a body without the field keeps the stored list. Each listed id must be a registered provider.",
                 "consumes": [
                     "application/json"
                 ],
@@ -10420,7 +10492,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Malformed body, or an id in ai.allowedProviders that no provider spec describes (PROVIDER_UNKNOWN)",
+                        "description": "Malformed body, or ids in ai.allowedProviders that no provider spec describes (PROVIDER_UNKNOWN; details.providers lists them)",
                         "schema": {
                             "$ref": "#/definitions/render.ErrorResponse"
                         }
@@ -10946,6 +11018,70 @@ const docTemplate = `{
                 },
                 "force": {
                     "type": "boolean"
+                }
+            }
+        },
+        "api.libraryFlow": {
+            "type": "object",
+            "properties": {
+                "blockCount": {
+                    "type": "integer"
+                },
+                "canDelete": {
+                    "type": "boolean"
+                },
+                "canEdit": {
+                    "type": "boolean"
+                },
+                "canShare": {
+                    "type": "boolean"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "errorCount": {
+                    "type": "integer"
+                },
+                "healthScore": {
+                    "description": "Health fields are populated only by the single-flow GET, not the list.",
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "isSharedWithMe": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "organizationId": {
+                    "type": "string"
+                },
+                "ownerDisplayName": {
+                    "type": "string"
+                },
+                "ownerId": {
+                    "type": "string"
+                },
+                "subflowCount": {
+                    "type": "integer"
+                },
+                "tags": {
+                    "description": "Tags ride on both the list and the GET: they were stored and filterable (?tags=) but\nnever serialized, so every reload showed \"No tags\".",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                },
+                "warningCount": {
+                    "type": "integer"
                 }
             }
         },
@@ -11687,9 +11823,41 @@ const docTemplate = `{
                 }
             }
         },
+        "render.PagedResponse-api_libraryFlow": {
+            "type": "object",
+            "properties": {
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.libraryFlow"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "nextCursor": {
+                    "type": "string"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "totalCapped": {
+                    "type": "boolean"
+                }
+            }
+        },
         "render.PagedResponse-interfaces_User": {
             "type": "object",
             "properties": {
+                "hasMore": {
+                    "type": "boolean"
+                },
                 "items": {
                     "type": "array",
                     "items": {
@@ -11699,11 +11867,17 @@ const docTemplate = `{
                 "limit": {
                     "type": "integer"
                 },
+                "nextCursor": {
+                    "type": "string"
+                },
                 "offset": {
                     "type": "integer"
                 },
                 "total": {
                     "type": "integer"
+                },
+                "totalCapped": {
+                    "type": "boolean"
                 }
             }
         },

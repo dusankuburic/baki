@@ -135,3 +135,59 @@ func TestProvideStorageBackend_LeaserIsTheDatabases(t *testing.T) {
 		t.Errorf("the desktop graph has a leaser (%T); without a database the jobs run alone", none)
 	}
 }
+
+// TestStorageConfig_SessionGuards: what storageConfig hands the backend for the two session guards. The idle-
+// transaction timeout is the configuration's effective one (the request timeout plus config.DBIdleTxTimeoutMargin
+// unless PAD_DB_IDLE_TX_TIMEOUT sets it, "0s" turning it off). The cloud profile refuses a connection role that
+// bypasses row-level security unless PAD_DB_ALLOW_BYPASSRLS is set; the other profiles only warn.
+func TestStorageConfig_SessionGuards(t *testing.T) {
+	cloud := serverStoreConfig(config.ModeCloud, true)
+	got := storageConfig(cloud)
+	if want := 30*time.Second + config.DBIdleTxTimeoutMargin; got.IdleInTxTimeout != want {
+		t.Errorf("IdleInTxTimeout = %v, want the request timeout plus the margin, %v", got.IdleInTxTimeout, want)
+	}
+	if !got.RefuseRLSBypass {
+		t.Error("the cloud profile must refuse a role that bypasses row-level security")
+	}
+	cloud.Runtime.RequestTimeout = config.Duration(2 * time.Minute)
+	if got, want := storageConfig(cloud).IdleInTxTimeout, 2*time.Minute+config.DBIdleTxTimeoutMargin; got != want {
+		t.Errorf("IdleInTxTimeout = %v after raising the request timeout, want %v", got, want)
+	}
+	cloud.Storage.DBIdleTxTimeout = config.ExplicitDuration(0)
+	if got := storageConfig(cloud).IdleInTxTimeout; got != 0 {
+		t.Errorf(`IdleInTxTimeout = %v with PAD_DB_IDLE_TX_TIMEOUT="0s", want 0 (off)`, got)
+	}
+	cloud.Storage.DBAllowBypassRLS = true
+	if storageConfig(cloud).RefuseRLSBypass {
+		t.Error("PAD_DB_ALLOW_BYPASSRLS=true must turn the refusal into the warning")
+	}
+	for _, accounts := range []bool{false, true} {
+		if storageConfig(serverStoreConfig(config.ModeLocal, accounts)).RefuseRLSBypass {
+			t.Errorf("local with a database (accounts %v) refuses a bypassing role; only the cloud profile does", accounts)
+		}
+	}
+}
+
+// TestProvideStorageBackend_ServerSessionTimeouts: a cloud deployment's pooled sessions carry the idle-transaction
+// timeout the configuration derives (the request timeout plus the margin) beside the statement and lock timeouts,
+// so a transaction left idle by a handler that outran its deadline is ended by the server instead of pinning its
+// connection, its locks and the vacuum horizon. The role is the test role (NOBYPASSRLS), which the cloud profile's
+// role check lets through.
+func TestProvideStorageBackend_ServerSessionTimeouts(t *testing.T) {
+	cfg := serverStoreConfig(config.ModeCloud, true)
+	cfg.Storage.DatabaseURL = secret.New(pgtest.NewDatabase(t, "")) // skips without DATABASE_URL
+	cfg.Storage.DBRequireSSL = "false"
+	var pool storagedb.SQLProvider
+	app := fxtest.New(t, fx.Supply(cfg), fx.Provide(provideStorageBackend), fx.Populate(&pool))
+	app.RequireStart()
+	defer app.RequireStop()
+
+	var idle, statement, lock string
+	if err := pool.DB().QueryRowContext(context.Background(), `SELECT current_setting('idle_in_transaction_session_timeout'),
+		current_setting('statement_timeout'), current_setting('lock_timeout')`).Scan(&idle, &statement, &lock); err != nil {
+		t.Fatalf("read the session settings: %v", err)
+	}
+	if idle != "90s" || statement != "30s" || lock != "30s" {
+		t.Errorf("idle_in_transaction_session_timeout %q, statement_timeout %q, lock_timeout %q; want 90s, 30s, 30s", idle, statement, lock)
+	}
+}

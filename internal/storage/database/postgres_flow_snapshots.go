@@ -25,7 +25,7 @@ func (b *PostgresStorageBackend) PushFlowSnapshot(ctx context.Context, s *interf
 		return interfaces.ErrFlowSnapshotUnstorable
 	}
 	retained := s.StoredBytes()
-	if lim.MaxBytes > 0 && retained > lim.MaxBytes {
+	if (lim.MaxBytes > 0 && retained > lim.MaxBytes) || (s.UserID != "" && lim.UserMaxBytes > 0 && retained > lim.UserMaxBytes) {
 		return interfaces.ErrFlowSnapshotTooLarge
 	}
 	var files any // NULL for a single-file snapshot
@@ -49,22 +49,25 @@ func (b *PostgresStorageBackend) PushFlowSnapshot(ctx context.Context, s *interf
 			created = s.CreatedAt.UTC()
 		}
 		if _, err := q.ExecContext(ctx,
-			`INSERT INTO flow_snapshots (id, flow_id, label, bytes, retained_bytes, source, files, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::timestamptz, NOW()))`,
-			s.ID, s.FlowID, s.Label, s.Bytes, retained, s.Source, files, created); err != nil {
+			`INSERT INTO flow_snapshots (id, flow_id, label, bytes, retained_bytes, source, files, created_at, user_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::timestamptz, NOW()), $9)`,
+			s.ID, s.FlowID, s.Label, s.Bytes, retained, s.Source, files, created, s.UserID); err != nil {
 			return err
 		}
-		// Newest first, a row is kept while it is within the count and the running size is within the bound; the
-		// newest always is (a snapshot over the bound alone was refused above).
-		_, err := q.ExecContext(ctx, `
-			DELETE FROM flow_snapshots WHERE flow_id = $1 AND seq IN (
-				SELECT seq FROM (
-					SELECT seq,
-					       ROW_NUMBER() OVER (ORDER BY seq DESC) AS n,
-					       SUM(retained_bytes) OVER (ORDER BY seq DESC) AS running
-					  FROM flow_snapshots WHERE flow_id = $1
-				) ring WHERE n > $2::bigint OR running > $3::bigint)`,
-			s.FlowID, keep, maxBytes)
+		if _, err := q.ExecContext(ctx, flowSnapshotFlowTrimSQL, s.FlowID, keep, maxBytes); err != nil {
+			return err
+		}
+		if s.UserID == "" || (lim.UserKeep <= 0 && lim.UserMaxBytes <= 0) {
+			return nil
+		}
+		userKeep, userMax := int64(lim.UserKeep), lim.UserMaxBytes
+		if userKeep <= 0 {
+			userKeep = 1 << 30
+		}
+		if userMax <= 0 {
+			userMax = 1 << 62
+		}
+		_, err := q.ExecContext(ctx, flowSnapshotUserTrimSQL, s.UserID, userKeep, userMax)
 		return err
 	})
 	// A flow that is gone (foreign key) or that the caller's scope cannot see (row-level security) has no ring.
@@ -76,6 +79,44 @@ func (b *PostgresStorageBackend) PushFlowSnapshot(ctx context.Context, s *interf
 	}
 	return nil
 }
+
+// flowSnapshotFlowTrimSQL trims a flow's ring ($1) to $2 rows and $3 bytes: newest first, a row is kept while it is
+// within the count and the running size is within the bound; the newest always is (a snapshot over the bound alone is
+// refused before the insert). It waits for a concurrent push's rows, so the ring holds its bound once both commit.
+const flowSnapshotFlowTrimSQL = `
+	DELETE FROM flow_snapshots WHERE flow_id = $1 AND seq IN (
+		SELECT seq FROM (
+			SELECT seq,
+			       ROW_NUMBER() OVER (ORDER BY seq DESC) AS n,
+			       SUM(retained_bytes) OVER (ORDER BY seq DESC) AS running
+			  FROM flow_snapshots WHERE flow_id = $1
+		) ring WHERE n > $2::bigint OR running > $3::bigint)`
+
+// flowSnapshotUserTrimSQL is the same walk over a user's ($1) snapshots on every flow (seq is one sequence for the
+// table, so newest first is push order across flows). Under the request's scope it sees the flows the user can open; a
+// row of theirs on a flow they lost is neither counted nor deleted, and goes with the 24 hour sweep. The literal
+// comparison of user_id with the empty string lets a generic plan use the partial index, which a bound parameter alone
+// cannot prove applies.
+//
+// Best effort: it ranks without locking and locks only the rows it deletes, skipping any another transaction holds
+// (SKIP LOCKED), so it never waits. Its rows span flows, so a waiting user trim could close a cycle with a concurrent
+// push whose flow trim holds one of them while it waits for a row this transaction's flow trim holds (two tabs of one
+// user, or two users on shared flows): a deadlock that lost the snapshot after a second. The kept rows stay unlocked
+// for the same reason: locking the user's whole set made every other push that trims one of them wait for this
+// request's commit, and two such sets crossed are the same cycle. A skipped row stays until the next push trims it.
+const flowSnapshotUserTrimSQL = `
+	WITH ranked AS (
+		SELECT seq,
+		       ROW_NUMBER() OVER (ORDER BY seq DESC) AS n,
+		       SUM(retained_bytes) OVER (ORDER BY seq DESC) AS running
+		  FROM flow_snapshots
+		 WHERE user_id = $1 AND user_id <> ''
+	), victims AS (
+		SELECT seq FROM flow_snapshots
+		 WHERE seq IN (SELECT seq FROM ranked WHERE n > $2::bigint OR running > $3::bigint)
+		   FOR UPDATE SKIP LOCKED
+	)
+	DELETE FROM flow_snapshots WHERE seq IN (SELECT seq FROM victims)`
 
 // flowSnapshotHasNUL reports whether any text of s holds a NUL byte, which TEXT and JSONB both refuse.
 func flowSnapshotHasNUL(s *interfaces.FlowSnapshot) bool {

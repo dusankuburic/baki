@@ -1,9 +1,10 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {render, screen, fireEvent, waitFor, within} from '@testing-library/react'
+import {render, screen, fireEvent, waitFor, within, act} from '@testing-library/react'
 import {ToastProvider} from '@/components/shared/Toast'
 import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import {useAuthStore} from '@/stores/authStore'
 import {useAdminStore} from '@/stores/adminStore'
+import {ApiError} from '@/api/client'
 import type {AdminUser, UserQuery, UserStats} from '@/api/admin'
 
 const listUsers = vi.fn()
@@ -39,17 +40,24 @@ const STATS: UserStats = {
   locked: 0,
 }
 
-function page(query: UserQuery) {
-  let rows = ALL
+// As the server answers: a cursor (here the offset it stands for) wins over the offset, an offset past 10 000
+// without one is refused, and a page with users after it says so and carries the next one's cursor.
+function page(query: UserQuery, all: AdminUser[] = ALL) {
+  let rows = all
   const q = query.q?.toLowerCase()
   if (q) rows = rows.filter(u => u.email.includes(q) || u.displayName.toLowerCase().includes(q))
   if (query.role) rows = rows.filter(u => (query.role === 'none' ? u.role === '' : u.role === query.role))
-  return {
-    items: rows.slice(query.offset, query.offset + query.limit),
+  const start = query.cursor ? Number(query.cursor.slice(1)) : query.offset
+  if (!query.cursor && start > 10_000) return Promise.reject(new ApiError('at most 10000', 400))
+  const more = start + query.limit < rows.length
+  return Promise.resolve({
+    items: rows.slice(start, start + query.limit),
     total: rows.length,
     offset: query.offset,
     limit: query.limit,
-  }
+    hasMore: more,
+    nextCursor: more ? `c${start + query.limit}` : undefined,
+  })
 }
 
 function renderSection() {
@@ -67,7 +75,7 @@ describe('UsersSection', () => {
     vi.clearAllMocks()
     useAdminStore.getState().reset()
     useAuthStore.setState({user: {id: 'u1', email: 'user1@example.com', role: 'admin', displayName: 'Alice'}})
-    listUsers.mockImplementation((query: UserQuery) => Promise.resolve(page(query)))
+    listUsers.mockImplementation((query: UserQuery) => page(query))
     setUserRole.mockResolvedValue(undefined)
   })
 
@@ -85,6 +93,96 @@ describe('UsersSection', () => {
     )
     expect(await screen.findByText('user17@example.com')).toBeInTheDocument()
     expect(nav).toHaveTextContent('Showing 11–17 of 17')
+    expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled()
+  })
+
+  it("follows the server's cursor to the next page, beside the offset", async () => {
+    renderSection()
+    await screen.findByText('user2@example.com')
+    expect(listUsers).toHaveBeenLastCalledWith(expect.objectContaining({offset: 0}), expect.anything())
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    await waitFor(() =>
+      expect(listUsers).toHaveBeenLastCalledWith(
+        expect.objectContaining({offset: 10, cursor: 'c10'}),
+        expect.anything(),
+      ),
+    )
+    expect(await screen.findByText('user17@example.com')).toBeInTheDocument()
+  })
+
+  it('reaches users past offset 10 000 by the cursor', async () => {
+    const many = Array.from({length: 20_000}, (_, i) => user(i + 1))
+    listUsers.mockImplementation((query: UserQuery) => page(query, many))
+    useAdminStore.getState().setUsersPage(1000) // offset 10 000, the deepest the server takes without a cursor
+    renderSection()
+    expect(await screen.findByText('user10001@example.com')).toBeInTheDocument()
+    const nav = screen.getByRole('navigation', {name: 'Users pagination'})
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    expect(await screen.findByText('user10011@example.com')).toBeInTheDocument()
+    expect(listUsers).toHaveBeenLastCalledWith(
+      expect.objectContaining({offset: 10010, cursor: 'c10010'}),
+      expect.anything(),
+    )
+    expect(nav).toHaveTextContent('Showing 10011–10020 of 20000')
+    expect(screen.queryByText("Couldn't load users")).toBeNull()
+  })
+
+  it('waits for the page it asked for before Next leads on', async () => {
+    const many = Array.from({length: 20_000}, (_, i) => user(i + 1))
+    listUsers.mockImplementation((query: UserQuery) => page(query, many))
+    useAdminStore.getState().setUsersPage(1000)
+    renderSection()
+    await screen.findByText('user10001@example.com')
+    let release: () => void = () => {}
+    listUsers.mockImplementationOnce(
+      (query: UserQuery) => new Promise(resolve => (release = () => resolve(page(query, many)))),
+    )
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    // A second click now would ask for page 1002 before page 1001 told its cursor: past 10 000, a refused offset.
+    expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    act(() => release())
+    expect(await screen.findByText('user10011@example.com')).toBeInTheDocument()
+    expect(useAdminStore.getState().users.page).toBe(1001)
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    expect(await screen.findByText('user10021@example.com')).toBeInTheDocument()
+    expect(listUsers).toHaveBeenLastCalledWith(
+      expect.objectContaining({offset: 10020, cursor: 'c10020'}),
+      expect.anything(),
+    )
+  })
+
+  it('keeps Next off after a page fails, until that page answers', async () => {
+    const many = Array.from({length: 20_000}, (_, i) => user(i + 1))
+    listUsers.mockImplementation((query: UserQuery) => page(query, many))
+    useAdminStore.getState().setUsersPage(1000)
+    renderSection()
+    await screen.findByText('user10001@example.com')
+    listUsers.mockImplementationOnce(() => Promise.reject(new ApiError('network', 0)))
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    await waitFor(() => expect(listUsers).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText("Couldn't load users")).toBeInTheDocument()
+    // The failed page told no cursor: the page after it has none, and past 10 000 its offset is refused.
+    expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled()
+    expect(screen.getByRole('button', {name: 'Previous page'})).toBeEnabled()
+    act(() => useAdminStore.getState().refresh())
+    expect(await screen.findByText('user10011@example.com')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Next page'})).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    expect(await screen.findByText('user10021@example.com')).toBeInTheDocument()
+    expect(listUsers).toHaveBeenLastCalledWith(
+      expect.objectContaining({offset: 10020, cursor: 'c10020'}),
+      expect.anything(),
+    )
+  })
+
+  it('takes the server at its word that no page follows, whatever the count says', async () => {
+    // The count was made before users were removed: 30, of which 17 remain.
+    listUsers.mockImplementation((query: UserQuery) => page(query).then(res => ({...res, total: 30})))
+    renderSection()
+    await screen.findByText('user2@example.com')
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    expect(await screen.findByText('user17@example.com')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled()
   })
 

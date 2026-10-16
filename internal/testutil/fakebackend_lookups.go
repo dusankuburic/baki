@@ -92,18 +92,35 @@ func (m *FakeBackend) ListOrgMembershipsForUser(ctx context.Context, userID stri
 	return out, nil
 }
 
-// ListFlowsWithTotal is ListFlows and CountFlows of the same filter. Like Postgres, which counts on the page's rows,
-// it counts again only for an empty page past the first.
-func (m *FakeBackend) ListFlowsWithTotal(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, int, error) {
+// ListFlowsPage is ListFlows' page, whether flows follow it (what CountFlows counts from its start, which
+// is the cursor's position, Skip flows on, or the offset), and CountFlows without the page bounds, capped like Postgres.
+func (m *FakeBackend) ListFlowsPage(ctx context.Context, filter interfaces.FlowFilter, totalCap int) (*interfaces.FlowPage, error) {
 	docs, err := m.ListFlows(ctx, filter)
-	if err != nil || (len(docs) == 0 && filter.Offset <= 0) {
-		return docs, 0, err
-	}
-	total, err := m.CountFlows(ctx, filter)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	return docs, total, nil
+	rest, err := m.CountFlows(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	start := filter.Offset
+	if filter.After != nil {
+		start = max(filter.After.Skip, 0)
+	}
+	unbounded := filter
+	unbounded.Offset, unbounded.After = 0, nil
+	total, err := m.CountFlows(ctx, unbounded)
+	if err != nil {
+		return nil, err
+	}
+	page := &interfaces.FlowPage{Docs: docs, HasMore: start+len(docs) < rest, Total: total}
+	if a := filter.After; a != nil && a.Counted {
+		page.Total, page.TotalCapped = a.Total, a.TotalCapped // the first page's, carried by the cursor
+	}
+	if totalCap > 0 && page.Total > totalCap {
+		page.Total, page.TotalCapped = totalCap, true
+	}
+	return page, nil
 }
 
 // SaveAuditEvents keeps every row through SaveAuditEvent, all or none: a nil row fails the whole batch. An id
@@ -168,6 +185,51 @@ func (m *FakeBackend) SaveIdentityLink(_ context.Context, link *interfaces.Ident
 	}
 	cp := *link
 	cp.CreatedAt = time.Now().UTC()
+	l.links[k] = &cp
+	return nil
+}
+
+// SaveUserWithIdentityLink checks both writes before making either, as the Postgres transaction rolls back: a taken
+// email (ErrEmailExists), an adoption of an account verified meanwhile (ErrAccountVerified) or an identity already
+// linked leaves the users and the links as they were.
+func (m *FakeBackend) SaveUserWithIdentityLink(_ context.Context, user *interfaces.User, link *interfaces.IdentityLink) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := &m.identityLinks
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if m.emailTakenLocked(user.Email, user.ID) {
+		return interfaces.ErrEmailExists
+	}
+	// An existing id is an adoption from a row read earlier: only while the stored row is unverified.
+	existing, adopt := m.Users[user.ID]
+	if adopt && existing.EmailVerified {
+		return interfaces.ErrAccountVerified
+	}
+	k := identityKey(link.Provider, link.Subject)
+	if _, ok := l.links[k]; ok {
+		return fmt.Errorf("identity link already exists for %s subject", link.Provider)
+	}
+	now := time.Now().UTC()
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = now
+	}
+	user.UpdatedAt = now
+	if m.Users == nil {
+		m.Users = make(map[string]*interfaces.User)
+	}
+	row := cloneUser(user)
+	if adopt {
+		// Only the verification and password change; the rest of user may be stale.
+		row = cloneUser(existing)
+		row.EmailVerified, row.Password, row.UpdatedAt = user.EmailVerified, user.Password, now
+	}
+	m.Users[user.ID] = row
+	if l.links == nil {
+		l.links = make(map[string]*interfaces.IdentityLink)
+	}
+	cp := *link
+	cp.CreatedAt = now
 	l.links[k] = &cp
 	return nil
 }

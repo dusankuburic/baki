@@ -195,6 +195,11 @@ describe('api read validation (per schema namespace)', () => {
       const page = await adminApi.listUsers({limit: 50, offset: 0})
       expect(page.items).toEqual([user])
 
+      mockFetch({items: [user], total: 2, offset: 0, limit: 1, hasMore: true, nextCursor: 'c1'})
+      expect(await adminApi.listUsers({limit: 1, offset: 0})).toMatchObject({hasMore: true, nextCursor: 'c1'})
+      mockFetch({items: [user], total: 2, offset: 0, limit: 1, hasMore: true, nextCursor: 7})
+      await expect(adminApi.listUsers({limit: 1, offset: 0})).rejects.toBeInstanceOf(ResponseValidationError)
+
       mockFetch({total: 1, byRole: {admin: 0, member: 1, viewer: 0, guest: 0, none: 0}, unverified: 0, locked: 0})
       await expect(adminApi.userStats()).resolves.toEqual({
         total: 1,
@@ -222,7 +227,15 @@ describe('api read validation (per schema namespace)', () => {
         createdAt: '2026-01-01T00:00:00Z',
       }
       mockFetch([event])
-      await expect(adminApi.listAuditEvents()).resolves.toEqual([event])
+      await expect(adminApi.listAuditEvents()).resolves.toEqual({events: [event], nextCursor: undefined})
+    })
+
+    it("hands back the audit page's X-Next-Cursor, the next page's cursor", async () => {
+      const headers = {'Content-Type': 'application/json', 'X-Next-Cursor': 'c-2'}
+      const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('[]', {status: 200, headers}))
+      const page = await adminApi.listAuditEvents({limit: 15, cursor: 'c-1'})
+      expect(page).toEqual({events: [], nextCursor: 'c-2'})
+      expect(String(spy.mock.calls[0]![0])).toContain('cursor=c-1')
     })
   })
 

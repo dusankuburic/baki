@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"pad-analyzer/internal/platform/txhook"
+	"pad-analyzer/internal/storage/interfaces"
 )
 
 // erasePhase orders account erasure: the phases run in this order.
@@ -33,7 +34,9 @@ type eraseStep struct {
 	// deletes says the step removes rows of table (rather than updating them), so ON DELETE CASCADE foreign keys to
 	// table reach their children: the coverage test accepts a cascade claim only through such a parent.
 	deletes bool
-	run     func(ctx context.Context, b *PostgresStorageBackend, tx *sql.Tx, e *erasure) error
+	// query is the statement of an eraseByUser or eraseByEmail step ("" for a run of its own), for the plan tests.
+	query string
+	run   func(ctx context.Context, b *PostgresStorageBackend, tx *sql.Tx, e *erasure) error
 }
 
 // erasure is the state of one account erasure.
@@ -47,7 +50,7 @@ type erasure struct {
 
 // eraseByUser is an erase step running query with $1 bound to the user's id.
 func eraseByUser(phase erasePhase, table, query string) eraseStep {
-	return eraseStep{phase: phase, table: table, deletes: isDelete(query), run: func(ctx context.Context, _ *PostgresStorageBackend, tx *sql.Tx, e *erasure) error {
+	return eraseStep{phase: phase, table: table, deletes: isDelete(query), query: query, run: func(ctx context.Context, _ *PostgresStorageBackend, tx *sql.Tx, e *erasure) error {
 		_, err := tx.ExecContext(ctx, query, e.userID)
 		return err
 	}}
@@ -55,7 +58,7 @@ func eraseByUser(phase erasePhase, table, query string) eraseStep {
 
 // eraseByEmail is an erase step running query with $1 bound to the user's email; skipped when it is unknown.
 func eraseByEmail(phase erasePhase, table, query string) eraseStep {
-	return eraseStep{phase: phase, table: table, deletes: isDelete(query), run: func(ctx context.Context, _ *PostgresStorageBackend, tx *sql.Tx, e *erasure) error {
+	return eraseStep{phase: phase, table: table, deletes: isDelete(query), query: query, run: func(ctx context.Context, _ *PostgresStorageBackend, tx *sql.Tx, e *erasure) error {
 		if e.email == "" {
 			return nil
 		}
@@ -74,8 +77,12 @@ func isDelete(query string) bool {
 // triage, versions, share links, invites, the audit trail). The statements run without the row-level-security user,
 // joining the request's transaction when there is one: they are keyed by the user's id and must reach the user's
 // rows on flows the user can no longer see; the caller authenticated the user. Idempotent: a missing user is not an
-// error. Blob cleanup runs after the commit.
+// error. The empty id is refused (ErrUserIDRequired): the steps would take every row keyed by it. Blob cleanup runs
+// after the commit.
 func (b *PostgresStorageBackend) DeleteUser(ctx context.Context, userID string) error {
+	if userID == "" {
+		return interfaces.ErrUserIDRequired
+	}
 	e := &erasure{userID: userID}
 	if err := b.withTx(ctx, func(_ context.Context, tx *sql.Tx) error {
 		return b.eraseUserInTx(ctx, tx, e)

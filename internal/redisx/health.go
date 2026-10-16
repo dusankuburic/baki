@@ -101,6 +101,20 @@ func (h *Health) Configured() bool { return h != nil && h.client != nil }
 // Degraded reports whether Redis is configured and unreachable right now. It reads state; it never pings.
 func (h *Health) Degraded() bool { return h.Configured() && h.down.Load() }
 
+// UpSince is when Redis last became reachable, and up whether it is now: false while degraded and for a deployment
+// without Redis.
+func (h *Health) UpSince() (since time.Time, up bool) {
+	if !h.Configured() {
+		return time.Time{}, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.down.Load() {
+		return time.Time{}, false
+	}
+	return h.since, true
+}
+
 // Status is a point-in-time view for the admin health page.
 type Status struct {
 	Configured bool
@@ -264,7 +278,7 @@ func (h *Health) DialHook(next redis.DialHook) redis.DialHook { return next }
 func (h *Health) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
 		err := next(ctx, cmd)
-		if cmd.Name() == "ping" {
+		if cmd.Name() == "ping" || (err != nil && isOptionalHandshake(cmd)) {
 			return err
 		}
 		h.record(cmdMechanism(cmd), err)
@@ -276,6 +290,9 @@ func (h *Health) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 func (h *Health) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []redis.Cmder) error {
 		err := next(ctx, cmds)
+		if err != nil && onlyHandshakeRefused(cmds) {
+			return err // the dial's handshake; what the connection then carries reports for itself
+		}
 		mech := otherMechanism
 		if err != nil {
 			for _, c := range cmds {
@@ -299,6 +316,39 @@ func (h *Health) record(mechanism string, err error) {
 	default:
 		h.RecordError(mechanism, err)
 	}
+}
+
+// onlyHandshakeRefused reports a pipeline whose only failures are the optional handshake commands go-redis sends on
+// every new connection and ignores when refused: CLIENT SETINFO (unknown before Redis 7.2, and Azure Cache for Redis
+// runs 6) and CLIENT MAINT_NOTIFICATIONS. Counting them would make each dial an error and three dials an outage.
+func onlyHandshakeRefused(cmds []redis.Cmder) bool {
+	refused := false
+	for _, c := range cmds {
+		if c.Err() == nil {
+			continue
+		}
+		if !isOptionalHandshake(c) {
+			return false
+		}
+		refused = true
+	}
+	return refused
+}
+
+func isOptionalHandshake(cmd redis.Cmder) bool {
+	if cmd.Name() != "client" {
+		return false
+	}
+	args := cmd.Args()
+	if len(args) < 2 {
+		return false
+	}
+	sub, _ := args[1].(string)
+	switch strings.ToLower(sub) {
+	case "setinfo", "maint_notifications":
+		return true
+	}
+	return false
 }
 
 // cmdMechanism names the mechanism a command touched by its key or channel: the first argument after the command

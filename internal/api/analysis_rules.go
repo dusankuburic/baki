@@ -141,7 +141,7 @@ func (h *AnalysisHandler) handleSetRuleEnabled(w http.ResponseWriter, r *http.Re
 // handleTestCustomRule runs a CANDIDATE rule against one of the caller's flows and reports what it
 // would match — validate answers "does this compile", this "does it do anything". Member-level, stores nothing.
 // @Summary      Test a candidate custom rule against a flow
-// @Description  Runs one unsaved rule, checked strictly, against a flow and returns the findings it would produce. The body is {rule, flowId} and nothing else; a rule the strict check refuses is a 400 with details.field ("rule.<field>") and details.reason.
+// @Description  Runs one unsaved rule, checked strictly, against a flow and returns the findings it would produce. The body is {rule, flowId} and nothing else; a rule the strict check refuses is a 400 with details.field ("rule.<field>") and details.reason. A built-in rule's id is not refused here (a legacy rule saved under one stays testable): it comes back in problems (reason RESERVED_ID, not a warning, since a save refuses it for a new rule), next to the strict check's warnings.
 // @Tags         analysis
 // @Accept       json
 // @Produce      json
@@ -177,11 +177,17 @@ func (h *AnalysisHandler) handleTestCustomRule(w http.ResponseWriter, r *http.Re
 		render.Error(w, customRuleError(err, "rule."), http.StatusBadRequest)
 		return
 	}
-	render.JSON(w, map[string]any{
+	out := map[string]any{
 		"matches":  len(findings),
 		"findings": findings,
 		"flowName": doc.Name,
-	})
+	}
+	// What the strict check says of the rule it ran: its warnings, and a built-in rule's id, which the editor shows as
+	// an error for a new rule (a save refuses one) and as a warning for a stored one.
+	if problems := toCustomRuleProblems(analyzer.CheckCustomRule(req.Rule, analyzer.CustomRuleStrict)); len(problems) > 0 {
+		out["problems"] = problems
+	}
+	render.JSON(w, out)
 }
 
 // @Summary      Update analysis rule config

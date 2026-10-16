@@ -15,7 +15,11 @@ var azureFoundrySpec = ProviderSpec{
 		Kind: CredentialDocument,
 		Fields: []CredentialField{
 			{Name: "endpoint", Label: "Resource endpoint", Type: FieldURL, Required: true, Placeholder: "https://my-resource.services.ai.azure.com"},
-			{Name: "authMode", Label: "Authentication", Type: FieldSelect, Required: true, Options: []string{AzureAuthModeAPIKey, AzureAuthModeEntra, AzureAuthModeEntraCLI}},
+			{Name: "authMode", Label: "Authentication", Type: FieldSelect, Required: true, Options: []SelectOption{
+				{Value: AzureAuthModeAPIKey, Label: "API key"},
+				{Value: AzureAuthModeEntra, Label: "Microsoft Entra ID"},
+				{Value: AzureAuthModeEntraCLI, Label: "Azure CLI"},
+			}},
 			{Name: "key", Label: "API key", Type: FieldSecret},
 			{Name: "tenantId", Label: "Tenant ID", Type: FieldText},
 			{Name: "clientId", Label: "Client ID", Type: FieldText},

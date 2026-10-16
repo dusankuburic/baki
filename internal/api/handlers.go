@@ -110,6 +110,12 @@ func (rt *Router) serveStatic(w http.ResponseWriter, r *http.Request, path strin
 				"form-action 'self'")
 	} else if strings.HasPrefix(path, "/assets/") {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else if path == "/sw.js" || path == "/manifest.json" || path == "/offline.html" {
+		// The service worker must be revalidated every load: a cached worker
+		// keeps serving the OLD shell (and its caches) for its whole lifetime,
+		// so a security-fix deploy would only reach browsers after the HTTP
+		// cache expires. Its dependencies ride the hashed /assets/ entries.
+		w.Header().Set("Cache-Control", "no-cache")
 	} else {
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 	}

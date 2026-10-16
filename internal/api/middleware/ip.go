@@ -15,6 +15,18 @@ func ClientIP(r *http.Request, trustedProxies []string) string {
 	return cachedProxySet(trustedProxies).clientIP(r)
 }
 
+// PeerIsTrusted reports whether the immediate TCP peer of r matches one of
+// trustedProxies. Callers use it to decide whether a forwarded header
+// (X-Forwarded-For, X-Forwarded-Proto) may be believed: a client that is not
+// a configured proxy must never influence decisions made from those headers.
+func PeerIsTrusted(r *http.Request, trustedProxies []string) bool {
+	remoteIP := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(remoteIP); err == nil {
+		remoteIP = host
+	}
+	return cachedProxySet(trustedProxies).trusts(remoteIP)
+}
+
 // proxySet is a trusted-proxy list parsed once (exact addresses and CIDR blocks). Malformed
 // entries are silently dropped — config validation already rejects them; this is defense-in-depth.
 type proxySet struct {

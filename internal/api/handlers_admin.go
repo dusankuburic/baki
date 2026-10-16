@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
-	"runtime/debug"
 	"strings"
 	"time"
 
@@ -16,47 +14,29 @@ import (
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/capability"
-	"pad-analyzer/internal/errreport"
 	"pad-analyzer/internal/lifecycle"
+	"pad-analyzer/internal/platform/drain"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 )
 
-// ScanNowFunc triggers an out-of-band governance sweep (a manual run of the scanner's periodic
-// pass). Nil when scanning isn't available (the endpoint reports 503); the run is async. It runs
-// as the scanner's job (scanner.ScanOnce): skipped while a sweep runs on any replica or the lock
-// cannot be asked for, and cancelled when the scanner stops at shutdown.
-type ScanNowFunc func(ctx context.Context)
+// ScanNowFunc starts an out-of-band governance sweep (a manual run of the scanner's periodic pass) in the
+// background and reports whether it started (scanner.ScanNow): nil when it did, lifecycle.ErrJobHeld while a sweep
+// runs on any replica, lifecycle.ErrJobStopped once the scanner stopped, another error when the sweep's lock or the
+// scanner is unavailable. The sweep is the scanner's job: bounded, panic-safe and cancelled when the scanner stops.
+// Nil when there is no server store to sweep (the endpoint reports 503).
+type ScanNowFunc func(ctx context.Context) error
 
-// manualRunTimeout caps an admin-triggered background scan so a stalled sweep can't leak a
-// goroutine forever. Generous: a full library sweep takes minutes, each flow bounded internally.
-const manualRunTimeout = 30 * time.Minute
+// scanNowLockWait bounds the request's wait for the sweep's cross-replica lock, normally one database round trip.
+const scanNowLockWait = 5 * time.Second
 
-// adminJobs runs admin-triggered jobs off the request path: capped, and drained (or abandoned at the deadline,
-// each bounded by manualRunTimeout) at shutdown instead of being bare goroutines nobody waits for.
-var adminJobs = lifecycle.NewBounded("admin_job", maxConcurrentAdminJobs)
-
-// maxConcurrentAdminJobs: a second "scan now" while one runs is allowed, a pile-up is not.
-const maxConcurrentAdminJobs = 2
-
-// runDetached runs an admin-triggered job on adminJobs, bounded by manualRunTimeout and guarded against
-// panics — the manual trigger did not recover, so a panic the nightly run survived took the process down when
-// an admin pressed "scan now". location is the pad_panics_total label. It reports false when the job was not
-// started (too many running, or shutting down).
-func runDetached(location, label string, run func(ctx context.Context)) bool {
-	return adminJobs.Go(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), manualRunTimeout)
-		defer cancel()
-		defer func() {
-			if rec := recover(); rec != nil {
-				errreport.CapturePanic(ctx, location, rec, debug.Stack(), errreport.Attrs{"job": label})
-			}
-		}()
-		slog.Info("admin: manual " + label + " triggered")
-		run(ctx)
-		slog.Info("admin: manual " + label + " completed")
-	})
-}
+// The codes of a scan-now that did not start.
+const (
+	// codeScanAlreadyRunning: a sweep runs on this or another replica; its results are the ones asked for.
+	codeScanAlreadyRunning = "SCAN_ALREADY_RUNNING"
+	// codeScanUnavailable: no store to sweep, or the sweep's lock could not be asked for; try again.
+	codeScanUnavailable = "SCAN_UNAVAILABLE"
+)
 
 type AdminHandler struct {
 	audit    *audit.Recorder
@@ -90,15 +70,16 @@ func NewAdminHandler(
 const maxUserSearchLen = 200
 
 // @Summary      List users
-// @Description  Returns one page of registered users, newest first, with the number of users matching the filters (total). Only available to system admins.
+// @Description  Returns one page of registered users, newest first, with the number of users matching the filters (total). hasMore reports users after the page, and nextCursor (absent on the last page) is the ?cursor= of the next one, with the same filters; a page with a cursor ignores offset. Only available to system admins.
 // @Tags         admin
 // @Produce      json
 // @Param        limit  query int    false "Page size (default 50, max 100)"
-// @Param        offset query int    false "Rows to skip"
-// @Param        q      query string false "Case-insensitive substring of the email or display name"
+// @Param        offset query int    false "Rows to skip, at most 10 000 without a cursor (a larger one is a 400; ignored with a cursor)"
+// @Param        cursor query string false "The previous page's nextCursor"
+// @Param        q      query string false "Case-insensitive substring of the email or display name; without a run of 3 letters or digits, a prefix of either"
 // @Param        role   query string false "Only this role: admin, member, viewer, guest, or none (accounts without a valid role)"
 // @Success      200 {object} render.PagedResponse[storageif.User] "One page of users"
-// @Failure      400 {object} map[string]string "Invalid limit, offset, q or role"
+// @Failure      400 {object} map[string]string "Invalid limit, offset (above 10 000 without a cursor), q, role or cursor"
 // @Failure      401 {object} map[string]string "Unauthorized"
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Failure      500 {object} map[string]string "Internal Server Error"
@@ -110,7 +91,7 @@ func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	offset, ok := parseIntParam(w, q.Get("offset"), "offset", 0)
+	offset, ok := listOffset(w, q.Get("offset"), q.Get("cursor") != "")
 	if !ok {
 		return
 	}
@@ -119,9 +100,6 @@ func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Reques
 	}
 	if limit > 100 {
 		limit = 100
-	}
-	if offset < 0 {
-		offset = 0
 	}
 	search := strings.TrimSpace(q.Get("q"))
 	if len(search) > maxUserSearchLen {
@@ -133,21 +111,42 @@ func (h *AdminHandler) handleAdminUserList(w http.ResponseWriter, r *http.Reques
 		render.Error(w, fmt.Errorf("invalid role filter: %s", role), http.StatusBadRequest)
 		return
 	}
+	filters := listFilterDigest(search, role)
+	after, err := decodeListCursor(q.Get("cursor"), adminUserListOrder, filters)
+	if err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
 
-	// An empty page is [] on the wire, never null: the admin table maps it.
-	users, total, err := h.users.QueryUsers(r.Context(), storageif.UserQuery{Q: search, Role: role, Limit: limit, Offset: offset})
+	// One more than the page, to tell whether another follows. An empty page is [] on the wire, never null: the admin
+	// table maps it.
+	users, total, err := h.users.QueryUsers(r.Context(), storageif.UserQuery{Q: search, Role: role, Limit: limit + 1, Offset: offset, After: after})
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
+	hasMore, next := len(users) > limit, ""
+	if hasMore {
+		users = users[:limit]
+		last := users[len(users)-1]
+		next = encodeListCursor(adminUserListOrder, filters, last.CreatedAt, last.ID)
+	}
 
 	render.JSON(w, render.PagedResponse[*storageif.User]{
-		Items:  users,
-		Total:  total,
-		Offset: offset,
-		Limit:  limit,
+		Items:      users,
+		Total:      total,
+		Offset:     offset,
+		Limit:      limit,
+		HasMore:    offsetPageHasMore(hasMore, next, after != nil, offset, limit),
+		NextCursor: next,
 	})
 }
+
+// Page sizes of the audit log, as the store bounds them: no limit is the default, one above the maximum the maximum.
+const (
+	adminAuditDefaultLimit = 100
+	adminAuditMaxLimit     = 500
+)
 
 // roleCounts is the per-role breakdown of userStatsView; "none" counts the
 // accounts whose stored role is not one of the four valid roles.
@@ -282,10 +281,12 @@ func toAuditEventViews(events []*storageif.AuditEvent) []auditEventView {
 // @Produce      json
 // @Param        action query string false "Only this action (e.g. auth.login)"
 // @Param        userId query string false "Only events by this user ID, or whose subject is this user (sign-ins, failed sign-ins, lockouts)"
-// @Param        limit query int false "Page size"
-// @Param        offset query int false "Rows to skip"
+// @Param        limit query int false "Page size (default 100, max 500)"
+// @Param        offset query int false "Rows to skip, at most 10 000 without a cursor (a larger one is a 400; ignored with a cursor)"
+// @Param        cursor query string false "The X-Next-Cursor of the previous page"
 // @Success      200 {array} map[string]interface{} "Audit entries"
-// @Failure      400 {object} map[string]string "Invalid limit or offset"
+// @Header       200 {string} X-Next-Cursor "When events follow the page: the ?cursor= of the next page, with the same filters"
+// @Failure      400 {object} map[string]string "Invalid limit, offset (above 10 000 without a cursor) or cursor"
 // @Failure      403 {object} map[string]string "Forbidden"
 // @Failure      503 {object} map[string]string "No storage backend (local mode)"
 // @Router       /api/admin/audit [get]
@@ -295,8 +296,20 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	offset, ok := parseIntParam(w, q.Get("offset"), "offset", 0)
+	offset, ok := listOffset(w, q.Get("offset"), q.Get("cursor") != "")
 	if !ok {
+		return
+	}
+	switch {
+	case limit <= 0:
+		limit = adminAuditDefaultLimit
+	case limit > adminAuditMaxLimit:
+		limit = adminAuditMaxLimit
+	}
+	filters := listFilterDigest(q.Get("userId"), q.Get("action"))
+	after, err := decodeListCursor(q.Get("cursor"), adminAuditOrder, filters)
+	if err != nil {
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 	filter := storageif.AuditFilter{
@@ -304,6 +317,7 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 		Action: q.Get("action"),
 		Limit:  limit,
 		Offset: offset,
+		After:  after,
 		// The operator asking "what happened to this account" wants the
 		// sign-ins and lockouts too, which carry the user as the subject.
 		IncludeSubject: true,
@@ -313,6 +327,24 @@ func (h *AdminHandler) handleAdminAuditList(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
+	}
+	// The answer stays a bare array (the admin page reads one), so the next cursor rides a header: after the last event
+	// of a full page, when one event at least follows it (a one-event read after it tells; the store's largest page has
+	// no room for one more).
+	if len(events) == limit {
+		last := events[len(events)-1]
+		if next := encodeListCursor(adminAuditOrder, filters, last.CreatedAt, last.ID); next != "" {
+			probe := filter
+			probe.Limit, probe.Offset, probe.After = 1, 0, &storageif.PageCursor{At: last.CreatedAt, ID: last.ID}
+			more, err := h.users.AuditEvents(r.Context(), probe)
+			if err != nil {
+				render.Error(w, err, http.StatusInternalServerError)
+				return
+			}
+			if len(more) > 0 {
+				w.Header().Set(nextCursorHeader, next)
+			}
+		}
 	}
 	render.JSON(w, toAuditEventViews(events))
 }
@@ -361,25 +393,36 @@ func (h *AdminHandler) handleMigrationStatus(w http.ResponseWriter, r *http.Requ
 //
 // The scanner normally runs on its periodic loop (PAD_SCAN_INTERVAL); this endpoint lets an admin
 // demand an immediate run — after a policy change, or with a long interval configured.
-// Fire-and-forget: a full sweep can take minutes, so the handler acknowledges {started: true} and
-// runs the work on a detached, bounded context.
+// A full sweep can take minutes, so the handler takes the sweep's lock, starts it in the background
+// and answers {started: true}, or says why it did not start.
 
 // @Summary      Run environment scanner
+// @Description  Starts a governance sweep now (admin only): the scanner's periodic pass, run in the background; its alerts arrive as a scheduled sweep's do. 200 {started: true} once it has started. A sweep already running on this or another replica is a 409 with code SCAN_ALREADY_RUNNING (its results are the ones asked for). A server that is stopping answers 503 SERVER_RESTARTING with Retry-After; no server store to sweep, or the sweep's cross-replica lock unavailable, is a 503 SCAN_UNAVAILABLE (try again).
 // @Tags         admin
-// @Accept       json
 // @Produce      json
-// @Success      200 {object} map[string]interface{} "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
+// @Success      200 {object} map[string]bool "Started: {started: true}"
 // @Failure      401 {object} map[string]string "Unauthorized"
-// @Failure      500 {object} map[string]string "Error"
+// @Failure      403 {object} map[string]string "Forbidden"
+// @Failure      409 {object} render.ErrorResponse "A sweep is already running (code SCAN_ALREADY_RUNNING)"
+// @Failure      503 {object} render.ErrorResponse "The sweep could not start (code SCAN_UNAVAILABLE), or the server is stopping (code SERVER_RESTARTING)"
 // @Router       /api/admin/scanner/scan [post]
 func (h *AdminHandler) handleScannerScan(w http.ResponseWriter, r *http.Request) {
 	if h.scanNow == nil {
-		render.Error(w, fmt.Errorf("governance scanner not configured: set PAD_SCAN_INTERVAL"), http.StatusServiceUnavailable)
+		render.ErrorWithCode(w, errors.New("governance scanner unavailable: no server store to sweep"), http.StatusServiceUnavailable, codeScanUnavailable)
 		return
 	}
-	if !runDetached("admin.scan-now", "governance scan", h.scanNow) {
-		render.ErrorWithCode(w, fmt.Errorf("a governance scan is already running; try again when it finishes"), http.StatusTooManyRequests, "SCAN_ALREADY_RUNNING")
+	ctx, cancel := context.WithTimeout(r.Context(), scanNowLockWait)
+	defer cancel()
+	switch err := h.scanNow(ctx); {
+	case errors.Is(err, lifecycle.ErrJobHeld):
+		render.ErrorWithCode(w, errors.New("a governance scan is already running (on this or another server); its results arrive when it finishes"), http.StatusConflict, codeScanAlreadyRunning)
+		return
+	case errors.Is(err, lifecycle.ErrJobStopped):
+		drain.Refuse(w)
+		return
+	case err != nil:
+		// Not a sweep in progress: the lock could not be asked for (a database error), or the scanner cannot sweep.
+		render.ErrorWithCode(w, fmt.Errorf("governance scan could not start: %w", err), http.StatusServiceUnavailable, codeScanUnavailable)
 		return
 	}
 	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionScanNow, ResourceType: "scanner"})

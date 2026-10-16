@@ -5,7 +5,7 @@ import {Activity, Database, HardDrive, Info, Play, RefreshCw, Server, ShieldChec
 import {adminApi, type ComponentStatus, type SystemHealth} from '@/api/admin'
 import {Button, useToast} from '@/components/shared'
 import {SectionCard, SectionNotice} from '@/components/auth/SectionCard'
-import {getErrorMessage} from '@/lib/getErrorMessage'
+import {getErrorCode, getErrorMessage} from '@/lib/getErrorMessage'
 import {useAsync} from '@/hooks/useAsync'
 import {useAdminStore} from '@/stores/adminStore'
 import {useSystemStore} from '@/stores/systemStore'
@@ -44,7 +44,11 @@ export function OperationsSection({visible = true, refreshKey = 0, children}: Pr
       await adminApi.triggerScannerScan()
       toast.success(t('operations.scanStarted'))
     } catch (e) {
-      toast.error(t('operations.scanFailed'), {description: getErrorMessage(e)})
+      const code = getErrorCode(e)
+      if (code === 'SCAN_ALREADY_RUNNING') toast.info(t('operations.scanAlreadyRunning'))
+      else if (code === 'SCAN_UNAVAILABLE')
+        toast.error(t('operations.scanFailed'), {description: t('operations.scanUnavailable')})
+      else toast.error(t('operations.scanFailed'), {description: getErrorMessage(e)})
     } finally {
       setScanBusy(false)
     }

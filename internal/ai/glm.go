@@ -16,7 +16,7 @@ func NewGLMProvider(apiKey string) *GLMProvider {
 	return &GLMProvider{
 		openaiBase: openaiBase{
 			apiKey:                apiKey,
-			client:                sharedHTTPClient,
+			client:                fixedHostClient(),
 			baseURL:               &glmBaseURL,
 			providerLabel:         "glm",
 			embeddingModel:        "embedding-3",

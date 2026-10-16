@@ -176,6 +176,8 @@ type approvalRecord struct {
 	Replica string `json:"replica"`
 	// Scope is the API-token scope the tool requires to decide ("" = none).
 	Scope string `json:"scope,omitempty"`
+	// Live: the replica keeps a liveness key, so its absence means the approval died with it (resumeSnapshot.Live).
+	Live bool `json:"live,omitempty"`
 }
 
 // activeRecord is the value of chatActiveKey.
@@ -193,10 +195,17 @@ type chatCluster struct {
 	instance string
 	// bus is nil when the replica has no instance name to be addressed by.
 	bus *redisx.CommandBus
+	// live keeps this replica's liveness key while it listens for commands; nil with one replica configured
+	// (shareAcrossReplicas), and then nothing it writes says it keeps one.
+	live *redisx.Liveness
+	// health is the shared client's (nil: none), and now the clock: a missing liveness key is believed only once this
+	// replica's own view of Redis has been steady for a whole key TTL (steadyView).
+	health *redisx.Health
+	now    func() time.Time
 }
 
 func newChatCluster(c *redis.Client, instance string, opts ...redisx.BusOption) *chatCluster {
-	cl := &chatCluster{c: c, instance: instance}
+	cl := &chatCluster{c: c, instance: instance, now: time.Now}
 	if instance != "" {
 		cl.bus = redisx.NewCommandBus(c, instance, chatCmdChannel, chatReplyChannel, opts...)
 	}
@@ -220,6 +229,7 @@ func (s *ChatService) attachCluster(c *redis.Client, instance string, busKey []b
 func (s *ChatService) StartCommands() {
 	if s.cluster != nil && s.cluster.bus != nil {
 		s.cluster.bus.Start(s.handleChatCommand)
+		s.cluster.live.Start()
 	}
 }
 
@@ -227,6 +237,8 @@ func (s *ChatService) StartCommands() {
 func (s *ChatService) StopCommands() {
 	if s.cluster != nil && s.cluster.bus != nil {
 		s.cluster.bus.Stop()
+		// A clean stop says at once that this replica is gone: a stop for a stream it left behind is not 503 meanwhile.
+		s.cluster.live.Stop()
 	}
 }
 
@@ -236,7 +248,7 @@ var (
 	chatCommandsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_chat_commands_total",
-			Help: "Chat stream commands between replicas by op (cancel, decide), side (origin: the replica that got the request; owner: the replica running the stream) and outcome: ok, gone (the stream had ended), no_pending (no such approval), forbidden (not the caller's stream), scope_denied (the token lacks the tool's scope), unsupported (an op this release does not know), unreachable (origin only: the owner could not be reached, the request answered 503 REPLICA_UNREACHABLE), unknown_owner (origin only: the stream's snapshot names no owner replica, a stream of the release before the commands; answered STREAM_NOT_FOUND), other (a reply status this release does not know). A steady unreachable rate is a replica that died or a Redis outage.",
+			Help: "Chat stream commands between replicas by op (cancel, decide), side (origin: the replica that got the request; owner: the replica running the stream) and outcome: ok, gone (the stream had ended), no_pending (no such approval), forbidden (not the caller's stream), scope_denied (the token lacks the tool's scope), unsupported (an op this release does not know), unreachable (origin only: the owner could not be reached, the request answered 503 REPLICA_UNREACHABLE), unknown_owner (origin only: the stream's snapshot names no owner replica, a stream of the release before the commands; answered STREAM_NOT_FOUND), owner_gone (origin only: the owner did not answer and its liveness key has lapsed, a replica that died; a stop is answered as for an ended stream, a decision as no longer pending), other (a reply status this release does not know). A steady unreachable rate is a stuck replica or a Redis outage; a replica that died shows as unreachable until its liveness key lapses (15 s), then as owner_gone.",
 		},
 		[]string{"op", "side", "outcome"},
 	)
@@ -323,6 +335,12 @@ var errNotDelivered = errors.New("command not delivered")
 // call sends cmd to the replica target and returns its answer. Every failure is ErrReplicaUnreachable, joined with
 // errNotDelivered when the command is known not to have been delivered.
 func (cl *chatCluster) call(ctx context.Context, target string, cmd chatCommand) (string, error) {
+	return cl.callOwner(ctx, target, false, cmd)
+}
+
+// callOwner is call for an owner that may keep a liveness key (live: the snapshot or approval record says it does).
+// When the owner does not answer and its key has lapsed, the failure is errOwnerGone: the stream died with its replica.
+func (cl *chatCluster) callOwner(ctx context.Context, target string, live bool, cmd chatCommand) (string, error) {
 	if cl == nil || cl.bus == nil {
 		recordUnreachable(cmd.Op, "no_bus")
 		return "", errors.Join(ErrReplicaUnreachable, errNotDelivered)
@@ -348,6 +366,10 @@ func (cl *chatCluster) call(ctx context.Context, target string, cmd chatCommand)
 			reason = "no_reply"
 		case errors.Is(err, redisx.ErrNotReady):
 			reason = "not_ready"
+		}
+		if cl.ownerGone(ctx, target, live) {
+			chatCommandsTotal.WithLabelValues(cmd.Op, "origin", "owner_gone").Inc()
+			return "", errOwnerGone
 		}
 		recordUnreachable(cmd.Op, reason)
 		if errors.Is(err, redisx.ErrNoReceiver) || errors.Is(err, redisx.ErrNotReady) {
@@ -404,7 +426,13 @@ func (s *ChatService) CancelStreamAs(ctx context.Context, scope, streamID string
 		chatCommandsTotal.WithLabelValues(opCancel, "origin", "unknown_owner").Inc()
 		return ErrStreamNotOwned
 	}
-	status, err := s.cluster.call(ctx, snap.Replica, chatCommand{Op: opCancel, StreamID: streamID, Scope: scope})
+	status, err := s.cluster.callOwner(ctx, snap.Replica, snap.Live, chatCommand{Op: opCancel, StreamID: streamID, Scope: scope})
+	if errors.Is(err, errOwnerGone) {
+		// The stream ended with its replica: the answer to a stop for an ended stream. Its snapshot goes, so a resume
+		// reports it interrupted instead of a stream that never ends.
+		s.cluster.dropDeadSnapshot(streamID, snap.Replica)
+		return nil
+	}
 	if err != nil {
 		return ErrReplicaUnreachable
 	}
@@ -461,7 +489,14 @@ func (s *ChatService) DecideApproval(ctx context.Context, scope, streamID, propo
 	if actor != nil && actor.Scoped() {
 		cmd.TokenScopes = actor.Scopes
 	}
-	status, err := s.cluster.call(ctx, rec.Replica, cmd)
+	status, err := s.cluster.callOwner(ctx, rec.Replica, rec.Live, cmd)
+	if errors.Is(err, errOwnerGone) {
+		// The approval died with its replica: answered as one no longer pending. The record goes before the claim, so a
+		// replica waiting on the claim finds nothing pending once it is free.
+		s.cluster.dropDeadApproval(proposalID, rec.Replica)
+		s.cluster.releaseDecision(proposalID, claim)
+		return ErrNoPendingFix
+	}
 	if err != nil {
 		// Not delivered at all (nobody listens, the bus is not up): the retry must be able to send. Possibly delivered
 		// (the reply did not come, the publish timed out): the claim is kept and says so, so the retry neither sends a
@@ -549,21 +584,23 @@ func (cl *chatCluster) opCtx(parent context.Context) (context.Context, context.C
 	return context.WithTimeout(context.WithoutCancel(parent), clusterOpTimeout)
 }
 
-// registerApproval publishes a pending approval for the other replicas. Best effort: a failure is logged and the
-// approval still works for decisions that reach this replica.
-func (cl *chatCluster) registerApproval(proposalID, streamID, requiredScope string, wait time.Duration) {
+// registerApproval publishes a pending approval for the other replicas and reports whether it is published. Best
+// effort: a failure is logged and the approval still works for decisions that reach this replica.
+func (cl *chatCluster) registerApproval(proposalID, streamID, requiredScope string, wait time.Duration) bool {
 	if cl == nil || len(proposalID) > maxProposalIDLen {
-		return
+		return false
 	}
-	val, err := json.Marshal(approvalRecord{V: 1, Kind: chatApprovalKey.Name(), Stream: streamID, Replica: cl.instance, Scope: requiredScope})
+	val, err := json.Marshal(approvalRecord{V: 1, Kind: chatApprovalKey.Name(), Stream: streamID, Replica: cl.instance, Scope: requiredScope, Live: cl.live != nil})
 	if err != nil {
-		return
+		return false
 	}
 	ctx, cancel := cl.opCtx(context.Background())
 	defer cancel()
 	if err := cl.c.Set(ctx, chatApprovalKey.Key(proposalID), val, wait+approvalKeySlack).Err(); err != nil {
 		redisx.LimitedWarn("chat_approval_publish", "chat approval not published: a decision from another replica will not find it", err)
+		return false
 	}
+	return true
 }
 
 // dropApproval removes the pending marker once the approval resolved. The TTL covers a failure. The decision claim stays:

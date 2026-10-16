@@ -59,8 +59,10 @@ func govVisibleFlows(user string) string {
 			    SELECT fc.flow_id FROM flow_collaborators fc WHERE fc.user_id = %[1]s`, user)
 }
 
-// govAlertReadWhere is govAlertWhere for the two read queries: the same target_user_id narrowing, with the
-// flow scope expressed through govVisibleFlows. Mutations keep govAlertWhere: keyed by alert id or rare.
+// govAlertReadWhere is govAlertWhere for the statements over many alerts (the list, the badge, "mark all read" and
+// "clear"): the same target_user_id narrowing, with the flow scope expressed through govVisibleFlows, so they start
+// from the caller's flows instead of testing every tenant's alerts. The one-alert mutations, keyed by id, keep
+// govAlertWhere.
 func govAlertReadWhere(userID string, args *sqlArgs) string {
 	if userID == "" {
 		// Local mode: no claims, single tenant. Only team-wide alerts exist.
@@ -187,14 +189,19 @@ func (b *PostgresStorageBackend) MarkGovernanceAlertRead(ctx context.Context, us
 	return err
 }
 
+// markAllGovAlertsReadSQL is the MarkAllGovernanceAlertsRead statement (exposed for the plan tests).
+func markAllGovAlertsReadSQL(userID string) (string, []any) {
+	var args sqlArgs
+	vis := govAlertReadWhere(userID, &args)
+	return `UPDATE gov_alerts SET read_at = NOW()
+		 WHERE read_at IS NULL AND dismissed_at IS NULL AND ` + vis, args
+}
+
 // MarkAllGovernanceAlertsRead clears the badge: stamps read_at on every visible
 // unread alert. RLS scopes the UPDATE to the caller's visible rows.
 func (b *PostgresStorageBackend) MarkAllGovernanceAlertsRead(ctx context.Context, userID string) error {
-	var args sqlArgs
-	vis := govAlertWhere(userID, &args)
-	_, err := b.query(ctx).ExecContext(ctx,
-		`UPDATE gov_alerts SET read_at = NOW()
-		 WHERE read_at IS NULL AND dismissed_at IS NULL AND `+vis, args...)
+	q, args := markAllGovAlertsReadSQL(userID)
+	_, err := b.query(ctx).ExecContext(ctx, q, args...)
 	return err
 }
 
@@ -208,16 +215,21 @@ func (b *PostgresStorageBackend) DismissGovernanceAlert(ctx context.Context, use
 	return err
 }
 
-// ClearGovernanceAlerts permanently deletes the caller's visible dismissed
-// alerts. Non-dismissed alerts are retained.
-func (b *PostgresStorageBackend) ClearGovernanceAlerts(ctx context.Context, userID string) error {
+// clearGovAlertsSQL is the ClearGovernanceAlerts statement (exposed for the plan tests).
+func clearGovAlertsSQL(userID string) (string, []any) {
 	// The most destructive of the six: an unscoped predicate here DELETED other
 	// orgs' dismissed alerts, and needed no identifier to do it.
 	var args sqlArgs
-	vis := govAlertWhere(userID, &args)
-	_, err := b.query(ctx).ExecContext(ctx,
-		`DELETE FROM gov_alerts
-		 WHERE dismissed_at IS NOT NULL AND `+vis, args...)
+	vis := govAlertReadWhere(userID, &args)
+	return `DELETE FROM gov_alerts
+		 WHERE dismissed_at IS NOT NULL AND ` + vis, args
+}
+
+// ClearGovernanceAlerts permanently deletes the caller's visible dismissed
+// alerts. Non-dismissed alerts are retained.
+func (b *PostgresStorageBackend) ClearGovernanceAlerts(ctx context.Context, userID string) error {
+	q, args := clearGovAlertsSQL(userID)
+	_, err := b.query(ctx).ExecContext(ctx, q, args...)
 	return err
 }
 

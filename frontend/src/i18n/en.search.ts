@@ -19,6 +19,7 @@ export const enSearch = {
     noMatches: 'No matches found for "{{query}}"',
     noMatchesScoped: 'No matches found for "{{query}}" in selected types',
     hintAllFlows: 'Type to search across all your flows...',
+    minChars: 'Type at least {{count}} letters or digits in a row to search across all your flows',
     hintThisFlow: 'Type to search across the entire flow...',
     hintSub: 'Search properties, variables, and comments',
     resultsCapped: '50+ results (refine query)',

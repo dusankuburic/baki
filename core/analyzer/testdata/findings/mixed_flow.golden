@@ -156,63 +156,63 @@ inventory: none
 findings: 17
 F-001 info/medium duplicate-action [Style] fix=remove-block @mixed_flow#0 sf=mixed_flow fp=duplicate-action:c47f47119420dc30
 F-002 info/medium subflow-no-error-handler [Reliability] fix=wrap-error-handler @mixed_flow#0 sf=mixed_flow fp=subflow-no-error-handler:c47f47119420dc30
-F-003 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-003 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 1)
     desc: malformed line
     meta: {"column":0,"line":1,"snippet":"Block,1,WebAutomation.Click link on web page,4,0"}
-F-004 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-004 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 3)
     desc: malformed line
     meta: {"column":0,"line":3,"snippet":"  WaitFor=0"}
-F-005 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-005 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 4)
     desc: malformed line
     meta: {"column":0,"line":4,"snippet":"Block,2,UIAutomation.Click button,4,4"}
-F-006 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-006 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 6)
     desc: malformed line
     meta: {"column":0,"line":6,"snippet":"Block,3,SetVariable.MyVar,4,8"}
-F-007 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-007 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 7)
     desc: malformed line
     meta: {"column":0,"line":7,"snippet":"  Value =\u003e %MyVar%"}
-F-008 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-008 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 8)
     desc: malformed line
     meta: {"column":0,"line":8,"snippet":"Block,4,Exit subflow,4,12"}
-F-009 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-009 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 9)
     desc: malformed line
     meta: {"column":0,"line":9,"snippet":"Block,5,Some unreachable action,4,16"}
-F-010 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-010 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 11)
     desc: malformed line
     meta: {"column":0,"line":11,"snippet":"Block,6,Loop.ForEach,4,20"}
-F-011 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-011 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 12)
     desc: malformed line
     meta: {"column":0,"line":12,"snippet":"  Item =\u003e %CurrentItem%"}
-F-012 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-012 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 13)
     desc: malformed line
     meta: {"column":0,"line":13,"snippet":"  Block,7,WebAutomation.Get text,4,24"}
-F-013 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-013 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 15)
     desc: malformed line
     meta: {"column":0,"line":15,"snippet":"  Block,8,SetVariable.Counter,4,28"}
-F-014 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-014 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 16)
     desc: malformed line
     meta: {"column":0,"line":16,"snippet":"    Value =\u003e %Counter%"}
-F-015 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-015 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 17)
     desc: malformed line
     meta: {"column":0,"line":17,"snippet":"Block,9,OnError.Handler,4,32"}
-F-016 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-016 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 19)
     desc: malformed line
     meta: {"column":0,"line":19,"snippet":"Block,10,WebAutomation.Fill text field,4,36"}
-F-017 warning/high parse-error [-] fix=- @- sf=mixed_flow fp=parse-error:
+F-017 warning/high parse-error [Syntax] fix=- @- sf=mixed_flow fp=parse-error:
     title: Parse error (line 21)
     desc: malformed line
     meta: {"column":0,"line":21,"snippet":"  Text='password=super_secret_value_here'"}

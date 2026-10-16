@@ -262,7 +262,9 @@ func TestDeployCompose_ReplicasOverlayAndItsCIJob(t *testing.T) {
 			t.Errorf("docker-compose.replicas.yml: %s must wait for a healthy db and redis", svc)
 		}
 	}
-	for _, port := range []string{`"8081:8080"`, `"8082:8080"`} {
+	// Loopback-bound like every dev-stack port: plaintext HTTP must not be
+	// reachable from the LAN (the smoke job and humans use localhost).
+	for _, port := range []string{`"127.0.0.1:8081:8080"`, `"127.0.0.1:8082:8080"`} {
 		if !strings.Contains(overlay, port) {
 			t.Errorf("docker-compose.replicas.yml publishes no %s", port)
 		}
@@ -329,4 +331,46 @@ func composeServiceBlock(text, service string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// TestDeployWorkflow_CapturesServingRevisionAndReportsFailedStartup pins GAP3-2 and GAP3-3 in deploy.yml:
+// the capture step reads properties.latestReadyRevisionName first and falls back to the template image when
+// empty, and a dedicated failure step reports when the Deploy step itself fails (e.g. startup probe timeout).
+func TestDeployWorkflow_CapturesServingRevisionAndReportsFailedStartup(t *testing.T) {
+	deploy := readDeployFile(t, ".github/workflows/deploy.yml")
+
+	captureIdx := strings.Index(deploy, "- name: Capture current revision image")
+	schemaIdx := strings.Index(deploy, "- name: Check whether this release changes schema migrations")
+	if captureIdx < 0 || schemaIdx < 0 || captureIdx >= schemaIdx {
+		t.Fatal("deploy.yml must contain 'Capture current revision image' before 'Check whether this release changes schema migrations'")
+	}
+	captureBlock := deploy[captureIdx:schemaIdx]
+	for _, want := range []string{
+		"--query properties.latestReadyRevisionName -o tsv",
+		"az containerapp revision show",
+		`--revision "$READY"`,
+		"--query properties.template.containers[0].image -o tsv",
+		`if [ -z "$IMAGE" ]; then`,
+	} {
+		if !strings.Contains(captureBlock, want) {
+			t.Errorf("capture step lacks %q", want)
+		}
+	}
+
+	smokeIdx := strings.Index(deploy, "- name: Smoke test")
+	reportIdx := strings.Index(deploy, "- name: Report failed revision")
+	rollbackIdx := strings.Index(deploy, "- name: Roll back on smoke-test failure")
+	if smokeIdx < 0 || reportIdx < 0 || rollbackIdx < 0 || !(smokeIdx < reportIdx && reportIdx < rollbackIdx) {
+		t.Fatal("deploy.yml must place 'Report failed revision' between 'Smoke test' and 'Roll back on smoke-test failure'")
+	}
+	reportBlock := deploy[reportIdx:rollbackIdx]
+	for _, want := range []string{
+		"if: failure() && steps.deploy.outcome == 'failure'",
+		"The new revision did not become ready; in Single revision mode the previous revision keeps serving traffic.",
+		"az containerapp revision deactivate",
+	} {
+		if !strings.Contains(reportBlock, want) {
+			t.Errorf("report failed revision step lacks %q", want)
+		}
+	}
 }

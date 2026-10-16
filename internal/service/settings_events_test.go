@@ -214,7 +214,7 @@ func TestSystemService_AnnouncesSettingsChanges(t *testing.T) {
 	if r.cachedFor("org-1") != nil || r.cachedFor("org-2") == nil {
 		t.Error("an org settings change must drop that org's profile and only that one")
 	}
-	if err := sys.UpdateUserSettings(ctx, "u1", *models.DefaultSettings()); err != nil {
+	if err := sys.UpdateUserSettings(ctx, "u1", *models.DefaultSettings(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := sys.UpdateSettings(ctx, *models.DefaultSettings()); err != nil {

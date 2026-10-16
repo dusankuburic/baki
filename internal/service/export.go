@@ -87,6 +87,18 @@ func (s *ExportService) Export(id string, doc *models.FlowDocument, report *mode
 		if err = validateUserPath(path); err != nil {
 			return nil, f, err
 		}
+		// Same shape as SaveClientExport: an absolute path (the native save
+		// dialog returns absolute paths, so the frontend contract is unchanged)
+		// and an extension matching a report format. The handler already drops
+		// the path in cloud mode; this bounds what a local-mode drive-by POST
+		// can do with a caller-supplied path — no dotfiles, no Startup-folder
+		// .bat/.cmd, no overwriting arbitrary program files.
+		if !filepath.IsAbs(path) {
+			return nil, f, fmt.Errorf("%w: export path must be absolute", ErrInvalidInput)
+		}
+		if ext := strings.ToLower(filepath.Ext(path)); !docExportExts[ext] {
+			return nil, f, fmt.Errorf("%w: unsupported export file type %q (want .md, .html or .pdf)", ErrInvalidInput, ext)
+		}
 		//nolint:gosec // G306: user-chosen export path; world-readable is intended for sharing.
 		if err = os.WriteFile(path, content, 0644); err != nil {
 			return nil, f, fmt.Errorf("write file: %w", err)
@@ -95,6 +107,10 @@ func (s *ExportService) Export(id string, doc *models.FlowDocument, report *mode
 
 	return content, f, nil
 }
+
+// docExportExts are the file types the report exports (PDF/Markdown/HTML) may
+// write server-side — the formats the native save dialog's filters offer.
+var docExportExts = map[string]bool{".md": true, ".html": true, ".pdf": true}
 
 // clientExportExts are the file types the findings panel saves through SaveClientExport:
 // its CSV of the filtered list (rendered in the browser) and the SARIF and JUnit XML it

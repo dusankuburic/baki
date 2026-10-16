@@ -85,6 +85,7 @@ func (e *identityEmbedder) embedded(text string) int {
 // it). The count behind the skip is cached, so turns in a row read it once.
 func TestSearch_EmptyCorpusSkipsEmbedding(t *testing.T) {
 	store := &countStore{FakeBackend: &testutil.FakeBackend{}}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	emb := &identityEmbedder{identity: "id-1"}
 	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(emb))
 
@@ -106,6 +107,7 @@ func TestSearch_EmptyCorpusSkipsEmbedding(t *testing.T) {
 // searches the new document instead of waiting out the cache.
 func TestSearch_UploadInvalidatesCorpusCount(t *testing.T) {
 	store := &countStore{FakeBackend: &testutil.FakeBackend{}}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	emb := &identityEmbedder{identity: "id-1"}
 	svc, rec := newSubscribedService(store, WithEmbedder(emb))
 	const q = "what is the retry policy?"
@@ -141,6 +143,7 @@ func TestSearch_UploadInvalidatesCorpusCount(t *testing.T) {
 // overwrite that invalidation with the stale "empty".
 func TestCorpusEmpty_StaleFillLosesToInvalidation(t *testing.T) {
 	store := &countStore{FakeBackend: &testutil.FakeBackend{}}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(&identityEmbedder{}))
 	store.onCount = func() { svc.InvalidateCorpus("org-1") } // the upload commits mid-read
 
@@ -158,6 +161,7 @@ func TestCorpusEmpty_StaleFillLosesToInvalidation(t *testing.T) {
 // key holds a hash of the query, never its text.
 func TestSearch_QueryEmbeddingCached(t *testing.T) {
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1}, "retry policy: three attempts")
 	emb := &identityEmbedder{identity: "openai|https://example.invalid|text-embedding-3-small|1536"}
 	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(emb))
@@ -333,6 +337,7 @@ func TestEmbedBatched_FailureStopsTheRest(t *testing.T) {
 // stale, so the next Search reads the count again.
 func TestDeleteDocument_InvalidatesCorpusCount(t *testing.T) {
 	store := &countStore{FakeBackend: &testutil.FakeBackend{}}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	svc, rec := newSubscribedService(store, WithEmbedder(&identityEmbedder{}))
 	ctx := context.Background()
 	for _, d := range []*interfaces.KnowledgeDocument{{ID: "d1", OrgID: "org-1"}, {ID: "d2", OrgID: "org-1"}, {ID: "d3", OrgID: "org-2"}} {
@@ -371,6 +376,7 @@ func TestDeleteDocument_InvalidatesCorpusCount(t *testing.T) {
 // A deleted organisation's cached count goes with it; other organisations' stay.
 func TestOrgDeleted_InvalidatesCorpusCount(t *testing.T) {
 	store := &countStore{FakeBackend: &testutil.FakeBackend{}}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	bus := eventbus.New(nil, 0)
 	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(&identityEmbedder{}), WithEventBus(bus))
 	SubscribeCorpusCache(bus, svc)

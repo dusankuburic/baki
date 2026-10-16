@@ -67,3 +67,30 @@ func TestFakeBackend_SaveUsageMetricConcurrent(t *testing.T) {
 		t.Errorf("%d rows carry a served model, want 25", withServed)
 	}
 }
+
+// DeleteUser keeps the erased user's organisation spend as the organisation's (without the user) and deletes their
+// personal spend, as Postgres's erasure does (lifecycle_users.go).
+func TestFakeBackend_DeleteUserKeepsOrgSpend(t *testing.T) {
+	ctx := context.Background()
+	be := NewFakeBackend()
+	for _, m := range []*interfaces.UsageMetric{
+		{ID: "org", UserID: "gone", OrgID: "o1", EstimatedCost: 1.5},
+		{ID: "own", UserID: "gone", EstimatedCost: 0.7},
+		{ID: "other", UserID: "stays", OrgID: "o1", EstimatedCost: 2},
+	} {
+		if err := be.SaveUsageMetric(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := be.DeleteUser(ctx, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range be.SavedUsageMetrics() {
+		got[r.ID] = r.UserID + "|" + r.OrgID
+	}
+	want := map[string]string{"org": "|o1", "other": "stays|o1"}
+	if len(got) != len(want) || got["org"] != want["org"] || got["other"] != want["other"] {
+		t.Errorf("usage rows after erasure = %v, want %v (organisation spend kept without the user, personal spend gone)", got, want)
+	}
+}

@@ -7,7 +7,7 @@ import (
 
 // KnowledgeStore covers the org knowledge base (RAG source documents + chunks).
 type KnowledgeStore interface {
-	// SaveKnowledgeDocument inserts the document row RLS-scoped to userID; the knowledge_documents WITH CHECK policy enforces org membership.
+	// SaveKnowledgeDocument inserts the document row RLS-scoped to userID; the knowledge_documents WITH CHECK policy enforces org membership. An organisation that does not exist is ErrOrgNotFound.
 	SaveKnowledgeDocument(ctx context.Context, userID string, doc *KnowledgeDocument) error
 	// DeleteKnowledgeDocument removes a document only when it belongs to orgID (one org cannot delete another's).
 	DeleteKnowledgeDocument(ctx context.Context, userID, orgID, id string) error
@@ -19,6 +19,10 @@ type KnowledgeStore interface {
 	ListKnowledgeDocumentIDsByFilename(ctx context.Context, orgID, filename string) (ids []string, total int, err error)
 	// SaveKnowledgeChunks inserts chunk rows RLS-scoped to userID; the knowledge_chunks WITH CHECK policy enforces org membership ("" only in non-authenticated local mode).
 	SaveKnowledgeChunks(ctx context.Context, userID string, chunks []KnowledgeChunk) error
+	// SaveKnowledgeDocumentWithChunks is SaveKnowledgeDocument and SaveKnowledgeChunks in one transaction, an upload's
+	// write: a document is never stored without its chunks. Any refusal (a document or chunk id already stored, the
+	// RLS policy) writes nothing.
+	SaveKnowledgeDocumentWithChunks(ctx context.Context, userID string, doc *KnowledgeDocument, chunks []KnowledgeChunk) error
 	// SearchKnowledge ranks the org's chunks at the query's width by cosine similarity. identity restricts the hits to the chunks embedded under it plus the legacy rows (no identity); "" = any identity.
 	SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int, identity string) ([]KnowledgeChunk, error)
 	// ListKnowledgeChunkContents returns up to limit chunks (no embeddings) strictly after the cursor in (doc_id, id) order — one re-index page; limit <= 0 = backend page cap. notIdentity skips the chunks already embedded under that identity (legacy rows are walked); "" walks every chunk.

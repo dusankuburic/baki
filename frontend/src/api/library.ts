@@ -72,6 +72,8 @@ export interface LibraryFilter {
   tags?: string[]
   limit?: number
   offset?: number
+  // The previous page's nextCursor. Sent beside the offset: a server that predates the cursors pages by the offset.
+  cursor?: string
 }
 
 export interface LibraryFlowVersion {
@@ -107,6 +109,7 @@ export const libraryApi = {
     if (filter.tags && filter.tags.length > 0) params.set('tags', filter.tags.join(','))
     if (filter.limit) params.set('limit', String(filter.limit))
     if (filter.offset) params.set('offset', String(filter.offset))
+    if (filter.cursor) params.set('cursor', filter.cursor)
     const qs = params.toString()
     return requestValidated(`/api/library${qs ? '?' + qs : ''}`, await getLibraryFlowsPageSchema(), {
       method: 'GET',

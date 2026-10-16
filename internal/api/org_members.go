@@ -98,6 +98,19 @@ func auditLentCredentialDisabled(ctx context.Context, rec *audit.Recorder, orgID
 	rec.Record(ctx, orgAuditEntry(audit.ActionKeysSave, orgID, meta))
 }
 
+// renderMemberChangeError answers a refused removal or role change: a user who is not a member is a 404, like an
+// unknown organisation (which the generic mapping already answers so), and taking the last admin away is a 409.
+func renderMemberChangeError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, collaboration.ErrMemberNotFound):
+		render.Error(w, err, http.StatusNotFound)
+	case errors.Is(err, collaboration.ErrLastAdmin):
+		render.Error(w, err, http.StatusConflict)
+	default:
+		render.Error(w, err, http.StatusInternalServerError)
+	}
+}
+
 // @Summary      List org members
 // @Tags         org
 // @Param        id path string true "Org ID"
@@ -143,11 +156,7 @@ func (h *OrgHandler) handleOrgMemberRemove(w http.ResponseWriter, r *http.Reques
 	// A removed admin who lent the shared credential takes it along (after the commit).
 	disabled := lendsSharedCredential(r.Context(), h.providers, id, userID)
 	if err := h.orgSvc.RemoveMember(r.Context(), id, userID); err != nil {
-		if errors.Is(err, collaboration.ErrLastAdmin) {
-			render.Error(w, err, http.StatusConflict)
-			return
-		}
-		render.Error(w, err, http.StatusInternalServerError)
+		renderMemberChangeError(w, err)
 		return
 	}
 	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgMemberRemove, id, map[string]string{"targetUser": userID}))
@@ -318,6 +327,8 @@ func (h *OrgHandler) handleInviteAccept(w http.ResponseWriter, r *http.Request) 
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} orgMemberMutationResponse "Updated; sharedCredentialDisabled is true when the demoted member was the lender of the org's shared Azure AI Foundry credential and it was disabled"
+// @Failure      404 {object} map[string]string "Unknown organisation, or the user is not a member of it"
+// @Failure      409 {object} map[string]string "The change would leave the organisation without an admin"
 // @Router       /api/orgs/{id}/members/{userId}/role [put]
 func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -344,7 +355,7 @@ func (h *OrgHandler) handleOrgMemberRoleUpdate(w http.ResponseWriter, r *http.Re
 		disabled = lendsSharedCredential(r.Context(), h.providers, id, userID)
 	}
 	if err := h.orgSvc.SetRole(r.Context(), id, userID, role); err != nil {
-		render.Error(w, err, http.StatusInternalServerError)
+		renderMemberChangeError(w, err)
 		return
 	}
 	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionOrgMemberRole, id, map[string]string{"targetUser": userID, "role": req.Role}))

@@ -1,11 +1,11 @@
 import {getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
-import {Check, Cloud, HardDrive, KeyRound, Loader2} from 'lucide-react'
-import {GithubMark} from '@/components/shared'
-import {useState, useEffect, useRef, useCallback, type ComponentType} from 'react'
+import {Check, KeyRound, Loader2} from 'lucide-react'
+import {useState, useEffect, useRef, useCallback} from 'react'
 import {createAdapter} from '@/platform/adapters'
 import {logger} from '@/lib/logger'
 import type {DeviceAuthResponse, GitHubAuthResult, GitHubUser} from '@/types'
+import {PROVIDER_GLYPHS, hasProviderGlyph} from './providerGlyphs'
 
 export const DEVICE_BUTTON_CLASS: Record<string, string> = {
   'github-models': 'bg-[#24292e] hover:bg-[#2f363d]',
@@ -30,20 +30,13 @@ interface Props {
 
 type State = 'unconfigured' | 'authorizing' | 'configured' | 'error'
 
-const GLYPHS: Record<string, ComponentType<{size?: number}>> = {
-  github: GithubMark,
-  cloud: Cloud,
-  'hard-drive': HardDrive,
-  key: KeyRound,
-}
-
 function glyphOf(icon: string | undefined): string {
   if (!icon) return 'github'
-  return Object.prototype.hasOwnProperty.call(GLYPHS, icon) ? icon : 'key'
+  return hasProviderGlyph(icon) ? icon : 'key'
 }
 
 function DeviceGlyph({name}: {name: string}) {
-  const Icon = GLYPHS[name] ?? KeyRound
+  const Icon = hasProviderGlyph(name) ? PROVIDER_GLYPHS[name]! : KeyRound
   return <Icon size={16} />
 }
 

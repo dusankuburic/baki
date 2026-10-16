@@ -146,7 +146,7 @@ func startServer(lc fx.Lifecycle, cfg *config.Config, router *api.Router, redisC
 			defer cancel()
 			err := server.Shutdown(shutdownCtx)
 			// Best-effort background work (webhooks, emails, alert fan-outs,
-			// usage rows, admin jobs) started by the requests that just finished
+			// usage rows) started by the requests that just finished
 			// gets the rest of the same budget; any still running after it is
 			// abandoned. Every lifecycle.Bounded runner is drained, not just the
 			// ones a handler happens to expose.

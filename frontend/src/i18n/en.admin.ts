@@ -112,6 +112,8 @@ export const enAdmin = {
     scanning: 'Starting…',
     scanStarted: 'Governance scan started',
     scanFailed: 'Trigger failed',
+    scanAlreadyRunning: 'A governance scan is already running; its alerts arrive when it finishes',
+    scanUnavailable: 'The scan could not start right now. Try again in a moment.',
     about: 'Version {{version}} ({{commit}}) · {{platform}}/{{arch}}',
     aboutUnknown: 'Version unknown',
   },

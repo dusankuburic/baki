@@ -38,6 +38,7 @@ func TestKnowledge_PolicySeesTheOrgOutsideARun(t *testing.T) {
 	policy := &recordingPolicy{}
 	factory := ai.NewProviderFactory(func(_, _ string) (string, error) { return "sk-member", nil }, nil, nil, nil, ai.WithProviderPolicy(policy))
 	store := testutil.NewFakeBackend()
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-1", OrgID: "org-1", Filename: "a.md"})
 	settings := &models.AppSettings{}
 	settings.AI.EmbeddingProvider = "openai" // chosen in settings, not pinned by PAD_EMBEDDING_PROVIDER

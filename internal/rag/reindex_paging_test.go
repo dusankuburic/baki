@@ -59,6 +59,7 @@ func seedManyChunks(store *testutil.FakeBackend, docs, n int) {
 // every document counted, and nothing reported as truncated.
 func TestReindexOrg_WalksEveryPage(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-empty") // the knowledge base needs its organisation
 	docs, n := 3, reindexPageSize+1
 	seedManyChunks(store, docs, n)
 	emb := &countingEmbedder{}
@@ -115,6 +116,7 @@ func TestReindexOrg_TruncatedBeyondCeiling(t *testing.T) {
 	t.Cleanup(func() { maxReindexChunks = prev })
 
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-empty") // the knowledge base needs its organisation
 	seedManyChunks(store, 2, maxReindexChunks+1)
 	svc := guardService(store, &countingEmbedder{})
 
@@ -150,6 +152,7 @@ func TestReindexOrg_TruncatedBeyondCeiling(t *testing.T) {
 
 	// Exactly the ceiling: complete, not truncated.
 	exact := &testutil.FakeBackend{EmbeddingDim: 1}
+	exact.SeedOrgs("org-1", "org-2", "org-empty") // the knowledge base needs its organisation
 	seedManyChunks(exact, 2, maxReindexChunks)
 	if res, err := guardService(exact, &countingEmbedder{}).ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{}); err != nil || res.Chunks != maxReindexChunks || res.Truncated || res.NextCursor != nil {
 		t.Errorf("corpus of exactly the ceiling = %+v, %v; want complete and not truncated", res, err)
@@ -191,6 +194,7 @@ func (g *gateEmbedder) Embed(ctx context.Context, text []string) ([][]float32, e
 // upload succeeds. Another org is not affected.
 func TestAddDocument_RefusedWhileReindexing(t *testing.T) {
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1", "org-2", "org-empty") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule")
 	_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-other", OrgID: "org-2", Filename: "other.md"})
 	gate := &gateEmbedder{entered: make(chan struct{}), release: make(chan struct{})}
@@ -263,6 +267,7 @@ func TestEmbeddingFailed_WrapsProviderCause(t *testing.T) {
 	cause := &ai.RateLimitError{RetryAfter: time.Second}
 	// Non-empty corpus: the sample runs first and fails.
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1", "org-2", "org-empty") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1, 0}, "alpha rule")
 	svc := guardService(store, failingEmbedder{err: cause})
 	for name, err := range map[string]error{

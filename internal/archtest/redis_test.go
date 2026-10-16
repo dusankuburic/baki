@@ -84,9 +84,14 @@ var redisDeclarations = map[string]int{
 	"internal/service/chat_commands.go":    5, // chat.cmd, chat.reply, chat.approval, chat.decision, chat.active (ADR 0033)
 	"internal/api/ws_ticket.go":            1, // ws.ticket
 	"internal/invalidation/fanout.go":      1, // inval.fanout
+	"internal/scanner/shared_scans.go":     1, // scanner.scan (ADR 0032 addendum)
+	"internal/service/analysis_shared.go":  2, // analysis.claim, analysis.pair (ADR 0032 addendum)
 	"internal/service/chat_resume.go":      1, // chat.resume
 	"internal/service/flow_upload_ids.go":  1, // flow.upload-id
 	"internal/websocket/backplane.go":      2, // ws.room, ws.presence
+	"internal/api/replica_caps.go":         2, // sse.conn-slots, flow.upload-slots (per-user caps across the replicas)
+	"internal/service/chat_replicas.go":    2, // chat.stream-slots, chat.stream-id
+	"internal/websocket/conn_cap.go":       1, // ws.conn-slots
 }
 
 // TestArch_RedisKeyLiteralsStayInDeclarations: no file outside internal/redisx and the files that declare a key

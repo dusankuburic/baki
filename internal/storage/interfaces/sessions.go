@@ -9,6 +9,9 @@ import (
 // ErrTokenAlreadyRevoked is returned by RevokeRefreshToken when the token was already revoked — treat as replay and revoke all of the user's sessions.
 var ErrTokenAlreadyRevoked = errors.New("refresh token already revoked")
 
+// ErrAccountVerified is SaveUserWithIdentityLink refusing to adopt an account verified since it was read.
+var ErrAccountVerified = errors.New("the account is already verified")
+
 // IdentityLink ties an external IdP identity (provider + stable subject ID) to a local user account for OIDC SSO.
 type IdentityLink struct {
 	Provider  string    `json:"provider"`
@@ -50,6 +53,12 @@ type RefreshTokenStore interface {
 type IdentityLinkStore interface {
 	// SaveIdentityLink stores a new link; an identity already linked (to anyone) is an error, never re-pointed.
 	SaveIdentityLink(ctx context.Context, link *IdentityLink) error
+	// SaveUserWithIdentityLink stores user and link as SaveIdentityLink does, in one transaction: an SSO sign-up never
+	// leaves an account without the identity that signs it in. A new id is inserted. An existing one is an adoption:
+	// only its email_verified and password take user's values, and only while the stored row is unverified (the
+	// rest of user may be stale); a row verified meanwhile is ErrAccountVerified. A taken email is ErrEmailExists
+	// and an identity already linked an error; in every refusal nothing is written.
+	SaveUserWithIdentityLink(ctx context.Context, user *User, link *IdentityLink) error
 	// LoadIdentityLink returns the link of an external identity, or ErrNotFound.
 	LoadIdentityLink(ctx context.Context, provider, subject string) (*IdentityLink, error)
 	// ListIdentityLinks returns userID's links, oldest first; never nil.

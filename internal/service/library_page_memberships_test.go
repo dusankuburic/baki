@@ -76,7 +76,7 @@ func TestListLibraryFlowsPage_ResolvesMembershipsOnce(t *testing.T) {
 	lib, b, _ := newR2Library(t)
 	ctx := context.Background()
 
-	page, err := lib.ListLibraryFlowsPage(ctx, "u1", "", ScopeAll, "", "updated_desc", 25, 0, nil)
+	page, err := lib.ListLibraryFlowsPage(ctx, "u1", "", ScopeAll, "", "updated_desc", 25, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("ListLibraryFlowsPage: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestListLibraryFlowsPage_ResolvesMembershipsOnce(t *testing.T) {
 
 	// Scopes that do not widen by org carry no memberships.
 	for _, scope := range []LibraryScope{ScopeMine, ScopeShared} {
-		p, err := lib.ListLibraryFlowsPage(ctx, "u1", "", scope, "", "", 25, 0, nil)
+		p, err := lib.ListLibraryFlowsPage(ctx, "u1", "", scope, "", "", 25, 0, nil, nil)
 		if err != nil {
 			t.Fatalf("ListLibraryFlowsPage(%s): %v", scope, err)
 		}
@@ -132,7 +132,7 @@ func TestListLibraryFlowsPage_ResolvesMembershipsOnce(t *testing.T) {
 func TestBatchFlowPermissionsWithRoles_NoRoleQueries(t *testing.T) {
 	lib, b, store := newR2Library(t)
 	ctx := context.Background()
-	page, err := lib.ListLibraryFlowsPage(ctx, "u1", "", ScopeAll, "", "", 25, 0, nil)
+	page, err := lib.ListLibraryFlowsPage(ctx, "u1", "", ScopeAll, "", "", 25, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("ListLibraryFlowsPage: %v", err)
 	}

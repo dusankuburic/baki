@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 	"weak"
 
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/semaphore"
@@ -43,6 +45,9 @@ type analysisRunFunc func(ctx context.Context, in analyzer.Input) *models.Analys
 type reportPair struct {
 	prev    *models.AnalysisReport
 	current *models.AnalysisReport
+	// at is when current was last recorded (unix ms): the shared pair's run is served instead only when it is newer
+	// (sharedAnalysis.run).
+	at int64
 }
 
 // cost is the bytes the pair charges against analysisReportBudget.
@@ -209,6 +214,32 @@ func analysisHistoryKey(doc *models.FlowDocument) string {
 	return analyzer.StableFlowID(doc)
 }
 
+// recordKey names a flow's report pair and dashboard-record claim, in this process and in Redis: a stored flow by its
+// tenant and storage id, anything else (a desktop document, a path) by its stable identity under "path". A
+// stored folder re-parsed by a cloud fix or a snapshot restore carries the parser's StableID, a hash of its file
+// names, which another organisation's folder of the same names shares: keyed by it, one tenant's report was served
+// for the other's flow.
+type recordKey struct {
+	tenant, flow string
+	// part is the tenant as a cache key part (sharedRuns).
+	part cache.Part
+}
+
+func analysisRecordKey(doc *models.FlowDocument) recordKey {
+	if doc.FilePath == "" && doc.ID != "" {
+		switch {
+		case doc.OrganizationID != "":
+			return recordKey{"org-" + doc.OrganizationID, doc.ID, cache.Org(doc.OrganizationID)}
+		case doc.OwnerID != "":
+			return recordKey{"user-" + doc.OwnerID, doc.ID, cache.User(doc.OwnerID)}
+		}
+	}
+	return recordKey{"path", analysisHistoryKey(doc), cache.Local()}
+}
+
+// String is the key of the in-process pair and claim maps.
+func (k recordKey) String() string { return k.tenant + "/" + k.flow }
+
 type AnalysisService struct {
 	notifier    EventNotifier
 	settings    SettingsProvider
@@ -234,6 +265,8 @@ type AnalysisService struct {
 	mu      sync.Mutex
 	reports *reportLRU
 	claims  *recordClaims
+	// shared is the other replicas' view of the pair and the claims (AnalysisOptions.Shared); nil: none.
+	shared *sharedAnalysis
 }
 
 // AnalysisOptions are AnalysisService's deployment wiring; the zero value analyzes on deployment settings with
@@ -254,6 +287,10 @@ type AnalysisOptions struct {
 	// Analyzer is the process's cached analyzer (internal/di), shared with FlowService so a reimport, a deleted
 	// flow and a desktop folder open reach the reports this service serves; nil builds a private one.
 	Analyzer *analyzer.CachedAnalyzer
+	// Shared is the deployment's Redis when it can run more than one replica (PAD_MAX_REPLICAS > 1): the report
+	// pair and the dashboard-record claims are then the deployment's (analysis_shared.go); nil keeps them per
+	// process.
+	Shared *redis.Client
 }
 
 // NewAnalysisService builds the service; the error return is kept for the DI signature.
@@ -275,6 +312,7 @@ func NewAnalysisService(notifier EventNotifier, settings SettingsProvider, histo
 		largeSem:    largeAnalysisSem,
 		reports:     newReportLRU(analysisReportBudget),
 		claims:      newRecordClaims(maxRecordClaims),
+		shared:      newSharedAnalysis(opts.Shared),
 	}, nil
 }
 
@@ -324,7 +362,9 @@ func (s *AnalysisService) ReleaseRecord(doc *models.FlowDocument, report *models
 	if s == nil || s.claims == nil || report == nil {
 		return
 	}
-	s.claims.release(analysisHistoryKey(doc), report)
+	key := analysisRecordKey(doc)
+	s.claims.release(key.String(), report)
+	s.shared.release(context.Background(), key, report)
 }
 
 // AnalyzeFlowBackground analyzes and RECORDS but emits no progress; above backgroundReportCeiling nothing is ADDED.
@@ -447,7 +487,8 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 
 	// Track the two most recent distinct runs for diffing.
 	if record {
-		key := analysisHistoryKey(doc)
+		rk := analysisRecordKey(doc)
+		key := rk.String()
 		s.mu.Lock()
 		pair, ok := s.reports.Get(key)
 		if !ok {
@@ -465,17 +506,32 @@ func (s *AnalysisService) analyzeFlow(ctx context.Context, doc *models.FlowDocum
 			pair.prev = pair.current
 			pair.current = result
 		}
+		at := time.Now().UnixMilli()
+		pair.at = at
 		// The claim is separate from the run tracking and lives outside the budgeted pair cache.
 		if claim {
 			fresh = s.claims.take(key, result)
 		}
 		// Re-put after mutating (the pair's cost changed); a background caller may not add a large one.
-		if ok || !opts.background || analyzer.ReportCost(result) <= backgroundReportCeiling {
+		retain := ok || !opts.background || analyzer.ReportCost(result) <= backgroundReportCeiling
+		if retain {
 			s.reports.Put(key, pair)
 		}
 		s.mu.Unlock()
+		// The other replicas' view: the run, its report unless a sweep made it, and the claim, which the shared one
+		// decides while Redis answers.
+		if s.shared != nil {
+			if retain {
+				s.shared.record(ctx, rk, result, at, !opts.background)
+			}
+			if claim {
+				if f, ok := s.shared.claim(ctx, rk, result); ok {
+					fresh = f
+				}
+			}
+		}
 		if newRun && s.history != nil {
-			s.history.Record(key, result, doc)
+			s.history.Record(analysisHistoryKey(doc), result, doc)
 		}
 	}
 
@@ -571,12 +627,20 @@ func countBlockTree(blocks []models.Block) int {
 }
 
 // TestRule runs ONE candidate rule and returns its findings — nothing cached, recorded or emitted. The rule is
-// checked strictly, as a save would; a rule it refuses is the *analyzer.CustomRuleError.
+// checked strictly, as a save would, except for a built-in rule's id: a test stores nothing, and a rule saved under
+// one before ids were checked can still be edited (OrgRuleService.SaveRule), so its editor must be able to test it.
+// A rule it refuses is the *analyzer.CustomRuleError.
 func (s *AnalysisService) TestRule(ctx context.Context, doc *models.FlowDocument, cfg analyzer.CustomRuleConfig) ([]models.Finding, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("no flow loaded")
 	}
-	rule, _, err := analyzer.CompileCustomRule(cfg, analyzer.CustomRuleStrict)
+	for _, p := range analyzer.CheckCustomRule(cfg, analyzer.CustomRuleStrict) {
+		if !p.Warning && p.Reason != analyzer.ReasonReservedID {
+			return nil, fmt.Errorf("invalid rule: %w", p)
+		}
+	}
+	// Tolerant differs from Strict only in what the loop above already refused, and in the built-in id.
+	rule, _, err := analyzer.CompileCustomRule(cfg, analyzer.CustomRuleTolerant)
 	if err != nil {
 		return nil, fmt.Errorf("invalid rule: %w", err)
 	}
@@ -594,30 +658,35 @@ func (s *AnalysisService) TestRule(ctx context.Context, doc *models.FlowDocument
 
 // PreviousReport returns the analysis run recorded immediately before the current one.
 func (s *AnalysisService) PreviousReport(doc *models.FlowDocument) (*models.AnalysisReport, bool) {
-	if s == nil || s.reports == nil {
-		return nil, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pair, _ := s.reports.Get(analysisHistoryKey(doc))
-	if pair == nil || pair.prev == nil {
-		return nil, false
-	}
-	return pair.prev, true
+	return s.recordedRun(doc, true)
 }
 
 // CurrentReport returns the flow's most recent report; nil-safe on an unconfigured service.
 func (s *AnalysisService) CurrentReport(doc *models.FlowDocument) (*models.AnalysisReport, bool) {
+	return s.recordedRun(doc, false)
+}
+
+// recordedRun is the pair's previous or current run: the deployment's when the pair is shared and Redis answers
+// (this replica's own report when it holds that run), else this replica's.
+func (s *AnalysisService) recordedRun(doc *models.FlowDocument, previous bool) (*models.AnalysisReport, bool) {
 	if s == nil || s.reports == nil {
 		return nil, false
 	}
+	key := analysisRecordKey(doc)
+	var cur, prev *models.AnalysisReport
+	var at int64
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	pair, _ := s.reports.Get(analysisHistoryKey(doc))
-	if pair == nil || pair.current == nil {
-		return nil, false
+	if pair, _ := s.reports.Get(key.String()); pair != nil {
+		cur, prev, at = pair.current, pair.prev, pair.at
 	}
-	return pair.current, true
+	s.mu.Unlock()
+	if r, ok := s.shared.run(key, previous, cur, prev, at); ok {
+		return r, r != nil
+	}
+	if previous {
+		return prev, prev != nil
+	}
+	return cur, cur != nil
 }
 
 // History returns the persisted analysis trend snapshots for a flow.

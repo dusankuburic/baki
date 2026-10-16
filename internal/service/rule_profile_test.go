@@ -32,6 +32,7 @@ func deploymentSettings(rules map[string]models.RuleConfig) *stubSettings {
 
 func storeRule(t *testing.T, b *testutil.FakeBackend, orgID, ruleID, match string, enabled bool) {
 	t.Helper()
+	b.SeedOrgs(orgID)
 	cfg := analyzer.CustomRuleConfig{
 		ID: ruleID, Name: ruleID, Severity: "warning",
 		Category: "Style", RawTypeMatch: match,

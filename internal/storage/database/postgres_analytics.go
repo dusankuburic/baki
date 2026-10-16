@@ -450,10 +450,7 @@ func (b *PostgresStorageBackend) LoadSecurityAnalytics(ctx context.Context, user
 		return nil, fmt.Errorf("analytics failed logins: %w", err)
 	}
 	if includeLocked {
-		if err := b.query(ctx).QueryRowContext(ctx, `
-			SELECT COUNT(*)::int FROM users
-			WHERE locked_until IS NOT NULL AND locked_until > NOW()`,
-		).Scan(&out.LockedAccounts); err != nil {
+		if err := b.query(ctx).QueryRowContext(ctx, lockedAccountsCountSQL).Scan(&out.LockedAccounts); err != nil {
 			return nil, fmt.Errorf("analytics locked accounts: %w", err)
 		}
 		out.LockedRead = true

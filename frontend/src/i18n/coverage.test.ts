@@ -134,6 +134,7 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/chat/hooks/useSelectedBlock.ts',
   'src/components/chat/ChatStreamProvider.tsx',
   'src/components/chat/chatStreamContext.ts',
+  'src/components/chat/providerGlyphs.ts',
 ])
 
 function usesI18n(src: string): boolean {

@@ -26,7 +26,7 @@ func init() {
 			{table: "flow_versions", noExport: "earlier versions of the exported flows (open: the bundle carries current content only)",
 				erase: erasedByStep | erasedByCascade, org: orgNotKeyed, noPurge: "pruned per flow on every save"},
 			{table: "flow_snapshots", noExport: "pre-mutation copies of the exported flows' source, an undo ring kept for 24 hours",
-				erase: erasedByCascade, org: orgNotKeyed},
+				erase: erasedByStep | erasedByCascade, org: orgNotKeyed},
 			{table: "flow_analysis", noExport: "derived from the flow's content",
 				erase: erasedByCascade, org: orgNotKeyed, noPurge: "one row per flow"},
 			{table: "flow_analysis_history", noExport: "derived from the flow's content",
@@ -67,6 +67,8 @@ func init() {
 			{phase: eraseOwned, table: "flows", deletes: true, run: eraseOwnedFlows},
 			// The user's identity on what stays with other people's flows: the content is theirs to keep.
 			eraseByUser(eraseIdentity, "flow_versions", `UPDATE flow_versions SET created_by = '' WHERE created_by = $1`),
+			// The per-user undo bound's identity (v47): the snapshot is the flow's text, so it stays for its 24 hours.
+			eraseByUser(eraseIdentity, "flow_snapshots", `UPDATE flow_snapshots SET user_id = '' WHERE user_id = $1`),
 			eraseByUser(eraseIdentity, "finding_status", `UPDATE finding_status SET
 		updated_by  = CASE WHEN updated_by = $1 THEN '' ELSE updated_by END,
 		assignee_id = CASE WHEN assignee_id = $1 THEN '' ELSE assignee_id END
@@ -87,7 +89,7 @@ func init() {
 		},
 		purge: []purgeStep{
 			// The undo ring is a 24 hour affordance: reads hide an older snapshot at once, the sweep frees its space.
-			// Batched because a long-idle deployment can hold many large rows; the count bound is per flow only.
+			// Batched because a long-idle deployment can hold many large rows; the push bounds each flow and each user, not the table.
 			{table: "flow_snapshots", cond: fmt.Sprintf(`created_at < NOW() - INTERVAL '%d seconds'`, int(interfaces.FlowSnapshotTTL.Seconds())), batched: true,
 				count: func(r *interfaces.PurgeResult) *int { return &r.FlowSnapshots }},
 			// An expired share link can never be redeemed again, so its row is dead weight — and one that still
@@ -227,7 +229,7 @@ func (b *PostgresStorageBackend) ownedFlowsPage(ctx context.Context, userID, aft
 		return nil, fmt.Errorf("list flows: %w", err)
 	}
 	defer rows.Close()
-	page, _, err := scanFlowList(rows, false, false)
+	page, err := scanFlowList(rows, false)
 	if err != nil {
 		return nil, err
 	}

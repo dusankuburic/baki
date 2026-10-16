@@ -116,6 +116,7 @@ func TestFakeBackend_PurgeExpiredData(t *testing.T) {
 	ctx := context.Background()
 	b := NewFakeBackend()
 	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
+	_ = b.SaveUser(ctx, &interfaces.User{ID: "u", Email: "u@example.com"}) // a session needs its account
 	_ = b.StoreRefreshToken(ctx, "old", "u", past, "", "")
 	_ = b.StoreRefreshToken(ctx, "live", "u", future, "", "")
 	_ = b.CreateAPIToken(ctx, &interfaces.APIToken{ID: "t1", UserID: "u", TokenHash: "h1", ExpiresAt: &past})
@@ -126,10 +127,10 @@ func TestFakeBackend_PurgeExpiredData(t *testing.T) {
 	_ = b.SaveOrg(ctx, &interfaces.Organisation{ID: "org", Name: "Org"})
 	longAgo, lately := time.Now().AddDate(0, 0, -8), time.Now().AddDate(0, 0, -1)
 	for _, inv := range []*interfaces.OrgInvite{
-		{ID: "expired", OrgID: "org", Email: "a@example.com", ExpiresAt: past},
-		{ID: "accepted-long-ago", OrgID: "org", Email: "b@example.com", ExpiresAt: future, AcceptedAt: &longAgo},
-		{ID: "accepted-lately", OrgID: "org", Email: "c@example.com", ExpiresAt: future, AcceptedAt: &lately},
-		{ID: "pending", OrgID: "org", Email: "d@example.com", ExpiresAt: future},
+		{ID: "expired", OrgID: "org", Email: "a@example.com", TokenHash: "h-expired", ExpiresAt: past},
+		{ID: "accepted-long-ago", OrgID: "org", Email: "b@example.com", TokenHash: "h-accepted-long-ago", ExpiresAt: future, AcceptedAt: &longAgo},
+		{ID: "accepted-lately", OrgID: "org", Email: "c@example.com", TokenHash: "h-accepted-lately", ExpiresAt: future, AcceptedAt: &lately},
+		{ID: "pending", OrgID: "org", Email: "d@example.com", TokenHash: "h-pending", ExpiresAt: future},
 	} {
 		if err := b.SaveOrgInvite(ctx, inv); err != nil {
 			t.Fatalf("SaveOrgInvite %s: %v", inv.ID, err)
@@ -155,6 +156,9 @@ func TestFakeBackend_PurgeExpiredData(t *testing.T) {
 func TestFakeBackend_SearchKnowledgeRanksByCosineSimilarity(t *testing.T) {
 	ctx := context.Background()
 	b := NewFakeBackend()
+	for _, org := range []string{"org", "other"} { // a document needs its organisation
+		_ = b.SaveOrg(ctx, &interfaces.Organisation{ID: org, Name: org})
+	}
 	_ = b.SaveKnowledgeDocument(ctx, "", &interfaces.KnowledgeDocument{ID: "d1", OrgID: "org", Filename: "guide.md"})
 	_ = b.SaveKnowledgeDocument(ctx, "", &interfaces.KnowledgeDocument{ID: "d2", OrgID: "other", Filename: "theirs.md"})
 	_ = b.SaveKnowledgeChunks(ctx, "", []interfaces.KnowledgeChunk{

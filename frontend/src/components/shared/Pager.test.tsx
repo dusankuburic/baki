@@ -37,6 +37,22 @@ describe('Pager', () => {
     expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled()
   })
 
+  it('keeps Next disabled when told to, whatever the total says', () => {
+    render(
+      <Pager
+        page={0}
+        pageSize={10}
+        count={10}
+        total={17}
+        nextDisabled
+        onPageChange={() => {}}
+        label="Users pagination"
+      />,
+    )
+    expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled()
+    expect(screen.getByRole('navigation', {name: 'Users pagination'})).toHaveTextContent('Showing 1–10 of 17')
+  })
+
   it('offers the page sizes and reports a change', () => {
     const onPageSizeChange = vi.fn()
     render(

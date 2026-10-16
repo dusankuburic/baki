@@ -3,7 +3,10 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -96,6 +99,70 @@ func TestCLI_SeveralFlowsRunLibraryRules(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("text output lacks %q:\n%s", want, stdout)
 		}
+	}
+}
+
+// TestCLI_SamePathTwiceIsOneFlow: a flow named twice, however the path is
+// spelled (with ./, relative or absolute, and on Windows in another case), is
+// analyzed once. It was two flows: listed twice, and its subflows reported by
+// the library rule as duplicated across the two. A folder named twice is one
+// flow too, and so a single-flow report, as when it is named once.
+func TestCLI_SamePathTwiceIsOneFlow(t *testing.T) {
+	a, b := writeLibraryFlows(t)
+	dir := filepath.Dir(a)
+	sep := string(filepath.Separator)
+	spellings := []string{a, dir + sep + "." + sep + filepath.Base(a)}
+	if cwd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(cwd, a); err == nil {
+			spellings = append(spellings, rel)
+		}
+	}
+	if runtime.GOOS == "windows" {
+		spellings = append(spellings, strings.ToUpper(a))
+	}
+	for _, again := range spellings {
+		stdout, stderr, code := runBakicli(t, "-config", "", "-rules", "duplicate-subflow-across-flows", "-format", "json", a, again, b)
+		var rep multiReportJSON
+		if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+			t.Fatalf("%s: %v\n%s", again, err, stdout)
+		}
+		if code != 0 || len(rep.Flows) != 2 || rep.Library == nil || rep.Library.Flows != 2 || len(rep.Library.Findings) != 2 {
+			t.Errorf("%s given after %s: exit %d, %d flows, library %+v (stderr=%s)", again, a, code, len(rep.Flows), rep.Library, stderr)
+		}
+		if !strings.Contains(stderr, "warning: "+again+" names the same flow as "+a) {
+			t.Errorf("%s: the dropped path is not named on stderr: %s", again, stderr)
+		}
+	}
+
+	// SARIF renders one flow: two flows exit 2 before any output.
+	stdout, stderr, code := runBakicli(t, "-config", "", "-format", "sarif", dir, dir+sep)
+	if code == 2 || !strings.Contains(stdout, `"runs"`) {
+		t.Errorf("a folder named twice with -format sarif: exit %d (stderr=%s)", code, stderr)
+	}
+}
+
+// TestDistinctTargets_KeepsFlowsThatDifferOnlyInCase: in a case-sensitive
+// directory (Linux; on Windows one with NTFS's per-directory flag, as WSL
+// sets) Flow.txt and flow.txt are two flows. Lowercasing every path on
+// Windows dropped the second, with only a warning.
+func TestDistinctTargets_KeepsFlowsThatDifferOnlyInCase(t *testing.T) {
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		if out, err := exec.Command("fsutil.exe", "file", "setCaseSensitiveInfo", dir, "enable").CombinedOutput(); err != nil {
+			t.Skipf("cannot make a case-sensitive directory: %v (%s)", err, out)
+		}
+	}
+	upper, lower := filepath.Join(dir, "Flow.txt"), filepath.Join(dir, "flow.txt")
+	writeFlow(t, upper)
+	writeFlow(t, lower)
+	a, aerr := os.Stat(upper)
+	b, berr := os.Stat(lower)
+	if aerr != nil || berr != nil || os.SameFile(a, b) {
+		t.Skipf("this directory is not case-sensitive (%v, %v)", aerr, berr)
+	}
+
+	if got := distinctTargets([]string{upper, lower, upper}); !slices.Equal(got, []string{upper, lower}) {
+		t.Errorf("distinctTargets(Flow.txt, flow.txt, Flow.txt) = %v, want both flows once", got)
 	}
 }
 

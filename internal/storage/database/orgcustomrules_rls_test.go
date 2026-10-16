@@ -13,7 +13,8 @@ import (
 // TestPostgres_OrgCustomRules_RenameUnderRLS runs the rename guard the way a request does, inside an org admin's
 // RLS transaction: renaming the admin's own rule is ErrOrgCustomRuleRenamed (it used to be a primary-key violation,
 // a 500), saving through another org's row id is ErrNotFound (the row is invisible, and its key still collides),
-// and neither changes a row. The contract suite covers the same without RLS.
+// and neither changes a row; a pause or resume reaches the admin's own rule only. The contract suite covers the same
+// without RLS.
 func TestPostgres_OrgCustomRules_RenameUnderRLS(t *testing.T) {
 	b := openTestDB(t)
 	ctx := context.Background()
@@ -70,6 +71,15 @@ func TestPostgres_OrgCustomRules_RenameUnderRLS(t *testing.T) {
 	if err := b.SaveOrgCustomRule(rctx, resave); err != nil {
 		t.Fatalf("re-save under RLS: %v", err)
 	}
+	// A toggle reaches the admin's own rule and no other org's, named under either org.
+	if got, err := b.SetOrgCustomRuleEnabled(rctx, orgA, ruleA.ID, true); err != nil || !got.Enabled {
+		t.Fatalf("resuming the admin's own rule under RLS: %+v, %v", got, err)
+	}
+	for _, org := range []string{orgA, orgB} {
+		if _, err := b.SetOrgCustomRuleEnabled(rctx, org, ruleB.ID, false); !errors.Is(err, interfaces.ErrNotFound) {
+			t.Fatalf("pausing another org's rule through %s: err = %v, want ErrNotFound", org, err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +92,8 @@ func TestPostgres_OrgCustomRules_RenameUnderRLS(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(rows) != 1 || rows[0].ID != want.id || rows[0].RuleID != want.ruleID {
-			t.Fatalf("%s rows = %+v, want only %s", org, rows, want.id)
+		if len(rows) != 1 || rows[0].ID != want.id || rows[0].RuleID != want.ruleID || !rows[0].Enabled {
+			t.Fatalf("%s rows = %+v, want only %s, enabled", org, rows, want.id)
 		}
 		var c struct {
 			RawTypeMatch string `json:"rawTypeMatch"`

@@ -20,11 +20,22 @@ func (b *PostgresStorageBackend) SaveOrgInvite(ctx context.Context, invite *inte
 	if invite.CreatedAt.IsZero() {
 		invite.CreatedAt = time.Now().UTC()
 	}
-	_, err := b.db.ExecContext(ctx, `
+	err := b.withOwnTx(ctx, sql.LevelDefault, func(txCtx context.Context, tx *sql.Tx) error {
+		// The pending-invite index ignores expiry: an expired invite the sweep has not removed yet would hold the
+		// address until it does. It can no longer be accepted, so the new one replaces it.
+		if invite.AcceptedAt == nil {
+			if _, err := tx.ExecContext(txCtx, `DELETE FROM org_invites
+				WHERE org_id = $1 AND email = $2 AND accepted_at IS NULL AND expires_at < NOW()`, invite.OrgID, invite.Email); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(txCtx, `
 		INSERT INTO org_invites (id, org_id, email, role, invited_by, token_hash, expires_at, accepted_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		invite.ID, invite.OrgID, invite.Email, string(invite.Role), invite.InvitedBy,
-		invite.TokenHash, invite.ExpiresAt, invite.AcceptedAt, invite.CreatedAt)
+			invite.ID, invite.OrgID, invite.Email, string(invite.Role), invite.InvitedBy,
+			invite.TokenHash, invite.ExpiresAt, invite.AcceptedAt, invite.CreatedAt)
+		return err
+	})
 	if err != nil {
 		if isPgErrCode(err, pgErrUniqueViolation) {
 			return interfaces.ErrOrgInviteExists

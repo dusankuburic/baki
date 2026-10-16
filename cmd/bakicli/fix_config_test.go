@@ -81,7 +81,7 @@ func TestFix_ConfigRuleSelectionNarrowsFixes(t *testing.T) {
 // bug: the loop ran the built-in rule set only, so a custom rule carrying an
 // autoFix was reported by `analyze` and never applied by `fix`.
 func TestFix_InlineCustomRuleWithAutoFixIsApplied(t *testing.T) {
-	cfg := &bakiConfig{CustomRulesInline: []analyzer.CustomRuleConfig{{
+	cfg := &bakiConfig{CustomRulesInline: inlineRules{{Config: analyzer.CustomRuleConfig{
 		ID:           "team-http-timeout",
 		Name:         "Team HTTP timeout",
 		Description:  "HTTP actions must declare a timeout",
@@ -89,7 +89,7 @@ func TestFix_InlineCustomRuleWithAutoFixIsApplied(t *testing.T) {
 		Category:     "reliability",
 		RawTypeMatch: "HTTPClient.InvokeUrl",
 		AutoFix:      "set-timeout",
-	}}}
+	}}}}
 	opts := buildFixOptions(cfg, "", "", 50)
 
 	var found bool

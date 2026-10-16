@@ -86,6 +86,7 @@ func ProvideSecurityConfig(cfg *config.Config, authMgr *auth.Manager, backend st
 		Idempotency:    idem,
 		OrgSvc:         orgSvc,
 		TrustedProxies: cfg.Server.TrustedProxies,
+		AllowedOrigins: cfg.Server.AllowedOrigins,
 		Features: api.FeatureFlags{
 			DisableSignUp:       cfg.Features.DisableSignUp,
 			LocalConfigEndpoint: cfg.Server.LocalConfigEndpoint,
@@ -151,7 +152,21 @@ var APIModule = fx.Options(
 	// A member who stops being an admin takes the org credentials they lent along, after the change commits.
 	fx.Invoke(api.SubscribeLentCredentialRevocation),
 	fx.Invoke(SubscribeRealtime),
+	fx.Invoke(ShareReplicaCaps),
 )
+
+// ShareReplicaCaps makes the per-user caps of the sockets (10) and the uploads (3) count every replica's when the
+// deployment can run more than one (operations.md, "Running more than one replica"); the event streams' is set in
+// ProvideEventManager and the chat streams' in the chat service. Each replica keeps its own cap as well, and a Redis
+// that does not answer leaves only that. Runs before the server serves.
+func ShareReplicaCaps(cfg *config.Config, client *redis.Client, health *redisx.Health, router *api.Router, flows *api.FlowHandler) {
+	shared := multiReplicaClient(client, cfg)
+	if shared == nil {
+		return
+	}
+	router.WebSocketHub().ShareConnCap(shared, health)
+	flows.ShareUploadCap(shared, health)
+}
 
 // ProvideEventManager is the SSE hub; EmitToOrg resolves an organisation's members from the store (none without
 // one: the desktop has no organisations). A deployment with the shared Redis (capability shared-state) also gets the
@@ -165,6 +180,8 @@ func ProvideEventManager(lc fx.Lifecycle, cfg *config.Config, shutdownCh chan st
 	if fanout {
 		opts = append(opts, api.WithFanout(redisx.NewSSEBackplane(client, health, redisx.BootOrigin(cfg.Runtime.InstanceID))))
 	}
+	// Several replicas: a user's 10 event streams count every replica's (nil client: this replica's cap only).
+	opts = append(opts, api.WithConnCap(multiReplicaClient(client, cfg), health))
 	m := api.NewEventManager(shutdownCh, opts...)
 	if !fanout {
 		return m

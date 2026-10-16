@@ -14,12 +14,17 @@ import (
 
 // PagedResponse is the standard envelope for paginated list endpoints: Items holds the page;
 // Total is the full collection size; Offset/Limit echo the request pagination so clients can
-// build next/prev links.
+// build next/prev links. HasMore reports items after the page, and NextCursor is the ?cursor= of
+// the next page where the list pages by keyset (omitted on the last page). TotalCapped marks a
+// Total cut at the list's cap: more items match ("10 000+").
 type PagedResponse[T any] struct {
-	Items  []T `json:"items"`
-	Total  int `json:"total"`
-	Offset int `json:"offset"`
-	Limit  int `json:"limit"`
+	Items       []T    `json:"items"`
+	Total       int    `json:"total"`
+	Offset      int    `json:"offset"`
+	Limit       int    `json:"limit"`
+	HasMore     bool   `json:"hasMore"`
+	NextCursor  string `json:"nextCursor,omitempty"`
+	TotalCapped bool   `json:"totalCapped"`
 }
 
 // JSON encodes data as JSON and writes it to w.

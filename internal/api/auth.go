@@ -70,13 +70,15 @@ type credentials struct {
 // CSRF POSTs, Path=/api/auth confines it. The body field stays for compat.
 const refreshCookieName = "pad_refresh"
 
-// isHTTPS reports whether the request reached the server over TLS (directly or via a trusted
-// proxy's X-Forwarded-Proto); the refresh cookie's Secure flag is set only for encrypted transport.
-func isHTTPS(r *http.Request) bool {
+// isHTTPS reports whether the request reached the server over TLS (directly, or via
+// X-Forwarded-Proto from a peer configured in trustedProxies); the refresh cookie's Secure
+// flag is set only for encrypted transport. The proxy gate matters in both directions: an
+// arbitrary client must not force the flag on, nor suppress it on a TLS deployment.
+func isHTTPS(r *http.Request, trustedProxies []string) bool {
 	if r.TLS != nil {
 		return true
 	}
-	if xfp := r.Header.Get("X-Forwarded-Proto"); xfp != "" {
+	if xfp := r.Header.Get("X-Forwarded-Proto"); xfp != "" && middleware.PeerIsTrusted(r, trustedProxies) {
 		return xfp == "https"
 	}
 	return false
@@ -85,7 +87,7 @@ func isHTTPS(r *http.Request) bool {
 // setRefreshCookie sets the HttpOnly refresh cookie. persistent=false omits
 // Expires, making it a browser-session cookie — the web build maps the login
 // form's "remember me" to this; true pins Expires to the token's TTL.
-func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time, persistent bool) {
+func setRefreshCookie(w http.ResponseWriter, r *http.Request, trustedProxies []string, token string, expires time.Time, persistent bool) {
 	// #nosec G124 -- HttpOnly and SameSite are both set; only Secure is
 	// conditional, and deliberately so. The desktop build serves plain HTTP on
 	// loopback, where a hard Secure:true makes the browser drop the refresh
@@ -96,7 +98,7 @@ func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string, expi
 		Value:    token,
 		Path:     "/api/auth",
 		HttpOnly: true,
-		Secure:   isHTTPS(r),
+		Secure:   isHTTPS(r, trustedProxies),
 		SameSite: http.SameSiteLaxMode,
 	}
 	if persistent {
@@ -105,7 +107,7 @@ func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string, expi
 	http.SetCookie(w, &c)
 }
 
-func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
+func clearRefreshCookie(w http.ResponseWriter, r *http.Request, trustedProxies []string) {
 	// #nosec G124 -- HttpOnly and SameSite are both set; only Secure is
 	// conditional, and deliberately so. The desktop build serves plain HTTP on
 	// loopback, where a hard Secure:true makes the browser drop the refresh
@@ -117,7 +119,7 @@ func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
 		Path:     "/api/auth",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   isHTTPS(r),
+		Secure:   isHTTPS(r, trustedProxies),
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -239,7 +241,7 @@ func (h *AuthHandler) issueSession(w http.ResponseWriter, r *http.Request, userI
 	}
 
 	// Set the HttpOnly refresh cookie; callers still return the body field for backward compatibility.
-	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt, remember)
+	setRefreshCookie(w, r, h.security.TrustedProxies, pair.RefreshToken, pair.RefreshExpiresAt, remember)
 
 	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionLogin, ResourceType: "user", ResourceID: userID})
 	return pair, true
@@ -419,7 +421,7 @@ func (h *AuthHandler) handleAuthRefresh(w http.ResponseWriter, r *http.Request) 
 
 	// Rotate the HttpOnly cookie to the newly-issued refresh token, keeping the
 	// session shape the client asked for (persistent vs browser-session).
-	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt, req.RememberMe)
+	setRefreshCookie(w, r, h.security.TrustedProxies, pair.RefreshToken, pair.RefreshExpiresAt, req.RememberMe)
 
 	render.JSON(w, pair)
 }
@@ -575,7 +577,7 @@ func (h *AuthHandler) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	clearRefreshCookie(w, r)
+	clearRefreshCookie(w, r, h.security.TrustedProxies)
 
 	if tokenStr := auth.ExtractToken(r); tokenStr != "" {
 		if claims, err := h.security.AuthMgr.VerifyIgnoreExpiry(tokenStr); err == nil && claims.ID != "" {

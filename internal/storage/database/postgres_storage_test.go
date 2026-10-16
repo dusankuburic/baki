@@ -9,6 +9,7 @@ import (
 	"pad-analyzer/internal/storage/contract"
 	"pad-analyzer/internal/storage/database"
 	"pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/testutil/pgtest"
 )
 
 // TestPostgres_Contract runs the cross-backend contract suite against
@@ -22,7 +23,14 @@ func TestPostgres_Contract(t *testing.T) {
 	if err := b.EnableFieldEncryption([]byte("contract-field-encryption-key-0123456789")); err != nil {
 		t.Fatalf("EnableFieldEncryption: %v", err)
 	}
-	contract.RunSuite(t, b)
+	contract.RunSuite(t, b, contract.FreshStore(func(t *testing.T) interfaces.StorageBackend {
+		fresh, err := database.New(context.Background(), database.DefaultConfig(pgtest.NewDatabase(t, "")))
+		if err != nil {
+			t.Fatalf("New (a database of its own): %v", err)
+		}
+		t.Cleanup(func() { fresh.Close() })
+		return fresh
+	}))
 }
 
 // TestPostgres_AuditContract runs the audit-log contract (v33's organisation and actor columns included).
@@ -214,6 +222,11 @@ func TestPostgres_RefreshTokenRotation(t *testing.T) {
 	b := openTestDB(t)
 	ctx := context.Background()
 	user := "rt-test-user"
+	// A session needs its account (v48).
+	if err := b.SaveUser(ctx, &interfaces.User{ID: user, Email: user + "@example.com", Password: "x"}); err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+	t.Cleanup(func() { cleanupUser(t, b, user) })
 	t.Cleanup(func() { _ = b.RevokeUserRefreshTokens(ctx, user) })
 
 	jti := "rt-jti-" + time.Now().Format("150405.000000000")

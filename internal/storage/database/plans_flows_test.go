@@ -403,8 +403,9 @@ func TestSearchFlowContents_NeedleIsLiteral(t *testing.T) {
 	if want := `%50\%\_done\\%`; got != want {
 		t.Errorf("needle pattern = %q, want %q", got, want)
 	}
-	_, largs := listFlowsSQL(interfaces.FlowFilter{UserID: "u", Query: "a_b%"})
-	if got, _ := largs[1].(string); got != `%a\_b\%%` {
-		t.Errorf("name query pattern = %q, want %q", got, `%a\_b\%%`)
+	// A run of three letters, so a substring (without one the name query is a prefix: plans_search_minimum_test.go).
+	_, largs := listFlowsSQL(interfaces.FlowFilter{UserID: "u", Query: "abc_d%"})
+	if got, _ := largs[1].(string); got != `%abc\_d\%%` {
+		t.Errorf("name query pattern = %q, want %q", got, `%abc\_d\%%`)
 	}
 }

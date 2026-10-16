@@ -13,7 +13,55 @@ import (
 // subject) pair is the primary key; re-linking the same external identity to a
 // different user is rejected rather than silently re-pointed.
 func (b *PostgresStorageBackend) SaveIdentityLink(ctx context.Context, link *interfaces.IdentityLink) error {
-	res, err := b.db.ExecContext(ctx, `
+	return saveIdentityLinkOn(ctx, b.db, link)
+}
+
+// SaveUserWithIdentityLink writes an SSO sign-up's account and its link in a transaction of its own, like
+// CreateUser: on the pool, never the request's, so a request that fails afterwards does not undo a sign-up that
+// already answered. The user goes first, for the link's foreign key.
+func (b *PostgresStorageBackend) SaveUserWithIdentityLink(ctx context.Context, user *interfaces.User, link *interfaces.IdentityLink) error {
+	return b.withOwnTx(ctx, sql.LevelDefault, func(txCtx context.Context, tx *sql.Tx) error {
+		if err := adoptOrInsertUserOn(txCtx, tx, user); err != nil {
+			return err
+		}
+		return saveIdentityLinkOn(txCtx, tx, link)
+	})
+}
+
+// adoptOrInsertUserOn inserts a new user; an existing one (an SSO adoption, from a row read before this write) gets
+// only its verification and password, and only while the stored row is unverified: the conflict's WHERE takes the
+// row lock, so an owner verifying at the same instant is either before (ErrAccountVerified) or after.
+func adoptOrInsertUserOn(ctx context.Context, exec DBTX, user *interfaces.User) error {
+	now := time.Now().UTC()
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = now
+	}
+	user.UpdatedAt = now
+	res, err := exec.ExecContext(ctx, `
+		INSERT INTO users (id, email, password, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (id) DO UPDATE SET
+			email_verified = EXCLUDED.email_verified,
+			password       = EXCLUDED.password,
+			updated_at     = EXCLUDED.updated_at
+		WHERE NOT users.email_verified`,
+		user.ID, user.Email, user.Password, string(user.Role), user.EmailVerified, user.FailedLoginAttempts, user.LockedUntil, user.DisplayName, user.AvatarURL, user.CreatedAt, user.UpdatedAt,
+	)
+	if err != nil {
+		if isPgErrCode(err, pgErrUniqueViolation) {
+			return interfaces.ErrEmailExists
+		}
+		return fmt.Errorf("adopt or insert user: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return interfaces.ErrAccountVerified
+	}
+	return nil
+}
+
+// saveIdentityLinkOn is SaveIdentityLink's insert on exec: the pool, or SaveUserWithIdentityLink's transaction.
+func saveIdentityLinkOn(ctx context.Context, exec DBTX, link *interfaces.IdentityLink) error {
+	res, err := exec.ExecContext(ctx, `
 		INSERT INTO identity_links (provider, subject, user_id, email, created_at)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (provider, subject) DO NOTHING`,

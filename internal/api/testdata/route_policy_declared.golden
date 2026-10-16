@@ -290,10 +290,10 @@ DELETE /api/v1/auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/ava
 DELETE /api/./auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/auth/profile/avatar
 DELETE /api/auth/profile/avatar/ | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=general tx=tx deadline=default label=/api/auth/profile/avatar
 OPTIONS /api/auth/profile/avatar | kind=method-not-allowed pattern=/api/auth/profile/avatar auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/auth/profile/avatar allow=POST,DELETE
-POST /api/auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=upload tx=tx deadline=default label=/api/auth/profile/avatar
-POST /api/v1/auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=upload tx=tx deadline=default label=/api/auth/profile/avatar
-POST /api/./auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=upload tx=tx deadline=default label=/api/auth/profile/avatar
-POST /api/auth/profile/avatar/ | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=upload tx=tx deadline=default label=/api/auth/profile/avatar
+POST /api/auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=avatar tx=tx deadline=default label=/api/auth/profile/avatar
+POST /api/v1/auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=avatar tx=tx deadline=default label=/api/auth/profile/avatar
+POST /api/./auth/profile/avatar | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=avatar tx=tx deadline=default label=/api/auth/profile/avatar
+POST /api/auth/profile/avatar/ | kind=endpoint pattern=/api/auth/profile/avatar auth=jwt scopes=deny ratelimit=avatar tx=tx deadline=default label=/api/auth/profile/avatar
 POST /api/auth/refresh | kind=endpoint pattern=/api/auth/refresh auth=none scopes=- ratelimit=auth tx=none deadline=default label=/api/auth/refresh
 POST /api/v1/auth/refresh | kind=endpoint pattern=/api/auth/refresh auth=none scopes=- ratelimit=auth tx=none deadline=default label=/api/auth/refresh
 POST /api/./auth/refresh | kind=endpoint pattern=/api/auth/refresh auth=none scopes=- ratelimit=auth tx=none deadline=default label=/api/auth/refresh

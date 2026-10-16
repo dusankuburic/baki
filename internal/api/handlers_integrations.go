@@ -32,8 +32,11 @@ const maxCIWebhookBodyBytes = 1 << 20
 // calls cost nothing in the log.
 var ciWebhookUnconfiguredWarn sync.Once
 
-// ciWebhookFormats are the answer shapes of the CI webhook; any other format is a 400.
+// ciWebhookFormats are the answer shapes of the CI webhook; any other format is a 400 UNKNOWN_FORMAT listing them.
 var ciWebhookFormats = []string{"summary", "report", "sarif"}
+
+// codeUnknownFormat answers a format the endpoint does not render; details.formats lists the ones it does.
+const codeUnknownFormat = "UNKNOWN_FORMAT"
 
 // ciDeprecationLink is the Link header of an answer to the deprecated deployment-wide secret: the decision record
 // that says what replaces it.
@@ -75,7 +78,7 @@ type ciWebhookResponse struct {
 // deployment-wide PAD_CI_WEBHOOK_SECRET, which reaches any flow by id (ADR 0019). A signed call runs as an
 // integration, never as a user; a token's call runs as the token. Each key's delivery id runs once.
 // @Summary      CI webhook
-// @Description  Analyzes a stored flow for a CI runner. Authenticated by an HMAC-SHA256 of "<X-Baki-Timestamp>." + body, sent as X-Baki-Signature: sha256=<hex>; the timestamp must be within 5 minutes. The key is an organisation CI credential (baki_ci_<keyId>_<secret>, minted under /api/orgs/{id}/ci-credentials; send X-Baki-Key-Id: <keyId>), which reaches that organisation's flows only, or the deprecated deployment-wide PAD_CI_WEBHOOK_SECRET (answered with Deprecation and Link headers where organisations exist). Instead of a signature, Authorization: Bearer <API token> with the ci scope reaches the flows the token's user can read, an organisation's flow only when the user is a member of it; an unscoped token or one without ci is a 401, and another user's flow is a 404 like an unknown one. Body: {flowId, failOn, format, deliveryId}. failOn is error (default), warning, info or none; findings of preview rules never fail the gate and are counted in `preview`. format "summary" (default) returns {flowId, flowName, passed, gate, errors, warnings, info, preview}, "report" adds the findings, "sarif" returns the SARIF 2.1.0 document instead (application/sarif+json); any other format is a 400. deliveryId (16 to 128 characters of A-Z, a-z, 0-9, - and _; bakicli sends 128 random bits) makes the call run once per key: a call whose key sent the same deliveryId before is a 409 CI_REPLAYED and runs nothing. It is optional for now.
+// @Description  Analyzes a stored flow for a CI runner. Authenticated by an HMAC-SHA256 of "<X-Baki-Timestamp>." + body, sent as X-Baki-Signature: sha256=<hex>; the timestamp must be within 5 minutes. The key is an organisation CI credential (baki_ci_<keyId>_<secret>, minted under /api/orgs/{id}/ci-credentials; send X-Baki-Key-Id: <keyId>), which reaches that organisation's flows only, or the deprecated deployment-wide PAD_CI_WEBHOOK_SECRET (answered with Deprecation and Link headers where organisations exist). Instead of a signature, Authorization: Bearer <API token> with the ci scope reaches the flows the token's user can read, an organisation's flow only when the user is a member of it; an unscoped token or one without ci is a 401, and another user's flow is a 404 like an unknown one. Body: {flowId, failOn, format, deliveryId}. failOn is error (default), warning, info or none; findings of preview rules never fail the gate and are counted in `preview`. format "summary" (default) returns {flowId, flowName, passed, gate, errors, warnings, info, preview}, "report" adds the findings, "sarif" returns the SARIF 2.1.0 document instead (application/sarif+json); a missing or empty format is "summary", any other is a 400 with code UNKNOWN_FORMAT and details.formats listing the three. deliveryId (16 to 128 characters of A-Z, a-z, 0-9, - and _; bakicli sends 128 random bits) makes the call run once per key: a call whose key sent the same deliveryId before is a 409 CI_REPLAYED and runs nothing. It is optional for now.
 // @Tags         analysis
 // @Accept       json
 // @Produce      json,application/sarif+json
@@ -85,7 +88,7 @@ type ciWebhookResponse struct {
 // @Param        Authorization header string false "Bearer <API token with the ci scope>, instead of a signature"
 // @Param        request body object true "{flowId, failOn, format, deliveryId}"
 // @Success      200 {object} map[string]interface{} "Gate verdict, or the SARIF document"
-// @Failure      400 {object} map[string]string "Bad Request (no flowId, unknown format, malformed deliveryId)"
+// @Failure      400 {object} render.ErrorResponse "Bad Request (no flowId, malformed deliveryId; code UNKNOWN_FORMAT with details.formats for an unknown format)"
 // @Failure      401 {object} map[string]string "Missing or invalid signature, key, timestamp or API token"
 // @Failure      404 {object} map[string]string "Flow not found (or outside what the credential or token reaches)"
 // @Failure      409 {object} map[string]string "CI_REPLAYED: this key already sent the deliveryId"
@@ -172,7 +175,10 @@ func (h *AnalysisHandler) handleCIWebhook(w http.ResponseWriter, r *http.Request
 		format = "summary"
 	}
 	if !slices.Contains(ciWebhookFormats, format) {
-		render.Error(w, fmt.Errorf("unknown format %q (must be %s)", req.Format, formatChoices(ciWebhookFormats)), http.StatusBadRequest)
+		// A code and the list, not just the message: a pipeline script reads the envelope, and a summary in place of
+		// the shape it asked for would be read as a verdict.
+		render.Error(w, apperr.Invalid(codeUnknownFormat, fmt.Sprintf("unknown format %q (must be %s)", req.Format, formatChoices(ciWebhookFormats))).
+			WithDetails(map[string]any{"formats": ciWebhookFormats}), 0)
 		return
 	}
 

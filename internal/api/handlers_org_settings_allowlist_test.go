@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
+	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/service"
 )
 
@@ -59,12 +61,20 @@ func TestOrgSettings_AllowedProvidersSurvivePartialWrites(t *testing.T) {
 		t.Errorf("an ai write without the field wiped the allowlist: allowedProviders = %v, want [claude]", got)
 	}
 
-	// An unknown id is refused with a code, and the stored list is untouched.
+	// An unknown id is refused with a code naming every unknown id (details.providers, so the settings UI can
+	// uncheck them), and the stored list is untouched.
 	rr = doRequestWithAuth(t, rt, http.MethodPost, "/api/system/settings/org/"+orgID, bearer,
-		map[string]any{"ai": map[string]any{"allowedProviders": []string{"Claude"}}})
+		map[string]any{"ai": map[string]any{"allowedProviders": []string{"Claude", "openai", "nope"}}})
 	checkStatus(t, rr, http.StatusBadRequest)
-	if code := errorCode(t, rr); code != service.ProviderCodeUnknown {
-		t.Errorf("unknown provider id in the allowlist: code = %q, want %q", code, service.ProviderCodeUnknown)
+	var env render.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode error envelope %q: %v", rr.Body.String(), err)
+	}
+	if env.Code != service.ProviderCodeUnknown {
+		t.Errorf("unknown provider id in the allowlist: code = %q, want %q", env.Code, service.ProviderCodeUnknown)
+	}
+	if got := fmt.Sprint(env.Details["providers"]); got != "[Claude nope]" {
+		t.Errorf("unknown provider ids: details.providers = %s, want [Claude nope] (body %s)", got, rr.Body.String())
 	}
 	if got := orgAllowedProviders(t, rt, orgID, bearer); len(got) != 1 || got[0] != "claude" {
 		t.Errorf("a refused write changed the allowlist: allowedProviders = %v, want [claude]", got)

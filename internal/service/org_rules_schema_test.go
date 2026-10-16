@@ -181,6 +181,7 @@ func TestOrgRuleService_SaveRule(t *testing.T) {
 	ctx := context.Background()
 	const org = "org-a"
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("org-a", "org-b") // a rule needs its organisation
 	svc := NewOrgRuleService(b, b, nil)
 	rule := func(id string) *analyzer.CustomRuleConfig {
 		return &analyzer.CustomRuleConfig{ID: id, Name: id, Severity: "warning", Category: "Style", RawTypeMatch: "^SET$"}
@@ -393,6 +394,12 @@ func TestAnalysisService_TestRuleIsStrict(t *testing.T) {
 	if err != nil || len(findings) != 1 {
 		t.Errorf("a valid rule: %d findings, %v", len(findings), err)
 	}
+	// A test stores nothing, so a built-in rule's id is no reason to refuse one: a legacy rule saved under one stays
+	// testable from its editor.
+	findings, err = svc.TestRule(context.Background(), doc, analyzer.CustomRuleConfig{ID: "dead-code", RawTypeMatch: "^SET$"})
+	if err != nil || len(findings) != 1 || findings[0].RuleID != "dead-code" {
+		t.Errorf("a rule under a built-in id: %+v, %v", findings, err)
+	}
 }
 
 // An undecodable row echoes the fields that decode, as before Phase 4a, so the editor's form and an old bundle's
@@ -405,5 +412,66 @@ func TestReadOrgRule_UndecodableRowEchoesWhatDecodes(t *testing.T) {
 	}
 	if r.Config.ID != "garbled" || r.Config.RawTypeMatch != "^SET$" || r.Config.NameMatch != "x" || r.Config.Severity != "" {
 		t.Errorf("echo = %+v, want the row's id with rawTypeMatch and nameMatch kept", r.Config)
+	}
+}
+
+// racingRuleStore lands race (a full save of the same rule) between a toggle's read of the org's rules and its write.
+type racingRuleStore struct {
+	*testutil.FakeBackend
+	race func()
+}
+
+func (s *racingRuleStore) fire() {
+	if race := s.race; race != nil {
+		s.race = nil
+		race()
+	}
+}
+
+func (s *racingRuleStore) ListOrgCustomRules(ctx context.Context, orgID string, enabledOnly bool) ([]*storageif.OrgCustomRule, error) {
+	rows, err := s.FakeBackend.ListOrgCustomRules(ctx, orgID, enabledOnly)
+	s.fire()
+	return rows, err
+}
+
+// SetOrgCustomRuleEnabled is a toggle's only store call: the save lands just before it.
+func (s *racingRuleStore) SetOrgCustomRuleEnabled(ctx context.Context, orgID, id string, enabled bool) (*storageif.OrgCustomRule, error) {
+	s.fire()
+	return s.FakeBackend.SetOrgCustomRuleEnabled(ctx, orgID, id, enabled)
+}
+
+// A pause (a toggle without config) racing a full save of the same rule wrote back the config it had read: the save
+// landed between the pause's read and its write, and its edit was lost while both requests answered 200.
+func TestOrgRuleService_PauseKeepsAConcurrentSave(t *testing.T) {
+	ctx := context.Background()
+	const org = "org-a"
+	b := testutil.NewFakeBackend()
+	b.SeedOrgs("org-a") // a rule needs its organisation
+	seedRow(t, b, org, "row", "house", `{"kind":"block","schemaVersion":1,"id":"house","name":"house","severity":"warning","rawTypeMatch":"^SET$"}`, true)
+	store := &racingRuleStore{FakeBackend: b}
+	store.race = func() {
+		on := true
+		edit := &analyzer.CustomRuleConfig{ID: "house", Name: "house", Severity: "warning", RawTypeMatch: "^WAIT$"}
+		if _, err := NewOrgRuleService(b, b, nil).SaveRule(ctx, org, OrgRuleSave{RowID: "row", Config: edit, Enabled: &on}); err != nil {
+			t.Errorf("the concurrent save: %v", err)
+		}
+	}
+	off := false
+	paused, err := NewOrgRuleService(store, b, nil).SaveRule(ctx, org, OrgRuleSave{RowID: "row", Enabled: &off})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.race != nil {
+		t.Fatal("the save did not land before the pause's write")
+	}
+	if got := storedConfig(t, b, org, "row")["rawTypeMatch"]; got != "^WAIT$" {
+		t.Errorf("stored rawTypeMatch = %v, want the concurrent save's ^WAIT$", got)
+	}
+	rows, _ := b.ListOrgCustomRules(ctx, org, false)
+	if len(rows) != 1 || rows[0].Enabled {
+		t.Errorf("stored %+v, want the one rule paused", rows)
+	}
+	if paused.Row.Enabled || paused.Config.RawTypeMatch != "^WAIT$" {
+		t.Errorf("the pause answered %+v (config %+v), want the stored rule paused", paused.Row, paused.Config)
 	}
 }

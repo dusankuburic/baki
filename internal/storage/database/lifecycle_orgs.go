@@ -63,7 +63,8 @@ func init() {
 			eraseByEmail(erasePersonal, "org_invites", `DELETE FROM org_invites WHERE email = $1`),
 		},
 		orgDelete: []orgDeleteStep{
-			// No foreign key reaches these from organisations; knowledge_chunks cascades with its document.
+			// Since v48 these cascade with the organisations row too (knowledge_chunks with its document). The steps
+			// stay: they are what cleans a database rolled back below v48, which has no such foreign key.
 			{phase: orgContent, table: "knowledge_documents", sql: `DELETE FROM knowledge_documents WHERE org_id = $1`},
 			{phase: orgContent, table: "policies", sql: `DELETE FROM policies WHERE org_id = $1`},
 			{phase: orgContent, table: "org_channels", sql: `DELETE FROM org_channels WHERE org_id = $1`},

@@ -47,6 +47,7 @@ func TestReindexOrg_PerPageCommit_Postgres(t *testing.T) {
 	stamp := time.Now().UnixNano()
 	org := fmt.Sprintf("reindex-pages-org-%d", stamp)
 	doc := fmt.Sprintf("reindex-pages-doc-%d", stamp)
+	seedOrgRow(t, b.DB(), org)
 	t.Cleanup(func() {
 		_, _ = b.DB().ExecContext(context.Background(), `DELETE FROM knowledge_chunks WHERE doc_id = $1`, doc)
 		_, _ = b.DB().ExecContext(context.Background(), `DELETE FROM knowledge_documents WHERE id = $1`, doc)

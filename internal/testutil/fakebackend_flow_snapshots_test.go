@@ -38,8 +38,15 @@ func TestFakeBackend_FlowSnapshotsPurgeAndErasure(t *testing.T) {
 		t.Errorf("the live snapshot did not survive the sweep: %+v", got)
 	}
 
+	// The erased user's snapshot on someone else's flow stays, without the user's id.
+	if err := m.PushFlowSnapshot(ctx, &interfaces.FlowSnapshot{ID: "f-kept-by-erased", FlowID: "f-kept", UserID: "u-erased", Source: "x"}, lim); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.DeleteUser(ctx, "u-erased"); err != nil {
 		t.Fatal(err)
+	}
+	if ring := m.flowSnapshots.rings["f-kept"]; len(ring) != 2 || ring[1].ID != "f-kept-by-erased" || ring[1].UserID != "" {
+		t.Errorf("after the erasure the other owner's ring is %+v; want the erased user's snapshot kept without its user", ring)
 	}
 	if got, _ := m.ListFlowSnapshots(ctx, "f-owned"); len(got) != 0 {
 		t.Errorf("the erased owner's flow kept its ring: %+v", got)

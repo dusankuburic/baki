@@ -33,10 +33,11 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		chatRl := newRL(cfg.Runtime.RateLimitChatRPS, cfg.Runtime.RateLimitChatBurst).SetGroup(route.RateChat)
 		uploadRl := newRL(cfg.Runtime.RateLimitUploadRPS, cfg.Runtime.RateLimitUploadBurst).SetGroup(route.RateUpload)
 		channelTestRl := newRL(cfg.Runtime.RateLimitChannelTestRPS, cfg.Runtime.RateLimitChannelTestBurst).SetGroup(route.RateChannelTest)
+		avatarRl := newRL(cfg.Runtime.RateLimitAvatarRPS, cfg.Runtime.RateLimitAvatarBurst).SetGroup(route.RateAvatar)
 		if redisClient != nil {
 			logger.Info("rate limiting: using shared Redis backplane", "url_set", cfg.Redis.URL.IsSet())
 		}
-		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl, channelTestRl)
+		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl, channelTestRl, avatarRl)
 
 		// Per-user write throttle: one bucket per authenticated user capping their total write volume across endpoints; cloud only (local is single-user and would self-DoS). Installed on the Router; appended to rateLimiters so Stop() runs on shutdown.
 		perUserRl := newRL(cfg.Runtime.RateLimitPerUserRPS, cfg.Runtime.RateLimitPerUserBurst).SetGroup(route.RatePerUser)
@@ -52,6 +53,7 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 			route.RateChat:        chatRl,
 			route.RateUpload:      uploadRl,
 			route.RateChannelTest: channelTestRl,
+			route.RateAvatar:      avatarRl,
 		}
 
 		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -196,8 +198,11 @@ func rateLimitGroup(method string, u *url.URL) string {
 		if group, ok := azureOutboundRoute(path); ok {
 			return group
 		}
-		if path == "/api/flow/upload" || path == "/api/auth/profile/avatar" {
+		if path == "/api/flow/upload" {
 			return rlGroupUpload
+		}
+		if path == "/api/auth/profile/avatar" {
+			return route.RateAvatar
 		}
 		// The channel test makes the server POST to an admin-chosen URL for up to 15 s (B13).
 		if isOrgChannelTestPath(path) {

@@ -12,6 +12,8 @@ export const enLibrary = {
     loading: 'loading…',
     flowsCount_one: '{{count}} flow',
     flowsCount_other: '{{count}} flows',
+    flowsCountCapped_one: 'More than {{count}} flow',
+    flowsCountCapped_other: 'More than {{count}} flows',
     refresh: 'Refresh',
   },
   rail: {
@@ -52,9 +54,12 @@ export const enLibrary = {
   pager: {
     total_one: '{{count}} flow total',
     total_other: '{{count}} flows total',
+    totalCapped_one: 'More than {{count}} flow',
+    totalCapped_other: 'More than {{count}} flows',
     prev: 'Prev',
     next: 'Next',
     pageOf: 'Page {{page}} of {{totalPages}}',
+    page: 'Page {{page}}',
   },
   detail: {
     panelAria: 'Flow details',

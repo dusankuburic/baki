@@ -1,4 +1,4 @@
-import {useCallback, useMemo, useState} from 'react'
+import {useCallback, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {analysisApi} from '@/api'
 import type {Rule, RuleConfig, Severity} from '@/types'
@@ -70,13 +70,22 @@ export default function RulesPanel() {
     [isOrgScope, overrides],
   )
 
+  // Writes run one at a time, each merging into the overrides as stored (read past the client's GET cache), so
+  // a quick second toggle keeps the first.
+  const orgWrites = useRef<Promise<unknown>>(Promise.resolve())
   const writeOrgOverride = useCallback(
-    async (ruleId: string, patch: RuleConfig) => {
-      const merged = {...overrides, [ruleId]: patch}
-      await settingsApi.updateOrgSettings(scope, {analysis: {rules: merged}} as never)
-      refetchOverrides()
+    (ruleId: string, patch: RuleConfig) => {
+      const write = orgWrites.current.then(async () => {
+        const fresh = await settingsApi.getOrgSettings(scope, {noDedup: true})
+        const stored = (fresh?.analysis?.rules as Record<string, RuleConfig> | undefined) ?? {}
+        const analysis = {...fresh?.analysis, rules: {...stored, [ruleId]: patch}}
+        await settingsApi.updateOrgSettings(scope, {analysis} as never)
+        refetchOverrides()
+      })
+      orgWrites.current = write.catch(() => {})
+      return write
     },
-    [overrides, refetchOverrides, scope],
+    [refetchOverrides, scope],
   )
 
   const handleToggle = async (ruleId: string, enabled: boolean) => {

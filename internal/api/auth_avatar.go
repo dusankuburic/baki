@@ -32,7 +32,7 @@ func userAvatarRoute(userID string) string { return "/api/users/" + userID + "/a
 // mountAvatarProfileRoutes registers the caller's own avatar management inside /api/auth, beside PUT /profile:
 // identity self-management, so it stays inside the group's token denial.
 func (h *AuthHandler) mountAvatarProfileRoutes(rb *route.Builder) {
-	rb.Post("/profile/avatar", h.handleAuthUploadAvatar, route.RateLimit(route.RateUpload))
+	rb.Post("/profile/avatar", h.handleAuthUploadAvatar, route.RateLimit(route.RateAvatar))
 	rb.Delete("/profile/avatar", Query(h.deleteAvatar))
 }
 
@@ -74,7 +74,7 @@ func (h *AuthHandler) deleteAvatar(ctx context.Context, _ struct{}) (profileEcho
 }
 
 // @Summary      Upload an avatar image
-// @Description  Re-encodes the uploaded PNG or JPEG (metadata stripped, downscaled to at most 512 px, at most 512 KB stored), stores it as the caller's avatar and points the profile's avatar URL at the serving route. A multipart/form-data body with one "avatar" file part; the declared content type is never trusted — the bytes decide.
+// @Description  Re-encodes the uploaded PNG or JPEG (metadata stripped, a JPEG turned upright by its EXIF orientation, downscaled to at most 512 px, at most 512 KB stored), stores it as the caller's avatar and points the profile's avatar URL at the serving route. A multipart/form-data body with one "avatar" file part; the declared content type is never trusted — the bytes decide.
 // @Tags         auth
 // @Accept       multipart/form-data
 // @Produce      json

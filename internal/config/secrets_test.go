@@ -36,13 +36,15 @@ var secretEnvRows = []struct{ env, field string }{
 }
 
 // sentinelFor is the value a test plants in a secret field: unique per field, and never a substring of a redaction
-// marker, a field name or a default.
+// marker, a field name or a default. Long enough to clear the auth-secret strength gate, which since it stopped
+// being cloud-only applies to these local-mode loads too.
 func sentinelFor(field string) string {
-	return "S3NT1NEL-" + strings.ReplaceAll(field, ".", "-") + "-hunter2"
+	return "S3NT1NEL-" + strings.ReplaceAll(field, ".", "-") + "-hunter2-0123456789abcdef0123456789"
 }
 
 // setSecretEnv fills every secret variable with its sentinel and the rest of the environment with what Validate
-// needs beside them (local mode, so no strength rule stands in the way of a short sentinel).
+// needs beside them (local mode; the sentinels are long enough for the strength rule, which is no longer
+// cloud-only).
 func setSecretEnv(t *testing.T) map[string]string {
 	t.Helper()
 	clearLoadEnv(t)
@@ -237,7 +239,7 @@ func TestConfig_SecretFieldsAreSecretValues(t *testing.T) {
 // so the keystore must not key stored data with it. A config file could set it beside a real secret and make the
 // keystore refuse that secret; the field is not a setting.
 func TestConfig_SecretEphemeralCannotComeFromAFile(t *testing.T) {
-	writeConfigFile(t, `{"Mode": "local", "Auth": {"Enabled": true, "Secret": "an-operator-secret", "SecretEphemeral": true}}`)
+	writeConfigFile(t, `{"Mode": "local", "Auth": {"Enabled": true, "Secret": "an-operator-secret-0123456789abcdef-0123456789", "SecretEphemeral": true}}`)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -245,7 +247,7 @@ func TestConfig_SecretEphemeralCannotComeFromAFile(t *testing.T) {
 	if cfg.Auth.SecretEphemeral {
 		t.Error("a config file set Auth.SecretEphemeral; it must only be set by ResolveRuntimeSecrets")
 	}
-	if got := cfg.Auth.Secret.Reveal(); got != "an-operator-secret" {
+	if got := cfg.Auth.Secret.Reveal(); got != "an-operator-secret-0123456789abcdef-0123456789" {
 		t.Errorf("Auth.Secret = %q, want the file's", got)
 	}
 }

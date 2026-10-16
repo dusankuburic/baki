@@ -7,9 +7,14 @@ package audit
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"log/slog"
+	"net"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,6 +94,9 @@ type Recorder struct {
 	adoptAfter time.Duration
 	adoptMu    sync.Mutex
 	adopted    []*spillStore
+	// unreachableAt is when a write last found the database unreachable (unix nanoseconds, 0: never); the reaper
+	// pauses its replay for replayPauseAfterOutage after it.
+	unreachableAt atomic.Int64
 }
 
 // New returns a recorder writing to store; Start starts its pool. Until then, and for a recorder never started,
@@ -252,6 +260,14 @@ func (r *Recorder) divert(reason string, ev *storageif.AuditEvent) {
 	fallback(reason, ev)
 }
 
+// spillUnreachable keeps an event a worker could not write because the database is unreachable: on our own spill
+// file, replayed by the reaper once the database answers (the insert is idempotent, so a replay that overlaps a
+// write that did land adds nothing). false: no spill queue or at its cap, and the caller logs it instead.
+func (r *Recorder) spillUnreachable(ev *storageif.AuditEvent) bool {
+	r.unreachableAt.Store(time.Now().UnixNano())
+	return r.spill != nil && r.spill.spillFor(ev, spillReasonUnreachable)
+}
+
 // saveDetached writes ev on its own, off the caller's path and context.
 func saveDetached(store storageif.AuditStore, ev *storageif.AuditEvent) {
 	if store == nil {
@@ -353,7 +369,7 @@ func (r *Recorder) worker() {
 				salvageBatch(r.store, batch)
 			}
 		}()
-		writeBatch(r.store, r.store, batch)
+		writeBatch(r.store, r.store, batch, r.spillUnreachable)
 	}
 	for {
 		select {
@@ -438,6 +454,9 @@ func (r *Recorder) replaySpilled() {
 	if r.spill == nil {
 		return
 	}
+	if at := r.unreachableAt.Load(); at != 0 && time.Since(time.Unix(0, at)) < replayPauseAfterOutage {
+		return // the database was unreachable a moment ago: the replay would come straight back
+	}
 	for _, s := range r.spillStores() {
 		if !r.replayFrom(s) {
 			return
@@ -484,14 +503,60 @@ func (r *Recorder) replayFrom(s *spillStore) bool {
 // writeBatch persists a batch with a bounded retry: a single batched write, falling back to per-event writes so
 // a bad row can't poison the batch. Events still failing after retry go to the log fallback sink
 // (pad_audit_dropped_total{reason="write_failed"}).
-func writeBatch(w writer, sink batchSink, events []*storageif.AuditEvent) {
-	if err := saveBatchWithRetry(sink, events); err == nil {
+//
+// spill takes an event the database could not be reached for (databaseUnreachable) onto the on-disk queue, for the
+// reaper to replay once the database is back; false: not kept (no spill queue, or at its cap), so the log fallback
+// gets it. nil: no spill.
+func writeBatch(w writer, sink batchSink, events []*storageif.AuditEvent, spill func(*storageif.AuditEvent) bool) {
+	err := saveBatchWithRetry(sink, events)
+	if err == nil {
+		return
+	}
+	if spill != nil && databaseUnreachable(err) {
+		// The database is not there: per-event writes would wait out the same failure twice per event.
+		for _, ev := range events {
+			if !spill(ev) {
+				slog.Warn("audit log write failed: database unreachable and the spill queue did not take it", "action", ev.Action, "err", err)
+				fallback("write_failed", ev)
+			}
+		}
 		return
 	}
 	// Batch failed (likely one bad row) — isolate via per-event writes below.
 	for _, ev := range events {
-		writeOne(w, ev)
+		writeOne(w, ev, spill)
 	}
+}
+
+// replayPauseAfterOutage is how long the reaper leaves the spill alone after a write found the database unreachable:
+// replaying into the outage would only cycle the events through the pool and back. A test variable.
+var replayPauseAfterOutage = 5 * time.Second
+
+// databaseUnreachable reports whether a failed write says the database could not be reached or could not take any
+// write (rather than refusing this row): a network error, the write's deadline, or an SQLSTATE of class 08
+// (connection), 28 (authorisation: the credentials stopped working), 53 (insufficient resources) or 57P01-57P03
+// (shutdown, not accepting connections). Such an event is worth keeping for a replay, which the idempotent insert
+// makes safe; a refused row would fail every replay, so it goes to the log as before.
+func databaseUnreachable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var coded interface{ SQLState() string }
+	if errors.As(err, &coded) {
+		state := coded.SQLState()
+		switch {
+		case strings.HasPrefix(state, "08"), strings.HasPrefix(state, "28"), strings.HasPrefix(state, "53"):
+			return true
+		case state == "57P01", state == "57P02", state == "57P03":
+			return true
+		}
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 // saveBatchWithRetry attempts the batched INSERT up to writeRetries+1 times with a short backoff between
@@ -515,7 +580,7 @@ func saveBatchWithRetry(sink batchSink, events []*storageif.AuditEvent) error {
 
 // writeOne saves a single event with one retry, diverting to the log fallback sink (and bumping the drop
 // metric) on persistent failure.
-func writeOne(w writer, ev *storageif.AuditEvent) {
+func writeOne(w writer, ev *storageif.AuditEvent, spill func(*storageif.AuditEvent) bool) {
 	save := func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), writeTTL)
 		defer cancel()
@@ -524,6 +589,9 @@ func writeOne(w writer, ev *storageif.AuditEvent) {
 	if err := save(); err != nil {
 		time.Sleep(retryDelay)
 		if err := save(); err != nil {
+			if spill != nil && databaseUnreachable(err) && spill(ev) {
+				return
+			}
 			slog.Warn("audit log write failed after retry", "action", ev.Action, "err", err)
 			fallback("write_failed", ev)
 		}
@@ -540,7 +608,7 @@ func salvageBatch(w writer, events []*storageif.AuditEvent) {
 					fallback("salvage_failed", ev)
 				}
 			}()
-			writeOne(w, ev)
+			writeOne(w, ev, nil)
 		}()
 	}
 }

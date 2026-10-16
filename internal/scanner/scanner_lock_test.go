@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/lifecycle"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
 )
@@ -92,6 +93,79 @@ func TestScanOnce_LockErrorSkips(t *testing.T) {
 	}
 }
 
+// TestScanNow_ReportsWhyTheSweepDidNotStart: the admin "scan now" learns what became of its sweep, which ScanOnce
+// only logs: a sweep running on another replica, a lock that cannot be asked for, a stopped scanner, a scanner with
+// nothing to sweep with. Nothing is analysed then.
+func TestScanNow_ReportsWhyTheSweepDidNotStart(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		held    bool
+		lockErr error
+		stopped bool
+		want    error
+	}{
+		{"another replica sweeps", true, nil, false, lifecycle.ErrJobHeld},
+		{"the lock cannot be asked for", false, errors.New("connection refused"), false, lifecycle.ErrJobLockUnavailable},
+		{"the scanner stopped", false, nil, true, lifecycle.ErrJobStopped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &lockingBackend{healthBackend: newBackend(), held: tc.held, err: tc.lockErr}
+			seedFlow(t, b, "f1")
+			var analysed atomic.Int32
+			s := New(b, b, countingAnalyze(&analysed), nil, 0, loopbackChannels(b))
+			t.Cleanup(s.Stop)
+			if tc.stopped {
+				s.Stop()
+			}
+			if err := s.ScanNow(context.Background()); !errors.Is(err, tc.want) {
+				t.Fatalf("ScanNow = %v, want %v", err, tc.want)
+			}
+			time.Sleep(20 * time.Millisecond)
+			if got := analysed.Load(); got != 0 {
+				t.Errorf("a sweep that did not start analysed %d flow(s)", got)
+			}
+		})
+	}
+	if err := New(nil, nil, nil, nil, 0, nil).ScanNow(context.Background()); !errors.Is(err, ErrScanUnavailable) {
+		t.Errorf("ScanNow without a store = %v, want ErrScanUnavailable", err)
+	}
+}
+
+// TestScanNow_StartsTheSweepInTheBackground: with the lock free ScanNow returns as soon as the sweep has started; the
+// sweep then analyses the library under the lock, which it gives back, and a second ScanNow meanwhile is refused as
+// held.
+func TestScanNow_StartsTheSweepInTheBackground(t *testing.T) {
+	b := &lockingBackend{healthBackend: newBackend()}
+	seedFlow(t, b, "f1")
+	analysing, release := make(chan struct{}), make(chan struct{})
+	s := New(b, b, func(_ context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
+		close(analysing)
+		<-release
+		return &models.AnalysisReport{FlowID: doc.ID}, nil
+	}, nil, 0, loopbackChannels(b))
+	t.Cleanup(s.Stop)
+
+	if err := s.ScanNow(context.Background()); err != nil {
+		t.Fatalf("ScanNow with the lock free = %v, want nil", err)
+	}
+	select {
+	case <-analysing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sweep ScanNow reported started never analysed the flow")
+	}
+	if err := s.ScanNow(context.Background()); !errors.Is(err, lifecycle.ErrJobHeld) {
+		t.Errorf("a second ScanNow while the sweep runs = %v, want lifecycle.ErrJobHeld", err)
+	}
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for b.released.Load() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the sweep's lock was released %d times, want once", b.released.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // panickingListBackend panics in the first ListFlows: outside scanFlow's per-flow recovery, in the sweep itself.
 type panickingListBackend struct {
 	*healthBackend
@@ -125,23 +199,22 @@ func TestScanner_PanicInASweepKeepsTheLoop(t *testing.T) {
 	}
 }
 
-// TestScanner_StopCancelsAnAdminSweep: the admin "scan now" runs ScanOnce with a context of its own. Stop used to
-// cancel only the periodic loop's sweeps, so at shutdown a manual sweep kept querying while the pool closed (R17).
+// TestScanner_StopCancelsAnAdminSweep: the admin "scan now" (ScanNow) starts a sweep outside the periodic loop. Stop
+// used to cancel only the loop's sweeps, so at shutdown a manual sweep kept querying while the pool closed (R17).
 func TestScanner_StopCancelsAnAdminSweep(t *testing.T) {
 	b := newBackend()
 	seedFlow(t, b, "f1")
-	analysing := make(chan struct{})
+	analysing, done := make(chan struct{}), make(chan struct{})
 	s := New(b, nil, func(ctx context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
 		close(analysing)
 		<-ctx.Done()
+		close(done)
 		return nil, ctx.Err()
 	}, nil, time.Hour, loopbackChannels(b))
 
-	done := make(chan struct{})
-	go func() {
-		s.ScanOnce(context.Background()) // as the admin trigger calls it
-		close(done)
-	}()
+	if err := s.ScanNow(context.Background()); err != nil {
+		t.Fatalf("ScanNow: %v", err)
+	}
 	<-analysing
 	s.Stop()
 	select {

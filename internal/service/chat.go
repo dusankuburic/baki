@@ -18,8 +18,10 @@ import (
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/errreport"
+	"pad-analyzer/internal/platform/apperr"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/rag"
+	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/ai/scrubber"
@@ -152,8 +154,10 @@ func turnGenerationParams(ctx context.Context, p ai.Provider, req models.ChatReq
 	return temperature, maxTokens
 }
 
-// errStreamIDInUse is the stream-ID collision sentinel; match with errors.Is.
-var errStreamIDInUse = errors.New("clientStreamId already in use")
+// errStreamIDInUse is the stream-ID collision sentinel; match with errors.Is. A 409 STREAM_ID_IN_USE, not a 500: the
+// id names a stream already started (on this replica or, claimed in Redis, another), which is what a resent start
+// finds when its first send went through, so the client resumes that stream instead of failing the turn.
+var errStreamIDInUse = apperr.Conflict("STREAM_ID_IN_USE", "clientStreamId already in use: a stream with this id was already started; resume it, or start with a new id")
 
 // ErrTooManyChatStreams is returned when the caller's concurrent-stream cap is exceeded; exported so the HTTP layer maps it to a distinct code.
 var ErrTooManyChatStreams = errors.New("too many chat responses running at once")
@@ -224,11 +228,24 @@ func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bo
 	}
 	s.streamCapMu.Unlock()
 
+	// The same two checks across the replicas (chat_replicas.go; a no-op with one replica), outside the lock like the
+	// ledger write below.
+	hold, dup, full := s.share.reserve(ctl)
+	if dup || full {
+		s.activeStreams.Delete(streamID)
+		if dup {
+			return false, errStreamIDInUse
+		}
+		return false, nil
+	}
+	ctl.shareHold = hold
+
 	// The budget's in-flight ledger holds exactly the active streams (released where activeStreams drops it). The write
 	// can be a Redis round trip, so it runs with the slot reserved but the lock free: a slow Redis delays this start
 	// alone, not every other start and the server's stop.
 	if err := s.aiBudget().hold(ctl); err != nil { // the shared ledger cannot answer: fail closed
 		s.activeStreams.Delete(streamID)
+		s.share.abort(ctl, hold)
 		return false, err
 	}
 	// The worker is counted under the lock that Shutdown sets closing under, so Shutdown's Wait cannot miss it; a stop
@@ -238,6 +255,7 @@ func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bo
 		s.streamCapMu.Unlock()
 		s.activeStreams.Delete(streamID)
 		s.aiBudget().release(ctl)
+		s.share.abort(ctl, hold)
 		return false, ErrServerRestarting
 	}
 	s.workers.Add(1) // the worker StreamChatMessage starts next; it calls Done as its very last step
@@ -311,6 +329,9 @@ type ChatService struct {
 	resume resumeStore
 	// cluster links this replica to the others (stream commands, the approval and active-stream keys); nil without Redis.
 	cluster *chatCluster
+	// share makes the stream cap and the clientStreamId check hold across the replicas (chat_replicas.go); nil with one
+	// replica or without Redis.
+	share *streamShare
 
 	// pendingFixDecisions holds apply_fix proposals awaiting approve/decline, keyed by ID.
 	pendingFixDecisions sync.Map
@@ -347,6 +368,13 @@ type ChatOptions struct {
 	// BusKey signs the stream commands between replicas (redisx.DeriveBusKey of the deployment's shared secret); empty
 	// leaves them unsigned. Used with Resume only.
 	BusKey []byte
+	// MultiReplica: the deployment can run more than one replica (PAD_MAX_REPLICAS > 1). With Resume, the caller's
+	// stream cap and the clientStreamId check then also hold across the replicas, and the replica keeps a liveness key
+	// so a stop for a dead replica's stream is answered as an ended one (chat_replicas.go). Without it they stay per
+	// replica, so a Redis maintenance window costs a single replica nothing.
+	MultiReplica bool
+	// Health is Resume's health (nil: never degraded); with it a degraded Redis is not asked at a stream start.
+	Health *redisx.Health
 }
 
 func NewChatService(
@@ -377,6 +405,9 @@ func NewChatService(
 	}
 	if opts.Resume != nil {
 		s.attachCluster(opts.Resume, opts.Instance, opts.BusKey)
+		if opts.MultiReplica {
+			s.shareAcrossReplicas(opts.Resume, opts.Health)
+		}
 	}
 	return s
 }
@@ -704,7 +735,9 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	var mirrorFinished chan struct{}
 	if rs := s.resumeBackplane(); rs.enabled() {
 		snap, mark := ctl.snapshotMarked()
-		if !rs.Save(ctx, streamID, snap, maxChatStreamDuration+resumeRetention) {
+		if rs.Save(ctx, streamID, snap, maxChatStreamDuration+resumeRetention) {
+			ctl.published.Store(true)
+		} else {
 			mark = unpublishedMark // the mirror's first tick retries
 		}
 		mirrorFinished = make(chan struct{})
@@ -718,6 +751,11 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	// "done" leaves, and the event names the version it was stored at (ADR 0031, addendum).
 	var storeAnswer func()
 	emit := func(eventType string, data map[string]interface{}) {
+		// One terminal event per stream, claimed before the answer is stored: after Shutdown ended the stream in a
+		// stuck worker's place, the worker's late done or error is dropped, and so is its answer.
+		if (eventType == "done" || eventType == "error") && !ctl.claimTerminalEvent(eventType) {
+			return
+		}
 		if eventType == "done" && storeAnswer != nil {
 			// The stored answer carries the billed rates this event names: record them before the write reads them.
 			ctl.mu.Lock()
@@ -788,6 +826,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			s.finishedStreams.Store(streamID, ctl)
 			s.activeStreams.Delete(streamID)
 			s.aiBudget().release(ctl)
+			s.share.finish(ctl, ctl.shareHold)
 			time.AfterFunc(resumeRetention, func() { s.finishedStreams.Delete(streamID) })
 			if persistAnswer && !answerAttempted {
 				// Read settings afresh: history-saving may have been switched off mid-stream.

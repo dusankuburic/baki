@@ -116,7 +116,9 @@ func (s *ChatService) requestApproval(ctx context.Context, streamID string, req 
 	defer s.pendingFixDecisions.Delete(req.id)
 	// Other replicas learn of the approval (stream, owner replica, required scope) before the card is shown, so a
 	// decision that lands on one of them reaches this stream (DecideApproval). Best effort.
-	s.cluster.registerApproval(req.id, streamID, req.requiredScope, s.decisionWait())
+	if s.cluster.registerApproval(req.id, streamID, req.requiredScope, s.decisionWait()) {
+		s.markPublished(streamID)
+	}
 	defer s.cluster.dropApproval(req.id)
 
 	emit("fix_proposal", req.eventData())

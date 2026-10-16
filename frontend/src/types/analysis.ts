@@ -185,6 +185,31 @@ export interface BatchResult {
   error?: string
 }
 
+/** A subflow (or, without a subflow name, a whole flow) of a library pass (core/models/library.go). */
+export interface LibraryLocation {
+  flowId: string
+  flowName?: string
+  subflowName?: string
+}
+
+/** A finding about one flow that only shows across flows: never in a flow's report, its health score or a gate. */
+export interface LibraryFinding extends Finding {
+  flowId: string
+  flowName?: string
+  subflowName?: string
+  related?: LibraryLocation[]
+}
+
+export interface LibraryReport {
+  findings: LibraryFinding[] | null
+  flows: number
+  truncated?: boolean
+  rulesRun: number
+  rulesSkipped?: number
+  generatedAt: string
+  durationMs: number
+}
+
 export interface BatchAnalysis {
   results: BatchResult[]
   totalFlows: number
@@ -194,6 +219,8 @@ export interface BatchAnalysis {
   totalInfo: number
   avgHealthScore: number
   durationMs: number
+  /** The library rules' pass over the folder's flows; absent when none is enabled, and from older servers. */
+  library?: LibraryReport
 }
 
 export interface AnalysisDiff {
@@ -274,7 +301,14 @@ export interface RuleConfig {
 export interface PolicyRule {
   ruleId: string
   enabled: boolean
-  severity?: Severity
+  severity?: Tolerant<Severity> | ''
+  maxCount?: number
+}
+
+export interface PolicyWaiver {
+  findingKey: string
+  reason?: string
+  expiresAt?: string
 }
 
 export interface Policy {
@@ -283,7 +317,11 @@ export interface Policy {
   name: string
   description?: string
   rules: PolicyRule[]
-  gateSeverity?: Severity
+  gateSeverity?: Tolerant<Severity> | ''
+  waivers?: PolicyWaiver[]
+  maxErrors?: number
+  maxWarnings?: number
+  maxInfo?: number
   createdAt?: string
   updatedAt?: string
 }
@@ -297,5 +335,6 @@ export interface PolicyResult {
   warnings: number
   info: number
   evaluated: number
+  waived?: number
   preview?: number
 }

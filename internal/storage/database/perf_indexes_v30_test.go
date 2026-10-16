@@ -11,30 +11,48 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// listFlowsWithTotalSQL must be the list statement with exactly one extra
-// select column: the same WHERE (same args, same order) so the total always
-// describes exactly the rows the page filtered.
-func TestListFlowsWithTotal_SQLShape(t *testing.T) {
+// listFlowsPageSQL must be the list statement asking for one more row, and countFlowsCappedSQL must count under the
+// same WHERE (same args, same order), so the total always describes exactly the rows the page filtered.
+func TestListFlowsPage_SQLShape(t *testing.T) {
 	filter := interfaces.FlowFilter{
 		UserID: "u1", Query: "etl", Limit: 25, Offset: 50,
 		SortBy: interfaces.FlowSortBlocksDesc, MetadataOnly: true,
 	}
 	listQ, listArgs := listFlowsSQL(filter)
-	totalQ, totalArgs := listFlowsWithTotalSQL(filter)
-
-	if !strings.Contains(totalQ, "COUNT(*) OVER() AS page_total") {
-		t.Errorf("total query missing COUNT(*) OVER(): %s", totalQ)
+	pageQ, pageArgs := listFlowsPageSQL(filter)
+	if listQ != pageQ || len(pageArgs) != len(listArgs) {
+		t.Fatalf("the page statement is not the list statement:\nlist: %s\npage: %s", listQ, pageQ)
 	}
-	if listQ != strings.Replace(totalQ, ", COUNT(*) OVER() AS page_total", "", 1) {
-		t.Errorf("total query is not the list query plus one column:\nlist:  %s\ntotal: %s", listQ, totalQ)
-	}
-	if len(totalArgs) != len(listArgs) {
-		t.Fatalf("arg count diverged: list %d, total %d", len(listArgs), len(totalArgs))
-	}
-	for i := range listArgs {
-		if listArgs[i] != totalArgs[i] {
-			t.Errorf("arg %d diverged: list %v, total %v", i, listArgs[i], totalArgs[i])
+	n := len(listArgs)
+	for i := range n - 2 {
+		if listArgs[i] != pageArgs[i] {
+			t.Errorf("arg %d diverged: list %v, page %v", i, listArgs[i], pageArgs[i])
 		}
+	}
+	if pageArgs[n-2] != 26 || pageArgs[n-1] != 50 {
+		t.Errorf("page LIMIT/OFFSET = %v/%v, want 26 (one more than the page) and 50", pageArgs[n-2], pageArgs[n-1])
+	}
+
+	countQ, countArgs := countFlowsCappedSQL(filter, 10000)
+	where := listQ[strings.Index(listQ, "WHERE"):strings.Index(listQ, "ORDER BY")]
+	if !strings.Contains(countQ, strings.TrimSpace(where)) || !strings.Contains(countQ, "LIMIT $3) capped") {
+		t.Errorf("the count is not the list's WHERE cut at the cap:\nlist:  %s\ncount: %s", listQ, countQ)
+	}
+	if len(countArgs) != n-1 || countArgs[n-2] != 10001 {
+		t.Errorf("count args = %v, want the list's filter args then the cap + 1", countArgs)
+	}
+	if q, _ := countFlowsCappedSQL(filter, 0); strings.Contains(q, "LIMIT") {
+		t.Errorf("an uncapped count must count every row: %s", q)
+	}
+
+	// A keyset page binds no offset; its count drops the cursor (the total covers the whole filter).
+	filter.SortBy, filter.After = interfaces.FlowSortUpdatedDesc, &interfaces.PageCursor{At: time.Unix(1700000000, 0).UTC(), ID: "f-9"}
+	kq, kargs := listFlowsPageSQL(filter)
+	if !strings.Contains(kq, "updated_at <= $3 AND (updated_at < $3 OR id > $4)") || kargs[len(kargs)-1] != 0 {
+		t.Errorf("keyset page = %s %v; want the updated_at/id bound and OFFSET 0", kq, kargs)
+	}
+	if cq, _ := countFlowsCappedSQL(filter, 10000); strings.Contains(cq, "updated_at") {
+		t.Errorf("the count keeps the cursor: %s", cq)
 	}
 }
 
@@ -85,12 +103,12 @@ func TestMigration_V30_TiebreakIndexes_Postgres(t *testing.T) {
 	}
 }
 
-// ListFlowsWithTotal must agree with the two-statement path it replaces:
-// same docs, and a total that ignores Limit/Offset.
-func TestListFlowsWithTotal_Postgres(t *testing.T) {
+// ListFlowsPage must agree with ListFlows and CountFlows: the same docs, whether more follow, and a total that
+// ignores Limit/Offset.
+func TestListFlowsPage_Postgres(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		t.Skip("DATABASE_URL not set — skipping ListFlowsWithTotal test")
+		t.Skip("DATABASE_URL not set — skipping ListFlowsPage test")
 	}
 	ctx := context.Background()
 	b, err := New(ctx, DefaultConfig(dsn))
@@ -116,15 +134,16 @@ func TestListFlowsWithTotal_Postgres(t *testing.T) {
 	filter := interfaces.FlowFilter{
 		UserID: owner, Limit: 2, SortBy: interfaces.FlowSortUpdatedDesc, MetadataOnly: true,
 	}
-	docs, total, err := b.ListFlowsWithTotal(ctx, filter)
+	page, err := b.ListFlowsPage(ctx, filter, 0)
 	if err != nil {
-		t.Fatalf("ListFlowsWithTotal: %v", err)
+		t.Fatalf("ListFlowsPage: %v", err)
 	}
-	if len(docs) != 2 {
-		t.Errorf("docs = %d, want the page size 2", len(docs))
+	docs := page.Docs
+	if len(docs) != 2 || !page.HasMore {
+		t.Errorf("docs = %d, more %v; want the page size 2 and more", len(docs), page.HasMore)
 	}
-	if total != 3 {
-		t.Errorf("total = %d, want 3 (unpaginated)", total)
+	if page.Total != 3 || page.TotalCapped {
+		t.Errorf("total = %d (capped %v), want 3 (unpaginated)", page.Total, page.TotalCapped)
 	}
 	for _, d := range docs {
 		if d.OwnerID != owner {
@@ -141,11 +160,11 @@ func TestListFlowsWithTotal_Postgres(t *testing.T) {
 		t.Fatalf("ListFlows: %v", err)
 	}
 	if len(listDocs) != len(docs) {
-		t.Fatalf("ListFlows returned %d docs, ListFlowsWithTotal %d", len(listDocs), len(docs))
+		t.Fatalf("ListFlows returned %d docs, ListFlowsPage %d", len(listDocs), len(docs))
 	}
 	for i := range docs {
 		if docs[i].ID != listDocs[i].ID {
-			t.Errorf("row %d: total-path id %s, list-path id %s", i, docs[i].ID, listDocs[i].ID)
+			t.Errorf("row %d: page id %s, list id %s", i, docs[i].ID, listDocs[i].ID)
 		}
 	}
 }

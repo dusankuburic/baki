@@ -53,6 +53,8 @@ func (b *PostgresStorageBackend) SaveOrgCustomRule(ctx context.Context, rule *st
 		return storageif.ErrOrgCustomRuleRenamed
 	case isPgErrCode(err, pgErrUniqueViolation):
 		return fmt.Errorf("save org custom rule: id %q is not one of this org's rules: %w", rule.ID, storageif.ErrNotFound)
+	case isUnknownOrg(err, "org_custom_rules_org_id_fkey"):
+		return storageif.ErrOrgNotFound
 	case err != nil:
 		return fmt.Errorf("save org custom rule: %w", err)
 	}
@@ -61,6 +63,28 @@ func (b *PostgresStorageBackend) SaveOrgCustomRule(ctx context.Context, rule *st
 	// one it proposed.
 	rule.ID = savedID
 	return nil
+}
+
+// SetOrgCustomRuleEnabled updates the enabled flag alone, in one statement, so
+// a full save landing between a pause's read and its write keeps its config.
+// Scoped by org like every method here: another tenant's id matches no row.
+func (b *PostgresStorageBackend) SetOrgCustomRuleEnabled(ctx context.Context, orgID, id string, enabled bool) (*storageif.OrgCustomRule, error) {
+	r := &storageif.OrgCustomRule{}
+	var cfg []byte
+	err := b.query(ctx).QueryRowContext(ctx, `
+		UPDATE org_custom_rules SET enabled = $3, updated_at = NOW()
+		WHERE id = $1 AND org_id = $2
+		RETURNING id, org_id, rule_id, config, enabled, created_at, updated_at`,
+		id, orgID, enabled,
+	).Scan(&r.ID, &r.OrgID, &r.RuleID, &cfg, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, fmt.Errorf("set org custom rule enabled: %w", storageif.ErrNotFound)
+	case err != nil:
+		return nil, fmt.Errorf("set org custom rule enabled: %w", err)
+	}
+	r.Config = cfg
+	return r, nil
 }
 
 // DeleteOrgCustomRule removes one rule. Scoped by org so an id from another

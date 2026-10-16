@@ -6,7 +6,7 @@ export interface CatalogFieldFixture {
   required: boolean
   placeholder?: string
   help?: string
-  options?: {value: string; label: string}[]
+  options?: {value: string; label?: string}[]
 }
 
 export interface CatalogSpecFixture {

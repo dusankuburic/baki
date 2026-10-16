@@ -98,30 +98,34 @@ func (s *IdentityService) ResolveSSOUser(ctx context.Context, provider string, i
 		// Security: an unverified local account (e.g. an open-registration "shadow" with a password an attacker
 		// knows) is a pre-account-takeover risk. Linking it to a verified SSO identity takes ownership: clear the
 		// password hash so the shadow's password can no longer log in, forcing the account onto the IdP.
-		if !existing.EmailVerified {
-			existing.EmailVerified = true
-			existing.Password = "" // Strip the insecure password hash
-			if err := s.users.SaveUser(ctx, existing); err != nil {
-				return nil, fmt.Errorf("failed to harden account — try again")
-			}
-			// Outstanding reset/verify tokens must go too: an attacker who created the shadow could have a reset
-			// link that would re-arm a known password after the owner takes over via SSO.
-			if err := s.users.InvalidateUserTokens(ctx, existing.ID,
-				storageif.TokenPurposePasswordReset, storageif.TokenPurposeEmailVerify); err != nil {
-				logger.FromContext(ctx).Error("failed to invalidate outstanding reset/verify tokens during SSO account hardening", "error", err, "userID", existing.ID)
-			}
-			logger.Info("account takeover prevented: cleared password on unverified account linked to verified SSO identity", "userID", existing.ID, "email", audit.RedactEmail(ident.Email))
-		} else {
+		verifiedAccount := fmt.Errorf("an account with this email already exists — link %s from your account settings", provider)
+		if existing.EmailVerified {
 			// Already verified: do NOT auto-link a new IdP identity — an attacker controlling an IdP that asserts
 			// the victim's email as verified could SSO straight into the account. The owner must add the provider
 			// from account settings.
-			return nil, fmt.Errorf("an account with this email already exists — link %s from your account settings", provider)
+			return nil, verifiedAccount
 		}
-
-		if err := s.links.SaveIdentityLink(ctx, newLink); err != nil {
+		// Outstanding reset/verify tokens must go too: an attacker who created the shadow could have a reset link
+		// that would re-arm a known password after the owner takes over via SSO. First, so that no outcome of the
+		// write below leaves a hardened account with them.
+		if err := s.users.InvalidateUserTokens(ctx, existing.ID,
+			storageif.TokenPurposePasswordReset, storageif.TokenPurposeEmailVerify); err != nil {
+			logger.FromContext(ctx).Error("failed to invalidate outstanding reset/verify tokens during SSO account hardening", "error", err, "userID", existing.ID)
+		}
+		existing.EmailVerified = true
+		existing.Password = "" // Strip the insecure password hash
+		// Hardened and linked in one write: hardened alone, the account was verified without a link, and the
+		// retry refused it as an existing verified account. The store writes only these two fields, and only while
+		// the account is still unverified: its owner may have verified it since the read above.
+		if err := s.links.SaveUserWithIdentityLink(ctx, existing, newLink); err != nil {
+			if errors.Is(err, storageif.ErrAccountVerified) {
+				return nil, verifiedAccount
+			}
 			return nil, fmt.Errorf("failed to link account — try again")
 		}
-		return existing, nil
+		logger.Info("account takeover prevented: cleared password on unverified account linked to verified SSO identity", "userID", existing.ID, "email", audit.RedactEmail(ident.Email))
+		// The stored account, not the row read above: its role or name may have changed in between.
+		return s.users.LoadUserByID(ctx, existing.ID)
 	}
 
 	user := &storageif.User{
@@ -134,12 +138,11 @@ func (s *IdentityService) ResolveSSOUser(ctx context.Context, provider string, i
 		Role:          auth.RoleMember,
 		DisplayName:   ident.DisplayName,
 	}
-	if err := s.users.CreateUser(ctx, user); err != nil {
-		return nil, fmt.Errorf("failed to create account — try again")
-	}
 	newLink.UserID = user.ID
-	if err := s.links.SaveIdentityLink(ctx, newLink); err != nil {
-		return nil, fmt.Errorf("failed to link account — try again")
+	// One write for the account and its link: written apart, a failure between them left a verified account
+	// without a link, which the retry then refused as an existing verified account.
+	if err := s.links.SaveUserWithIdentityLink(ctx, user, newLink); err != nil {
+		return nil, fmt.Errorf("failed to create account — try again")
 	}
 	return user, nil
 }

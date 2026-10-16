@@ -24,7 +24,7 @@ func TestSystemService_EmptyUserScopeIsTheDeployment(t *testing.T) {
 
 	want := *models.DefaultSettings()
 	want.Appearance.Theme = "light"
-	if err := sys.UpdateUserSettings(ctx, "", want); err != nil {
+	if err := sys.UpdateUserSettings(ctx, "", want, nil); err != nil {
 		t.Fatalf("UpdateUserSettings without a user: %v", err)
 	}
 	if deployment.Get().Appearance.Theme != "light" {

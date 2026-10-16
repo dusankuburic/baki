@@ -27,6 +27,7 @@ func newAllowListedChannels(b *testutil.FakeBackend, policy egress.Policy, hosts
 // host as typed and no address; an on-list host saves.
 func TestChannelService_SaveRefusesAHostOffTheAllowList(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	svc := newAllowListedChannels(b, egress.AllowLoopback, "localhost", "*.logic.azure.com")
 	ctx := context.Background()
 	for _, save := range []ChannelSave{
@@ -67,6 +68,7 @@ func TestChannelService_DeliveryObeysTheAllowList(t *testing.T) {
 	defer srv.Close()
 	port := srv.URL[strings.LastIndex(srv.URL, ":"):]
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	ctx := context.Background()
 	_ = b.SaveOrgChannel(ctx, &storageif.OrgChannel{ID: "off", OrgID: "o", Name: "left the list", Kind: "teams-workflow", URL: "http://127.0.0.1" + port + "/workflows/x", Enabled: true})
 	_ = b.SaveOrgChannel(ctx, &storageif.OrgChannel{ID: "on", OrgID: "o", Name: "listed", Kind: "webhook", URL: "http://localhost" + port + "/hook", Enabled: true})

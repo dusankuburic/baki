@@ -25,6 +25,7 @@ import {
   type ProviderInfo,
   type ProviderSpec,
   type RuleStage,
+  type Severity,
   type Tolerant,
   type UnknownEnumValue,
 } from '@/types'
@@ -48,6 +49,10 @@ function nilAsEmpty<T extends z.ZodTypeAny>(item: T) {
 
 function tolerantEnum<T extends string>(values: readonly T[]) {
   return z.string().transform((v): Tolerant<T> => (isKnown(values, v) ? v : (v as UnknownEnumValue)))
+}
+
+function nullAsAbsent<T extends z.ZodTypeAny>(item: T) {
+  return item.nullish().transform(v => v ?? undefined)
 }
 
 export function buildSchemas() {
@@ -140,6 +145,43 @@ export function buildSchemas() {
         .passthrough(),
     })
     .passthrough() as unknown as z.ZodType<AnalysisReport>
+
+  // A policy round-trips: the panel saves back what it listed and the server replaces the stored one wholesale, so
+  // every level passes unknown fields through. The severities are tolerant: the server reads a gate it does not know
+  // as report-only, an override it does not know as an error (analyzer.EvaluatePolicy).
+  const PolicySeveritySchema = tolerantEnum<Severity>(['error', 'warning', 'info'])
+  const PolicySchema = z
+    .object({
+      id: z.string(),
+      orgId: z.string().optional(),
+      name: z.string(),
+      description: z.string().optional(),
+      rules: nilAsEmpty(
+        z
+          .object({
+            ruleId: z.string(),
+            enabled: z.boolean(),
+            severity: PolicySeveritySchema.optional(),
+            maxCount: nullAsAbsent(z.number()),
+          })
+          .passthrough(),
+      ),
+      gateSeverity: PolicySeveritySchema.optional(),
+      waivers: nullAsAbsent(
+        z.array(
+          z
+            .object({findingKey: z.string(), reason: z.string().optional(), expiresAt: z.string().optional()})
+            .passthrough(),
+        ),
+      ),
+      maxErrors: nullAsAbsent(z.number()),
+      maxWarnings: nullAsAbsent(z.number()),
+      maxInfo: nullAsAbsent(z.number()),
+      createdAt: z.string().optional(),
+      updatedAt: z.string().optional(),
+    })
+    .passthrough()
+  const PoliciesSchema = nilAsEmpty(PolicySchema)
 
   const AppSettingsSchema = z
     .object({
@@ -253,6 +295,9 @@ export function buildSchemas() {
       total: z.number(),
       offset: z.number(),
       limit: z.number(),
+      hasMore: z.boolean().optional(),
+      nextCursor: z.string().optional(),
+      totalCapped: z.boolean().optional(),
     })
     .passthrough() as unknown as z.ZodType<PagedResponse<LibraryFlow>>
 
@@ -386,7 +431,7 @@ export function buildSchemas() {
       required: z.boolean(),
       placeholder: z.string().optional(),
       help: z.string().optional(),
-      options: z.array(z.object({value: z.string(), label: z.string()}).passthrough()).optional(),
+      options: z.array(z.object({value: z.string(), label: z.string().optional()}).passthrough()).optional(),
     })
     .passthrough()
 
@@ -615,6 +660,8 @@ export function buildSchemas() {
       total: z.number(),
       offset: z.number(),
       limit: z.number(),
+      hasMore: z.boolean().optional(),
+      nextCursor: z.string().optional(),
     })
     .passthrough() as unknown as z.ZodType<PagedResponse<AdminUser>>
 
@@ -750,6 +797,8 @@ export function buildSchemas() {
     LoadedFlowDocumentSchema,
     FindingSchema,
     AnalysisReportSchema,
+    PolicySchema,
+    PoliciesSchema,
     AppSettingsSchema,
     RecentFilesSchema,
     SearchResultsSchema,

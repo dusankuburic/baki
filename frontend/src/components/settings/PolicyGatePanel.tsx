@@ -1,14 +1,16 @@
-import {useEffect, useState, useCallback} from 'react'
+import {useEffect, useState, useCallback, useRef} from 'react'
 import {useTranslation} from 'react-i18next'
 import {Plus, Trash2, Shield, ShieldCheck, ShieldAlert, ChevronDown, ChevronRight, Play} from 'lucide-react'
 import clsx from 'clsx'
 import {analysisApi} from '@/api'
-import type {Policy, PolicyResult, PolicyRule, Severity, Rule} from '@/types'
+import {isKnown, type Policy, type PolicyResult, type PolicyRule, type Severity, type Rule} from '@/types'
 import {useOrgStore} from '@/stores/orgStore'
 import {useFlowStore} from '@/stores/flowStore'
 import {useToast} from '@/components/shared/Toast'
 import {Button, IconButton, useConfirm} from '@/components/shared'
+import ErrorState from '@/components/shared/ErrorState'
 import {useAsync} from '@/hooks/useAsync'
+import {uuid} from '@/lib/uuid'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 
 const GATE_VALUES: {key: 'reportOnly' | 'infoPlus' | 'warningPlus' | 'errorPlus'; value: Severity | ''}[] = [
@@ -17,6 +19,10 @@ const GATE_VALUES: {key: 'reportOnly' | 'infoPlus' | 'warningPlus' | 'errorPlus'
   {key: 'warningPlus', value: 'warning'},
   {key: 'errorPlus', value: 'error'},
 ]
+const GATE_SEVERITIES: readonly Severity[] = ['info', 'warning', 'error']
+
+// slot keys a policy's save state by organisation and listed id.
+const slot = (org: string | null, id: string) => `${org ?? ''}\n${id}`
 
 export default function PolicyGatePanel() {
   const {t} = useTranslation('settings')
@@ -29,19 +35,35 @@ export default function PolicyGatePanel() {
 
   const [policies, setPolicies] = useState<Policy[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const openFlowId = useFlowStore(s => s.document?.id ?? null)
   const [results, setResults] = useState<Record<string, PolicyResult>>({})
   const [evaluatingId, setEvaluatingId] = useState<string | null>(null)
+  // A policy's saves go out one at a time, an edit made meanwhile after the answer, under the id it carries: a policy
+  // listed without one gets it from that answer, and a second save without one would be a second policy. Keyed by
+  // organisation and listed id (each may list an id-less policy); renamed maps a listed id to the one its save gave
+  // it, for an edit from a render before the answer. An answer after an organisation switch leaves the list shown.
+  const saving = useRef(new Map<string, {next: Policy | null}>())
+  const renamed = useRef(new Map<string, string>())
+  const shownOrg = useRef(activeOrgId)
+  useEffect(() => {
+    shownOrg.current = activeOrgId
+  }, [activeOrgId])
 
   const loadPolicies = useCallback(async () => {
     if (!activeOrgId) return
+    renamed.current.clear()
     setLoading(true)
+    setLoadFailed(false)
     try {
       const result = await analysisApi.listPolicies(activeOrgId)
       setPolicies(result || [])
     } catch {
+      // A list that failed (or failed validation) is not an empty one, nor the previous org's.
+      setPolicies([])
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
@@ -58,9 +80,11 @@ export default function PolicyGatePanel() {
       return
     }
     const name = t('policy.newPolicyName', {count: policies.length + 1})
+    const org = activeOrgId
+    // An id of its own: a save without one is an edit of the policy a server before v48 stored without one.
     const policy: Policy = {
-      id: '',
-      orgId: activeOrgId,
+      id: uuid(),
+      orgId: org,
       name,
       description: '',
       rules: [],
@@ -68,16 +92,19 @@ export default function PolicyGatePanel() {
     }
     try {
       const saved = await analysisApi.savePolicy(policy)
-      setPolicies([...policies, saved])
-      setExpandedId(saved.id)
-      setCreating(false)
+      if (org === shownOrg.current) {
+        setPolicies(prev => [...prev, saved])
+        setExpandedId(saved.id)
+        setCreating(false)
+      }
     } catch (err) {
       toast.error(t('policy.createFailed', {message: (err as Error).message}))
     }
   }
 
   const handleDelete = async (id: string) => {
-    if (!activeOrgId) return
+    const org = activeOrgId
+    if (!org) return
     const ok = await confirm({
       title: t('policy.deleteTitle'),
       message: t('policy.deleteMessage'),
@@ -85,26 +112,63 @@ export default function PolicyGatePanel() {
     })
     if (!ok) return
     try {
-      await analysisApi.deletePolicy(activeOrgId, id)
-      setPolicies(policies.filter(p => p.id !== id))
-      if (expandedId === id) setExpandedId(null)
+      await analysisApi.deletePolicy(org, id)
+      const inFlight = saving.current.get(slot(org, id))
+      if (inFlight) inFlight.next = null
+      if (org === shownOrg.current) {
+        setPolicies(prev => prev.filter(p => p.id !== id))
+        if (expandedId === id) setExpandedId(null)
+      }
     } catch (err) {
       toast.error(t('policy.deleteFailed', {message: (err as Error).message}))
     }
   }
 
-  const handleUpdate = async (policy: Policy) => {
+  const handleUpdate = (edit: Policy) => {
+    const org = activeOrgId
+    const policy = {...edit, id: renamed.current.get(slot(org, edit.id)) ?? edit.id}
+    // Shown at once; sent now, or after the save in flight (only the latest edit waits).
+    setPolicies(prev => prev.map(p => (p.id === policy.id ? policy : p)))
+    const inFlight = saving.current.get(slot(org, policy.id))
+    if (inFlight) inFlight.next = policy
+    else void sendPolicy(policy, org)
+  }
+
+  const sendPolicy = async (policy: Policy, org: string | null) => {
+    const key = policy.id
+    const at = slot(org, key)
+    const entry = {next: null as Policy | null}
+    saving.current.set(at, entry)
+    let saved: Policy | null = null
     try {
-      const saved = await analysisApi.savePolicy(policy)
-      setPolicies(policies.map(p => (p.id === saved.id ? saved : p)))
-      setResults(prev => {
-        const next = {...prev}
-        delete next[saved.id]
-        return next
-      })
+      saved = await analysisApi.savePolicy(policy)
     } catch (err) {
       toast.error(t('policy.saveFailed', {message: (err as Error).message}))
     }
+    saving.current.delete(at)
+    const {next} = entry
+    const here = org === shownOrg.current
+    if (saved) {
+      const {id} = saved
+      if (id !== key) renamed.current.set(at, id)
+      if (here) {
+        // Replaced by the id it was sent with: a policy listed without one comes back with the id the server gave
+        // it. An edit waiting to go out stays shown.
+        const shown = next ? {...next, id} : saved
+        setPolicies(prev => prev.map(p => (p.id === key ? shown : p)))
+        if (id !== key) setExpandedId(prev => (prev === key ? id : prev))
+        setResults(prev => {
+          const cleared = {...prev}
+          delete cleared[key]
+          delete cleared[id]
+          return cleared
+        })
+      }
+    } else if (!next && here) {
+      // Not saved: show what is stored.
+      void loadPolicies()
+    }
+    if (next) void sendPolicy({...next, id: saved?.id ?? key}, org)
   }
 
   const handleEvaluate = async (policy: Policy) => {
@@ -148,7 +212,11 @@ export default function PolicyGatePanel() {
 
       {activeOrgId && loading && <div className="text-sm text-text-secondary">{t('policy.loading')}</div>}
 
-      {activeOrgId && !loading && policies.length === 0 && (
+      {activeOrgId && !loading && loadFailed && (
+        <ErrorState message={t('policy.loadFailed')} onRetry={() => void loadPolicies()} className="py-6" />
+      )}
+
+      {activeOrgId && !loading && !loadFailed && policies.length === 0 && (
         <div className="text-sm text-text-secondary italic">{t('policy.empty')}</div>
       )}
 
@@ -212,7 +280,7 @@ export default function PolicyGatePanel() {
                     <div className="mt-1">
                       <SegmentedControl
                         options={GATE_VALUES.map(o => ({label: t(`policy.gate.${o.key}`), value: o.value}))}
-                        value={policy.gateSeverity ?? ''}
+                        value={knownGate(policy.gateSeverity)}
                         onChange={val => handleUpdate({...policy, gateSeverity: val as Severity | undefined})}
                         activation="manual"
                       />
@@ -334,8 +402,16 @@ function PolicyResultView({result}: {result: PolicyResult}) {
   )
 }
 
-function GateBadge({severity}: {severity?: Severity}) {
+// knownGate is the gate as the server evaluates it (analyzer.EvaluatePolicy): trimmed and lower-cased, and a value it
+// does not know is report-only.
+function knownGate(gate: Policy['gateSeverity']): Severity | '' {
+  const normalized = gate?.trim().toLowerCase()
+  return isKnown(GATE_SEVERITIES, normalized) ? normalized : ''
+}
+
+function GateBadge({severity: gate}: {severity: Policy['gateSeverity']}) {
   const {t} = useTranslation('settings')
+  const severity = knownGate(gate)
   if (!severity) {
     return (
       <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-surface-3 text-text-secondary">

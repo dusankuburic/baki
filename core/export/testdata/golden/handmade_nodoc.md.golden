@@ -34,7 +34,7 @@ A severity no consumer knows.
 
 ## Warnings (2)
 
-### 1. =HYPERLINK("http://x")
+### 1. =HYPERLINK(&#34;http://x&#34;)
 
 - **Rule:** `org-no-msgbox`
 - **Severity:** warning
@@ -42,7 +42,7 @@ A severity no consumer knows.
 - **Subflow:** sf-1
 
 Line one
-Line two <b>&amp;</b> 'quoted' "dq"
+Line two &lt;b&gt;&amp;amp;&lt;/b&gt; &#39;quoted&#39; &#34;dq&#34;
 
 > **Suggestion:** @risk: use a log action
 

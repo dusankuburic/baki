@@ -181,7 +181,8 @@ func (l IgnoreList) Match(rel string) bool {
 
 // walkFolder calls visit with the key and entry of every member of dir, in
 // walk order (lexical within each directory). A recursive walk never follows
-// a symlinked directory; a flat one lists dir with os.ReadDir.
+// a symlinked directory below dir (dir itself is followed); a flat one lists
+// dir with os.ReadDir.
 func walkFolder(dir string, opts FolderOptions, visit func(key string, d fs.DirEntry) error) error {
 	var ignore IgnoreList
 	if opts.IgnoreFile != "" {
@@ -202,7 +203,16 @@ func walkFolder(dir string, opts FolderOptions, visit func(key string, d fs.DirE
 		}
 		return nil
 	}
-	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	// The root is followed when it is a link (a symlink, a Windows junction), as
+	// os.ReadDir above and os.OpenRoot follow it; WalkDir would list it as a lone
+	// entry. A trailing separator makes WalkDir's Lstat resolve the final link
+	// (POSIX path resolution, which os.Lstat implements on Windows too). Links
+	// inside the tree are still entries as themselves, so none is walked.
+	root := dir
+	if info, err := os.Lstat(dir); err == nil && info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
+		root = dir + string(filepath.Separator)
+	}
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -212,9 +222,8 @@ func walkFolder(dir string, opts FolderOptions, visit func(key string, d fs.DirE
 		}
 		rel = filepath.ToSlash(rel)
 		if rel == "." {
-			// A symlinked root is not walked (it lists nothing), as before.
-			if !d.IsDir() && d.Type()&fs.ModeSymlink == 0 {
-				return fmt.Errorf("%s: not a directory", p)
+			if !d.IsDir() {
+				return fmt.Errorf("%s: not a directory", dir)
 			}
 			return nil
 		}

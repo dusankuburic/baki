@@ -70,7 +70,10 @@ export default function FindingCommentsPanel({
         visible.map(c => (
           <div key={c.id} className="text-2xs space-y-0.5">
             <div className="flex items-center gap-2">
-              <span className="text-text-secondary font-medium">{c.authorName || c.authorId.slice(0, 8)}</span>
+              <span className="text-text-secondary font-medium">
+                {/* An erased account leaves its comments with neither an id nor a name. */}
+                {c.authorName || c.authorId.slice(0, 8) || t('comments.formerMember')}
+              </span>
               <span className="text-text-disabled">{localDate(c.createdAt)}</span>
               {userId !== null && (c.authorId === userId || canModerate) && (
                 <button

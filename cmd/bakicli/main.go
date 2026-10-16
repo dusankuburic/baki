@@ -5,7 +5,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -96,14 +98,17 @@ Usage:
   bakicli init [-o .bakirc.json]                 Generate a starter config
   bakicli watch [flags] <file|folder>            Re-analyze on every save (Ctrl-C to stop)
   bakicli migrate down [flags] <version>         Roll the server schema back (operator-only)
+  bakicli migrate adopt-checksum [flags] <ver>   Adopt this binary's checksum for a drifted step
+  bakicli migrate preflight [flags]              Check pre-deploy migration readiness & drift
   bakicli --version                              Print version
   bakicli <subcommand> -h                        Flags of a subcommand
 
 Output formats (-format): %s
   -report-json <path> additionally writes the JSON report from the same run.
-  Several flows (one per path) are analyzed together with -format text or json;
-  their cross-flow library findings (preview) never gate. Flags go before the
-  paths: a flag after a path is an error (exit 2).
+  Several flows (one per path; a path given twice counts once) are analyzed
+  together with -format text or json; their cross-flow library findings
+  (preview) never gate. Flags go before the paths: a flag after a path is an
+  error (exit 2).
 
 Exit codes:
   0  gate passed
@@ -194,7 +199,7 @@ func runAnalyze() {
 		fmt.Fprintf(os.Stderr, "bakicli: unknown -format value %q (must be %s)\n", *format, formatChoices())
 		os.Exit(2)
 	}
-	targets := flag.Args()
+	targets := distinctTargets(flag.Args())
 	if err := checkOutput(*format, targets, isTerminal(os.Stdout)); err != nil {
 		fmt.Fprintf(os.Stderr, "bakicli: %v\n", err)
 		os.Exit(2)
@@ -281,6 +286,43 @@ func runAnalyze() {
 	}) {
 		os.Exit(1)
 	}
+}
+
+// distinctTargets drops a path argument that names a path given before it,
+// with a warning: one flow given twice was analyzed, reported and compared by
+// the library rules as two. Two existing paths are the same when os.SameFile
+// says so (another case where the filesystem ignores case, a link), else when
+// their cleaned absolute paths are equal; lowercasing on Windows merged two
+// flows of a case-sensitive directory. "-" (stdin) is one input however often
+// it is given.
+func distinctTargets(targets []string) []string {
+	type given struct {
+		target, abs string
+		info        os.FileInfo // nil when the path cannot be stat'ed
+	}
+	seen := make([]given, 0, len(targets))
+	out := make([]string, 0, len(targets))
+next:
+	for _, target := range targets {
+		cur := given{target: target, abs: target}
+		if target != "-" {
+			if abs, err := filepath.Abs(target); err == nil {
+				cur.abs = abs
+			}
+			if info, err := os.Stat(target); err == nil {
+				cur.info = info
+			}
+		}
+		for _, prev := range seen {
+			if cur.abs == prev.abs || (cur.info != nil && prev.info != nil && os.SameFile(cur.info, prev.info)) {
+				fmt.Fprintf(os.Stderr, "bakicli: warning: %s names the same flow as %s; analyzing it once\n", target, prev.target)
+				continue next
+			}
+		}
+		seen = append(seen, cur)
+		out = append(out, target)
+	}
+	return out
 }
 
 // analyzeGate is how an analyze run decides its exit code.
@@ -1166,21 +1208,36 @@ func runInit(args []string) {
 // the operator raising --max-steps.
 const maxDefaultDownSteps = 3
 
-// runMigrate implements `bakicli migrate down <version>`: operator-only schema
-// rollback, the reverse of the server's boot-time forward migrate(). Guards:
-// --max-steps (default 3), typed confirm (--force skips), reversibility
-// pre-check, and a boot-reapply warning (a newer binary re-applies the steps).
+// runMigrate dispatches migrate subcommands (down, adopt-checksum, preflight).
 func runMigrate(args []string) {
-	if len(args) == 0 || args[0] != "down" {
+	if len(args) == 0 {
 		printMigrateUsage()
 		os.Exit(2)
 	}
+	switch args[0] {
+	case "down":
+		runMigrateDown(args[1:])
+	case "adopt-checksum":
+		runMigrateAdoptChecksum(args[1:])
+	case "preflight":
+		runMigratePreflight(args[1:])
+	default:
+		printMigrateUsage()
+		os.Exit(2)
+	}
+}
+
+// runMigrateDown implements `bakicli migrate down <version>`: operator-only schema
+// rollback, the reverse of the server's boot-time forward migrate(). Guards:
+// --max-steps (default 3), typed confirm (--force skips), reversibility
+// pre-check, and a boot-reapply warning (a newer binary re-applies the steps).
+func runMigrateDown(args []string) {
 	fs := flag.NewFlagSet("migrate down", flag.ExitOnError)
 	dsnFlag := fs.String("dsn", "", "Postgres DSN (default: $PAD_DATABASE_URL)")
 	force := fs.Bool("force", false, "skip the interactive confirm prompt")
 	maxSteps := fs.Int("max-steps", maxDefaultDownSteps, "refuse to roll back more than this many steps in one invocation")
-	fs.Usage = printMigrateUsage
-	_ = fs.Parse(args[1:])
+	fs.Usage = printMigrateDownUsage
+	_ = fs.Parse(args)
 	if fs.NArg() < 1 {
 		fs.Usage()
 		os.Exit(2)
@@ -1200,9 +1257,10 @@ func runMigrate(args []string) {
 		os.Exit(2)
 	}
 
-	// database.New runs the idempotent forward migrate, so schema_migrations
-	// exists and the step set is loaded.
-	b, err := database.New(context.Background(), database.DefaultConfig(dsn))
+	// OpenForMaintenance connects and configures the pool without running
+	// forward migrations or verifyChecksums, allowing down migrations on drifted
+	// schemas or pre-48 schemas with duplicate data.
+	b, err := database.OpenForMaintenance(context.Background(), database.DefaultConfig(dsn))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bakicli migrate down: connect: %v\n", err)
 		os.Exit(1)
@@ -1222,13 +1280,25 @@ func runMigrate(args []string) {
 
 	// Build + validate the plan from the binary's step list (no DB writes yet).
 	steps := database.MigrationSteps()
+	maxKnown := latestKnownMigrationVersion(steps)
 	stepCount := current - target
+	if current > maxKnown {
+		fmt.Printf("Rollback plan: v%d → v%d (%d step(s))\n", current, target, stepCount)
+		fmt.Printf("  v%d [NEWER THAN THIS BINARY]\n", current)
+		fmt.Fprintf(os.Stderr, "bakicli migrate down: v%d is newer than this bakicli (knows v%d); run migrate down with the release that added it\n", current, maxKnown)
+		os.Exit(2)
+	}
 	if stepCount > *maxSteps {
 		fmt.Fprintf(os.Stderr, "bakicli migrate down: refusing to roll back %d steps (max %d); pass --max-steps to raise the cap\n", stepCount, *maxSteps)
 		os.Exit(2)
 	}
 	fmt.Printf("Rollback plan: v%d → v%d (%d step(s))\n", current, target, stepCount)
 	for v := current; v > target; v-- {
+		if v > maxKnown {
+			fmt.Printf("  v%d [NEWER THAN THIS BINARY]\n", v)
+			fmt.Fprintf(os.Stderr, "bakicli migrate down: v%d is newer than this bakicli (knows v%d); run migrate down with the release that added it\n", v, maxKnown)
+			os.Exit(2)
+		}
 		var name string
 		reversible := false
 		for _, s := range steps {
@@ -1249,8 +1319,10 @@ func runMigrate(args []string) {
 	}
 
 	fmt.Println("\nWARNING: a newer server binary will RE-APPLY these steps on its next")
-	fmt.Println("boot (the forward migrate() runs at startup). For the rollback to stick,")
+	fmt.Println("boot (the forward migrate() runs at startup). Stop every replica first (its")
+	fmt.Println("requests would also wait on the down's locks); for the rollback to stick,")
 	fmt.Println("deploy a binary that no longer contains these steps, or keep the server stopped.")
+	fmt.Println("An image rollback past expand-only steps needs no down at all.")
 
 	if !*force {
 		fmt.Printf("\nThis is DESTRUCTIVE and drops data. To proceed, type the target version (%d): ", target)
@@ -1276,13 +1348,290 @@ func runMigrate(args []string) {
 	fmt.Printf("Rolled back %d step(s): %v\n", len(rolled), rolled)
 }
 
+func latestKnownMigrationVersion(steps []database.MigrationStep) int {
+	var maxV int
+	for _, s := range steps {
+		if s.Version > maxV {
+			maxV = s.Version
+		}
+	}
+	return maxV
+}
+
+// runMigrateAdoptChecksum implements `bakicli migrate adopt-checksum <version>`:
+// adopts this binary's computed checksum for a recorded migration row.
+func runMigrateAdoptChecksum(args []string) {
+	fs := flag.NewFlagSet("migrate adopt-checksum", flag.ExitOnError)
+	dsnFlag := fs.String("dsn", "", "Postgres DSN (default: $PAD_DATABASE_URL)")
+	force := fs.Bool("force", false, "skip the interactive confirm prompt")
+	fs.Usage = printMigrateAdoptChecksumUsage
+	_ = fs.Parse(args)
+	if fs.NArg() < 1 {
+		fs.Usage()
+		os.Exit(2)
+	}
+	version, err := strconv.Atoi(fs.Arg(0))
+	if err != nil || version <= 0 {
+		fmt.Fprintf(os.Stderr, "bakicli migrate adopt-checksum: version must be a positive integer, got %q\n", fs.Arg(0))
+		os.Exit(2)
+	}
+
+	dsn := *dsnFlag
+	if dsn == "" {
+		dsn = os.Getenv("PAD_DATABASE_URL")
+	}
+	if dsn == "" {
+		fmt.Fprintln(os.Stderr, "bakicli migrate adopt-checksum: no database DSN (set --dsn or PAD_DATABASE_URL)")
+		os.Exit(2)
+	}
+
+	steps := database.MigrationSteps()
+	maxKnown := latestKnownMigrationVersion(steps)
+	computed, ok := database.MigrationChecksum(version)
+	if !ok || version > maxKnown {
+		fmt.Fprintf(os.Stderr, "bakicli migrate adopt-checksum: unknown migration version %d (latest known is %d)\n", version, maxKnown)
+		os.Exit(2)
+	}
+
+	b, err := database.OpenForMaintenance(context.Background(), database.DefaultConfig(dsn))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli migrate adopt-checksum: connect: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = b.Close() }()
+
+	ctx := context.Background()
+
+	var recorded sql.NullString
+	err = b.DB().QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE version = $1`, version).Scan(&recorded)
+	if errors.Is(err, sql.ErrNoRows) {
+		fmt.Fprintf(os.Stderr, "bakicli migrate adopt-checksum: migration v%d is not recorded in schema_migrations\n", version)
+		os.Exit(1)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli migrate adopt-checksum: read version v%d: %v\n", version, err)
+		os.Exit(1)
+	}
+	if !recorded.Valid || recorded.String == "" {
+		fmt.Fprintf(os.Stderr, "bakicli migrate adopt-checksum: migration v%d has no recorded checksum to adopt (empty)\n", version)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Migration v%d checksum:\n", version)
+	fmt.Printf("  recorded: %s\n", recorded.String)
+	fmt.Printf("  computed: %s\n", computed)
+
+	if recorded.String == computed {
+		fmt.Printf("Checksum for v%d is already up to date.\n", version)
+		return
+	}
+
+	if !*force {
+		fmt.Printf("\nTo adopt the computed checksum for v%d, type the version (%d): ", version, version)
+		var resp string
+		if _, err := fmt.Fscanln(os.Stdin, &resp); err != nil {
+			fmt.Fprintln(os.Stderr, "bakicli migrate adopt-checksum: no confirmation received; aborting")
+			os.Exit(1)
+		}
+		if resp != strconv.Itoa(version) {
+			fmt.Fprintln(os.Stderr, "bakicli migrate adopt-checksum: confirmation did not match version; aborting")
+			os.Exit(1)
+		}
+	}
+
+	rec, comp, err := b.AdoptChecksum(ctx, version)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli migrate adopt-checksum: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Adopted checksum for v%d: %s (was %s)\n", version, comp, rec)
+}
+
+// runMigratePreflight implements `bakicli migrate preflight`: verifies readiness
+// for migration 0048 (checks for case-duplicate emails, duplicate invite tokens)
+// and inspects schema_migrations >= 47 for checksum drift.
+func runMigratePreflight(args []string) {
+	fs := flag.NewFlagSet("migrate preflight", flag.ExitOnError)
+	dsnFlag := fs.String("dsn", "", "Postgres DSN (default: $PAD_DATABASE_URL)")
+	fs.Usage = printMigratePreflightUsage
+	_ = fs.Parse(args)
+
+	dsn := *dsnFlag
+	if dsn == "" {
+		dsn = os.Getenv("PAD_DATABASE_URL")
+	}
+	if dsn == "" {
+		fmt.Fprintln(os.Stderr, "bakicli migrate preflight: no database DSN (set --dsn or PAD_DATABASE_URL)")
+		os.Exit(2)
+	}
+
+	b, err := database.OpenForMaintenance(context.Background(), database.DefaultConfig(dsn))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bakicli migrate preflight: connect: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = b.Close() }()
+
+	ctx := context.Background()
+	db := b.DB()
+
+	actionNeeded := false
+
+	// 1. Check for case-duplicate emails in users
+	type dupEmailGroup struct {
+		address string
+		ids     string
+	}
+	var emailDups []dupEmailGroup
+	rows, err := db.QueryContext(ctx, database.DuplicateEmailGroupsSQL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "preflight: query duplicate emails: %v\n", err)
+		os.Exit(1)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var g dupEmailGroup
+		if err := rows.Scan(&g.address, &g.ids); err != nil {
+			fmt.Fprintf(os.Stderr, "preflight: scan duplicate email row: %v\n", err)
+			os.Exit(1)
+		}
+		emailDups = append(emailDups, g)
+	}
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "preflight: iterate duplicate emails: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(emailDups) > 0 {
+		actionNeeded = true
+		fmt.Printf("ACTION NEEDED: found %d case-duplicate email group(s) in users:\n", len(emailDups))
+		for _, g := range emailDups {
+			fmt.Printf("  address %q: %s\n", g.address, g.ids)
+		}
+		fmt.Println("\nRecipe to resolve duplicates before deploying v48 (docs/deployment.md, Before deploying v48):")
+		fmt.Println(database.DuplicateEmailResolveSQL)
+		fmt.Println()
+	}
+
+	// 2. Check for duplicate token_hash in org_invites
+	type dupInviteGroup struct {
+		ids string
+	}
+	var inviteDups []dupInviteGroup
+	invRows, err := db.QueryContext(ctx, database.DuplicateInviteTokenGroupsSQL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "preflight: query duplicate invites: %v\n", err)
+		os.Exit(1)
+	}
+	defer invRows.Close()
+	for invRows.Next() {
+		var d dupInviteGroup
+		if err := invRows.Scan(&d.ids); err != nil {
+			fmt.Fprintf(os.Stderr, "preflight: scan duplicate invite row: %v\n", err)
+			os.Exit(1)
+		}
+		inviteDups = append(inviteDups, d)
+	}
+	if err := invRows.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "preflight: iterate duplicate invites: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(inviteDups) > 0 {
+		actionNeeded = true
+		fmt.Printf("ACTION NEEDED: found %d duplicate token_hash group(s) in org_invites:\n", len(inviteDups))
+		for _, d := range inviteDups {
+			fmt.Printf("  invite ids: %s\n", d.ids)
+		}
+		fmt.Println("Recipe: DELETE all but one invite of each group (the invitee can be re-invited).")
+		fmt.Println()
+	}
+
+	// 3. Check schema_migrations rows >= 47
+	type migRow struct {
+		version  int
+		name     string
+		checksum string
+		compat   string
+	}
+	var migRows []migRow
+	mRows, err := db.QueryContext(ctx, `SELECT version, name, coalesce(checksum, ''), coalesce(compat, '') FROM schema_migrations WHERE version >= 47 ORDER BY version`)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "preflight: query schema_migrations: %v\n", err)
+		os.Exit(1)
+	}
+	defer mRows.Close()
+	for mRows.Next() {
+		var r migRow
+		if err := mRows.Scan(&r.version, &r.name, &r.checksum, &r.compat); err != nil {
+			fmt.Fprintf(os.Stderr, "preflight: scan migration row: %v\n", err)
+			os.Exit(1)
+		}
+		migRows = append(migRows, r)
+	}
+	if err := mRows.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "preflight: iterate schema_migrations: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(migRows) > 0 {
+		fmt.Println("Schema migrations (version >= 47):")
+		for _, r := range migRows {
+			computed, known := database.MigrationChecksum(r.version)
+			if !known {
+				fmt.Printf("  v%d %s: newer than this binary (recorded=%s)\n", r.version, r.name, r.checksum)
+				continue
+			}
+			if r.checksum != "" && r.checksum != computed {
+				actionNeeded = true
+				fmt.Printf("  v%d %s: DRIFT DETECTED (recorded=%s, computed=%s) -> adopt with `bakicli migrate adopt-checksum %d` if shape matches\n",
+					r.version, r.name, r.checksum, computed, r.version)
+			} else {
+				fmt.Printf("  v%d %s: ok (checksum=%s)\n", r.version, r.name, r.checksum)
+			}
+		}
+		fmt.Println()
+	}
+
+	if actionNeeded {
+		fmt.Fprintln(os.Stderr, "preflight: action needed before deploy")
+		os.Exit(1)
+	}
+
+	fmt.Println("preflight: clean — ready for deployment")
+}
+
 func printMigrateUsage() {
+	fmt.Fprintln(os.Stderr, "usage: bakicli migrate <subcommand> [flags] [args]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Subcommands:")
+	fmt.Fprintln(os.Stderr, "  down [flags] <target-version>       roll the DB schema back (operator-only; never runs on boot)")
+	fmt.Fprintln(os.Stderr, "  adopt-checksum [flags] <version>    adopt this binary's checksum for a drifted step")
+	fmt.Fprintln(os.Stderr, "  preflight [flags]                   check pre-deploy migration readiness & drift")
+}
+
+func printMigrateDownUsage() {
 	fmt.Fprintln(os.Stderr, "usage: bakicli migrate down [flags] <target-version>")
 	fmt.Fprintln(os.Stderr, "  roll the DB schema back to <target-version> (operator-only; never runs on boot)")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  -dsn string       Postgres DSN (default: $PAD_DATABASE_URL)")
 	fmt.Fprintln(os.Stderr, "  -force            skip the interactive confirm prompt")
 	fmt.Fprintln(os.Stderr, "  -max-steps int    refuse to roll back more than this many steps (default 3)")
+}
+
+func printMigrateAdoptChecksumUsage() {
+	fmt.Fprintln(os.Stderr, "usage: bakicli migrate adopt-checksum [flags] <version>")
+	fmt.Fprintln(os.Stderr, "  adopt this binary's computed checksum for a recorded migration step")
+	fmt.Fprintln(os.Stderr, "flags:")
+	fmt.Fprintln(os.Stderr, "  -dsn string       Postgres DSN (default: $PAD_DATABASE_URL)")
+	fmt.Fprintln(os.Stderr, "  -force            skip the interactive confirm prompt")
+}
+
+func printMigratePreflightUsage() {
+	fmt.Fprintln(os.Stderr, "usage: bakicli migrate preflight [flags]")
+	fmt.Fprintln(os.Stderr, "  check for conditions migration 0048 refuses (case-duplicate emails, duplicate invite tokens) and migration drift")
+	fmt.Fprintln(os.Stderr, "flags:")
+	fmt.Fprintln(os.Stderr, "  -dsn string       Postgres DSN (default: $PAD_DATABASE_URL)")
 }
 
 // bakiConfig is the .bakirc.json schema; all fields optional (missing = defaults).
@@ -1296,7 +1645,7 @@ type bakiConfig struct {
 	RuleCfg     map[string]bakiRuleConf `json:"ruleConfig,omitempty"`
 	// CustomRulesInline: rule definitions in the config, additive to customRules
 	// (a path); /api/orgs/{id}/rules/export emits exactly this shape.
-	CustomRulesInline []analyzer.CustomRuleConfig `json:"customRulesInline,omitempty"`
+	CustomRulesInline inlineRules `json:"customRulesInline,omitempty"`
 }
 
 type bakiRuleConf struct {
@@ -1561,7 +1910,7 @@ func readReport(path string) (*models.AnalysisReport, error) {
 	return &doc.AnalysisReport, nil
 }
 
-func inlineRulesOf(cfg *bakiConfig) []analyzer.CustomRuleConfig {
+func inlineRulesOf(cfg *bakiConfig) []analyzer.CustomRuleEntry {
 	if cfg == nil {
 		return nil
 	}

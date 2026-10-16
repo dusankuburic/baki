@@ -94,6 +94,7 @@ func budgetedKnowledge(t *testing.T, store *testutil.FakeBackend, budget *memoBu
 func TestKnowledge_SearchQueryEmbedIsRefusedOverBudget(t *testing.T) {
 	ctx := context.Background()
 	store := testutil.NewFakeBackend()
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1, 0}, "existing guideline")
 	budget := &memoBudget{spent: 9, limit: 5}
 	svc, emb := budgetedKnowledge(t, store, budget)
@@ -126,6 +127,7 @@ func TestKnowledge_SearchQueryEmbedIsRefusedOverBudget(t *testing.T) {
 func TestKnowledge_RunReadsUsageOncePerRun(t *testing.T) {
 	ctx := context.Background()
 	store := testutil.NewFakeBackend()
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	budget := &memoBudget{spent: 1, limit: 5}
 	svc, emb := budgetedKnowledge(t, store, budget)
 

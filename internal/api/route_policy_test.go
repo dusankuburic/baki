@@ -428,3 +428,26 @@ func TestRouteLabels_ArePatterns(t *testing.T) {
 		t.Errorf("no-route labels %v, want just /api/other and /static/*", seen)
 	}
 }
+
+// TestRoutePolicy_RequestTransactionsHaveTheDefaultDeadline: the server ends a transaction left idle for longer than
+// the request timeout plus a margin (idle_in_transaction_session_timeout, config.EffectiveDBIdleTxTimeout). That cuts
+// only a handler already past its deadline because every route that runs in the request transaction has the default
+// deadline, the request timeout: a stream or bulk deadline on a transactional route would let its handler idle
+// inside its own deadline past the timeout. Such a route runs outside the transaction (route.NoTx), as the chat
+// stream and the knowledge bulk routes do.
+func TestRoutePolicy_RequestTransactionsHaveTheDefaultDeadline(t *testing.T) {
+	rt := newTestRouter(testutil.NewFakeBackend(), true)
+	checked := 0
+	for _, p := range rt.routes.Policies() {
+		if p.Kind != route.KindEndpoint || p.Access != route.AuthRequired || p.Tx != route.TxRequest {
+			continue
+		}
+		checked++
+		if p.Deadline != route.DeadlineDefault {
+			t.Errorf("%s %s runs in the request transaction with the %s deadline; give it route.NoTx() or the default deadline", p.Method, p.Pattern, p.Deadline)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no transactional route found; the policy table is empty or the filter is wrong")
+	}
+}

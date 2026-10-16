@@ -34,13 +34,14 @@ func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, 
 }
 
 // @Summary      Stream chat message
-// @Description  Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). When the server stored the turn itself (cloud mode, the request carried no history) the answer is in the store before done is sent, and done and error also carry conversationVersion (the stored conversation's version after the server's own writes) and conversationBase (the version the turn began from), only while no other writer changed the thread in between; a client still at conversationBase can adopt conversationVersion without saving or reloading. An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, AI_BUDGET_UNAVAILABLE, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, PROVIDER_UNKNOWN when the turn names a provider no spec describes, PROVIDER_NOT_ALLOWED when the provider policy refused it — disabled in the deployment or off the organisation's allowed-provider list (ADR 0028), MODEL_NOT_AVAILABLE, SERVER_RESTARTING when the server's stop ended the stream, …). A provider id the registry does not know is refused before any stream starts with 400 and code PROVIDER_UNKNOWN. For provider azure-foundry the model is a model registry id ("m/<entryId>"; "" for the server default; a pre-registry deployment, "claude:" or "agent:" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE. While the server is stopping no stream starts: 503 with code SERVER_RESTARTING, a Retry-After header and details.retryAfterSeconds; the request may be sent again once after that wait.
+// @Description  Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). When the server stored the turn itself (cloud mode, the request carried no history) the answer is in the store before done is sent, and done and error also carry conversationVersion (the stored conversation's version after the server's own writes) and conversationBase (the version the turn began from), only while no other writer changed the thread in between; a client still at conversationBase can adopt conversationVersion without saving or reloading. An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, AI_BUDGET_UNAVAILABLE, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, PROVIDER_UNKNOWN when the turn names a provider no spec describes, PROVIDER_NOT_ALLOWED when the provider policy refused it — disabled in the deployment or off the organisation's allowed-provider list (ADR 0028), MODEL_NOT_AVAILABLE, SERVER_RESTARTING when the server's stop ended the stream, …). A provider id the registry does not know is refused before any stream starts with 400 and code PROVIDER_UNKNOWN. For provider azure-foundry the model is a model registry id ("m/<entryId>"; "" for the server default; a pre-registry deployment, "claude:" or "agent:" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE. While the server is stopping no stream starts: 503 with code SERVER_RESTARTING, a Retry-After header and details.retryAfterSeconds; the request may be sent again once after that wait. A clientStreamId that already names a stream (running, or finished within the resume window, on any replica) is refused with 409 and code STREAM_ID_IN_USE: a resent start whose first send went through gets it, and resumes that stream (POST /api/chat/resume) instead of starting another.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} string "Stream ID"
 // @Failure      400 {object} render.ErrorResponse "Bad Request: malformed body, code MODEL_NOT_AVAILABLE (the Azure AI Foundry model is not available to the caller) or PROVIDER_UNKNOWN (no provider spec describes the id)"
+// @Failure      409 {object} render.ErrorResponse "The clientStreamId already names a stream (code STREAM_ID_IN_USE): resume it"
 // @Failure      429 {object} render.ErrorResponse "Too many concurrent chat streams (code CHAT_CAPACITY_REACHED)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Failure      503 {object} render.ErrorResponse "The server is restarting (code SERVER_RESTARTING; Retry-After and details.retryAfterSeconds say when to send it again)"
@@ -78,6 +79,7 @@ func (h *ChatHandler) handleStreamChatMessage(w http.ResponseWriter, r *http.Req
 		if renderModelNotAvailable(w, err) {
 			return
 		}
+		// A typed error keeps its own status: a clientStreamId in use is a 409 STREAM_ID_IN_USE.
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -162,7 +164,7 @@ func beginFinishedBody(res *service.ResumeResult) map[string]any {
 }
 
 // @Summary      Cancel stream
-// @Description  Cancels an active streaming session. A stream that runs on another server of a multi-server deployment is stopped through that server; when it cannot be reached the answer is 503 with code REPLICA_UNREACHABLE (retry), never an ok that stopped nothing.
+// @Description  Cancels an active streaming session. A stream that runs on another server of a multi-server deployment is stopped through that server; when it cannot be reached the answer is 503 with code REPLICA_UNREACHABLE (retry), never an ok that stopped nothing. A stream whose server has stopped running (it no longer renews its liveness record, about 15 seconds after it died) ended with it, and is answered like any ended stream (ok).
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
@@ -194,7 +196,7 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 // scope the tool requires; the flow mutation separately re-checks EDITOR permission at apply time
 // (the stream itself only required viewer).
 // @Summary      Respond to an approval prompt
-// @Description  Approval decision: delivers the user's approve/decline (with per-item opt-outs for a batch) for a tool request — a fix_proposal event — pending in one of the caller's chat streams. The stream must be the caller's, and a scoped API token must hold the scope the tool requires (write for the fix tools). First decision wins; unknown or already-decided proposals return 404.
+// @Description  Approval decision: delivers the user's approve/decline (with per-item opt-outs for a batch) for a tool request — a fix_proposal event — pending in one of the caller's chat streams. The stream must be the caller's, and a scoped API token must hold the scope the tool requires (write for the fix tools). First decision wins; unknown or already-decided proposals return 404, and so does a proposal whose server has stopped running (its stream ended with it).
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json

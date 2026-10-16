@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -411,15 +412,19 @@ func (b *PostgresStorageBackend) migrate(ctx context.Context) error {
 	return nil
 }
 
-// liftSessionTimeouts clears the pool's statement/lock timeouts on the migration's dedicated session
-// and returns a restorer: a long CREATE INDEX can outrun the statement budget, and a replica waiting on
-// the advisory lock must not be killed by lock_timeout.
+// liftSessionTimeouts clears the pool's statement, lock and idle-transaction timeouts on the migration's dedicated
+// session and returns a restorer: a long CREATE INDEX can outrun the statement budget, a replica waiting on the
+// advisory lock must not be killed by lock_timeout, and a step's transaction is not a request's, whose deadline the
+// idle-transaction timeout is derived from.
 func liftSessionTimeouts(ctx context.Context, conn *sql.Conn) (restore func(), err error) {
 	if _, err := conn.ExecContext(ctx, "SET statement_timeout = 0"); err != nil {
 		return nil, fmt.Errorf("lift statement_timeout for migration: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, "SET lock_timeout = 0"); err != nil {
 		return nil, fmt.Errorf("lift lock_timeout for migration: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, "SET idle_in_transaction_session_timeout = 0"); err != nil {
+		return nil, fmt.Errorf("lift idle_in_transaction_session_timeout for migration: %w", err)
 	}
 	return func() {
 		// Fresh context: the caller's may already be cancelled, and a pooled conn with the
@@ -433,6 +438,11 @@ func liftSessionTimeouts(ctx context.Context, conn *sql.Conn) (restore func(), e
 		}
 		if _, err := conn.ExecContext(rctx, "RESET lock_timeout"); err != nil {
 			slog.Warn("migration: RESET lock_timeout failed; closing connection", "err", err)
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			return
+		}
+		if _, err := conn.ExecContext(rctx, "RESET idle_in_transaction_session_timeout"); err != nil {
+			slog.Warn("migration: RESET idle_in_transaction_session_timeout failed; closing connection", "err", err)
 			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		}
 	}, nil
@@ -511,6 +521,13 @@ func verifyChecksums(ctx context.Context, conn *sql.Conn, current int) error {
 	if err != nil {
 		return fmt.Errorf("load migration checksums: %w", err)
 	}
+	type mismatch struct {
+		version  int
+		name     string
+		recorded string
+		computed string
+	}
+	var diffs []mismatch
 	for _, m := range migrations {
 		if m.version > current {
 			continue // not applied yet — checksum written at apply time
@@ -530,11 +547,37 @@ func verifyChecksums(ctx context.Context, conn *sql.Conn, current int) error {
 			continue
 		}
 		if got != want {
-			return fmt.Errorf(
-				"schema migration drift detected: v%d %q checksum mismatch (recorded=%s computed=%s); "+
-					"an already-applied migration's SQL was modified — never edit a shipped migration, append a new one",
-				m.version, m.name, got, want)
+			slog.Error("schema migration drift detected",
+				"version", m.version, "name", m.name, "recorded", got, "computed", want)
+			diffs = append(diffs, mismatch{
+				version:  m.version,
+				name:     m.name,
+				recorded: got,
+				computed: want,
+			})
 		}
+	}
+	if len(diffs) > 0 {
+		var details []string
+		var steps []string
+		var adoptCmds []string
+		for _, d := range diffs {
+			details = append(details, fmt.Sprintf("v%d (recorded=%s, computed=%s)", d.version, d.recorded, d.computed))
+			steps = append(steps, fmt.Sprintf("v%d", d.version))
+			adoptCmds = append(adoptCmds, fmt.Sprintf("`bakicli migrate adopt-checksum %d`", d.version))
+		}
+		stepWord := "step"
+		if len(steps) > 1 {
+			stepWord = "steps"
+		}
+		return fmt.Errorf(
+			"schema migration drift detected: %s; "+
+				"this database ran another text of %s %s; if its shape is the shipped one adopt it (%s), "+
+				"else roll it back with the build that applied it (operations.md, Migration status)",
+			strings.Join(details, ", "),
+			stepWord, strings.Join(steps, ", "),
+			strings.Join(adoptCmds, ", "),
+		)
 	}
 	return nil
 }
@@ -576,16 +619,29 @@ var (
 // pgLockNotAvailable is SQLSTATE lock_not_available, raised when lock_timeout expires.
 const pgLockNotAvailable = "55P03"
 
-// applyMigration applies one step, retrying (with a growing pause) while a table lock is not available.
+// pgDeadlockDetected is SQLSTATE deadlock_detected. A step that locks many tables (v48 alters six) can meet a request
+// of the still-serving revision that locks two of them in the other order (an erasure, an organisation delete); the
+// server aborts one of the two, and the step, which ran nothing outside its transaction, is as safe to retry as after
+// a lock timeout.
+const pgDeadlockDetected = "40P01"
+
+// applyMigration applies one step, retrying (with a growing pause) while a table lock is not available or the step
+// lost a deadlock.
 func applyMigration(ctx context.Context, conn *sql.Conn, m migration) error {
+	return retryLockConflicts(ctx, m, "up", func() error { return applyMigrationOnce(ctx, conn, m) })
+}
+
+// retryLockConflicts runs apply, one transaction of step m, again after a lock timeout or a lost deadlock.
+func retryLockConflicts(ctx context.Context, m migration, direction string, apply func() error) error {
 	for attempt := 1; ; attempt++ {
-		err := applyMigrationOnce(ctx, conn, m)
-		if err == nil || !isPgErrCode(err, pgLockNotAvailable) || attempt >= migrationLockAttempts {
+		err := apply()
+		retry := isPgErrCode(err, pgLockNotAvailable) || isPgErrCode(err, pgDeadlockDetected)
+		if err == nil || !retry || attempt >= migrationLockAttempts {
 			return err
 		}
 		wait := migrationLockBackoff * time.Duration(attempt)
-		slog.Warn("schema migration could not get a table lock in time; retrying",
-			"version", m.version, "name", m.name, "attempt", attempt, "retry_in", wait)
+		slog.Warn("schema migration could not get a table lock in time, or lost a deadlock; retrying",
+			"version", m.version, "name", m.name, "direction", direction, "attempt", attempt, "retry_in", wait, "error", err)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -618,7 +674,8 @@ func applyMigrationOnce(ctx context.Context, conn *sql.Conn, m migration) (err e
 	return tx.Commit()
 }
 
-// applyMigrationDown runs one step's downSQL and removes its version record in one transaction; the downSQL is not checksummed.
+// applyMigrationDown runs one step's downSQL and removes its version record in one transaction; the downSQL is not
+// checksummed. Each lock wait is bounded as a step's going up is (applyMigrationOnce).
 func applyMigrationDown(ctx context.Context, conn *sql.Conn, m migration) (err error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -629,6 +686,9 @@ func applyMigrationDown(ctx context.Context, conn *sql.Conn, m migration) (err e
 			_ = tx.Rollback()
 		}
 	}()
+	if _, err = tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", migrationLockTimeout.Milliseconds())); err != nil {
+		return fmt.Errorf("set lock_timeout: %w", err)
+	}
 	if _, err = tx.ExecContext(ctx, m.downSQL); err != nil {
 		return fmt.Errorf("exec down sql: %w", err)
 	}
@@ -655,11 +715,79 @@ func MigrationSteps() []MigrationStep {
 	return out
 }
 
+// MigrationChecksum returns the computed checksum of the given migration step in this binary, if known.
+func MigrationChecksum(version int) (string, bool) {
+	m, ok := migrationByVersion(version)
+	if !ok {
+		return "", false
+	}
+	return migrationChecksum(m.sql), true
+}
+
+// AdoptChecksum adopts the current binary's computed checksum for an applied migration version whose
+// recorded checksum differed (e.g. pre-release schema text drift). It refuses versions above the latest
+// known migration, unknown steps, or steps without a recorded checksum in schema_migrations.
+func (b *PostgresStorageBackend) AdoptChecksum(ctx context.Context, version int) (recorded, computed string, err error) {
+	step, ok := migrationByVersion(version)
+	if !ok {
+		return "", "", fmt.Errorf("unknown migration version %d", version)
+	}
+	computed = migrationChecksum(step.sql)
+
+	conn, err := b.db.Conn(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("acquire migration conn: %w", err)
+	}
+	defer conn.Close()
+
+	restore, err := liftSessionTimeouts(ctx, conn)
+	if err != nil {
+		return "", "", err
+	}
+	defer restore()
+
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+		return "", "", fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	defer releaseMigrationLock(conn)
+
+	var rec sql.NullString
+	err = conn.QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE version = $1`, version).Scan(&rec)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", fmt.Errorf("migration v%d is not recorded in schema_migrations", version)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("read recorded checksum v%d: %w", version, err)
+	}
+	if !rec.Valid || rec.String == "" {
+		return "", "", fmt.Errorf("migration v%d has no recorded checksum to adopt (empty)", version)
+	}
+	recorded = rec.String
+
+	res, err := conn.ExecContext(ctx,
+		`UPDATE schema_migrations SET checksum = $1 WHERE version = $2 AND checksum = $3`,
+		computed, version, recorded)
+	if err != nil {
+		return recorded, computed, fmt.Errorf("update checksum v%d: %w", version, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return recorded, computed, fmt.Errorf("check affected rows: %w", err)
+	}
+	if rows == 0 {
+		return recorded, computed, fmt.Errorf("checksum for v%d changed concurrently", version)
+	}
+	slog.Warn("schema migration checksum adopted", "version", version, "recorded", recorded, "computed", computed)
+	return recorded, computed, nil
+}
+
 // ErrMigrationNotReversible is returned by MigrateDown when the rollback path crosses a step with no downSQL (e.g. the baseline); restore from backup instead.
 var ErrMigrationNotReversible = fmt.Errorf("migration not reversible: a step in the rollback path has no down-migration (baseline or unsafe); restore from backup instead")
 
 // MigrateDown rolls the schema back to targetVersion via each step's downSQL in strict descending
-// order, each in its own transaction under the advisory lock. Operator-invoked (bakicli), never on boot.
+// order, each in its own transaction under the advisory lock, retried like a step going up. Operator-invoked
+// (bakicli), never on boot, with the app stopped: a down takes the locks a step does, without the care a step's
+// order takes over the release still serving.
 func (b *PostgresStorageBackend) MigrateDown(ctx context.Context, targetVersion int) ([]int, error) {
 	conn, err := b.db.Conn(ctx)
 	if err != nil {
@@ -702,7 +830,7 @@ func (b *PostgresStorageBackend) MigrateDown(ctx context.Context, targetVersion 
 	for v := current; v > targetVersion; v-- {
 		step := mustMigrationByVersion(v) // presence guaranteed by the pre-check
 		slog.Warn("schema migration rolling back", "version", step.version, "name", step.name)
-		if err := applyMigrationDown(ctx, conn, step); err != nil {
+		if err := retryLockConflicts(ctx, step, "down", func() error { return applyMigrationDown(ctx, conn, step) }); err != nil {
 			return rolledBack, fmt.Errorf("apply down-migration v%d %q: %w", step.version, step.name, err)
 		}
 		rolledBack = append(rolledBack, step.version)

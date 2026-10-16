@@ -107,10 +107,14 @@ func parseErrorFallback(flow *models.FlowDocument, settings *models.AppSettings,
 		anchorSF = flow.Subflows[0].ID
 	}
 	out := buildParseErrorFindings(flow.ParseErrors, "", anchorSF)
-	if ov := severityOverride(&ParseErrorRule{}, settings); ov != "" {
-		for i := range out {
+	// What collectFindings' finish adds to the anchored ones.
+	rule := &ParseErrorRule{}
+	ov := severityOverride(rule, settings)
+	for i := range out {
+		if ov != "" {
 			out[i].Severity = ov
 		}
+		out[i].Category = rule.Category()
 	}
 	return out
 }

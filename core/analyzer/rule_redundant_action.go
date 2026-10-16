@@ -62,13 +62,8 @@ func (r *RedundantActionRule) checkConsecutiveConversion(block *models.Block, ct
 		return nil
 	}
 
-	siblings := GetSiblings(ctx, block)
-	if len(siblings) < 2 {
-		return nil
-	}
-
 	// Use the precomputed sibling index instead of an O(siblings) self-scan.
-	myIdx, ok := ctx.BlockIndex[block.ID]
+	siblings, myIdx, ok := siblingPosition(ctx, block)
 	if !ok || myIdx <= 0 {
 		return nil
 	}

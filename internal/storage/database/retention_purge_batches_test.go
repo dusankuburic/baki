@@ -158,8 +158,16 @@ func TestPurgeExpiredData_BatchesUntilEmpty(t *testing.T) {
 	if bl := deletesOf(f, "token_blacklist"); len(bl) != 1 || !strings.Contains(bl[0].query, "ctid = ANY(ARRAY(SELECT ctid FROM token_blacklist WHERE expires_at < NOW() LIMIT $1))") {
 		t.Errorf("token_blacklist delete is not the batched form:\n%s", describeCalls(bl))
 	}
+	// Sessions are a growth table too (a row per sign-in and per refresh), and so are the rule notices (a row per
+	// scope and rule set, the retention window): batched.
+	if rt := deletesOf(f, "refresh_tokens"); len(rt) != 1 || !strings.Contains(rt[0].query, "ctid = ANY(ARRAY(SELECT ctid FROM refresh_tokens WHERE expires_at < NOW() LIMIT $1))") {
+		t.Errorf("refresh_tokens delete is not the batched form:\n%s", describeCalls(rt))
+	}
+	if rn := deletesOf(f, "rule_notices"); len(rn) != 1 || !strings.Contains(rn[0].query, "ctid = ANY(ARRAY(SELECT ctid FROM rule_notices WHERE updated_at < NOW() - ($1 * INTERVAL '1 day') LIMIT $2))") {
+		t.Errorf("rule_notices delete is not the batched form:\n%s", describeCalls(rn))
+	}
 	// The small tables stay single statements.
-	for _, table := range []string{"refresh_tokens", "api_tokens", "user_tokens", "org_invites", "share_tokens"} {
+	for _, table := range []string{"api_tokens", "user_tokens", "org_invites", "share_tokens", "org_ci_credentials"} {
 		d := deletesOf(f, table)
 		if len(d) != 1 || strings.Contains(d[0].query, "ctid") {
 			t.Errorf("%s: want one plain delete, got:\n%s", table, describeCalls(d))
@@ -316,5 +324,42 @@ func TestExportAuditEvents_DB_CarriesEveryEvent(t *testing.T) {
 			t.Errorf("event %s exported twice", ev.ID)
 		}
 		seen[ev.ID] = true
+	}
+}
+
+// TestPurgeExpiredData_DB_RefreshTokensInBatches: the expired sessions go in batches (shrunk to 7) until none is
+// left, the live ones stay, and the count is exact.
+func TestPurgeExpiredData_DB_RefreshTokensInBatches(t *testing.T) {
+	b, _ := openIsolatedMigrationDB(t)
+	ctx := context.Background()
+	old := purgeBatchSize
+	purgeBatchSize = 7
+	t.Cleanup(func() { purgeBatchSize = old })
+
+	const user = "purge-rt-user"
+	if _, err := b.db.ExecContext(ctx, `INSERT INTO users (id, email, password, role) VALUES ($1, $1 || '@example.com', 'x', 'member')`, user); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	const expired, live = 3*7 + 1, 3
+	if _, err := b.db.ExecContext(ctx, `
+		INSERT INTO refresh_tokens (jti, user_id, expires_at)
+		SELECT 'expired-' || g, $1, NOW() - (g || ' minutes')::interval FROM generate_series(1, $2::int) g
+		UNION ALL
+		SELECT 'live-' || g, $1, NOW() + (g || ' hours')::interval FROM generate_series(1, $3::int) g`, user, expired, live); err != nil {
+		t.Fatalf("seed sessions: %v", err)
+	}
+	res, err := b.PurgeExpiredData(ctx, 0)
+	if err != nil {
+		t.Fatalf("PurgeExpiredData: %v", err)
+	}
+	if res.RefreshTokens != expired {
+		t.Errorf("RefreshTokens = %d, want %d (every expired session, across %d batches)", res.RefreshTokens, expired, (expired+6)/7)
+	}
+	var left, liveLeft int
+	if err := b.db.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE expires_at < NOW()), count(*) FILTER (WHERE jti LIKE 'live-%') FROM refresh_tokens`).Scan(&left, &liveLeft); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 || liveLeft != live {
+		t.Errorf("after the purge: %d expired and %d live sessions; want 0 and %d", left, liveLeft, live)
 	}
 }

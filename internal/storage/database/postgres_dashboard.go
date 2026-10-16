@@ -520,10 +520,7 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 
 	// Currently locked accounts. Instance-wide: the users table has no org/owner
 	// scoping, and lockouts are a fleet-security signal rather than a per-owner one.
-	if err := b.query(ctx).QueryRowContext(ctx, `
-		SELECT COUNT(*)::int FROM users
-		WHERE locked_until IS NOT NULL AND locked_until > NOW()`,
-	).Scan(&out.Security.LockedAccounts); err != nil {
+	if err := b.query(ctx).QueryRowContext(ctx, lockedAccountsCountSQL).Scan(&out.Security.LockedAccounts); err != nil {
 		logger.Warn("dashboard: locked-account count unavailable", "error", err)
 		securityOK = false
 	}

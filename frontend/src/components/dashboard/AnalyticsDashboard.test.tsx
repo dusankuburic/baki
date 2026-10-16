@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {render, screen, fireEvent, waitFor} from '@testing-library/react'
+import {render, screen, fireEvent, waitFor, within} from '@testing-library/react'
 import AnalyticsDashboard from './AnalyticsDashboard'
 import {ToastProvider} from '@/components/shared/Toast'
 
@@ -140,6 +140,75 @@ describe('AnalyticsDashboard', () => {
     expect(await screen.findByText('good.txt')).toBeInTheDocument()
     expect(screen.getByText('broken.txt')).toBeInTheDocument()
     expect(screen.getByText(/no flow content found/)).toBeInTheDocument()
+  })
+
+  it("shows the folder's library findings across flows, grouped apart from the per-flow rows", async () => {
+    getDashboard.mockResolvedValue({
+      totalFlowsAnalyzed: 0,
+      totalFindings: 0,
+      findingsBySeverity: {},
+      findingsByCategory: {},
+      findingsByRule: {},
+      avgHealthScore: 0,
+      topProblemFlows: [],
+    })
+    fileOpenDirectory.mockResolvedValue('C:/flows')
+    const finding = (flowId: string, flowName: string, subflowName: string, other: [string, string]) => ({
+      id: '',
+      ruleId: 'duplicate-subflow-across-flows',
+      severity: 'info',
+      title: 'Subflow duplicated across flows',
+      description: `Subflow "${subflowName}" has the same steps as a subflow of another flow.`,
+      blockId: '',
+      subflowId: '',
+      suggestion: "Move the shared steps into one desktop flow and call it with 'Run desktop flow'.",
+      stage: 'preview',
+      flowId,
+      flowName,
+      subflowName,
+      related: [{flowId: other[0], flowName: other[1], subflowName: other[0] === 'b' ? 'SignIn' : 'Login'}],
+    })
+    batchAnalyze.mockResolvedValue({
+      results: [
+        {
+          flowId: 'a',
+          flowName: 'invoices',
+          report: {flowId: 'a', findings: [], stats: {errors: 0, warnings: 0, info: 0}},
+        },
+        {
+          flowId: 'b',
+          flowName: 'orders',
+          report: {flowId: 'b', findings: [], stats: {errors: 0, warnings: 0, info: 0}},
+        },
+      ],
+      totalFlows: 2,
+      totalFindings: 0,
+      totalErrors: 0,
+      totalWarnings: 0,
+      totalInfo: 0,
+      avgHealthScore: 100,
+      durationMs: 5,
+      library: {
+        findings: [
+          finding('a', 'invoices', 'Login', ['b', 'orders']),
+          finding('b', 'orders', 'SignIn', ['a', 'invoices']),
+        ],
+        flows: 2,
+        rulesRun: 1,
+        generatedAt: '2026-10-14T00:00:00Z',
+        durationMs: 1,
+      },
+    })
+
+    renderDash()
+    fireEvent.click(await screen.findByText('Analyze Folder…'))
+
+    const region = await screen.findByRole('region', {name: 'Across flows'})
+    expect(within(region).getByText('Subflow duplicated across flows')).toBeInTheDocument()
+    expect(within(region).getByText('invoices › Login')).toBeInTheDocument()
+    expect(within(region).getByText('orders › SignIn')).toBeInTheDocument()
+    expect(within(region).getByText('Also in orders › SignIn')).toBeInTheDocument()
+    expect(within(region).getByText('Preview')).toBeInTheDocument()
   })
 
   it('post-batch refresh does not flash loading skeleton', async () => {

@@ -14,8 +14,8 @@ import (
 // Opener opens the transaction scope of one request.
 type Opener interface {
 	// Open installs a lazy scope for userID on ctx: the transaction begins with the first scoped statement. With
-	// failOpen a scope that cannot begin lets the request run without it (reads); otherwise every scoped statement
-	// fails. The caller ends the scope with Commit or Rollback.
+	// failOpen a scope that cannot begin lets the request run without it (the RLS middleware no longer asks for that:
+	// reads fail closed too); otherwise every scoped statement fails. The caller ends the scope with Commit or Rollback.
 	Open(ctx context.Context, userID string, failOpen bool) (context.Context, Scope)
 	// HookRunner runs each post-commit hook of the request with a fresh fail-closed scope for userID: the
 	// request's own scope has ended by then.

@@ -118,6 +118,32 @@ func TestHealth_OperationFailuresNeedAStreak(t *testing.T) {
 	}
 }
 
+// A new connection's handshake is not an operation: go-redis sends CLIENT SETINFO (and CLIENT MAINT_NOTIFICATIONS)
+// on every dial and ignores a refusal, which a Redis before 7.2 (Azure Cache for Redis runs 6) always answers. Counted,
+// each pooled connection would be an error and three would degrade a healthy Redis. miniredis refuses them too.
+func TestHealth_HandshakeRefusalsAreNotFailures(t *testing.T) {
+	_, client, h := newHealth(t)
+	ctx := context.Background()
+	before := errorsFor("other")
+	conns := make([]*redis.Conn, 0, opFailuresToDegrade+2)
+	for range opFailuresToDegrade + 2 {
+		c := client.Conn() // a dedicated connection: each one dials and runs the handshake
+		conns = append(conns, c)
+		if err := c.Set(ctx, "k", "v", time.Minute).Err(); err != nil {
+			t.Fatalf("Set on a new connection: %v", err)
+		}
+	}
+	for _, c := range conns {
+		_ = c.Close()
+	}
+	if h.Degraded() {
+		t.Error("a healthy Redis is degraded by connection handshakes")
+	}
+	if got := errorsFor("other") - before; got != 0 {
+		t.Errorf("pad_redis_errors_total{other} grew by %v over handshakes, want 0", got)
+	}
+}
+
 // A success between failures resets the streak; a miss (redis.Nil) is an answer, not a failure.
 func TestHealth_SuccessAndMissesResetTheStreak(t *testing.T) {
 	mr, client, h := newHealth(t)

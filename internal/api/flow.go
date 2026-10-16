@@ -12,6 +12,7 @@ import (
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/capability"
+	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/models"
@@ -26,6 +27,8 @@ const maxConcurrentUploadsPerUser = 3
 type uploadLimiter struct {
 	mu   sync.Mutex
 	sems map[string]chan struct{}
+	// shared counts a user's uploads across the replicas (FlowHandler.ShareUploadCap); nil is this replica's cap only.
+	shared *redisx.SlotCap
 }
 
 func newUploadLimiter() *uploadLimiter {
@@ -47,7 +50,7 @@ func (l *uploadLimiter) acquire(ctx context.Context, userID string) (release fun
 	l.mu.Unlock()
 	select {
 	case sem <- struct{}{}:
-		return func() {
+		local := func() {
 			<-sem
 			// Drop the entry when the last holder releases so the map does not grow unboundedly;
 			// cur == sem guards a release race that recreated a different channel, and len==0 means no sender is blocked.
@@ -56,7 +59,17 @@ func (l *uploadLimiter) acquire(ctx context.Context, userID string) (release fun
 				delete(l.sems, userID)
 			}
 			l.mu.Unlock()
-		}, true
+		}
+		if l.shared == nil {
+			return local, true
+		}
+		// The user's uploads on every replica count too, waited for like the local slot.
+		shared, ok := l.acquireShared(ctx, userID)
+		if !ok {
+			local()
+			return func() {}, false
+		}
+		return func() { shared(); local() }, true
 	case <-ctx.Done():
 		return func() {}, false
 	}
@@ -110,6 +123,25 @@ func (h *FlowHandler) handleUploadFlow(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Files) == 0 {
 		render.Error(w, fmt.Errorf("no files uploaded"), http.StatusBadRequest)
+		return
+	}
+	// Endpoint-local caps in the spirit of handleAnalyzeRaw's: the global 10 MiB body cap
+	// and the upload limiter bound transport and concurrency, but a body of many tiny
+	// pathological files still amplifies into parse structures before any of those bite.
+	const (
+		maxUploadFiles   = 100
+		maxUploadTotalKB = 8192
+	)
+	if len(req.Files) > maxUploadFiles {
+		render.Error(w, fmt.Errorf("too many files (%d > %d)", len(req.Files), maxUploadFiles), http.StatusRequestEntityTooLarge)
+		return
+	}
+	var totalKB int
+	for _, src := range req.Files {
+		totalKB += (len(src) + 1023) / 1024
+	}
+	if totalKB > maxUploadTotalKB {
+		render.Error(w, fmt.Errorf("payload too large (%d KB > %d KB)", totalKB, maxUploadTotalKB), http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -410,12 +442,12 @@ func (h *FlowHandler) handleSearchFlow(w http.ResponseWriter, r *http.Request) {
 }
 
 // @Summary      Search cloud library
-// @Description  handleSearchLibrary runs a query across every flow the caller can access (cross-flow / org-wide search), merging per-flow hits into one result set. Each hit is stamped with its source flowId/flowName so the UI can group them.
+// @Description  handleSearchLibrary runs a query across every flow the caller can access (cross-flow / org-wide search), merging per-flow hits into one result set. Each hit is stamped with its source flowId/flowName so the UI can group them. The text needs a run of at least 3 letters or digits; an empty text answers no results.
 // @Tags         flow
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      400 {object} render.ErrorResponse "BAD_REQUEST, or QUERY_TOO_SHORT (no run of 3 letters or digits; details.minLength)"
 // @Failure      401 {object} map[string]string "Unauthorized"
 // @Failure      500 {object} map[string]string "Error"
 // @Failure      503 {object} map[string]string "Service Unavailable (cloud mode required)"

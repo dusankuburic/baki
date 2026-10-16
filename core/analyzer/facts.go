@@ -503,6 +503,20 @@ func GetSiblings(ctx *RuleContext, block *models.Block) []*models.Block {
 	return ctx.SiblingMap[key]
 }
 
+// siblingPosition is block's sibling group and its index in it; ok is false
+// when the indexes do not hold block's ID there: a document the parser never
+// emits repeats a subflow ID or a parent's block ID, so the later group took
+// the key. A rule reading a neighbour then skips the block rather than index
+// another group's blocks.
+func siblingPosition(ctx *RuleContext, block *models.Block) (siblings []*models.Block, idx int, ok bool) {
+	siblings = GetSiblings(ctx, block)
+	idx, ok = ctx.BlockIndex[block.ID]
+	if !ok || idx >= len(siblings) || siblings[idx].ID != block.ID {
+		return nil, 0, false
+	}
+	return siblings, idx, true
+}
+
 func GetParent(ctx *RuleContext, block *models.Block) *models.Block {
 	pid, ok := ctx.ParentMap[block.ID]
 	if !ok {

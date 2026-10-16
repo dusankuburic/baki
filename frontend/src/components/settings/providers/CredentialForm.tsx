@@ -285,7 +285,7 @@ function FieldInput({
             value={value}
             onChange={e => onChange(e.target.value)}
             onBlur={onBlur}
-            options={field.options ?? []}
+            options={(field.options ?? []).map(o => ({value: o.value, label: o.label || o.value}))}
             placeholder={placeholder ?? ''}
             hint={field.help}
             error={error}

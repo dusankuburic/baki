@@ -505,6 +505,7 @@ export const findings = {
     delete: 'Delete comment',
     deleteTitle: 'Delete comment',
     deleteMessage: 'This comment will be permanently deleted for everyone on the flow.',
+    formerMember: 'A former member',
   },
   related: {
     heading: 'Related findings',

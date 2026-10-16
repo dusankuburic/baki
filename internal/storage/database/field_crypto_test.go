@@ -29,6 +29,7 @@ func TestOrgChannels_EncryptedAtRest(t *testing.T) {
 	if err := b.EnableFieldEncryption([]byte(testFieldKey)); err != nil {
 		t.Fatal(err)
 	}
+	seedOrgRow(t, b.db, "org-fc")
 	const url, secret = "https://hooks.slack.com/services/T000/B000/XXXXSECRET", "hmac-signing-secret"
 	for _, id := range []string{"ch-1", "ch-2"} {
 		if err := b.SaveOrgChannel(ctx, &storageif.OrgChannel{
@@ -91,6 +92,8 @@ func TestOrgChannels_EncryptedAtRest(t *testing.T) {
 func TestEncryptOrgChannelsAtRest_SealsLegacyRowsOnce(t *testing.T) {
 	b, _ := openIsolatedMigrationDB(t)
 	ctx := context.Background()
+	seedOrgRow(t, b.db, "org-bf")
+	seedOrgRow(t, b.db, "org-bf-empty")
 	if _, err := b.db.ExecContext(ctx, `INSERT INTO org_channels (id, org_id, name, kind, url, secret, created_at) VALUES
 		('legacy-1', 'org-bf', 'a', 'webhook', 'https://hooks.example.com/a', 's3cret', NOW() - INTERVAL '1 minute'),
 		('legacy-2', 'org-bf', 'b', 'teams',   'https://acme.webhook.office.com/b', '', NOW()),

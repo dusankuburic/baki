@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/config"
+	"pad-analyzer/internal/lifecycle"
 	padmetrics "pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/platform/lock"
 	"pad-analyzer/internal/platform/reqtx"
@@ -39,10 +41,15 @@ type StorageResult struct {
 	Idempotency storageif.IdempotencyStore
 }
 
-// vectorIndexBuildTimeout bounds the background HNSW build of the knowledge
-// index (EnsureVectorIndex); a corpus that takes longer is left for the next
-// boot to finish (the invalid leftover is dropped).
-const vectorIndexBuildTimeout = 2 * time.Hour
+// The background work after boot has a budget per part: the schema upkeep
+// (SchemaUpkeep), then the HNSW build of the knowledge index
+// (EnsureVectorIndex), so an upkeep held up by a long transaction never hands
+// the build an expired context. What takes longer is left for the next boot to
+// finish (an invalid leftover index is dropped).
+const (
+	schemaUpkeepTimeout     = time.Hour
+	vectorIndexBuildTimeout = 2 * time.Hour
+)
 
 func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, error) {
 	if cfg.Storage.Backend != config.StorageDatabase {
@@ -58,10 +65,11 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 	poolStop := make(chan struct{})
 	// The knowledge HNSW index is built in the background after boot (CREATE
 	// INDEX CONCURRENTLY cannot run inside the migration transaction, and a
-	// large corpus takes minutes): detached from the start hook's context,
-	// bounded by its own timeout, cancelled on stop. An interrupted build
-	// leaves an invalid index the next boot drops and redoes.
-	indexCtx, cancelIndexBuild := context.WithTimeout(context.Background(), vectorIndexBuildTimeout)
+	// large corpus takes minutes), after the schema upkeep (the steps' deferred
+	// validations and concurrent builds): detached from the start hook's context,
+	// cancelled on stop (runPostBootIndexWork). An interrupted build leaves an
+	// invalid index the next boot drops and redoes.
+	indexCtx, cancelIndexBuild := context.WithCancel(context.Background())
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			go func() {
@@ -78,9 +86,7 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 			}()
 			go func() {
 				defer cancelIndexBuild()
-				if err := pgBackend.EnsureVectorIndex(indexCtx, pgBackend.EmbeddingDim()); err != nil {
-					logger.Warn("knowledge vector index build did not finish", "error", err)
-				}
+				runPostBootIndexWork(indexCtx, pgBackend)
 			}()
 			return nil
 		},
@@ -109,6 +115,33 @@ func provideStorageBackend(lc fx.Lifecycle, cfg *config.Config) (StorageResult, 
 	return res, nil
 }
 
+// postBootIndexer is the database's index work after boot (*storagedb.PostgresStorageBackend).
+type postBootIndexer interface {
+	SchemaUpkeep(ctx context.Context) error
+	EnsureVectorIndex(ctx context.Context, dims int) error
+	EmbeddingDim() int
+}
+
+// runPostBootIndexWork runs the schema upkeep, then the HNSW build, one after the other (two concurrent index builds
+// wait for each other's transactions), each on its own budget. Once shutdown has stopped the upkeep's job it starts
+// nothing more: the build would be a new job the drain has already passed.
+func runPostBootIndexWork(ctx context.Context, w postBootIndexer) {
+	uctx, cancel := context.WithTimeout(ctx, schemaUpkeepTimeout)
+	err := w.SchemaUpkeep(uctx)
+	cancel()
+	if errors.Is(err, lifecycle.ErrJobStopped) || ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		logger.Warn("schema upkeep did not finish", "error", err)
+	}
+	vctx, cancel := context.WithTimeout(ctx, vectorIndexBuildTimeout)
+	defer cancel()
+	if err := w.EnsureVectorIndex(vctx, w.EmbeddingDim()); err != nil {
+		logger.Warn("knowledge vector index build did not finish", "error", err)
+	}
+}
+
 // storageConfig is the Postgres backend's configuration: its defaults with the operator's PAD_DB_* settings over
 // them, durations included (parsed and range-checked by config.Load).
 func storageConfig(cfg *config.Config) storagedb.Config {
@@ -135,6 +168,11 @@ func storageConfig(cfg *config.Config) storagedb.Config {
 	dbCfg.ConnMaxLifetime = cfg.Storage.DBConnMaxLifetime.Std()
 	dbCfg.ConnMaxIdleTime = cfg.Storage.DBConnMaxIdleTime.Std()
 	dbCfg.StatementTimeout = cfg.Storage.DBStatementTimeout.Std()
+	// Above the request timeout unless set otherwise, so the server ends only a transaction whose handler is
+	// already past its deadline.
+	dbCfg.IdleInTxTimeout = cfg.EffectiveDBIdleTxTimeout()
+	// Tenants share the cloud's database: a role that bypasses row-level security refuses to boot there.
+	dbCfg.RefuseRLSBypass = capability.Of(cfg).Profile() == capability.Cloud && !cfg.Storage.DBAllowBypassRLS
 
 	// Apply Azure Blob Storage config: enabled when a container is set
 	// together with an auth source — an account name (Managed Identity) or a

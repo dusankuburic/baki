@@ -300,3 +300,33 @@ func TestServeStatic_StaleOrForeignSiblingIgnored(t *testing.T) {
 		t.Errorf("/index.html served precompressed: Content-Encoding %q (status %d)", ce, rr.Code)
 	}
 }
+
+// TestServeStatic_ServiceWorkerAndFriendsAreNoCache: the service worker (and
+// its manifest / offline shell) must revalidate on every load — a cached
+// worker keeps serving the old shell for its whole lifetime, so a
+// security-fix deploy would only reach browsers after the HTTP cache expiry.
+// Hashed /assets/ keep their immutable year.
+func TestServeStatic_ServiceWorkerAndFriendsAreNoCache(t *testing.T) {
+	rt, dir := precompressedRouter(t)
+	for _, name := range []string{"sw.js", "manifest.json", "offline.html"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("/*stub*/"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"/sw.js", "/manifest.json", "/offline.html"} {
+		w := httptest.NewRecorder()
+		rt.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status %d", path, w.Code)
+		}
+		if cc := w.Header().Get("Cache-Control"); cc != "no-cache" {
+			t.Errorf("%s: Cache-Control %q, want no-cache", path, cc)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	rt.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/assets/app-abc123.js", nil))
+	if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+		t.Errorf("hashed asset: Cache-Control %q, want immutable", cc)
+	}
+}

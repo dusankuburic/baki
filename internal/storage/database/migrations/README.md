@@ -1,72 +1,23 @@
 # Schema migrations (v32 and later)
 
-Versions 1–31 are Go string literals in `../postgres_migrations.go` and are frozen: never edit them, because the
-boot-time checksum check refuses a database whose recorded checksum no longer matches. Every new step is a file
-in this directory, embedded into the binary and appended after v31.
+Versions 1–31 are frozen Go string literals in `../postgres_migrations.go` — never edit them; the boot-time checksum check refuses a database whose recorded checksum no longer matches. Every new step is a file in this directory, embedded into the binary and appended after v31.
 
-## Files
+- `NNNN_name.up.sql` — the step (e.g. `0032_audit_org_id.up.sql`); the 4-digit version continues the sequence without gaps; the name is lowercase letters, digits, `_`.
+- `NNNN_name.down.sql` (optional) — the reverse, used only by `bakicli migrate down`, with the app stopped. No down file means the step is irreversible: `migrate down` refuses to cross it.
 
-- `NNNN_name.up.sql`: the step, for example `0032_audit_org_id.up.sql`. The version is the 4-digit prefix and
-  must continue the sequence without gaps. The name is lowercase letters, digits and `_`.
-- `NNNN_name.down.sql` (optional): the reverse, used only by `bakicli migrate down`. No down file means the step
-  is irreversible, so `migrate down` refuses to cross it.
-
-Each step runs in one transaction together with its `schema_migrations` row. The checksum covers the up file's
-text after stripping a UTF-8 BOM and converting CRLF to LF, so the same file hashes identically on every
-checkout. `.gitattributes` also keeps `*.sql` files LF.
+Each step runs in one transaction with its `schema_migrations` row; the checksum covers the up file's text after stripping a UTF-8 BOM and converting CRLF to LF (`.gitattributes` keeps `*.sql` LF).
 
 ## Compatibility directive (required)
 
-Every up file carries exactly one line:
+Every up file carries exactly one line: `-- baki:compat expand` or `-- baki:compat breaking`.
 
-```sql
--- baki:compat expand
-```
+- **expand** — the release before keeps working on the new schema (new tables, nullable columns, columns with a default, new indexes/functions). An older binary boots on a schema ahead of it by expand-only steps, so an image rollback is safe without a schema rollback.
+- **breaking** — the previous release cannot run against it (dropping/renaming a column or table, `NOT NULL` without a default, a type change, RLS changes that hide rows); an older binary refuses to boot until the schema is rolled back.
 
-or `-- baki:compat breaking`.
+Prefer expand/contract: ship the expand step with code that works with both shapes; ship the drop one release later, after no deployed code reads the old shape. Pending contract steps: v35 `settings_sections` (ADR 0012) and `CHECK (id <> '')` on `policies` after v48 (rekey `''` rows first, then add `NOT VALID` and validate after boot via `SchemaUpkeep`, its item's statement re-keying what the CHECK refuses).
 
-- **expand**: the release before this one keeps working on the new schema. Examples: new tables, new nullable
-  columns, columns with a default, new indexes, new functions. The value is recorded in `schema_migrations`, and
-  an older binary (one with this guard) boots against a schema that is ahead of it by expand-only steps. That
-  makes an image rollback safe without a schema rollback.
-- **breaking**: anything the previous release cannot run against. Examples: dropping or renaming a column or
-  table, adding `NOT NULL` without a default, changing a type, RLS changes that hide rows the old code reads. An
-  older binary refuses to boot until the schema is rolled back.
-
-Prefer expand/contract over breaking steps. First ship an expand step plus code that works with both shapes.
-Ship the contract step (the drop) one release later, after no deployed code reads the old shape.
-
-### Pending contract steps
-
-- **v35 `settings_sections`** ([ADR 0012](../../../../docs/adr/0012-settings-sections-with-versions.md)). This
-  release writes both the settings blobs (`app_settings`, `user_settings`, `org_settings`) and the section rows.
-  The next release backfills rows for blobs that have none, reconciles rows whose `legacy_digest` no longer matches
-  their blob (a change made after a rollback to the release before), stops writing the blobs (rows get a NULL
-  `legacy_digest`) and reads a blob only for a section without a row. The release after drops the blob tables and
-  `legacy_digest` in a `breaking` step, once no non-NULL digest remains.
-
-## Long-running work
-
-Each step runs with a `lock_timeout` (`SET LOCAL`, 5 s) and is retried with a growing pause when a table lock is
-not available, so a step never queues the still-serving revision's queries behind it for long.
-
-Do not put `CREATE INDEX CONCURRENTLY` or long backfills in a step. Build indexes concurrently after boot (see
-`EnsureVectorIndex`), and run data backfills as resumable jobs.
+Steps and downs run under `SET LOCAL lock_timeout = 5s`, retried on lock timeouts and deadlocks (max 6 attempts). Row work first, only on orphans of row-per-entity tables; growing tables are SchemaUpkeep's. Table locks in all-or-none groups (the 0048/0049 DO blocks): wait for a busy table alone (200 ms slices, extended to `deadlock_timeout` + 200 ms once if an autovacuum holds it), holding none of the group, so no concurrent multi-table writer deadlocks (an erasure writes `org_invites` both before and after `share_tokens`). Lock `users` and `refresh_tokens` in the last group with only their own statements after; never hold a write-blocking lock on `flow_versions` or `audit_events`. Foreign keys and CHECKs `NOT VALID`; build/drop indexes of busy or growing tables `CONCURRENTLY` after boot via `SchemaUpkeep` (v48/v49); never reuse a retired index name. Tests: `TestMigration0048_BlocksWritesOnlyInItsTail` checks reads and locks statement by statement; `TestMigration0048_NoDeadlockWithThePreviousRelease` and `_SignInsNeverWaitOnItsLockWaits` check lock waits against concurrent writes. No `CREATE INDEX CONCURRENTLY` or long backfills inside a step; run backfills as resumable jobs.
 
 ## Checks
 
-`go test ./internal/storage/database/` loads this directory and checks the following:
-
-- the sequence has no gaps;
-- every up file has its directive;
-- shipped steps still match `testdata/migration_checksums.golden`.
-
-When you add a step, refresh the golden file:
-
-```
-go test ./internal/storage/database/ -run TestMigrationChecksums_Golden -update-migration-checksums
-```
-
-CI also boots the previous release on the schema your branch migrates to (`previous-release-boot`, see
-[safety-nets.md](../../../../docs/architecture/safety-nets.md)): a newer `breaking` step fails it, and so does an
-`expand` step the previous release cannot boot on.
+`go test ./internal/storage/database/` checks: the sequence has no gaps; every up file has its directive; shipped steps match `testdata/migration_checksums.golden`. Refresh the golden when adding a step: `go test ./internal/storage/database/ -run TestMigrationChecksums_Golden -update-migration-checksums`. CI also boots the previous release on the migrated schema (`previous-release-boot`): a `breaking` step fails it, and so does an `expand` step the previous release cannot boot on. Operator tooling: `bakicli migrate preflight` checks for integrity violations (case-duplicate emails, duplicate invite tokens) and checksum drift before deploy; `bakicli migrate adopt-checksum <version>` reconciles drifted pre-release migration texts whose schema shape matches.

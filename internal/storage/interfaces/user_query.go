@@ -14,20 +14,31 @@ import (
 const UserRoleNone = "none"
 
 // UserQuery filters the admin user list. Q is a case-insensitive substring of
-// the email or display name; Role is "" (every user), a valid auth.Role, or
-// UserRoleNone; Limit/Offset page the ordered result.
+// the email or display name, a prefix of either when it has no run of
+// MinSearchTermRunes word characters (ShortSearchTerm: no trigram index
+// serves such a substring) or Prefix is set; Role is "" (every user), a valid
+// auth.Role, or UserRoleNone; Limit/Offset page the ordered result.
 type UserQuery struct {
 	Q      string
 	Role   string
 	Limit  int
 	Offset int
+	// After is a keyset cursor (the CreatedAt and ID of the last user of the page before): the page holds the users
+	// after it in the list's order (created_at desc, id asc), and Offset is ignored. The total still counts every match.
+	After *PageCursor
+	// Prefix matches Q as a prefix even when ShortSearchTerm calls it long: the Postgres store sets it for a term
+	// its database draws no trigram from.
+	Prefix bool
 }
 
 // Matches reports whether u satisfies the query's Q and Role filters.
 func (q UserQuery) Matches(u *User) bool {
 	if needle := strings.ToLower(strings.TrimSpace(q.Q)); needle != "" {
-		if !strings.Contains(strings.ToLower(u.Email), needle) &&
-			!strings.Contains(strings.ToLower(u.DisplayName), needle) {
+		match := strings.Contains
+		if q.Prefix || ShortSearchTerm(needle) {
+			match = strings.HasPrefix
+		}
+		if !match(strings.ToLower(u.Email), needle) && !match(strings.ToLower(u.DisplayName), needle) {
 			return false
 		}
 	}
@@ -43,8 +54,8 @@ func (q UserQuery) Matches(u *User) bool {
 
 // Apply runs the query over an in-memory user set: keeps what Matches accepts,
 // orders newest first (created_at desc, id asc — the Postgres order), returns
-// the Offset/Limit page plus the match count. Non-positive Limit takes
-// everything after Offset; the page is never nil.
+// the Offset/Limit page (or the Limit after the After cursor) plus the match
+// count. Non-positive Limit takes everything after Offset; the page is never nil.
 func (q UserQuery) Apply(users []*User) ([]*User, int) {
 	matched := make([]*User, 0, len(users))
 	for _, u := range users {
@@ -62,6 +73,13 @@ func (q UserQuery) Apply(users []*User) ([]*User, int) {
 	offset := q.Offset
 	if offset < 0 {
 		offset = 0
+	}
+	if a := q.After; a != nil {
+		// The first user after the cursor: older, or as old with a greater id.
+		offset = sort.Search(total, func(i int) bool {
+			u := matched[i]
+			return u.CreatedAt.Before(a.At) || (u.CreatedAt.Equal(a.At) && u.ID > a.ID)
+		})
 	}
 	if offset >= total {
 		return []*User{}, total

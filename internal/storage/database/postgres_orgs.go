@@ -3,15 +3,26 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
 // ---- Organisation operations ----
+
+// isUnknownOrg reports whether err is the violation of constraint, a foreign key to organisations (migration 0048): a
+// write for an organisation that does not exist, which local mode without accounts lets a client send. The store
+// answers it ErrOrgNotFound (a 404), not a 500.
+func isUnknownOrg(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgErrForeignKeyViolation && pgErr.ConstraintName == constraint
+}
 
 func (b *PostgresStorageBackend) SaveOrg(ctx context.Context, org *interfaces.Organisation) error {
 	return b.withTx(ctx, func(_ context.Context, tx *sql.Tx) error { return b.upsertOrgInTx(ctx, tx, org) })

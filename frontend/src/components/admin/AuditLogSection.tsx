@@ -176,6 +176,7 @@ export function AuditLogSection() {
               pageSize={filter.pageSize}
               count={events.length}
               hasMore={hasMore}
+              nextDisabled={isLoading || isRefetching || error !== null}
               onPageChange={setAuditPage}
               pageSizeOptions={AUDIT_PAGE_SIZES}
               onPageSizeChange={setAuditPageSize}

@@ -86,7 +86,7 @@ func events(n int) []*storageif.AuditEvent {
 func TestWriteBatch_UsesBatchSink(t *testing.T) {
 	w := &fakeWriter{}
 	s := &fakeBatchSink{}
-	writeBatch(w, s, events(3))
+	writeBatch(w, s, events(3), nil)
 
 	if s.calls.Load() != 1 {
 		t.Errorf("batch sink calls = %d, want 1", s.calls.Load())
@@ -103,7 +103,7 @@ func TestWriteBatch_UsesBatchSink(t *testing.T) {
 func TestWriteBatch_BatchFailsFallsBackToPerEvent(t *testing.T) {
 	w := &fakeWriter{}
 	s := &fakeBatchSink{err: errors.New("batch insert failed")}
-	writeBatch(w, s, events(2))
+	writeBatch(w, s, events(2), nil)
 
 	if s.calls.Load() == 0 {
 		t.Error("expected the batch sink to be attempted first")
@@ -119,7 +119,7 @@ func TestWriteOne_RetryRecovers(t *testing.T) {
 	w.failFirst.Store(1) // first SaveAuditEvent fails, retry succeeds
 
 	before := auditDroppedCount("write_failed")
-	writeOne(w, events(1)[0])
+	writeOne(w, events(1)[0], nil)
 
 	if w.count() != 2 {
 		t.Errorf("expected 2 attempts (1 fail + 1 retry), got %d", w.count())
@@ -134,7 +134,7 @@ func TestWriteOne_PersistentFailureBumpsMetric(t *testing.T) {
 	w := &fakeWriter{err: errors.New("db down")} // every call fails
 
 	before := auditDroppedCount("write_failed")
-	writeOne(w, events(1)[0])
+	writeOne(w, events(1)[0], nil)
 
 	if w.count() != 2 {
 		t.Errorf("expected 2 attempts (initial + 1 retry), got %d", w.count())

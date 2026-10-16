@@ -70,7 +70,14 @@ type CredentialField struct {
 	Placeholder string
 	Help        string
 	// Options are the choices of a select field.
-	Options []string
+	Options []SelectOption
+}
+
+// SelectOption is one choice of a select field: the value the credential stores and the label a person reads
+// (empty: the value itself).
+type SelectOption struct {
+	Value string
+	Label string
 }
 
 // CredentialSchema describes how a provider's credential is entered.
@@ -350,10 +357,17 @@ type ProviderOptions struct {
 
 // ConfigureProviders applies opts to every registered spec by its EgressPolicy: a user-endpoint provider gets
 // the dial-time guard and the allow-list (Azure AI Foundry's process runtime), a loopback provider the gate
-// that keeps a cloud server off its own loopback services, and a fixed-host provider nothing — its host is a
-// constant in the binary (an operator's *_API_URL override is trusted). One call at boot, in place of a call
-// per provider.
+// that keeps a cloud server off its own loopback services, and a fixed-host provider a guarded clone of the
+// shared client under the same policy — its host is a constant in the binary (an operator's *_API_URL override
+// is trusted), so there the guard is defense-in-depth against a misconfiguration or a redirect, never the
+// boundary. One call at boot, in place of a call per provider.
 func ConfigureProviders(opts ProviderOptions) {
+	// Once, not once per spec: every fixed-host provider shares one client.
+	policy := opts.Egress
+	if opts.AllowPrivateEgress {
+		policy = egress.AllowPrivateNetwork
+	}
+	ConfigureFixedHostClient(policy)
 	for _, spec := range Specs() {
 		switch spec.Egress.Kind {
 		case EgressUserEndpoint:
@@ -378,13 +392,17 @@ func (s ProviderSpec) WireModes() []string {
 }
 
 // WireCredential is the credential schema as the wire carries it (models.CredentialSchema): Fields is never
-// null, and a select's options carry a label (the value itself until a spec names one).
+// null, and a select's options carry a label (the value itself where a spec names none).
 func (s ProviderSpec) WireCredential() models.CredentialSchema {
 	out := models.CredentialSchema{Kind: string(s.Credential.Kind), Fields: []models.CredentialField{}, HelpURL: s.Credential.HelpURL}
 	for _, f := range s.Credential.Fields {
 		wf := models.CredentialField{Name: f.Name, Label: f.Label, Type: string(f.Type), Required: f.Required, Placeholder: f.Placeholder, Help: f.Help}
 		for _, o := range f.Options {
-			wf.Options = append(wf.Options, models.CredentialOption{Value: o, Label: o})
+			label := o.Label
+			if label == "" {
+				label = o.Value
+			}
+			wf.Options = append(wf.Options, models.CredentialOption{Value: o.Value, Label: label})
 		}
 		out.Fields = append(out.Fields, wf)
 	}

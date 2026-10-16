@@ -51,11 +51,13 @@ func (h *AnalysisHandler) handleEvaluatePolicy(w http.ResponseWriter, r *http.Re
 }
 
 // @Summary      Save a named policy for an organization
+// @Description  Upserts the policy on (id, orgId). A policy sent without an id gets a generated id, returned in the body with the stored timestamps; send that id back to update it. It is a new policy, unless the organisation still has one stored under the empty id (by a server of the release before, which stored every id-less policy of an organisation there, each overwriting the last): then it is that policy, under the new id.
 // @Tags         policy
 // @Produce      json
 // @Success      200 {object} object "OK"
 // @Failure      400 {object} object "Bad Request"
 // @Failure      401 {object} object "Unauthorized"
+// @Failure      404 {object} object "Not Found (no such organisation)"
 // @Failure      503 {object} object "Service Unavailable (cloud mode required)"
 // @Router       /api/analysis/policy/save [post]
 func (h *AnalysisHandler) handleSavePolicy(w http.ResponseWriter, r *http.Request) {

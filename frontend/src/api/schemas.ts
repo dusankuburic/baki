@@ -33,6 +33,10 @@ export const getFindingSchema = (): Promise<Schemas['FindingSchema']> => loadSch
 export const getAnalysisReportSchema = (): Promise<Schemas['AnalysisReportSchema']> =>
   loadSchemas().then(s => s.AnalysisReportSchema)
 
+export const getPolicySchema = (): Promise<Schemas['PolicySchema']> => loadSchemas().then(s => s.PolicySchema)
+
+export const getPoliciesSchema = (): Promise<Schemas['PoliciesSchema']> => loadSchemas().then(s => s.PoliciesSchema)
+
 export const getAppSettingsSchema = (): Promise<Schemas['AppSettingsSchema']> =>
   loadSchemas().then(s => s.AppSettingsSchema)
 

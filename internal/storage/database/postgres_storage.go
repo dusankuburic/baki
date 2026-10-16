@@ -85,9 +85,18 @@ type Config struct {
 	// StatementTimeout is applied to every pooled connection as Postgres statement_timeout AND lock_timeout,
 	// cancelling a runaway query or lock wait server-side. 0 disables; migrations lift it for their session.
 	StatementTimeout time.Duration
+	// IdleInTxTimeout is every pooled connection's idle_in_transaction_session_timeout: the server ends a session
+	// whose transaction sits idle for longer, releasing its locks and its hold on the vacuum horizon. 0 (the
+	// default: the backend knows no request deadline) disables; the app sets the request timeout plus a margin
+	// (config.EffectiveDBIdleTxTimeout). The migrations and the vector index build lift it for their session.
+	IdleInTxTimeout time.Duration
 	// RequireSSL, when true, refuses a DSN whose sslmode does not enforce an encrypted connection — a
 	// fail-fast guard so a misconfigured cloud deployment carrying credentials over plaintext is caught at boot.
 	RequireSSL bool
+	// RefuseRLSBypass, when true, refuses to start on a connection role that bypasses Row-Level Security (a
+	// superuser or BYPASSRLS), before the migrations run; false only warns. The cloud profile sets it unless
+	// PAD_DB_ALLOW_BYPASSRLS.
+	RefuseRLSBypass bool
 
 	AzureStorageAccount   string
 	AzureStorageContainer string
@@ -118,6 +127,8 @@ const (
 	LogPoolOverServerLimit = "postgres: connection pools can exceed max_connections"
 	// LogPgBouncerPort (WARN): the DSN points at port 6432, where Azure Flexible Server's PgBouncer listens.
 	LogPgBouncerPort = "PgBouncer transaction mode is unsupported: session advisory locks"
+	// LogRLSPoliciesInert (WARN): the role bypasses Row-Level Security, and the boot was not asked to refuse it.
+	LogRLSPoliciesInert = "postgres: connection role bypasses Row-Level Security — the RLS policies in this schema are INERT"
 )
 
 // DefaultApplicationName is the application_name of a connection when neither the DSN nor Config names one.
@@ -140,10 +151,9 @@ func DefaultConfig(dsn string) Config {
 	}
 }
 
-// New opens a PostgreSQL connection, configures the pool, and runs migrations.
-// With Managed Identity a fresh Entra token is injected per connection by
-// azureMIConnector (no background refresh goroutine).
-func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
+// openStorageBackend opens a PostgreSQL connection pool, validates TLS/role settings, and initializes
+// blob storage without running migrations.
+func openStorageBackend(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	pgxCfg, err := pgx.ParseConfig(cfg.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
@@ -152,7 +162,7 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	// Fail fast on an insecure connection when TLS is required — checked after parsing (a malformed DSN
 	// surfaces its real error) and before any network/blob setup.
 	if cfg.RequireSSL && !sslModeIsSecure(cfg.DSN) {
-		return nil, fmt.Errorf("postgres: TLS required but DSN sslmode=%q is insecure; use sslmode=require or verify-full", sslModeFromDSN(cfg.DSN))
+		return nil, fmt.Errorf("postgres: TLS required but DSN sslmode=%q is insecure; use sslmode=verify-full (or require, which encrypts without verifying the server)", sslModeFromDSN(cfg.DSN))
 	}
 	// Before the first connection: through a transaction-mode pooler that one may already fail (its startup
 	// parameters), and this line names the cause.
@@ -212,18 +222,21 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	if pgxCfg.RuntimeParams == nil {
 		pgxCfg.RuntimeParams = map[string]string{}
 	}
-	// Server-side statement and lock budgets on every connection. No
-	// idle_in_transaction_session_timeout, though no longer for a chat stream
-	// idling in the request transaction: the streaming routes run outside it
-	// (rls_middleware.go), and it ends before the first response byte (ADR
-	// 0004). It still idles while its handler works between statements (an
-	// outbound call, CPU), and lives until the handler returns, not until the
-	// deadline (rls.go begins it WithoutCancel): a timeout would have to outlast
-	// the slowest handler.
+	// Server-side statement and lock budgets on every connection, and the idle-transaction one. The request
+	// transaction idles while its handler works between statements (an outbound call, CPU) and lives until the
+	// handler returns, not until the deadline (rls.go begins it WithoutCancel), so the app sets the idle timeout
+	// above the request timeout (config.EffectiveDBIdleTxTimeout): it ends only the transaction of a handler already
+	// past its deadline, which would otherwise pin its connection, its locks and the vacuum horizon. Every route in
+	// the request transaction has the default deadline (the streams and the bulk routes run outside it; an api test
+	// keeps it so). A lease's session holds its advisory lock idle but outside any transaction, which the timeout
+	// does not count; the migrations and the vector index build lift it for their session (liftSessionTimeouts).
 	if cfg.StatementTimeout > 0 {
 		ms := strconv.FormatInt(cfg.StatementTimeout.Milliseconds(), 10)
 		pgxCfg.RuntimeParams["statement_timeout"] = ms
 		pgxCfg.RuntimeParams["lock_timeout"] = ms
+	}
+	if cfg.IdleInTxTimeout > 0 {
+		pgxCfg.RuntimeParams["idle_in_transaction_session_timeout"] = strconv.FormatInt(cfg.IdleInTxTimeout.Milliseconds(), 10)
 	}
 	setApplicationName(pgxCfg.RuntimeParams, cfg.ApplicationName)
 
@@ -264,9 +277,12 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 	db.SetConnMaxIdleTime(idleTime)
 
 	b.db = db
-	if err := b.migrate(ctx); err != nil {
+	// Before the migrations: a role that bypasses Row-Level Security would also own every table they create.
+	if err := checkRLSRole(ctx, slog.Default(), func(ctx context.Context) (string, bool, error) {
+		return rlsBypassedByRole(ctx, db)
+	}, cfg.RefuseRLSBypass); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
+		return nil, err
 	}
 
 	// Apply the embedding-dimension contract (default config.DefaultEmbeddingDim,
@@ -276,23 +292,44 @@ func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
 		b.embeddingDim = config.DefaultEmbeddingDim
 	}
 
+	return b, nil
+}
+
+// OpenForMaintenance opens a PostgreSQL connection pool and verifies the connection role
+// (checking RLS bypass), but does NOT run migrations or schema upkeep. This allows maintenance
+// tools (such as bakicli migrate down, preflight, or adopt-checksum) to run against databases
+// with drifted checksums or unmigrated schema states.
+func OpenForMaintenance(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
+	return openStorageBackend(ctx, cfg)
+}
+
+// New opens a PostgreSQL connection, configures the pool, and runs migrations.
+// With Managed Identity a fresh Entra token is injected per connection by
+// azureMIConnector (no background refresh goroutine).
+func New(ctx context.Context, cfg Config) (*PostgresStorageBackend, error) {
+	b, err := openStorageBackend(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := b.migrate(ctx); err != nil {
+		b.db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+
 	// Detect whether pgvector is available so SearchKnowledge can push the
 	// similarity ordering into the database; without it the Go-side ranker
 	// keeps local mode and extension-less deployments working.
-	b.hasPgvector = detectPgvector(ctx, db)
+	b.hasPgvector = detectPgvector(ctx, b.db)
 	if b.hasPgvector {
-		b.hnswIterativeScan = detectHNSWIterativeScan(ctx, db)
+		b.hnswIterativeScan = detectHNSWIterativeScan(ctx, b.db)
 	}
 
-	// Surface a silently-disabled security layer: a superuser/BYPASSRLS role makes
-	// every RLS policy inert, and nothing else reveals it — queries succeed, tests
-	// pass, the schema still lists the policies.
-	warnIfRLSBypassed(ctx, db)
-
+	maxOpen, _ := poolLimits(cfg)
 	// Every replica's pool full at once (a burst, a stuck dependency) must fit the server, or the next connection
 	// fails with "too many clients".
 	warnIfPoolExceedsServer(ctx, slog.Default(), func(ctx context.Context) (serverConnLimits, error) {
-		return readServerConnLimits(ctx, db)
+		return readServerConnLimits(ctx, b.db)
 	}, maxOpen, cfg.ExpectedReplicas, cfg.ServerMaxConns)
 
 	return b, nil
@@ -391,30 +428,38 @@ func setApplicationName(params map[string]string, name string) {
 }
 
 // rlsBypassedByRole reports whether the connection's current role ignores Row-Level Security (a superuser
-// or BYPASSRLS). The third return is false when the question could not be answered, so callers stay quiet.
-func rlsBypassedByRole(ctx context.Context, db *sql.DB) (role string, bypassed bool, known bool) {
-	err := db.QueryRowContext(ctx,
+// or BYPASSRLS). err is set when the question could not be answered.
+func rlsBypassedByRole(ctx context.Context, db *sql.DB) (role string, bypassed bool, err error) {
+	err = db.QueryRowContext(ctx,
 		`SELECT current_user, rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user`,
 	).Scan(&role, &bypassed)
 	if err != nil {
-		return "", false, false
+		return "", false, err
 	}
-	return role, bypassed, true
+	return role, bypassed, nil
 }
 
-// warnIfRLSBypassed logs once at startup when the configured database role
-// defeats Row-Level Security. WARNS rather than refusing to boot: the
-// docker-compose default connects as `postgres`, so failing closed would
-// brick existing deployments on upgrade.
-func warnIfRLSBypassed(ctx context.Context, db *sql.DB) {
-	role, bypassed, known := rlsBypassedByRole(ctx, db)
-	if !known || !bypassed {
-		return
+// checkRLSRole surfaces a silently disabled security layer at startup: a superuser or BYPASSRLS role makes every RLS
+// policy inert, and nothing else reveals it (queries succeed, tests pass, the schema still lists the policies).
+// Asked to refuse (the cloud profile, where tenants share the database), it fails the boot; a role it cannot read
+// refuses too, since it cannot tell the policies hold. Otherwise it warns (LogRLSPoliciesInert), and an unreadable
+// role stays quiet (the migrations report an unreachable server). The compose stacks and the Azure bootstrap connect
+// as baki_app, NOSUPERUSER NOBYPASSRLS.
+func checkRLSRole(ctx context.Context, log *slog.Logger, read func(context.Context) (role string, bypassed bool, err error), refuse bool) error {
+	role, bypassed, err := read(ctx)
+	switch {
+	case err != nil && refuse:
+		return fmt.Errorf("postgres: could not read whether the connection role bypasses Row-Level Security, so refusing to start without knowing that the tenant policies apply (PAD_DB_ALLOW_BYPASSRLS=true skips the refusal): %w", err)
+	case err != nil || !bypassed:
+		return nil
+	case refuse:
+		return fmt.Errorf("postgres: the connection role %q bypasses Row-Level Security (a superuser or BYPASSRLS), so every tenant policy in this schema would be inert; connect as a NOSUPERUSER NOBYPASSRLS role that owns the database (infra/postgres.bicep's bootstrap, scripts/db-init), or set PAD_DB_ALLOW_BYPASSRLS=true to start anyway with a warning", role)
 	}
-	slog.Warn("postgres: connection role bypasses Row-Level Security — the RLS policies in this schema are INERT",
+	log.Warn(LogRLSPoliciesInert,
 		"role", role,
 		"impact", "tenant isolation rests entirely on the application authz layer; the database-side backstop is not in effect",
 		"remediation", "connect as a role created with NOSUPERUSER NOBYPASSRLS that owns the application database")
+	return nil
 }
 
 // poolLimits resolves the pool's open/idle caps. The idle cap defaults to the

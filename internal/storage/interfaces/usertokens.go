@@ -10,6 +10,13 @@ type UserTokenStore interface {
 	CreateUserToken(ctx context.Context, t *UserToken) error
 	// ConsumeUserToken atomically redeems a valid (unused, unexpired) token of the purpose, marks it used, and returns the owning userID (ErrNotFound — no replay).
 	ConsumeUserToken(ctx context.Context, purpose, tokenHash string) (userID string, err error)
+	// UserTokenValid reports whether a token of the purpose is unused and unexpired, consuming nothing: a cheap refusal
+	// before costly work. Only the consuming call decides.
+	UserTokenValid(ctx context.Context, purpose, tokenHash string) (bool, error)
+	// RedeemPasswordReset consumes a valid password-reset token and sets its user's password (lifting a lockout) in one
+	// change, so an invalidation landing meanwhile (an SSO adoption clearing the password) either refuses it or comes
+	// after it; ErrNotFound when the token is unknown, used, expired or of another purpose.
+	RedeemPasswordReset(ctx context.Context, tokenHash, passwordHash string) (userID string, err error)
 	// InvalidateUserTokens marks every unused, unexpired token of the purposes used, so outstanding reset/verify links die after a password change (account-takeover guard); no-op when none match.
 	InvalidateUserTokens(ctx context.Context, userID string, purposes ...string) error
 	// SetUserEmailVerified marks a user's email as verified.

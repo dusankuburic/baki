@@ -145,6 +145,7 @@ func (s *Scanner) storeNotices(ctx context.Context, last bool) {
 		logger.Warn("scanner: store new-rules notices failed", "notices", len(batch), "err", err)
 		for _, id := range flows {
 			s.setLastScanKey(id, "")
+			s.shared.forget(ctx, id)
 		}
 		return
 	}

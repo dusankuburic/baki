@@ -1,5 +1,5 @@
 import {useTranslation} from 'react-i18next'
-import {useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentType} from 'react'
+import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react'
 import clsx from 'clsx'
 import {Check, ChevronDown, Cloud, HardDrive, Search, Settings, Users} from 'lucide-react'
 import {GithubMark} from '@/components/shared'
@@ -15,6 +15,7 @@ import {modelKind} from '@/lib/modelIds'
 import {modelKindLabelKey, purposeLabel, purposeLabelKey, type PurposeLabelOf} from '@/lib/modelPurpose'
 import {matchesQuery} from '@/lib/textMatch'
 import {PROVIDERS, isKnownProviderId, type ModelDetail} from '@/types'
+import {PROVIDER_GLYPHS, hasProviderGlyph} from './providerGlyphs'
 
 export interface PickerProvider {
   id: string
@@ -67,15 +68,11 @@ function statusKey(status: string | undefined): StatusKey | null {
   }
 }
 
-const PROVIDER_ICONS: Record<string, ComponentType<{size?: number}>> = {
-  cloud: Cloud,
-  'hard-drive': HardDrive,
-  github: GithubMark,
-}
-
 function ProviderGlyph({id, icon}: {id: string; icon?: string}) {
-  const Icon = icon && Object.prototype.hasOwnProperty.call(PROVIDER_ICONS, icon) ? PROVIDER_ICONS[icon] : undefined
-  if (Icon) return <Icon size={12} />
+  if (hasProviderGlyph(icon)) {
+    const Icon = PROVIDER_GLYPHS[icon]!
+    return <Icon size={12} />
+  }
   if (id === 'local') return <HardDrive size={12} />
   if (id === 'github-models' || id === 'copilot') return <GithubMark size={12} />
   return <Cloud size={12} />

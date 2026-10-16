@@ -312,9 +312,10 @@ func (m *FakeBackend) LoadFlowHeader(_ context.Context, id string) (*interfaces.
 }
 
 // matchFlowsLocked is Postgres's flowFilterWhere over the stored flows, unordered: the scope (AllFlows, SharedOnly,
-// the user's owned/org/collaborator union, or the org scopes) and the Query, Created*, AfterID and Tags filters.
-// An unscoped filter, SharedOnly without a user, or an invalid tag matches nothing. ListFlows, CountFlows and
-// SearchFlowContents share it, as the Postgres statements do. The caller holds m.mu.
+// the user's owned/org/collaborator union, or the org scopes) and the Query, Created*, AfterID, After and Tags filters.
+// An unscoped filter, SharedOnly without a user, an invalid tag, or After with a sort other than the updated-at ones
+// matches nothing. ListFlows, CountFlows and SearchFlowContents share it, as the Postgres statements do. The caller
+// holds m.mu.
 func (m *FakeBackend) matchFlowsLocked(filter interfaces.FlowFilter) []*interfaces.FlowDocument {
 	var tags []string
 	if len(filter.Tags) > 0 {
@@ -328,15 +329,23 @@ func (m *FakeBackend) matchFlowsLocked(filter interfaces.FlowFilter) []*interfac
 	if !filter.AllFlows && (unscoped || (filter.SharedOnly && filter.UserID == "")) {
 		return nil
 	}
-	query := strings.ToLower(filter.Query)
+	// The name query: a substring, a prefix when ShortSearchTerm (no run of three letters or digits) or QueryPrefix,
+	// blank none.
+	query, nameMatch := strings.ToLower(filter.Query), strings.Contains
+	if term := strings.TrimSpace(query); term == "" {
+		query = ""
+	} else if filter.QueryPrefix || interfaces.ShortSearchTerm(term) {
+		query, nameMatch = term, strings.HasPrefix
+	}
 	var out []*interfaces.FlowDocument
 	for _, f := range m.Flows {
 		switch {
 		case !m.flowInScopeLocked(f, filter),
-			query != "" && !strings.Contains(strings.ToLower(f.Name), query),
+			query != "" && !nameMatch(strings.ToLower(f.Name), query),
 			filter.CreatedAfter != nil && !f.CreatedAt.After(*filter.CreatedAfter),
 			filter.CreatedBefore != nil && !f.CreatedAt.Before(*filter.CreatedBefore),
 			filter.AfterID != "" && f.ID <= filter.AfterID,
+			filter.After != nil && !afterFlowCursor(f, filter),
 			tags != nil && !slices.ContainsFunc(tags, func(t string) bool { return slices.Contains(f.Tags, t) }):
 			continue
 		}
@@ -361,6 +370,19 @@ func (m *FakeBackend) flowInScopeLocked(f *interfaces.FlowDocument, filter inter
 	default:
 		return slices.Contains(filter.OrganizationIDs, f.OrganizationID)
 	}
+}
+
+// afterFlowCursor reports whether f comes after filter.After in filter's updated-at order, the id breaking ties
+// (Postgres's keyset predicate); in any other order nothing does.
+func afterFlowCursor(f *interfaces.FlowDocument, filter interfaces.FlowFilter) bool {
+	c := filter.After
+	switch filter.SortBy {
+	case interfaces.FlowSortUpdatedDesc:
+		return f.UpdatedAt.Before(c.At) || (f.UpdatedAt.Equal(c.At) && f.ID > c.ID)
+	case interfaces.FlowSortUpdatedAsc:
+		return f.UpdatedAt.After(c.At) || (f.UpdatedAt.Equal(c.At) && f.ID > c.ID)
+	}
+	return false
 }
 
 // sortFlows is Postgres's flowOrderBy, every order ending in the id; names compare lower-cased in byte order
@@ -400,6 +422,9 @@ func sortFlows(flows []*interfaces.FlowDocument, by interfaces.FlowSort) {
 // listFlows is one ListFlows page plus the number of flows the filter matches: Postgres's page bounds (a limit
 // <= 0 or > 500 is 100) and MetadataOnly (no Content or Source).
 func (m *FakeBackend) listFlows(filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, int, error) {
+	if filter.After != nil {
+		filter.Offset = max(filter.After.Skip, 0) // the cursor is the position, the page starts Skip flows after it
+	}
 	if filter.Offset < 0 {
 		return nil, 0, errors.New("OFFSET must not be negative")
 	}
@@ -484,6 +509,9 @@ func (m *FakeBackend) SearchFlowContents(_ context.Context, filter interfaces.Fl
 	needle = strings.ToLower(strings.TrimSpace(needle))
 	if needle == "" {
 		return []*interfaces.FlowDocument{}, nil
+	}
+	if interfaces.ShortSearchTerm(needle) {
+		return nil, interfaces.ErrQueryTooShort
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 200
@@ -677,10 +705,11 @@ func (m *FakeBackend) sortedUsersLocked(keep func(*interfaces.User) bool) []*int
 	return out
 }
 
-// emailTakenLocked reports whether a user other than id holds email (users.email is unique, case-sensitively).
+// emailTakenLocked reports whether a user other than id holds email, whatever its case (users_lower_email_key,
+// migration 0048).
 func (m *FakeBackend) emailTakenLocked(email, id string) bool {
 	for _, u := range m.Users {
-		if u.Email == email && u.ID != id {
+		if strings.EqualFold(u.Email, email) && u.ID != id {
 			return true
 		}
 	}
@@ -849,9 +878,24 @@ func (m *FakeBackend) updateUserLocked(id string, fn func(*interfaces.User)) boo
 	return true
 }
 
+// UpdateUserRole counts the admins and writes under one lock, as the Postgres transaction does with its row locks: the
+// last admin keeps the role (ErrLastAdmin).
 func (m *FakeBackend) UpdateUserRole(_ context.Context, id string, role auth.Role) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if role != auth.RoleAdmin {
+		if u, ok := m.Users[id]; ok && u.Role == auth.RoleAdmin {
+			admins := 0
+			for _, other := range m.Users {
+				if other.Role == auth.RoleAdmin {
+					admins++
+				}
+			}
+			if admins == 1 {
+				return interfaces.ErrLastAdmin
+			}
+		}
+	}
 	if !m.updateUserLocked(id, func(u *interfaces.User) { u.Role, u.UpdatedAt = role, time.Now().UTC() }) {
 		return interfaces.ErrNotFound
 	}
@@ -921,8 +965,12 @@ func (m *FakeBackend) DeleteUserAvatar(_ context.Context, id string) error {
 // name, share links, invitations sent, CI credentials minted, organisations owned) and teammates' comment and assignment alerts naming the
 // user say "a teammate"; alerts addressed to the user, the user's notices, sessions, usage rows, memberships,
 // invitations to the user's email, settings, tokens and grants go; audit rows are anonymised, and pre-auth rows
-// naming the user's address lose it. Organisations stay with their other members. A missing user is not an error.
+// naming the user's address lose it. Organisations stay with their other members. A missing user is not an error;
+// the empty id is ErrUserIDRequired.
 func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
+	if id == "" {
+		return interfaces.ErrUserIDRequired
+	}
 	m.idem.deleteUser(id)
 	m.identityLinks.deleteUser(id)
 	m.mu.Lock()
@@ -949,6 +997,7 @@ func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
 			}
 		}
 	}
+	m.eraseFlowSnapshotUserLocked(id)
 	for _, byKey := range m.FindingStatuses {
 		for _, st := range byKey {
 			if st.UpdatedBy == id {
@@ -1014,6 +1063,14 @@ func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
 	m.mu.Unlock()
 
 	m.usageMu.Lock()
+	// Organisation spend stays the organisation's, without the user; personal spend goes.
+	for i, u := range m.UsageMetrics {
+		if u.UserID == id && u.OrgID != "" {
+			cp := *u // a fresh row: SavedUsageMetrics snapshots share the old one
+			cp.UserID = ""
+			m.UsageMetrics[i] = &cp
+		}
+	}
 	m.UsageMetrics = slices.DeleteFunc(m.UsageMetrics, func(u *interfaces.UsageMetric) bool { return u.UserID == id })
 	m.usageMu.Unlock()
 	m.auditMu.Lock()
@@ -1511,7 +1568,7 @@ func (m *FakeBackend) LoadSecurityAnalytics(_ context.Context, _, _ string, _ bo
 
 // ---- Refresh tokens ----
 
-// StoreRefreshToken records an issued token; a jti already stored is left as it is.
+// StoreRefreshToken records an issued token; a jti already stored is left as it is, and a new one needs its user.
 func (m *FakeBackend) StoreRefreshToken(_ context.Context, jti, userID string, expiresAt time.Time, userAgent, ip string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1519,6 +1576,9 @@ func (m *FakeBackend) StoreRefreshToken(_ context.Context, jti, userID string, e
 		m.refreshTokens = make(map[string]*fakeRefreshToken)
 	}
 	if _, ok := m.refreshTokens[jti]; !ok {
+		if _, ok := m.Users[userID]; !ok {
+			return errForeignKey("refresh_tokens", "user", userID)
+		}
 		m.refreshTokens[jti] = &fakeRefreshToken{info: interfaces.RefreshTokenInfo{
 			ID: jti, UserID: userID, CreatedAt: time.Now().UTC(), ExpiresAt: expiresAt.UTC(), UserAgent: userAgent, IP: ip,
 		}}
@@ -1621,7 +1681,60 @@ func (m *FakeBackend) SaveKnowledgeDocument(_ context.Context, _ string, doc *in
 	if _, ok := m.KnowledgeDocs[doc.ID]; ok {
 		return fmt.Errorf("fake: knowledge document %q already exists", doc.ID)
 	}
+	if _, ok := m.Orgs[doc.OrgID]; !ok {
+		return interfaces.ErrOrgNotFound
+	}
+	m.saveKnowledgeDocumentLocked(doc)
+	return nil
+}
+
+// checkKnowledgeChunksLocked refuses chunks whose document does not exist (doc, when set, is one being written with
+// them) or that name another organisation than their document's (the composite foreign key of migration 0048); a
+// chunk naming none takes its document's.
+func (m *FakeBackend) checkKnowledgeChunksLocked(chunks []interfaces.KnowledgeChunk, doc *interfaces.KnowledgeDocument) error {
+	for _, c := range chunks {
+		d, ok := m.KnowledgeDocs[c.DocID]
+		if doc != nil && c.DocID == doc.ID {
+			d, ok = doc, true
+		}
+		if !ok {
+			return errForeignKey("knowledge_chunks", "knowledge document", c.DocID)
+		}
+		if c.OrgID != "" && c.OrgID != d.OrgID {
+			return errForeignKey("knowledge_chunks", "knowledge document in organisation "+c.OrgID, c.DocID)
+		}
+	}
+	return nil
+}
+
+func (m *FakeBackend) saveKnowledgeDocumentLocked(doc *interfaces.KnowledgeDocument) {
 	m.KnowledgeDocs[doc.ID] = &interfaces.KnowledgeDocument{ID: doc.ID, OrgID: doc.OrgID, Filename: doc.Filename, CreatedAt: time.Now().UTC(), ChunkerVersion: max(doc.ChunkerVersion, 1)}
+}
+
+// SaveKnowledgeDocumentWithChunks checks every row before storing any, as the Postgres transaction rolls back: a
+// document id already stored, or a chunk id already stored or repeated (a primary key there), refuses the whole write.
+func (m *FakeBackend) SaveKnowledgeDocumentWithChunks(_ context.Context, _ string, doc *interfaces.KnowledgeDocument, chunks []interfaces.KnowledgeChunk) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.initKnowledge()
+	if _, ok := m.KnowledgeDocs[doc.ID]; ok {
+		return fmt.Errorf("fake: knowledge document %q already exists", doc.ID)
+	}
+	seen := make(map[string]bool, len(chunks))
+	for _, c := range chunks {
+		if _, ok := m.KnowledgeChunks[c.ID]; ok || seen[c.ID] {
+			return fmt.Errorf("fake: knowledge chunk %q already exists", c.ID)
+		}
+		seen[c.ID] = true
+	}
+	if _, ok := m.Orgs[doc.OrgID]; !ok {
+		return interfaces.ErrOrgNotFound
+	}
+	if err := m.checkKnowledgeChunksLocked(chunks, doc); err != nil {
+		return err
+	}
+	m.saveKnowledgeDocumentLocked(doc)
+	m.saveKnowledgeChunksLocked(chunks)
 	return nil
 }
 func (m *FakeBackend) DeleteKnowledgeDocument(_ context.Context, _ string, orgID, id string) error {
@@ -1705,11 +1818,20 @@ func (m *FakeBackend) ListKnowledgeDocumentIDsByFilename(_ context.Context, orgI
 	return ids, len(docs), nil
 }
 
-// SaveKnowledgeChunks stores the chunks; a chunk without an org takes its document's.
+// SaveKnowledgeChunks stores the chunks, all or none, as the Postgres transaction does; a chunk without an org takes
+// its document's.
 func (m *FakeBackend) SaveKnowledgeChunks(_ context.Context, _ string, chunks []interfaces.KnowledgeChunk) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.initKnowledge()
+	if err := m.checkKnowledgeChunksLocked(chunks, nil); err != nil {
+		return err
+	}
+	m.saveKnowledgeChunksLocked(chunks)
+	return nil
+}
+
+func (m *FakeBackend) saveKnowledgeChunksLocked(chunks []interfaces.KnowledgeChunk) {
 	for _, c := range chunks {
 		if d, ok := m.KnowledgeDocs[c.DocID]; ok && c.OrgID == "" {
 			c.OrgID = d.OrgID
@@ -1717,7 +1839,6 @@ func (m *FakeBackend) SaveKnowledgeChunks(_ context.Context, _ string, chunks []
 		c.Embedding = slices.Clone(c.Embedding)
 		m.KnowledgeChunks[c.ID] = c
 	}
-	return nil
 }
 
 // knowledgeMinSimilarity is the Postgres search's relevance floor (cosine similarity).
@@ -2216,6 +2337,32 @@ func (m *FakeBackend) ConsumeUserToken(_ context.Context, purpose, tokenHash str
 	return t.UserID, nil
 }
 
+// UserTokenValid is ConsumeUserToken's match, read only.
+func (m *FakeBackend) UserTokenValid(_ context.Context, purpose, tokenHash string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.UserTokens[tokenHash]
+	return ok && t.Purpose == purpose && !time.Now().After(t.ExpiresAt), nil
+}
+
+// RedeemPasswordReset consumes the token and writes the password (lifting a lockout) under one lock, as the Postgres
+// statement does in one change.
+func (m *FakeBackend) RedeemPasswordReset(_ context.Context, tokenHash, passwordHash string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.UserTokens[tokenHash]
+	if !ok || t.Purpose != interfaces.TokenPurposePasswordReset || time.Now().After(t.ExpiresAt) {
+		return "", interfaces.ErrNotFound
+	}
+	delete(m.UserTokens, tokenHash)
+	if !m.updateUserLocked(t.UserID, func(u *interfaces.User) {
+		u.Password, u.FailedLoginAttempts, u.LockedUntil, u.UpdatedAt = passwordHash, 0, nil, time.Now().UTC()
+	}) {
+		return "", interfaces.ErrNotFound
+	}
+	return t.UserID, nil
+}
+
 // SetUserEmailVerified marks the user verified (UpdatedAt untouched); an unknown id is not an error.
 func (m *FakeBackend) SetUserEmailVerified(_ context.Context, userID string) error {
 	m.mu.Lock()
@@ -2272,7 +2419,7 @@ func (m *FakeBackend) SavedAuditEvents() []*interfaces.AuditEvent {
 }
 
 // ListAuditEvents mirrors the Postgres list: the filters, newest first with the id breaking ties, and the page
-// bounds (limit <= 0 is 100, capped at 500).
+// bounds (limit <= 0 is 100, capped at 500; the After cursor in place of the offset).
 func (m *FakeBackend) ListAuditEvents(_ context.Context, f interfaces.AuditFilter) ([]*interfaces.AuditEvent, error) {
 	limit := f.Limit
 	switch {
@@ -2283,6 +2430,13 @@ func (m *FakeBackend) ListAuditEvents(_ context.Context, f interfaces.AuditFilte
 	}
 	out := m.matchingAuditEvents(f)
 	offset := min(max(f.Offset, 0), len(out))
+	if a := f.After; a != nil {
+		// The first event after the cursor: older, or as old with a greater id.
+		offset = sort.Search(len(out), func(i int) bool {
+			e := out[i]
+			return e.CreatedAt.Before(a.At) || (e.CreatedAt.Equal(a.At) && e.ID > a.ID)
+		})
+	}
 	return out[offset:min(offset+limit, len(out))], nil
 }
 
@@ -2518,8 +2672,11 @@ func (m *FakeBackend) RevokeShareToken(_ context.Context, flowID, tokenID string
 func policyKey(orgID, id string) string { return orgID + "\x00" + id }
 
 // SavePolicy upserts by (id, org) and writes the stamps back onto p. Like the Postgres row it keeps the name,
-// description, rules, gate severity, waivers and severity budgets.
+// description, rules, gate severity, waivers and severity budgets; it needs an id and its organisation.
 func (m *FakeBackend) SavePolicy(_ context.Context, p *models.Policy) error {
+	if p.ID == "" {
+		return interfaces.ErrPolicyIDRequired
+	}
 	row, err := clonePolicy(&models.Policy{
 		ID: p.ID, OrgID: p.OrgID, Name: p.Name, Description: p.Description, Rules: p.Rules,
 		GateSeverity: p.GateSeverity, Waivers: p.Waivers, MaxErrors: p.MaxErrors, MaxWarnings: p.MaxWarnings, MaxInfo: p.MaxInfo,
@@ -2531,6 +2688,9 @@ func (m *FakeBackend) SavePolicy(_ context.Context, p *models.Policy) error {
 	row.CreatedAt, row.UpdatedAt = now, now
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.Orgs[p.OrgID]; !ok {
+		return interfaces.ErrOrgNotFound
+	}
 	if m.Policies == nil {
 		m.Policies = make(map[string]*models.Policy)
 	}
@@ -2540,6 +2700,24 @@ func (m *FakeBackend) SavePolicy(_ context.Context, p *models.Policy) error {
 	m.Policies[policyKey(p.OrgID, p.ID)] = row
 	p.CreatedAt, p.UpdatedAt = row.CreatedAt, row.UpdatedAt
 	return nil
+}
+
+// RekeyIdlessPolicy moves orgID's policy under the empty id (a row only a test seeds here) to id.
+func (m *FakeBackend) RekeyIdlessPolicy(_ context.Context, orgID, id string) (bool, error) {
+	if id == "" {
+		return false, interfaces.ErrPolicyIDRequired
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.Policies[policyKey(orgID, "")]
+	if !ok {
+		return false, nil
+	}
+	delete(m.Policies, policyKey(orgID, ""))
+	moved := *p
+	moved.ID = id
+	m.Policies[policyKey(orgID, id)] = &moved
+	return true, nil
 }
 
 // clonePolicy copies p deeply: rules and waivers as their JSONB columns hand them back, budgets as new values.
@@ -2785,9 +2963,27 @@ func (m *FakeBackend) SaveOrgCustomRule(_ context.Context, rule *interfaces.OrgC
 	if existing, ok := m.OrgCustomRules[rule.ID]; ok && existing.OrgID != rule.OrgID {
 		return interfaces.ErrNotFound
 	}
+	if _, ok := m.Orgs[rule.OrgID]; !ok {
+		return interfaces.ErrOrgNotFound
+	}
 	cp := *rule
 	m.OrgCustomRules[rule.ID] = &cp
 	return nil
+}
+
+// SetOrgCustomRuleEnabled mirrors the Postgres UPDATE: the flag (and the
+// update time) alone, and another org's row is ErrNotFound.
+func (m *FakeBackend) SetOrgCustomRuleEnabled(_ context.Context, orgID, id string, enabled bool) (*interfaces.OrgCustomRule, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.OrgCustomRules[id]
+	if !ok || r.OrgID != orgID {
+		return nil, interfaces.ErrNotFound
+	}
+	r.Enabled = enabled
+	r.UpdatedAt = time.Now().UTC()
+	cp := *r
+	return &cp, nil
 }
 
 func (m *FakeBackend) DeleteOrgCustomRule(_ context.Context, orgID, id string) error {
@@ -2825,7 +3021,8 @@ func (m *FakeBackend) ListOrgCustomRules(_ context.Context, orgID string, enable
 // org-ownership check mirrors the Postgres upsert's
 // `WHERE org_channels.org_id = EXCLUDED.org_id`: an id existing under a
 // DIFFERENT org is ErrNotFound, never a silent cross-tenant overwrite. An
-// update keeps the row's CreatedAt, as the upsert's SET list does.
+// update keeps the row's CreatedAt, as the upsert's SET list does. A new
+// channel needs its organisation.
 func (m *FakeBackend) SaveOrgChannel(_ context.Context, ch *interfaces.OrgChannel) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2839,6 +3036,8 @@ func (m *FakeBackend) SaveOrgChannel(_ context.Context, ch *interfaces.OrgChanne
 			return interfaces.ErrNotFound
 		}
 		cp.CreatedAt = existing.CreatedAt
+	} else if _, ok := m.Orgs[ch.OrgID]; !ok {
+		return interfaces.ErrOrgNotFound
 	}
 	m.OrgChannels[ch.ID] = cp
 	return nil

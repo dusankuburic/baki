@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sync/singleflight"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/apperr"
 	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/analyzer"
@@ -761,11 +762,21 @@ func (s *FlowService) resolveSearchCandidate(ctx context.Context, id string) (do
 	return doc, true, err
 }
 
+// errQueryTooShort refuses a library search without a run of storageif.MinSearchTermRunes letters or digits: the
+// content match's trigram index serves no such term ("ab", "---"), so it would read every tenant's flow text.
+var errQueryTooShort = apperr.Invalid("QUERY_TOO_SHORT",
+	fmt.Sprintf("a library search needs at least %d letters or digits in a row", storageif.MinSearchTermRunes)).
+	WithDetails(map[string]any{"minLength": storageif.MinSearchTermRunes})
+
 // SearchLibrary queries every RLS-accessible flow, merging per-flow hits (clamped, then globally capped).
 func (s *FlowService) SearchLibrary(ctx context.Context, userID string, query models.SearchQuery) (*models.SearchResults, error) {
 	if s.storage == nil || s.docProvider == nil {
 		// Local/no storage: HTTP answers 503 before here; this keeps direct callers nil-safe.
 		return &models.SearchResults{Query: query, Results: []models.SearchResult{}}, nil
+	}
+	// Refused here, not only by the store, so a backend that scans instead answers the same.
+	if storageif.ShortSearchTerm(query.Text) {
+		return nil, errQueryTooShort.Wrap(storageif.ErrQueryTooShort)
 	}
 	// Content pushdown (R3-5a): matches come from the index so a search sees the whole library; unsupported backends scan.
 	var flows []*storageif.FlowDocument
@@ -778,6 +789,9 @@ func (s *FlowService) SearchLibrary(ctx context.Context, userID string, query mo
 		// Pushdown matched nothing: the library genuinely has no content hit.
 		recordLibrarySearch("pushdown")
 		return &models.SearchResults{Query: query, Results: []models.SearchResult{}, TotalCount: 0}, nil
+	case errors.Is(cerr, storageif.ErrQueryTooShort):
+		// The store's database draws no trigram from it (its ctype or Unicode tables count fewer word characters).
+		return nil, errQueryTooShort.Wrap(cerr)
 	default:
 		if !errors.Is(cerr, storageif.ErrContentSearchUnsupported) {
 			// A real pushdown error degrades to scan rather than failing the search.
@@ -898,8 +912,14 @@ func (s *FlowService) ReadSourceFiles(doc *models.FlowDocument, filenames []stri
 	dir := filepath.Dir(doc.FilePath)
 
 	for _, name := range filenames {
-		// Reject empty/null-byte names before touching the filesystem (matches the other path guards).
+		// Reject empty/null-byte names before touching the filesystem (matches the other path guards),
+		// and confine each name to a single component of the opened folder — today the cloud provider
+		// strips FilePath so this never runs server-side, but the safety must not rest on an
+		// invariant two call-sites away (PatchFlow applies the same safeConvComponent guard).
 		if err := validateUserPath(name); err != nil {
+			continue
+		}
+		if !safeConvComponent(name) {
 			continue
 		}
 		path := filepath.Join(dir, name)

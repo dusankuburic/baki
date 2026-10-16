@@ -510,7 +510,7 @@ F-054 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactio
 F-055 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#13 sf=Framework_SetTransactionStatus fp=unused-variable:a3abf8717cf388a4
 F-056 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#16 sf=Framework_SetTransactionStatus fp=unused-variable:d010bdbec60cdaab
 F-057 info/low unused-variable [Style] fix=remove-block @Framework_SetTransactionStatus#17 sf=Framework_SetTransactionStatus fp=unused-variable:ce3fcb6f7bd84df7
-F-058 warning/high parse-error [-] fix=- @- sf=Main fp=parse-error:
+F-058 warning/high parse-error [Syntax] fix=- @- sf=Main fp=parse-error:
     title: Parse error (line 24)
     desc: ELSE outside IF
     meta: {"column":1,"line":24,"snippet":"ELSE"}

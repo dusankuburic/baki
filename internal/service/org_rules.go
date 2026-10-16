@@ -180,6 +180,23 @@ var (
 //
 // A config the strict check refuses is its *analyzer.CustomRuleError, which the API maps to the field.
 func (s *OrgRuleService) SaveRule(ctx context.Context, orgID string, req OrgRuleSave) (OrgRule, error) {
+	if req.Config == nil {
+		if req.RowID == "" || req.Enabled == nil {
+			return OrgRule{}, errOrgRuleToggle
+		}
+		// The flag alone: writing back the row as read would restore the older config over a full save landing
+		// in between.
+		row, err := s.rules.SetOrgCustomRuleEnabled(ctx, orgID, req.RowID, *req.Enabled)
+		if errors.Is(err, storageif.ErrNotFound) {
+			return OrgRule{}, errOrgRuleMissing
+		}
+		if err != nil {
+			return OrgRule{}, err
+		}
+		s.bus.Publish(ctx, events.SettingsChanged{Scope: events.OrgSettings, ID: orgID})
+		return ReadOrgRule(row), nil
+	}
+
 	rows, err := s.rules.ListOrgCustomRules(ctx, orgID, false)
 	if err != nil {
 		return OrgRule{}, err
@@ -191,21 +208,6 @@ func (s *OrgRuleService) SaveRule(ctx context.Context, orgID string, req OrgRule
 			}
 		}
 		return nil
-	}
-	if req.Config == nil {
-		if req.RowID == "" || req.Enabled == nil {
-			return OrgRule{}, errOrgRuleToggle
-		}
-		row := find(func(r *storageif.OrgCustomRule) bool { return r.ID == req.RowID })
-		if row == nil {
-			return OrgRule{}, errOrgRuleMissing
-		}
-		toggled := *row
-		toggled.Enabled = *req.Enabled
-		if err := s.save(ctx, &toggled); err != nil {
-			return OrgRule{}, err
-		}
-		return ReadOrgRule(&toggled), nil
 	}
 
 	cfg := *req.Config

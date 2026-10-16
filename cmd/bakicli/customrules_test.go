@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"pad-core/analyzer"
 )
 
 // setFlow trips a SET-matching custom rule and nothing at error severity.
@@ -98,6 +100,80 @@ func TestCLI_CustomRulesTooNewExit2(t *testing.T) {
 	_, stderr, code = runBakicli(t, "-config", "", "-custom-rules", negative, flow)
 	if code != 0 || !strings.Contains(stderr, `(rule "neg") skipped`) || strings.Contains(stderr, "newer bakicli") {
 		t.Errorf("negative schemaVersion: exit %d stderr=%s", code, stderr)
+	}
+}
+
+// TestCLI_InlineRetypedNewerRule: a .bakirc.json whose inline rule is a newer
+// release's and gives a field another JSON type is read like the same rule in
+// a -custom-rules file: that rule needs a newer bakicli (exit 2, ADR 0015) and
+// the rest of the config is still read and checked. The config used to fail as
+// a whole ("invalid config JSON") without naming the rule. A JSON type error in
+// a rule of this version still fails the config as a whole.
+func TestCLI_InlineRetypedNewerRule(t *testing.T) {
+	flow := writeTempFlow(t, setFlow)
+	cfg := writeConfig(t, t.TempDir(), map[string]any{"failOn": "error", "customRulesInline": []map[string]any{
+		{"id": "ok", "name": "x", "rawTypeMatch": "^SET$", "owner": "team-a"},
+		{"schemaVersion": 2, "id": "v2", "nameMatch": []string{"^Set"}},
+	}})
+	stdout, stderr, code := runBakicli(t, "-config", cfg, "-format", "sarif", flow)
+	if code != 2 || stdout != "" {
+		t.Errorf("exit %d, stdout %d bytes, want 2 and no report (stderr=%s)", code, len(stdout), stderr)
+	}
+	for _, want := range []string{`entry 1 (rule "v2")`, newerBakicliHint, `entry 0 (rule "ok"): custom rule "ok": unknown field "owner" ignored`,
+		"1 custom rule(s) need a newer bakicli"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, "invalid config JSON") {
+		t.Errorf("the config failed as a whole:\n%s", stderr)
+	}
+	for _, sub := range [][]string{{"fix", "-config", cfg, flow}, {"suppressions", "-config", cfg, flow}} {
+		if _, stderr, code := runBakicli(t, sub...); code != 2 || !strings.Contains(stderr, newerBakicliHint) {
+			t.Errorf("%s: exit %d, want 2 naming the rule (stderr=%s)", sub[0], code, stderr)
+		}
+	}
+
+	typed := writeConfig(t, t.TempDir(), map[string]any{"customRulesInline": []map[string]any{
+		{"id": "ok", "name": "x", "rawTypeMatch": "^SET$"},
+		{"id": "sev", "name": "y", "severity": 3, "rawTypeMatch": "^SET$"},
+	}})
+	_, stderr, code = runBakicli(t, "-config", typed, flow)
+	if code != 2 || !strings.Contains(stderr, "invalid config JSON") || !strings.Contains(stderr, "customRulesInline.severity") ||
+		strings.Contains(stderr, newerBakicliHint) {
+		t.Errorf("a type error in a version-1 rule: exit %d stderr=%s", code, stderr)
+	}
+}
+
+// TestInlineRules_FailsAsBefore: apart from a newer release's rule, a config
+// whose customRulesInline does not decode fails with the error it had when the
+// field was a []CustomRuleConfig.
+func TestInlineRules_FailsAsBefore(t *testing.T) {
+	type oldConfig struct {
+		FailOn            string                      `json:"failOn"`
+		CustomRulesInline []analyzer.CustomRuleConfig `json:"customRulesInline"`
+	}
+	type newConfig struct {
+		FailOn            string      `json:"failOn"`
+		CustomRulesInline inlineRules `json:"customRulesInline"`
+	}
+	for _, doc := range []string{
+		`{"customRulesInline": {"id": "x"}}`,
+		`{"customRulesInline": ["x"]}`,
+		`{"customRulesInline": [{"id": "ok"}, {"id": "sev", "severity": 3}]}`,
+		`{"customRulesInline": [{"id": "neg", "schemaVersion": -1, "nameMatch": ["^Set"]}]}`,
+		`{"failOn": 1, "customRulesInline": [{"id": "ok"}]}`,
+	} {
+		var o oldConfig
+		var n newConfig
+		oerr, nerr := json.Unmarshal([]byte(doc), &o), json.Unmarshal([]byte(doc), &n)
+		if oerr == nil || nerr == nil || strings.ReplaceAll(nerr.Error(), "newConfig", "oldConfig") != oerr.Error() {
+			t.Errorf("%s:\n new: %v\n old: %v", doc, nerr, oerr)
+		}
+	}
+	var n newConfig
+	if err := json.Unmarshal([]byte(`{"customRulesInline": null}`), &n); err != nil || n.CustomRulesInline != nil {
+		t.Errorf("null: %v, %v", n.CustomRulesInline, err)
 	}
 }
 

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -113,6 +117,38 @@ func TestLoadFolder_SkipsDotDirectories(t *testing.T) {
 	got := loadedFiles(t, dir)
 	if len(got) != 1 {
 		t.Errorf("walked into a dot-directory: %v", got)
+	}
+}
+
+// TestCLI_SymlinkedRootFolder: a folder named through a symlink is analyzed
+// (it listed nothing: "no .txt or .pad files found", exit 2), and fix and watch
+// get its files; a symlink inside it is still skipped.
+func TestCLI_SymlinkedRootFolder(t *testing.T) {
+	target := t.TempDir()
+	writeFlow(t, filepath.Join(target, "sub", "Real.txt"))
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	writeFlow(t, outside)
+	link := filepath.Join(t.TempDir(), "flows")
+	for _, l := range [][2]string{{target, link}, {outside, filepath.Join(target, "leak.txt")}} {
+		if err := os.Symlink(l[0], l[1]); err != nil {
+			const errPrivilegeNotHeld = syscall.Errno(1314) // ERROR_PRIVILEGE_NOT_HELD
+			if runtime.GOOS == "windows" && errors.Is(err, errPrivilegeNotHeld) {
+				t.Skipf("this process may not create symlinks (enable Developer Mode or run elevated): %v", err)
+			}
+			t.Fatal(err)
+		}
+	}
+
+	if got := loadedFiles(t, link); !slices.Equal(got, []string{"sub/Real.txt"}) {
+		t.Errorf("loadFolder through the link read %v, want sub/Real.txt", got)
+	}
+	if files, err := expandFixTargets(link); err != nil || !slices.Equal(files, []string{filepath.Join(link, "sub", "Real.txt")}) {
+		t.Errorf("expandFixTargets through the link = %v, %v", files, err)
+	}
+	// miniFlow's hard-coded URL is an info finding.
+	stdout, stderr, code := runBakicli(t, "-config", "", "-format", "json", "-fail-on", "error", link)
+	if code != 0 || !strings.Contains(stdout, `"ruleId": "hardcoded-url"`) {
+		t.Errorf("bakicli on a symlinked folder: exit %d\nstdout: %.300s\nstderr: %s", code, stdout, stderr)
 	}
 }
 

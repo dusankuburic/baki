@@ -9,6 +9,9 @@ type PagerProps = {
   count: number
   total?: number
   hasMore?: boolean
+  // Next stays disabled whatever the count says: a page still loading or failed (its next page's cursor is not known),
+  // or a server saying no page follows that it can reach.
+  nextDisabled?: boolean
   onPageChange: (page: number) => void
   pageSizeOptions?: number[]
   onPageSizeChange?: (size: number) => void
@@ -22,6 +25,7 @@ export default function Pager({
   count,
   total,
   hasMore = false,
+  nextDisabled = false,
   onPageChange,
   pageSizeOptions,
   onPageSizeChange,
@@ -79,7 +83,7 @@ export default function Pager({
           size="sm"
           label={t('pager.next')}
           onClick={() => onPageChange(page + 1)}
-          disabled={atEnd}
+          disabled={atEnd || nextDisabled}
         />
       </span>
     </nav>

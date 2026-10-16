@@ -92,6 +92,8 @@ func (s *OrgService) Create(ctx context.Context, name, ownerID string) (*interfa
 	if err := s.store.SaveOrg(ctx, org); err != nil {
 		return nil, err
 	}
+	// The owner joins like any other member: subscribers see every membership through OrgMemberAdded.
+	s.memberChanged(ctx, org.ID, ownerID, auth.RoleAdmin, events.OrgMemberAdded)
 	return org, nil
 }
 

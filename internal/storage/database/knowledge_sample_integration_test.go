@@ -35,6 +35,10 @@ func TestSampleKnowledgeChunkEmbeddings_Postgres(t *testing.T) {
 		}
 	})
 	for doc, org := range docs {
+		// A document needs its organisation (v48).
+		if _, err := db.ExecContext(ctx, `INSERT INTO organisations (id, name, owner_id) VALUES ($1, $1, '') ON CONFLICT (id) DO NOTHING`, org); err != nil {
+			t.Fatalf("seed organisation: %v", err)
+		}
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO knowledge_documents (id, org_id, filename) VALUES ($1, $2, 'sample.txt')
 			ON CONFLICT (id) DO NOTHING`, doc, org); err != nil {

@@ -24,14 +24,14 @@ func TestSystemService_SettingsChangedAudiences(t *testing.T) {
 		Orgs:  map[string]*storageif.Organisation{"org-a": {ID: "org-a"}},
 	}
 	cloud := NewSystemService(newTestSettingsStore(t), nil, n, backend, config.ModeCloud, nil, nil)
-	if err := cloud.UpdateUserSettings(context.Background(), "user-9", *models.DefaultSettings()); err != nil {
+	if err := cloud.UpdateUserSettings(context.Background(), "user-9", *models.DefaultSettings(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := cloud.UpdateOrgSettings(context.Background(), "org-a", *models.DefaultSettings(), OrgSettingsWrite{}); err != nil {
 		t.Fatal(err)
 	}
 	desktop := NewSystemService(newTestSettingsStore(t), nil, n, nil, config.ModeLocal, nil, nil)
-	if err := desktop.UpdateUserSettings(context.Background(), "local", *models.DefaultSettings()); err != nil {
+	if err := desktop.UpdateUserSettings(context.Background(), "local", *models.DefaultSettings(), nil); err != nil {
 		t.Fatal(err)
 	}
 	want := []testutil.Emitted{

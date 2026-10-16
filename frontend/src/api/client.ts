@@ -281,6 +281,7 @@ export const GET_CACHE_MAX_BODY_CHARS = 512 * 1024
 interface ParsedBody {
   value: unknown
   size: number
+  headers?: Headers
 }
 
 const getInFlight = new Map<string, Promise<ParsedBody>>()
@@ -296,6 +297,17 @@ export function clearRequestCache(): void {
   cacheEpoch++
   getCache.clear()
   getInFlight.clear()
+}
+
+// Bumped by every answered write: a GET in flight across one must not refill the cache with what the write may
+// have replaced. Any write counts, not only one to the GET's path: a skipped fill costs one refetch, while a
+// per-path count would keep an entry for every path ever written.
+let writeEpoch = 0
+
+function invalidateCachedGet(path: string): void {
+  writeEpoch++
+  getCache.delete(path)
+  getInFlight.delete(path)
 }
 
 function cloneCached<T>(value: T): T {
@@ -362,14 +374,16 @@ async function doRequest(path: string, opts: RequestOptions): Promise<ParsedBody
   await ensureFreshToken(path)
 
   const response = await fetchWithRetry(path, body, method, timeoutMs, opts.signal)
+  // A write answered: a cached read of the same path (an org settings save, then its re-read) is stale.
+  if (!READ_METHODS.has(method.toUpperCase())) invalidateCachedGet(path)
 
   if (!response.ok) throw await errorFor(response)
 
-  if (response.status === 204) return {value: undefined, size: 0}
+  if (response.status === 204) return {value: undefined, size: 0, headers: response.headers}
 
   try {
     const text = await response.text()
-    return {value: JSON.parse(text), size: text.length}
+    return {value: JSON.parse(text), size: text.length, headers: response.headers}
   } catch {
     throw new Error('Server returned a non-JSON response')
   }
@@ -384,6 +398,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
 
   const key = path
   const epoch = cacheEpoch
+  const writes = writeEpoch
   const cached = getCache.get(key)
   if (cached) {
     if (cached.expiresAt > Date.now()) return cloneCached(cached.value) as T
@@ -401,7 +416,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
 
   const promise = doRequest(path, opts)
     .then(res => {
-      if (epoch !== cacheEpoch || res.size > GET_CACHE_MAX_BODY_CHARS) return res
+      if (epoch !== cacheEpoch || writes !== writeEpoch || res.size > GET_CACHE_MAX_BODY_CHARS) return res
       evictExpiredCache()
       getCache.set(key, {value: cloneCached(res.value), expiresAt: Date.now() + GET_CACHE_TTL_MS})
       return res
@@ -420,6 +435,21 @@ export async function requestValidated<T>(path: string, schema: z.ZodType<T>, op
     throw new ResponseValidationError(path, result.error)
   }
   return result.data
+}
+
+/** requestValidated for a read whose answer also rides response headers (a bare-array list's next cursor): never
+ * cached or shared, it hands the headers back beside the body. */
+export async function requestValidatedWithHeaders<T>(
+  path: string,
+  schema: z.ZodType<T>,
+  opts: RequestOptions = {},
+): Promise<{value: T; headers: Headers}> {
+  const res = await doRequest(path, opts)
+  const result = schema.safeParse(res.value)
+  if (!result.success) {
+    throw new ResponseValidationError(path, result.error)
+  }
+  return {value: result.data, headers: res.headers ?? new Headers()}
 }
 
 export interface RawRequestOptions {

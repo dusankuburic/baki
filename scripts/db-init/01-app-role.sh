@@ -14,8 +14,10 @@
 # rely on it as defense-in-depth behind an explicit WHERE clause. When it is
 # off, any gap in the Go layer is the whole story rather than half of it.
 #
-# The app logs a warning at startup when it detects a bypassing role
-# (warnIfRLSBypassed in internal/storage/database/postgres_storage.go).
+# The app refuses to start in cloud mode when it detects a bypassing role, and
+# logs a warning in local mode (checkRLSRole in
+# internal/storage/database/postgres_storage.go; PAD_DB_ALLOW_BYPASSRLS=true
+# turns the refusal into the warning).
 #
 # WHY THIS IS A SHELL SCRIPT AND NOT A .sql FILE
 #
@@ -98,8 +100,8 @@ echo "db-init: created unprivileged role baki_app and handed it ownership of $PO
 #
 #   SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'baki_app';
 #
-# both must be false, and the app's startup log must no longer warn about RLS
-# being bypassed.
+# both must be false. Until they are, a cloud-mode app refuses to start (or,
+# with PAD_DB_ALLOW_BYPASSRLS=true, warns about RLS being bypassed).
 #
 # A deployment already initialised from the OLD .sql file has the published
 # password 'baki_app'. Rotate it:

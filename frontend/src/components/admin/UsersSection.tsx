@@ -193,6 +193,7 @@ export function UsersSection({stats}: {stats: UserStats | null}) {
               pageSize={list.pageSize}
               count={data.items.length}
               total={data.total}
+              nextDisabled={isLoading || isRefetching || error !== null || data.hasMore === false}
               onPageChange={setUsersPage}
               pageSizeOptions={USERS_PAGE_SIZES}
               onPageSizeChange={setUsersPageSize}

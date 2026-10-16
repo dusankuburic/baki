@@ -194,16 +194,25 @@ func TestCIWebhook_ValidSignature_MissingFlowID_Returns400(t *testing.T) {
 	}
 }
 
-// An unknown format is refused instead of falling back to the summary; bakicli gates every value but sarif, so no
-// release of it sends one expecting a verdict.
+// An unknown format is refused instead of falling back to the summary, with a code a pipeline can switch on and the
+// formats it may send; bakicli gates every value but sarif, so no release of it sends one expecting a verdict.
 func TestCIWebhook_UnknownFormat_Returns400(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	setCIGlobalSecret(t, rt, "topsecret")
 	seedCloudFlowWithSource(t, rt, "flow-ci-format", "alice", rawSampleFlow)
 	for _, format := range []string{"json", "junit", "Summary2"} {
 		rr := serveCI(rt, ciCall(t, "topsecret", "", map[string]string{"flowId": "flow-ci-format", "format": format}))
-		if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "unknown format") {
-			t.Errorf("format %q: %d %s, want 400", format, rr.Code, rr.Body.String())
+		var env struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Details struct {
+				Formats []string `json:"formats"`
+			} `json:"details"`
+		}
+		_ = json.Unmarshal(rr.Body.Bytes(), &env)
+		if rr.Code != http.StatusBadRequest || env.Code != "UNKNOWN_FORMAT" || !strings.Contains(env.Message, "unknown format") ||
+			strings.Join(env.Details.Formats, ",") != "summary,report,sarif" {
+			t.Errorf("format %q: %d %s, want 400 UNKNOWN_FORMAT listing summary, report and sarif", format, rr.Code, rr.Body.String())
 		}
 	}
 	for _, format := range []string{"", "SUMMARY", " report "} {

@@ -34,7 +34,8 @@ func readDeployFile(t *testing.T, rel string) string {
 // TestDeployPool_DerivedFromTheServerCap evaluates main.bicep's pool derivation: with the server's
 // max_connections known, each replica gets its share of what the reserve leaves, counting the rolling deploy's
 // surge (the new revision's minReplicas, at least one, beside the old revision's maxReplicas), at least 1 (the app
-// reads 0 as "unset" and opens its default) and at most the app default.
+// reads 0 as "unset" and opens its default; never below 3 in practice: schema_upkeep and the knowledge index build pin
+// two connections and skip a smaller pool, warning at boot) and at most the app default.
 func TestDeployPool_DerivedFromTheServerCap(t *testing.T) {
 	bicep := readDeployFile(t, "infra/main.bicep")
 	if !regexp.MustCompile(`(?m)^param dbServerMaxConnections int = 0$`).MatchString(bicep) {

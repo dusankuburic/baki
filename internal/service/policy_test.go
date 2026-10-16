@@ -23,6 +23,17 @@ func (s *policyStoreStub) SavePolicy(_ context.Context, p *models.Policy) error 
 	return nil
 }
 
+func (s *policyStoreStub) RekeyIdlessPolicy(_ context.Context, orgID, id string) (bool, error) {
+	p, ok := s.byKey[orgID+"/"]
+	if !ok {
+		return false, s.err
+	}
+	delete(s.byKey, orgID+"/")
+	p.ID = id
+	s.byKey[orgID+"/"+id] = p
+	return true, nil
+}
+
 func (s *policyStoreStub) GetPolicy(_ context.Context, orgID, id string) (*models.Policy, error) {
 	if p, ok := s.byKey[orgID+"/"+id]; ok {
 		return p, nil
@@ -75,5 +86,30 @@ func TestPolicyService_OrgScopedCRUD(t *testing.T) {
 	store.err = errors.New("db down")
 	if err := svc.Save(ctx, &models.Policy{ID: "p3", OrgID: "org-a"}); !errors.Is(err, store.err) {
 		t.Errorf("Save error = %v, want the store's", err)
+	}
+}
+
+// TestPolicyService_SaveGivesAnIdlessPolicyAnID: a policy saved without an id gets a generated one, written back
+// onto it, so two id-less policies of one organisation no longer overwrite each other; an id the caller gave is kept.
+func TestPolicyService_SaveGivesAnIdlessPolicyAnID(t *testing.T) {
+	store := &policyStoreStub{byKey: map[string]*models.Policy{}}
+	svc := NewPolicyService(store)
+	ctx := context.Background()
+
+	a, b := &models.Policy{OrgID: "org-a", Name: "a"}, &models.Policy{OrgID: "org-a", Name: "b"}
+	for _, p := range []*models.Policy{a, b} {
+		if err := svc.Save(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.ID == "" || b.ID == "" || a.ID == b.ID {
+		t.Fatalf("ids = %q, %q; want two distinct generated ids", a.ID, b.ID)
+	}
+	if got, _ := svc.List(ctx, "org-a"); len(got) != 2 {
+		t.Errorf("List = %d policies, want both", len(got))
+	}
+	named := &models.Policy{ID: "mine", OrgID: "org-a", Name: "c"}
+	if err := svc.Save(ctx, named); err != nil || named.ID != "mine" {
+		t.Errorf("an explicit id: %q, %v; want it kept", named.ID, err)
 	}
 }

@@ -168,3 +168,33 @@ func TestCachedProxySet_Bounded(t *testing.T) {
 		t.Errorf("cache entries = %d, want the cap %d", entries, maxProxySetCacheEntries)
 	}
 }
+
+// TestPeerIsTrusted gates every forwarded-header decision (X-Forwarded-For,
+// X-Forwarded-Proto): only a configured proxy's word counts.
+func TestPeerIsTrusted(t *testing.T) {
+	trusted := []string{"10.0.0.0/8"}
+
+	direct := httptest.NewRequest(http.MethodGet, "/", nil)
+	direct.RemoteAddr = "10.0.0.1:443"
+	if !PeerIsTrusted(direct, trusted) {
+		t.Error("peer inside a trusted CIDR should be trusted")
+	}
+
+	foreign := httptest.NewRequest(http.MethodGet, "/", nil)
+	foreign.RemoteAddr = "203.0.113.5:12345"
+	if PeerIsTrusted(foreign, trusted) {
+		t.Error("outside peer must not be trusted, whatever headers it sends")
+	}
+
+	loopback := httptest.NewRequest(http.MethodGet, "/", nil)
+	loopback.RemoteAddr = "127.0.0.1:9999"
+	if PeerIsTrusted(loopback, trusted) {
+		t.Error("loopback is not implicitly trusted (desktop serves HTTP locally)")
+	}
+
+	noList := httptest.NewRequest(http.MethodGet, "/", nil)
+	noList.RemoteAddr = "10.0.0.1:443"
+	if PeerIsTrusted(noList, nil) {
+		t.Error("empty trusted-proxy list must trust nobody")
+	}
+}

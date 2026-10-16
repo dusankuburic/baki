@@ -162,6 +162,13 @@ services:
       # initialised from the old 01-app-role.sql has the published password and
       # needs an explicit ALTER ROLE — see scripts/db-init/01-app-role.sh.
       - BAKI_APP_PASSWORD=${BAKI_APP_PASSWORD:?BAKI_APP_PASSWORD must be set}
+      # The superuser password gets the same treatment: the base file defaults
+      # it to the repo-published "postgres", which would leave a known-password
+      # superuser one `docker exec` away from full database control. Not
+      # published and never used by the app, but a production volume must not
+      # boot with it. Also only consumed on FIRST init of an empty volume —
+      # existing volumes keep whatever they were initialised with.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (the superuser password; the app itself uses BAKI_APP_PASSWORD)}
     # Not published. The base file binds 127.0.0.1 for local psql access; in
     # production the database is reachable only from the compose network.
     ports: !reset []

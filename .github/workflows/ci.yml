@@ -18,6 +18,7 @@ jobs:
   go-test:
     name: Go Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Postgres backs the storage contract / RLS / DB+blob E2E tests (they skip
     # when DATABASE_URL is unset). A service container is fine here — unlike
     # Azurite it needs no command override.
@@ -102,7 +103,7 @@ jobs:
         env:
           AZURITE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
           DATABASE_URL: "postgres://baki_app:baki_app@localhost:5432/baki_app?sslmode=disable"
-        run: go test -race -count=1 -coverprofile=coverage.out ./... ./core/...
+        run: go test -race -count=1 -timeout 30m -coverprofile=coverage.out ./... ./core/...
       - name: Upload coverage
         if: github.event_name == 'push'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4

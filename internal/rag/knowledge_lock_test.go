@@ -124,6 +124,7 @@ func (f *erroringEmbedder) Embed(context.Context, []string) ([][]float32, error)
 // existing busy (409).
 func TestKnowledgeLock_UploadOnOneReplicaRefusesBothOnAnother(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	leaser := newMemLeaser()
 	release := make(chan struct{})
 	blocked := &blockingEmbedder{release: release}
@@ -156,6 +157,7 @@ func TestKnowledgeLock_UploadOnOneReplicaRefusesBothOnAnother(t *testing.T) {
 // TestKnowledgeLock_ReindexOnOneReplicaRefusesUploadOnAnother: the re-index's whole page loop holds the lease.
 func TestKnowledgeLock_ReindexOnOneReplicaRefusesUploadOnAnother(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	seedManyChunks(store, 1, 3)
 	leaser := newMemLeaser()
 	release := make(chan struct{})
@@ -188,6 +190,7 @@ func TestKnowledgeLock_LeaseReleasedOnEveryExit(t *testing.T) {
 	ctx := context.Background()
 	t.Run("success", func(t *testing.T) {
 		store := &testutil.FakeBackend{EmbeddingDim: 1}
+		store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 		leaser := newMemLeaser()
 		svc := replica(store, leaser, &namedEmbedder{identity: "A", vec: []float32{1}})
 		if err := svc.AddDocument(ctx, "scope", "org-1", "a.md", "text"); err != nil {
@@ -202,6 +205,7 @@ func TestKnowledgeLock_LeaseReleasedOnEveryExit(t *testing.T) {
 	})
 	t.Run("embedding fails", func(t *testing.T) {
 		store := &testutil.FakeBackend{EmbeddingDim: 1}
+		store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 		leaser := newMemLeaser()
 		svc := replica(store, leaser, &erroringEmbedder{err: ai.ErrProviderDown})
 		if err := svc.AddDocument(ctx, "scope", "org-1", "a.md", "text"); err == nil {
@@ -213,6 +217,7 @@ func TestKnowledgeLock_LeaseReleasedOnEveryExit(t *testing.T) {
 	})
 	t.Run("model switch refused", func(t *testing.T) {
 		store := &testutil.FakeBackend{EmbeddingDim: 1}
+		store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 		seedIdentityChunks(store, []float32{1}, "A", "A")
 		leaser := newMemLeaser()
 		svc := replica(store, leaser, &namedEmbedder{identity: "B", vec: []float32{0}})
@@ -225,6 +230,7 @@ func TestKnowledgeLock_LeaseReleasedOnEveryExit(t *testing.T) {
 	})
 	t.Run("context cancelled", func(t *testing.T) {
 		store := &testutil.FakeBackend{EmbeddingDim: 1}
+		store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 		leaser := newMemLeaser()
 		blocked := &blockingEmbedder{release: make(chan struct{})}
 		svc := replica(store, leaser, blocked)

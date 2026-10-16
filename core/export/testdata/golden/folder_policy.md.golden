@@ -27,7 +27,7 @@
 
 This file/folder operation can fail due to missing files, permission issues, or file locks but has no error handler.
 
-> **Suggestion:** Wrap this action in an 'On Block Error' handler to manage missing files, permission errors, and file lock issues gracefully.
+> **Suggestion:** Wrap this action in an &#39;On Block Error&#39; handler to manage missing files, permission errors, and file lock issues gracefully.
 
 ### 2. Network operation without timeout
 
@@ -38,7 +38,7 @@ This file/folder operation can fail due to missing files, permission issues, or 
 
 This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
 
-> **Suggestion:** Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.
+> **Suggestion:** Set an explicit timeout value in the action&#39;s properties. For web automation, use &#39;Wait for element&#39; with a timeout instead of relying on default behavior.
 
 ### 3. Network operation without timeout
 
@@ -49,7 +49,7 @@ This network/UI automation action has no explicit timeout configured. If the tar
 
 This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
 
-> **Suggestion:** Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.
+> **Suggestion:** Set an explicit timeout value in the action&#39;s properties. For web automation, use &#39;Wait for element&#39; with a timeout instead of relying on default behavior.
 
 ### 4. Network operation without timeout
 
@@ -60,7 +60,7 @@ This network/UI automation action has no explicit timeout configured. If the tar
 
 This network/UI automation action has no explicit timeout configured. If the target is unresponsive, the flow will hang indefinitely.
 
-> **Suggestion:** Set an explicit timeout value in the action's properties. For web automation, use 'Wait for element' with a timeout instead of relying on default behavior.
+> **Suggestion:** Set an explicit timeout value in the action&#39;s properties. For web automation, use &#39;Wait for element&#39; with a timeout instead of relying on default behavior.
 
 ### 5. Resource opened but never closed
 
@@ -71,7 +71,7 @@ This network/UI automation action has no explicit timeout configured. If the tar
 
 This action opens a Excel instance (stored in %ExcelInstance%) but no matching close action was found in the flow.
 
-> **Suggestion:** Add a 'Excel.Close' action to release the resource. Place it inside an 'On Block Error' handler to guarantee cleanup even on failure.
+> **Suggestion:** Add a &#39;Excel.Close&#39; action to release the resource. Place it inside an &#39;On Block Error&#39; handler to guarantee cleanup even on failure.
 
 ### 6. Resource opened but never closed
 
@@ -82,7 +82,7 @@ This action opens a Excel instance (stored in %ExcelInstance%) but no matching c
 
 This action opens a database connection (stored in %SQLConnection%) but no matching close action was found in the flow.
 
-> **Suggestion:** Add a 'Database.Close' action to release the resource. Place it inside an 'On Block Error' handler to guarantee cleanup even on failure.
+> **Suggestion:** Add a &#39;Database.Close&#39; action to release the resource. Place it inside an &#39;On Block Error&#39; handler to guarantee cleanup even on failure.
 
 ### 7. UI automation in tight loop
 
@@ -93,7 +93,7 @@ This action opens a database connection (stored in %SQLConnection%) but no match
 
 This loop contains UI/web automation actions without any delay, which can overwhelm the target application.
 
-> **Suggestion:** Add a 'Wait' or 'Delay' action inside the loop to reduce load on the target application.
+> **Suggestion:** Add a &#39;Wait&#39; or &#39;Delay&#39; action inside the loop to reduce load on the target application.
 
 ### 8. SQL injection risk
 
@@ -179,7 +179,7 @@ This action commonly fails but has no error handler in its surrounding scope.
 - **Block:** b-003
 - **Subflow:** sf-1
 
-Variable 'ExcelData' is used here but doesn't seem to be assigned anywhere in the flow.
+Variable &#39;ExcelData&#39; is used here but doesn&#39;t seem to be assigned anywhere in the flow.
 
 > **Suggestion:** Ensure the variable is initialized with a SET action or as an output of another action.
 
@@ -190,7 +190,7 @@ Variable 'ExcelData' is used here but doesn't seem to be assigned anywhere in th
 - **Block:** b-003
 - **Subflow:** sf-1
 
-Variable 'CurrentRow' is used here but doesn't seem to be assigned anywhere in the flow.
+Variable &#39;CurrentRow&#39; is used here but doesn&#39;t seem to be assigned anywhere in the flow.
 
 > **Suggestion:** Ensure the variable is initialized with a SET action or as an output of another action.
 
@@ -201,7 +201,7 @@ Variable 'CurrentRow' is used here but doesn't seem to be assigned anywhere in t
 - **Block:** b-004
 - **Subflow:** sf-1
 
-Variable 'Browser' is used here but doesn't seem to be assigned anywhere in the flow.
+Variable &#39;Browser&#39; is used here but doesn&#39;t seem to be assigned anywhere in the flow.
 
 > **Suggestion:** Ensure the variable is initialized with a SET action or as an output of another action.
 
@@ -212,7 +212,7 @@ Variable 'Browser' is used here but doesn't seem to be assigned anywhere in the 
 - **Block:** b-008
 - **Subflow:** sf-2
 
-Variable 'InvoiceId' is used here but doesn't seem to be assigned anywhere in the flow.
+Variable &#39;InvoiceId&#39; is used here but doesn&#39;t seem to be assigned anywhere in the flow.
 
 > **Suggestion:** Ensure the variable is initialized with a SET action or as an output of another action.
 
@@ -225,7 +225,7 @@ Variable 'InvoiceId' is used here but doesn't seem to be assigned anywhere in th
 - **Block:** b-009
 - **Subflow:** sf-2
 
-Property 'Files' contains an absolute path: /home/ops/tmp/invoice.csv
+Property &#39;Files&#39; contains an absolute path: /home/ops/tmp/invoice.csv
 
 > **Suggestion:** Use a relative path or store the base directory in a variable configured per environment.
 
@@ -236,7 +236,7 @@ Property 'Files' contains an absolute path: /home/ops/tmp/invoice.csv
 - **Block:** b-007
 - **Subflow:** sf-2
 
-Property 'ConnectionString' contains a hardcoded IP address: 10.0.0.5
+Property &#39;ConnectionString&#39; contains a hardcoded IP address: 10.0.0.5
 
 > **Suggestion:** Store the IP address in a variable so it can be changed per environment.
 
@@ -249,7 +249,7 @@ Property 'ConnectionString' contains a hardcoded IP address: 10.0.0.5
 
 Two consecutive web/UI automation actions with no wait between them, which can cause timing failures.
 
-> **Suggestion:** Add a 'Wait for element' or 'Delay' action between UI automation steps to improve reliability.
+> **Suggestion:** Add a &#39;Wait for element&#39; or &#39;Delay&#39; action between UI automation steps to improve reliability.
 
 ### 4. Transient operation without retry
 
@@ -260,7 +260,7 @@ Two consecutive web/UI automation actions with no wait between them, which can c
 
 This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
 
-> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.
+> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an &#39;On Block Error&#39; handler that implements retry logic.
 
 ### 5. Transient operation without retry
 
@@ -271,7 +271,7 @@ This network/external service action is prone to transient failures (timeouts, r
 
 This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
 
-> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.
+> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an &#39;On Block Error&#39; handler that implements retry logic.
 
 ### 6. Transient operation without retry
 
@@ -282,7 +282,7 @@ This network/external service action is prone to transient failures (timeouts, r
 
 This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
 
-> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.
+> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an &#39;On Block Error&#39; handler that implements retry logic.
 
 ### 7. Transient operation without retry
 
@@ -293,7 +293,7 @@ This network/external service action is prone to transient failures (timeouts, r
 
 This network/external service action is prone to transient failures (timeouts, rate limits, connection resets) but has no retry mechanism or error handler.
 
-> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an 'On Block Error' handler that implements retry logic.
+> **Suggestion:** Wrap this action in a loop with a retry counter and delay, or add an &#39;On Block Error&#39; handler that implements retry logic.
 
 ### 8. Subflow without error handler
 
@@ -302,7 +302,7 @@ This network/external service action is prone to transient failures (timeouts, r
 - **Block:** b-001
 - **Subflow:** sf-1
 
-Subflow "Main" has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
+Subflow &#34;Main&#34; has action blocks but no error handler. Unhandled errors will silently terminate the subflow.
 
 > **Suggestion:** Add a Try/Catch or On Block Error handler to protect against unexpected failures.
 

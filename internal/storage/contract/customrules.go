@@ -14,6 +14,12 @@ import (
 func runCustomRuleScenarios(ctx context.Context, b interfaces.StorageBackend, runID string, run func(string, func(*testing.T))) {
 	org := "contract-customrules-" + runID
 	other := "contract-customrules-other-" + runID
+	// Both organisations, saved for each scenario: their rules need them.
+	seedOrgs := func(t *testing.T) {
+		t.Helper()
+		seedOrg(ctx, t, b, org, "contract-cr-admin-"+runID)
+		seedOrg(ctx, t, b, other, "contract-cr-admin-"+runID)
+	}
 	cfg := func(id, match string) json.RawMessage {
 		return json.RawMessage(`{"kind":"block","schemaVersion":1,"id":"` + id + `","name":"` + id + `","severity":"warning","rawTypeMatch":"` + match + `"}`)
 	}
@@ -43,6 +49,7 @@ func runCustomRuleScenarios(ctx context.Context, b interfaces.StorageBackend, ru
 	// nothing: not the row, and not the org's other rule when the new id is already taken. Postgres used to answer a
 	// primary-key violation (a 500) and the fake renamed in place.
 	run("CustomRules_rename_is_refused", func(t *testing.T) {
+		seedOrgs(t)
 		a := &interfaces.OrgCustomRule{ID: "contract-cr-a-" + runID, OrgID: org, RuleID: "rule-a", Config: cfg("rule-a", "^SET$"), Enabled: true}
 		if err := b.SaveOrgCustomRule(ctx, a); err != nil {
 			t.Skipf("backend does not support org custom rules: %v", err)
@@ -88,6 +95,7 @@ func runCustomRuleScenarios(ctx context.Context, b interfaces.StorageBackend, ru
 
 	// Another org's row id is never written through this org, renamed or not.
 	run("CustomRules_other_orgs_row_is_not_found", func(t *testing.T) {
+		seedOrgs(t)
 		victim := &interfaces.OrgCustomRule{ID: "contract-cr-victim-" + runID, OrgID: other, RuleID: "victim", Config: cfg("victim", "^SET$"), Enabled: true}
 		if err := b.SaveOrgCustomRule(ctx, victim); err != nil {
 			t.Skipf("backend does not support org custom rules: %v", err)
@@ -108,9 +116,53 @@ func runCustomRuleScenarios(ctx context.Context, b interfaces.StorageBackend, ru
 		}
 	})
 
+	// A pause or resume changes the enabled flag alone: the config stays as stored, including one a full save wrote
+	// after the caller read the row (a pause that wrote back the row it read restored the older config). Another
+	// org's row id, or an unknown one, is ErrNotFound and changes nothing.
+	run("CustomRules_set_enabled_keeps_the_config", func(t *testing.T) {
+		seedOrgs(t)
+		row := &interfaces.OrgCustomRule{ID: "contract-cr-toggle-" + runID, OrgID: org, RuleID: "toggle", Config: cfg("toggle", "^SET$"), Enabled: true}
+		if err := b.SaveOrgCustomRule(ctx, row); err != nil {
+			t.Skipf("backend does not support org custom rules: %v", err)
+		}
+		t.Cleanup(func() { _ = b.DeleteOrgCustomRule(ctx, org, row.ID) })
+		read := list(t, org)[row.ID]
+		edit := &interfaces.OrgCustomRule{ID: row.ID, OrgID: org, RuleID: "toggle", Config: cfg("toggle", "^WAIT$"), Enabled: true}
+		if err := b.SaveOrgCustomRule(ctx, edit); err != nil {
+			t.Fatalf("the full save: %v", err)
+		}
+
+		got, err := b.SetOrgCustomRuleEnabled(ctx, org, read.ID, false)
+		if err != nil {
+			t.Fatalf("SetOrgCustomRuleEnabled: %v", err)
+		}
+		if got.ID != row.ID || got.OrgID != org || got.RuleID != "toggle" || got.Enabled || match(t, got.Config) != "^WAIT$" {
+			t.Errorf("SetOrgCustomRuleEnabled returned %+v (%s), want the saved rule paused", got, got.Config)
+		}
+		if r := list(t, org)[row.ID]; r == nil || r.Enabled || match(t, r.Config) != "^WAIT$" {
+			t.Errorf("stored %+v, want the saved config paused", r)
+		}
+		if got, err := b.SetOrgCustomRuleEnabled(ctx, org, row.ID, true); err != nil || !got.Enabled {
+			t.Errorf("resume: %+v, %v", got, err)
+		}
+
+		for _, target := range []struct{ org, id string }{{other, row.ID}, {org, "contract-cr-missing-" + runID}} {
+			if _, err := b.SetOrgCustomRuleEnabled(ctx, target.org, target.id, false); !errors.Is(err, interfaces.ErrNotFound) {
+				t.Errorf("SetOrgCustomRuleEnabled(%s, %s): err = %v, want ErrNotFound", target.org, target.id, err)
+			}
+		}
+		if r := list(t, org)[row.ID]; r == nil || !r.Enabled {
+			t.Errorf("a refused toggle changed the rule: %+v", r)
+		}
+		if rows := list(t, other); len(rows) != 0 {
+			t.Errorf("a refused toggle stored %d rule(s) in the other org", len(rows))
+		}
+	})
+
 	// The store carries the config opaquely: keys it does not know (a newer release's fields) come back with their
 	// values, so a save that merges them back keeps them.
 	run("CustomRules_unknown_config_keys_round_trip", func(t *testing.T) {
+		seedOrgs(t)
 		raw := json.RawMessage(`{"kind":"block","schemaVersion":1,"id":"fwd","name":"fwd","severity":"info","rawTypeMatch":"^SET$","futureField":{"n":[1,2]},"note":"kept"}`)
 		row := &interfaces.OrgCustomRule{ID: "contract-cr-fwd-" + runID, OrgID: org, RuleID: "fwd", Config: raw, Enabled: true}
 		if err := b.SaveOrgCustomRule(ctx, row); err != nil {

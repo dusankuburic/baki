@@ -10,6 +10,7 @@ import {logger} from '@/lib/logger'
 import {storableModelLabel} from '@/lib/modelIds'
 import {uuid} from '@/lib/uuid'
 import {
+  CHAT_ERROR_CODES,
   classifyChatFailure,
   budgetDetail,
   providerErrorInfo,
@@ -191,6 +192,19 @@ export function useTurnLifecycle({
       })
       updateThread(threadId, {inFlight: {streamId: sid, messageId: msgId, ...meta}})
 
+      // A create answered STREAM_ID_IN_USE went through before (the retry of one whose answer was lost): the stream
+      // with this id is this turn's, so it is resumed instead of failing the turn.
+      let adopted = false
+      const create = async (): Promise<string> => {
+        try {
+          return await chatApi.streamChatMessage(req)
+        } catch (e) {
+          if (!(e instanceof ApiError) || e.code !== CHAT_ERROR_CODES.streamIdInUse) throw e
+          adopted = true
+          return sid
+        }
+      }
+
       const run = async () => {
         try {
           const registered = await registerStream(sid,  false)
@@ -201,7 +215,7 @@ export function useTurnLifecycle({
           req.clientStreamId = sid
           let returnedId: string
           try {
-            returnedId = await chatApi.streamChatMessage(req)
+            returnedId = await create()
           } catch (e) {
             const acc = streamAccRef.current.get(sid)
             const restarting = e instanceof ApiError && classifyChatFailure(e.message, e.code) === 'serverRestarting'
@@ -219,7 +233,7 @@ export function useTurnLifecycle({
               return
             }
             updateStream(threadId, {toolStatus: null})
-            returnedId = await chatApi.streamChatMessage(req)
+            returnedId = await create()
           }
           if (!isCurrentGen(threadId, myGen)) {
             abortSend()
@@ -231,6 +245,16 @@ export function useTurnLifecycle({
             return
           }
           confirmStream(sid)
+          if (adopted) {
+            resumeInto(sid, {
+              mode: 'full',
+              onGone: () => {
+                if (!isCurrentGen(threadId, myGen)) return
+                abortSend()
+                appendErrorBubble(i18n.t('chat:errors.noStream'))
+              },
+            })
+          }
         } catch (e: unknown) {
           if (!isCurrentGen(threadId, myGen)) return
           const errMsg = getErrorMessage(e) || i18n.t('chat:errors.sendFailed')
@@ -288,6 +312,7 @@ export function useTurnLifecycle({
       isCurrentGen,
       notifyBudget,
       registerStream,
+      resumeInto,
       startStream,
       streamAccRef,
       teardownRef,

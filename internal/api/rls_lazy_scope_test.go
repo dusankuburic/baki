@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -281,17 +282,24 @@ func TestRLSMiddleware_LazyScope(t *testing.T) {
 		if rr.Code != http.StatusServiceUnavailable {
 			t.Errorf("mutation status %d, want 503", rr.Code)
 		}
+		// Nothing ran, so the mutation is safe to send again.
+		if got := rr.Header().Get("Retry-After"); got != "1" {
+			t.Errorf("mutation Retry-After %q, want 1", got)
+		}
 		if n := b.begins.Load(); n != 1 {
 			t.Errorf("BeginRLS x%d, want 1 attempt", n)
 		}
 	})
 
-	t.Run("a read whose start fails still runs, lazily, on the pool", func(t *testing.T) {
+	// A read whose transaction cannot start must not run on the pool, where the policies allow every row: its
+	// statements fail, and whatever the handler makes of that (an error, an empty page, a 404) the caller gets a 503
+	// to retry.
+	t.Run("a read whose start fails is refused, never run on the pool", func(t *testing.T) {
 		b := newLazyRLSBackend(t)
 		b.beginErr = errors.New("pool exhausted")
 		rt := newTestRouter(b, true)
 
-		// No statement: the start is never attempted.
+		// No statement: the start is never attempted, and the read answers as it always did.
 		rr, _ := serveLazyRLS(t, rt, http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
@@ -299,17 +307,34 @@ func TestRLSMiddleware_LazyScope(t *testing.T) {
 			t.Errorf("read without statements: status %d, BeginRLS x%d; want 200 and no attempt", rr.Code, b.begins.Load())
 		}
 
-		// With a statement: one attempt, fail-open.
-		var gotErr error
-		rr, _ = serveLazyRLS(t, rt, http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
-			gotErr = storagedb.EnsureRLS(r.Context())
-			w.WriteHeader(http.StatusOK)
-		})
-		if gotErr != nil || rr.Code != http.StatusOK {
-			t.Errorf("read: err %v status %d, want fail-open (nil, 200)", gotErr, rr.Code)
-		}
-		if n := b.begins.Load(); n != 1 {
-			t.Errorf("BeginRLS x%d, want one attempt", n)
+		for _, answer := range []int{http.StatusOK, http.StatusNotFound, http.StatusInternalServerError} {
+			b.begins.Store(0)
+			var gotErr error
+			hooked := false
+			rr, _ = serveLazyRLS(t, rt, http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
+				gotErr = storagedb.EnsureRLS(r.Context())
+				txhook.Register(r.Context(), func(context.Context) { hooked = true })
+				w.WriteHeader(answer)
+				_, _ = w.Write([]byte(`{"items":[]}`))
+			})
+			if !errors.Is(gotErr, storageif.ErrRLSUnavailable) {
+				t.Errorf("handler answering %d: the statement got %v, want ErrRLSUnavailable (not the pool)", answer, gotErr)
+			}
+			if rr.Code != http.StatusServiceUnavailable {
+				t.Errorf("handler answering %d: status %d, want 503", answer, rr.Code)
+			}
+			if !strings.Contains(rr.Body.String(), `"SERVICE_UNAVAILABLE"`) || strings.Contains(rr.Body.String(), "items") {
+				t.Errorf("handler answering %d: body %q, want the SERVICE_UNAVAILABLE envelope instead of the handler's body", answer, rr.Body.String())
+			}
+			if got := rr.Header().Get("Retry-After"); got != "1" {
+				t.Errorf("handler answering %d: Retry-After %q, want 1", answer, got)
+			}
+			if n := b.begins.Load(); n != 1 {
+				t.Errorf("handler answering %d: BeginRLS x%d, want one attempt", answer, n)
+			}
+			if hooked {
+				t.Errorf("handler answering %d: post-commit hook ran for a refused read", answer)
+			}
 		}
 	})
 }

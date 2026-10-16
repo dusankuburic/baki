@@ -14,8 +14,13 @@ import (
 // policyColumns are a policy row's columns in the order scanPolicy reads them.
 const policyColumns = `id, org_id, name, description, rules, gate_severity, waivers, max_errors, max_warnings, max_info, created_at, updated_at`
 
-// SavePolicy inserts or updates a policy (upsert by id+org_id).
+// SavePolicy inserts or updates a policy (upsert by id+org_id). An empty id is refused: stored under the empty id, the
+// organisation's id-less policies overwrote each other (the service gives a new policy an id). An organisation that
+// does not exist is ErrOrgNotFound (its foreign key).
 func (b *PostgresStorageBackend) SavePolicy(ctx context.Context, p *models.Policy) error {
+	if p.ID == "" {
+		return interfaces.ErrPolicyIDRequired
+	}
 	rulesJSON, err := json.Marshal(p.Rules)
 	if err != nil {
 		return err
@@ -33,7 +38,7 @@ func (b *PostgresStorageBackend) SavePolicy(ctx context.Context, p *models.Polic
 	// are set here (NOW()), and the save handler renders the struct it was
 	// given — so without this a just-saved policy came back with a zero
 	// created/updated date and the panel showed the year 1 until a refetch.
-	return b.query(ctx).QueryRowContext(ctx,
+	err = b.query(ctx).QueryRowContext(ctx,
 		`INSERT INTO policies (id, org_id, name, description, rules, gate_severity, waivers, max_errors, max_warnings, max_info, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
 		 ON CONFLICT (id, org_id) DO UPDATE SET
@@ -49,6 +54,24 @@ func (b *PostgresStorageBackend) SavePolicy(ctx context.Context, p *models.Polic
 		 RETURNING created_at, updated_at`,
 		p.ID, p.OrgID, p.Name, p.Description, rulesJSON, string(p.GateSeverity), waiversJSON, p.MaxErrors, p.MaxWarnings, p.MaxInfo,
 	).Scan(&p.CreatedAt, &p.UpdatedAt)
+	if isUnknownOrg(err, "policies_org_id_fkey") {
+		return interfaces.ErrOrgNotFound
+	}
+	return err
+}
+
+// RekeyIdlessPolicy moves orgID's row under the empty id to id, in the caller's transaction (the save that follows
+// writes it), so the two are one change.
+func (b *PostgresStorageBackend) RekeyIdlessPolicy(ctx context.Context, orgID, id string) (bool, error) {
+	if id == "" {
+		return false, interfaces.ErrPolicyIDRequired
+	}
+	res, err := b.query(ctx).ExecContext(ctx, `UPDATE policies SET id = $2 WHERE org_id = $1 AND id = ''`, orgID, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // scanPolicy reads one row of policyColumns.

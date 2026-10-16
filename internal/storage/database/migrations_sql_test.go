@@ -124,7 +124,56 @@ func TestApplyMigration_RetriesOnLockTimeout(t *testing.T) {
 	}
 }
 
-// TestApplyMigration_OtherErrorsAreNotRetried: only lock timeouts are retried.
+// TestApplyMigration_RetriesOnDeadlock: a step chosen as a deadlock's victim (a concurrent erasure or org delete locks
+// the same tables in another order) rolls back and is retried like a lock timeout, instead of failing the boot.
+func TestApplyMigration_RetriesOnDeadlock(t *testing.T) {
+	defer func(backoff time.Duration) { migrationLockBackoff = backoff }(migrationLockBackoff)
+	migrationLockBackoff = time.Millisecond
+
+	var stepRuns atomic.Int32
+	b, f := newFakeBackend(t, 1, func(query string, _ []driver.NamedValue) fakeResult {
+		if strings.Contains(query, "ALTER TABLE deadlocked") && stepRuns.Add(1) <= 2 {
+			return fakeResult{err: &pgconn.PgError{Code: "40P01", Message: "deadlock detected"}}
+		}
+		return fakeResult{}
+	})
+	ctx := context.Background()
+	conn, err := b.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	m := migration{version: 32, name: "deadlocked", sql: "ALTER TABLE deadlocked ADD COLUMN x int;", compat: compatExpand}
+	if err := applyMigration(ctx, conn, m); err != nil {
+		t.Fatalf("applyMigration: %v", err)
+	}
+	if n := stepRuns.Load(); n != 3 {
+		t.Errorf("step ran %d times, want 3 (two deadlocks, one success)", n)
+	}
+	inserts := 0
+	for _, c := range f.Calls() {
+		if strings.Contains(c.query, "INSERT INTO schema_migrations") {
+			inserts++
+		}
+	}
+	if inserts != 1 {
+		t.Errorf("INSERT INTO schema_migrations x%d, want x1", inserts)
+	}
+
+	// The retries are bounded like the lock timeouts': a step that deadlocks every time fails the boot with the error.
+	stepRuns.Store(-100)
+	err = applyMigration(ctx, conn, m)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "40P01" {
+		t.Fatalf("a step deadlocking every time: err = %v, want the deadlock", err)
+	}
+	if n := stepRuns.Load() + 100; n != int32(migrationLockAttempts) {
+		t.Errorf("a step deadlocking every time ran %d times, want %d", n, migrationLockAttempts)
+	}
+}
+
+// TestApplyMigration_OtherErrorsAreNotRetried: only lock timeouts and deadlocks are retried.
 func TestApplyMigration_OtherErrorsAreNotRetried(t *testing.T) {
 	var stepRuns atomic.Int32
 	b, _ := newFakeBackend(t, 1, func(query string, _ []driver.NamedValue) fakeResult {

@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // TestMigrateDown_RoundTrip is the DATABASE_URL-gated integration test for the
@@ -85,5 +86,51 @@ func TestMigrateDown_NoOpWhenAlreadyAtOrBelowTarget(t *testing.T) {
 	}
 	if len(rolled2) != 0 {
 		t.Errorf("expected no rollbacks when target>current, got %v", rolled2)
+	}
+}
+
+// TestMigrateDown_WaitsBoundedForEachLock: a down step holds every lock it takes until it commits, and a lock it
+// waits for holds up every later query on that table. Behind a reader of users (an operator's session, a replica not
+// yet stopped), 0049's down waited for as long as the reader lived, and every sign-in's read of users with it. Like a
+// step going up, it now waits at most the step's lock_timeout, then rolls back, pauses and tries again.
+func TestMigrateDown_WaitsBoundedForEachLock(t *testing.T) {
+	b, _ := openIsolatedMigrationDB(t)
+	ctx := context.Background()
+	defer func(timeout, backoff time.Duration) { migrationLockTimeout, migrationLockBackoff = timeout, backoff }(migrationLockTimeout, migrationLockBackoff)
+	migrationLockTimeout, migrationLockBackoff = 300*time.Millisecond, 200*time.Millisecond
+	upkept(t, b) // the users indexes the down drops
+	reader := openSession(t, b)
+	reader.must([]string{`SELECT count(*) FROM users`})
+
+	done := make(chan error, 1)
+	go func() { _, err := b.MigrateDown(ctx, 48); done <- err }()
+	var worst time.Duration
+	for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		qctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		start := time.Now()
+		var n int
+		err := b.db.QueryRowContext(qctx, `SELECT count(*) FROM users WHERE id = 'nobody'`).Scan(&n)
+		cancel()
+		if err != nil {
+			t.Fatalf("a read of users during the down: %v", err)
+		}
+		worst = max(worst, time.Since(start))
+	}
+	if err := reader.tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("MigrateDown(48) once the reader ended: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("MigrateDown(48) did not end once the reader ended")
+	}
+	if worst > time.Second {
+		t.Errorf("a read of users waited %v behind the down's lock wait; want at most about its 300 ms lock_timeout", worst.Round(time.Millisecond))
+	}
+	if v, _ := b.CurrentSchemaVersion(ctx); v != 48 {
+		t.Errorf("after the down the schema is at v%d, want 48", v)
 	}
 }

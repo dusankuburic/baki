@@ -358,3 +358,23 @@ func TestMemOrgStore_AcceptedInviteAllowsDuplicateEmail(t *testing.T) {
 		t.Errorf("expected no error for duplicate email after acceptance, got %v", err)
 	}
 }
+
+// TestMemOrgStore_ExpiredInviteGivesWay: an expired pending invite no longer holds its address, as on the database
+// (migration 0048): a new invite replaces it instead of ErrOrgInviteExists until the sweep removes it.
+func TestMemOrgStore_ExpiredInviteGivesWay(t *testing.T) {
+	store := NewMemOrgStore()
+	ctx := context.Background()
+	stale := &interfaces.OrgInvite{ID: "inv-old", OrgID: "org-1", Email: "test@example.com", Role: auth.RoleMember,
+		TokenHash: "hash-old", ExpiresAt: now().Add(-time.Hour), CreatedAt: now().Add(-8 * 24 * time.Hour)}
+	if err := store.SaveOrgInvite(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	fresh := &interfaces.OrgInvite{ID: "inv-new", OrgID: "org-1", Email: "test@example.com", Role: auth.RoleMember,
+		TokenHash: "hash-new", ExpiresAt: now().Add(24 * time.Hour), CreatedAt: now()}
+	if err := store.SaveOrgInvite(ctx, fresh); err != nil {
+		t.Fatalf("a new invite while the only pending one has expired: %v", err)
+	}
+	if list, _ := store.ListOrgInvites(ctx, "org-1"); len(list) != 1 || list[0].ID != "inv-new" {
+		t.Errorf("invites = %+v, want only the new one", list)
+	}
+}

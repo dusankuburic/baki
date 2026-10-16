@@ -271,6 +271,35 @@ describe('OrgCustomRulesSection', () => {
     expect(save.mock.lastCall?.[3]).toBe('row-1')
   })
 
+  it('tries a saved rule under a built-in id', async () => {
+    const reserved = {field: 'id', reason: 'RESERVED_ID', message: 'the id is a built-in rule id'}
+    testCustomRule.mockResolvedValue({matches: 2, flowName: 'Main', findings: [], problems: [reserved]})
+    list.mockResolvedValue([stored({ruleId: 'dead-code'}, {id: 'dead-code'})])
+    renderSection()
+
+    fireEvent.click(await screen.findByRole('button', {name: /edit rule/i}))
+    fireEvent.change(await screen.findByRole('combobox'), {target: {value: 'flow-1'}})
+    fireEvent.click(screen.getByRole('button', {name: /try it/i}))
+    expect(await screen.findByText(/matches 2 block/i)).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('no-http-without-retry')).not.toHaveAttribute('aria-invalid')
+  })
+
+  it('still refuses a built-in id for a new rule when Try it runs it', async () => {
+    const reserved = {field: 'id', reason: 'RESERVED_ID', message: 'the id is a built-in rule id'}
+    testCustomRule.mockResolvedValue({matches: 2, flowName: 'Main', findings: [], problems: [reserved]})
+    renderSection()
+
+    fireEvent.click(await screen.findByRole('button', {name: /new rule/i}))
+    const id = screen.getByPlaceholderText('no-http-without-retry')
+    fireEvent.change(id, {target: {value: 'dead-code'}})
+    fireEvent.change(await screen.findByRole('combobox'), {target: {value: 'flow-1'}})
+    fireEvent.click(screen.getByRole('button', {name: /try it/i}))
+
+    await waitFor(() => expect(id).toHaveAttribute('aria-invalid', 'true'))
+    expect(id).toHaveAccessibleDescription('the id is a built-in rule id')
+    expect(screen.queryByText(/matches 2 block/i)).toBeNull()
+  })
+
   it('shows a save the server refuses at the field it names', async () => {
     save.mockRejectedValue(
       new ApiError('invalid rule: unknown field', 400, 'BAD_REQUEST', null, {

@@ -35,7 +35,7 @@ var (
 
 // analyzerVersion is the version part of the analyzer's cache keys (not of FlowHash, the pure content identity);
 // bump it when rule logic or parser output changes.
-const analyzerVersion = "5"
+const analyzerVersion = "6"
 
 var analyzerVersionPart = cache.Version(analyzerVersion)
 

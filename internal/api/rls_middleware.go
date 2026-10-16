@@ -148,7 +148,7 @@ func isOrgChannelTestPath(path string) bool {
 	return len(segs) == 4 && segs[0] != "" && segs[1] == "channels" && segs[2] != "" && segs[3] == "test"
 }
 
-// rlsMiddleware sets app.current_user_id for authenticated /api/ requests that are not exempt, in a transaction wrapping the entire request: LAZY for reads (first scoped statement, reqtx.Scope), fail-closed for mutations (starts before the handler; a start failure is a 503).
+// rlsMiddleware sets app.current_user_id for authenticated /api/ requests that are not exempt, in a transaction wrapping the entire request: LAZY for reads (first scoped statement, reqtx.Scope), started before the handler for mutations; fail-closed for both (a start failure is a 503 with Retry-After).
 // No-op without JWT auth, without a request transaction (SecurityConfig.RequestTx: Postgres), or on public/exempt routes; /ws and background work (scanner, retention, audit writer, notifications) are outside it entirely and rest on Go-layer authz plus explicit clauses — RLS policies allow every row when app.current_user_id is unset. Ends the transaction before the first response byte (txResponseWriter): below 400 it commits, and a failed commit becomes a 503; 400 and above, or a panic before the response started, roll back.
 func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -178,13 +178,15 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 		}
 
 		// The scope is LAZY for reads: BEGIN + set_config run on the first scoped statement, so a read that never touches the store pins nothing.
-		// MUTATING requests fail CLOSED — without the transaction the policies short-circuit to allow-all — so a mutation's scope starts HERE, before handler code, landing the 503 before its non-transactional side effects (keystore writes, provider calls, blob uploads, audit rows). Reads stay fail-open (explicit ownership predicates also scope them).
-		failOpen := r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
+		// Every scope fails CLOSED — without the transaction the policies short-circuit to allow-all. A MUTATION's scope starts HERE, before handler code, landing the 503 before its non-transactional side effects (keystore writes, provider calls, blob uploads, audit rows).
+		// A read whose lazy start fails gets ErrRLSUnavailable from every statement instead of the pool, and a 503 whatever the handler answered (txResponseWriter); it used to run unscoped.
+		read := r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
 		base := r.Context()
-		ctx, scope := requestTx.Open(base, claims.UserID, failOpen)
-		if !failOpen {
+		ctx, scope := requestTx.Open(base, claims.UserID, false)
+		if !read {
 			if err := scope.Begin(); err != nil {
 				slog.Error("rls: failed to begin transaction, refusing mutation", "method", r.Method, "path", r.URL.Path, "err", err)
+				w.Header().Set("Retry-After", rlsRetryAfter)
 				render.Error(w, errRLSUnavailableResponse, http.StatusServiceUnavailable)
 				return
 			}
@@ -195,6 +197,14 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 		runHooks := func() { hooks.Commit(requestTx.HookRunner(base, claims.UserID)) }
 
 		tw := newTxResponseWriter(w, func(status int) bool {
+			if err := scope.Err(); err != nil {
+				// Only a read gets here (a mutation's start failure was refused above): its statements failed, so
+				// whatever it answered is not the caller's data.
+				slog.Error("rls: failed to begin transaction, refusing the read", "method", r.Method, "path", r.URL.Path, "err", err)
+				_ = scope.Rollback()
+				hooks.Abort()
+				return false
+			}
 			if status >= http.StatusBadRequest {
 				if err := scope.Rollback(); err != nil {
 					slog.Warn("rls: rollback after error response failed", "err", err)
@@ -211,6 +221,8 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 			}
 			return true
 		})
+		// Nothing of a request whose transaction never started ran, so it is safe to send again.
+		tw.retryAfter = func() bool { return scope.Err() != nil }
 
 		// A panic before the response started rolls back. After it the write is already committed, so its
 		// post-commit work still runs. Either way the panic continues to the recoverer above.
@@ -228,11 +240,6 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(tw, r)
 
-		// Only a read can get here with a start failure (a mutation's was
-		// refused above); it ran on the pool.
-		if err := scope.Err(); err != nil {
-			slog.Warn("rls: failed to begin transaction, proceeded without RLS (read-only)", "method", r.Method, "path", r.URL.Path, "err", err)
-		}
 		// A handler that wrote nothing is decided now (net/http then sends its implicit 200, or the 503).
 		tw.finish()
 		// Deferred work runs only after the write is durable (e.g. blob cleanup for a deleted flow): a
@@ -248,6 +255,10 @@ func (rt *Router) rlsMiddleware(next http.Handler) http.Handler {
 // retry, and nothing about the database leaks.
 var errRLSUnavailableResponse = errors.New("temporarily unavailable — retry")
 
+// rlsRetryAfter is the Retry-After of a request refused because its transaction could not start: nothing of it ran,
+// and an exhausted pool or a lost connection is usually back within a second.
+const rlsRetryAfter = "1"
+
 // txResponseWriter ends the request's RLS transaction BEFORE the first byte of the response leaves. A response
 // below 400 is committed first, and a commit failure turns it into a 503, so a client is never told that a write
 // succeeded which did not persist (the response used to stream through, with Commit running after the handler
@@ -256,20 +267,24 @@ var errRLSUnavailableResponse = errors.New("temporarily unavailable — retry")
 // the database once it has started its response.
 type txResponseWriter struct {
 	http.ResponseWriter
-	end     func(status int) bool // commits or rolls back for status; false = the commit failed
+	end     func(status int) bool // commits or rolls back for status; false = refused (failed commit, or never started)
 	entry   http.Header           // the headers as they were before the handler ran
 	status  int
 	decided bool
-	failed  bool // the commit failed: a 503 went out instead, later writes are swallowed
+	failed  bool // refused: a 503 went out instead, later writes are swallowed
+
+	// retryAfter reports, for a refusal, that the request may be sent again (Retry-After); nil = never.
+	retryAfter func() bool
 }
 
 func newTxResponseWriter(w http.ResponseWriter, end func(status int) bool) *txResponseWriter {
 	return &txResponseWriter{ResponseWriter: w, end: end, entry: w.Header().Clone(), status: http.StatusOK}
 }
 
-// decide ends the transaction for status, once. On a failed commit it answers 503 itself, with the headers
-// restored to what they were before the handler ran: the security, CORS and request-ID headers stay, while
-// what the handler set for its own response (cookies, ETag, Content-Length) goes.
+// decide ends the transaction for status, once. On a refusal (a failed commit, a read whose transaction never
+// started) it answers 503 itself, with the headers restored to what they were before the handler ran: the
+// security, CORS and request-ID headers stay, while what the handler set for its own response (cookies, ETag,
+// Content-Length) goes.
 func (t *txResponseWriter) decide(status int) {
 	if t.decided {
 		return
@@ -286,6 +301,9 @@ func (t *txResponseWriter) decide(status int) {
 	}
 	for k, v := range t.entry {
 		h[k] = v
+	}
+	if t.retryAfter != nil && t.retryAfter() {
+		h.Set("Retry-After", rlsRetryAfter)
 	}
 	render.Error(t.ResponseWriter, errRLSUnavailableResponse, http.StatusServiceUnavailable)
 }

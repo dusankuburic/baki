@@ -86,6 +86,9 @@ export interface AISettings {
   saveConversationHistory: boolean
   systemPromptSuffix?: string
   dailyBudget: number
+  /** An organisation's allowed providers (ADR 0028): absent or empty allows every provider. The org settings
+   * route keeps the stored list when a write leaves this out, and clears it on an explicit []. */
+  allowedProviders?: ProviderID[]
   prompts: AIPromptsConfig
 }
 

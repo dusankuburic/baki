@@ -16,10 +16,10 @@ var (
 		},
 		[]string{"reason"},
 	)
-	auditSpilledTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	auditSpilledTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "pad_audit_spilled_total",
-		Help: "Audit events diverted to the on-disk spill queue because the in-memory pool was full. A reaper drains these back into the DB pool when capacity returns.",
-	})
+		Help: "Audit events written to the on-disk spill queue, by reason: full (the in-memory pool was full) or db_unavailable (the database could not be reached after the write's retry; an event replayed into a continuing outage is spilled and counted again). A reaper drains them back into the DB pool when there is room and the database answers.",
+	}, []string{"reason"})
 	auditSpillReplayedTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "pad_audit_spill_replayed_total",
 		Help: "Audit events drained from the on-disk spill queue and re-enqueued to the DB pool.",
@@ -28,16 +28,29 @@ var (
 		Name: "pad_audit_spill_dropped_total",
 		Help: "Audit events dropped because the on-disk spill queue was at its size cap — only happens under sustained overload beyond the spill capacity.",
 	})
+	auditSpillUndecodableTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "pad_audit_spill_undecodable_total",
+		Help: "Lines of the on-disk audit spill queue skipped on replay because they do not decode: the torn last line of a writer that died mid-append, or a damaged file. The event on that line is lost; the lines after it replay.",
+	})
 	auditSpillDepth = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "pad_audit_spill_depth",
-		Help: "Audit events currently on the on-disk spill queue (overflow past the in-memory pool). Non-zero means the DB sink fell behind; pair with pad_audit_spill_replayed_total to confirm recovery.",
+		Help: "Audit events currently on the on-disk spill queue (overflow past the in-memory pool, or writes the database was unreachable for). Non-zero means the DB sink fell behind or is down; pair with pad_audit_spill_replayed_total to confirm recovery.",
 	})
 )
 
 func init() {
 	metrics.MustRegister(auditDroppedTotal, auditSpilledTotal, auditSpillReplayedTotal, auditSpillDroppedTotal,
-		auditSpillDepth)
+		auditSpillUndecodableTotal, auditSpillDepth)
+	for _, reason := range []string{spillReasonFull, spillReasonUnreachable} {
+		auditSpilledTotal.WithLabelValues(reason)
+	}
 }
+
+// The reasons of pad_audit_spilled_total.
+const (
+	spillReasonFull        = "full"
+	spillReasonUnreachable = "db_unavailable"
+)
 
 // recordAuditDropped bumps the audit_dropped_total counter for an event that
 // could not be persisted to the DB sink — "full"/"closed" when the enqueue
@@ -62,9 +75,32 @@ func auditDroppedCount(reason string) float64 {
 }
 
 // recordAuditSpilled bumps pad_audit_spilled_total — an event went to the
-// on-disk spill queue because the in-memory pool was full.
-func recordAuditSpilled() {
-	auditSpilledTotal.Inc()
+// on-disk spill queue, for reason (spillReasonFull, spillReasonUnreachable).
+func recordAuditSpilled(reason string) {
+	auditSpilledTotal.WithLabelValues(reason).Inc()
+}
+
+// recordAuditSpillUndecodable adds n to pad_audit_spill_undecodable_total — spill lines that do not decode were skipped.
+func recordAuditSpillUndecodable(n int) {
+	auditSpillUndecodableTotal.Add(float64(n))
+}
+
+// auditSpillUndecodableCount returns the current pad_audit_spill_undecodable_total value. For tests.
+func auditSpillUndecodableCount() float64 {
+	m := &dto.Metric{}
+	if err := auditSpillUndecodableTotal.Write(m); err != nil || m.Counter == nil {
+		return 0
+	}
+	return m.Counter.GetValue()
+}
+
+// auditSpilledReasonCount returns the current pad_audit_spilled_total value for reason. For tests.
+func auditSpilledReasonCount(reason string) float64 {
+	m := &dto.Metric{}
+	if err := auditSpilledTotal.WithLabelValues(reason).Write(m); err != nil || m.Counter == nil {
+		return 0
+	}
+	return m.Counter.GetValue()
 }
 
 // recordAuditSpillReplayed bumps pad_audit_spill_replayed_total — a spilled
@@ -92,17 +128,10 @@ func auditSpillDroppedCount() float64 {
 	return m.Counter.GetValue()
 }
 
-// auditSpilledCount returns the current pad_audit_spilled_total value.
+// auditSpilledCount returns the current pad_audit_spilled_total value over every reason.
 // For tests.
 func auditSpilledCount() float64 {
-	m := &dto.Metric{}
-	if err := auditSpilledTotal.Write(m); err != nil {
-		return 0
-	}
-	if m.Counter == nil {
-		return 0
-	}
-	return m.Counter.GetValue()
+	return auditSpilledReasonCount(spillReasonFull) + auditSpilledReasonCount(spillReasonUnreachable)
 }
 
 // setAuditSpillDepth sets the on-disk audit spill queue depth gauge.

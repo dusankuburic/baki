@@ -25,9 +25,9 @@ func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) s
 	sb.WriteString("# PAD Analyzer — Analysis Report\n\n")
 
 	if doc != nil {
-		fmt.Fprintf(&sb, "**Flow:** %s\n", doc.Name)
+		fmt.Fprintf(&sb, "**Flow:** %s\n", esc(doc.Name))
 		if doc.FilePath != "" {
-			fmt.Fprintf(&sb, "**File:** %s\n", doc.FilePath)
+			fmt.Fprintf(&sb, "**File:** %s\n", esc(doc.FilePath))
 		}
 	}
 	if report == nil {
@@ -72,16 +72,19 @@ func ReportToMarkdown(report *models.AnalysisReport, doc *models.FlowDocument) s
 
 		for i, fi := range idxs {
 			f := &report.Findings[fi]
-			fmt.Fprintf(&sb, "### %d. %s\n\n", i+1, f.Title)
-			fmt.Fprintf(&sb, "- **Rule:** `%s`\n", f.RuleID)
+			// Every flow-derived field goes through esc(): Markdown renderers
+			// that pass raw HTML through (VS Code preview, many wikis) would
+			// otherwise execute markup planted in a flow name or description.
+			fmt.Fprintf(&sb, "### %d. %s\n\n", i+1, esc(f.Title))
+			fmt.Fprintf(&sb, "- **Rule:** `%s`\n", esc(f.RuleID))
 			fmt.Fprintf(&sb, "- **Severity:** %s\n", f.Severity)
-			fmt.Fprintf(&sb, "- **Block:** %s\n", f.BlockID)
+			fmt.Fprintf(&sb, "- **Block:** %s\n", esc(f.BlockID))
 			if f.SubflowID != "" {
-				fmt.Fprintf(&sb, "- **Subflow:** %s\n", f.SubflowID)
+				fmt.Fprintf(&sb, "- **Subflow:** %s\n", esc(f.SubflowID))
 			}
-			fmt.Fprintf(&sb, "\n%s\n", f.Description)
+			fmt.Fprintf(&sb, "\n%s\n", esc(f.Description))
 			if f.Suggestion != "" {
-				fmt.Fprintf(&sb, "\n> **Suggestion:** %s\n", f.Suggestion)
+				fmt.Fprintf(&sb, "\n> **Suggestion:** %s\n", esc(f.Suggestion))
 			}
 			sb.WriteString("\n")
 		}

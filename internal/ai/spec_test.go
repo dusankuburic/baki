@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/capability"
+	"pad-core/models"
 )
 
 var updateProviderSpecs = flag.Bool("update-provider-specs", false, "rewrite testdata/providers.golden from the registered provider specs")
@@ -117,6 +118,11 @@ func TestProviderSpecs_Complete(t *testing.T) {
 				}
 				if (f.Type == FieldSelect) != (len(f.Options) > 0) {
 					t.Errorf("credential field %q: options go with type select only", f.Name)
+				}
+				for _, o := range f.Options {
+					if o.Value == "" || o.Label == "" {
+						t.Errorf("credential field %q: option %+v needs a value and a label", f.Name, o)
+					}
 				}
 			}
 			if spec.Keys.Primary == "" {
@@ -264,6 +270,35 @@ func TestProviderSpecs_Golden(t *testing.T) {
 	}
 	if got := b.String(); got != strings.ReplaceAll(string(want), "\r\n", "\n") {
 		t.Errorf("provider specs differ from %s (refresh with -update-provider-specs and review the diff):\n--- want\n%s\n--- got\n%s", path, want, got)
+	}
+}
+
+// TestProviderSpecs_SelectOptionsCarryLabels: a select's options reach the catalogue with the label a person reads,
+// not the stored value (the client shows the label and falls back to the value against an older server).
+func TestProviderSpecs_SelectOptionsCarryLabels(t *testing.T) {
+	spec, ok := SpecOf(AzureFoundryProviderID)
+	if !ok {
+		t.Fatal("no azure-foundry spec")
+	}
+	var got []models.CredentialOption
+	for _, f := range spec.WireCredential().Fields {
+		if f.Name == "authMode" {
+			got = f.Options
+		}
+	}
+	want := []models.CredentialOption{
+		{Value: AzureAuthModeAPIKey, Label: "API key"},
+		{Value: AzureAuthModeEntra, Label: "Microsoft Entra ID"},
+		{Value: AzureAuthModeEntraCLI, Label: "Azure CLI"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("authMode options on the wire = %+v, want %+v", got, want)
+	}
+	unlabelled := ProviderSpec{Credential: CredentialSchema{Fields: []CredentialField{
+		{Name: "region", Label: "Region", Type: FieldSelect, Options: []SelectOption{{Value: "eu"}}},
+	}}}
+	if got := unlabelled.WireCredential().Fields[0].Options; !slices.Equal(got, []models.CredentialOption{{Value: "eu", Label: "eu"}}) {
+		t.Errorf("an unlabelled option on the wire = %+v, want the value as its label", got)
 	}
 }
 

@@ -18,6 +18,7 @@ func seedIdentityCorpus(t *testing.T, b *PostgresStorageBackend, prefix string) 
 	t.Helper()
 	ctx := context.Background()
 	orgID, docID = prefix+"-org", prefix+"-doc"
+	seedOrgRow(t, b.db, orgID)
 	t.Cleanup(func() {
 		_, _ = b.db.ExecContext(ctx, `DELETE FROM knowledge_chunks WHERE doc_id = $1`, docID)
 		_, _ = b.db.ExecContext(ctx, `DELETE FROM knowledge_documents WHERE id = $1`, docID)

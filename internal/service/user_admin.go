@@ -46,20 +46,14 @@ func (s *UserAdminService) Stats(ctx context.Context) (*storageif.UserStats, err
 	return s.store.LoadUserStats(ctx)
 }
 
-// ChangeRole sets userID's role; demoting the only admin is ErrLastAdmin. The user's refresh tokens are then
-// revoked (best effort) so they re-authenticate and pick up the new role: an existing access JWT keeps the old
+// ChangeRole sets userID's role; demoting the only admin is ErrLastAdmin. The store decides that in the write
+// (a count read before it let two admins demoting each other at once both through). The user's refresh tokens are
+// then revoked (best effort) so they re-authenticate and pick up the new role: an existing access JWT keeps the old
 // role until it expires, and no new one may be minted stale.
 func (s *UserAdminService) ChangeRole(ctx context.Context, userID string, role auth.Role) error {
-	if role != auth.RoleAdmin {
-		admins, err := s.store.ListAdmins(ctx)
-		if err != nil {
-			return err
-		}
-		if len(admins) == 1 && admins[0].ID == userID {
-			return ErrLastAdmin
-		}
-	}
-	if err := s.store.UpdateUserRole(ctx, userID, role); err != nil {
+	if err := s.store.UpdateUserRole(ctx, userID, role); errors.Is(err, storageif.ErrLastAdmin) {
+		return ErrLastAdmin
+	} else if err != nil {
 		return err
 	}
 	if err := s.store.RevokeUserRefreshTokens(ctx, userID); err != nil {

@@ -245,6 +245,12 @@ describe('tolerant provider catalogue', () => {
     expect(s.ProviderCatalogSchema.safeParse({providers: null}).success).toBe(true)
   })
 
+  it('reads a select option without a label (the client shows its value)', () => {
+    const field = {name: 'region', label: 'Region', type: 'select', required: true, options: [{value: 'eu'}]}
+    const out = s.ProviderCatalogSchema.parse({providers: [spec({credential: {kind: 'api_key', fields: [field]}})]})
+    expect(out.providers[0]!.credential.fields[0]!.options).toEqual([{value: 'eu'}])
+  })
+
   it('the listing carries the same optional fields, tolerant too', () => {
     const out = s.ProviderListSchema.parse([
       provider({

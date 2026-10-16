@@ -58,6 +58,7 @@ func invalidField(err error) string {
 // must enter the URL again (nothing sealed can be kept) and then makes it deliverable; it can be removed.
 func TestChannelService_UnreadableChannelListedSkippedAndReplaceable(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	svc := newTestChannels(t, b, egress.AllowLoopback)
 	ctx := context.Background()
 	_ = b.SaveOrgChannel(ctx, &storageif.OrgChannel{ID: "ok", OrgID: "o", Name: "fine", Kind: "webhook", URL: "http://127.0.0.1:9/ok", Enabled: true})
@@ -129,6 +130,7 @@ func TestChannelService_JiraChannel(t *testing.T) {
 	}))
 	defer srv.Close()
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	svc := newTestChannels(t, b, egress.AllowLoopback)
 	ctx := context.Background()
 
@@ -308,6 +310,7 @@ func TestChannelService_EmailRecipientsAreMembers(t *testing.T) {
 // keeps the choice; an unknown or empty choice is refused on events.
 func TestChannelService_EventSubscriptions(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	svc := newTestChannels(t, b, egress.AllowLoopback)
 	ctx := context.Background()
 	_ = b.SaveOrgChannel(ctx, &storageif.OrgChannel{ID: "old", OrgID: "o", Kind: "webhook", URL: "http://127.0.0.1:9/old", Enabled: true})

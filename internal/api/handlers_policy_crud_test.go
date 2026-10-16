@@ -14,6 +14,7 @@ import (
 func TestPolicySave_OrgMemberSucceeds(t *testing.T) {
 	rt := newJWTTestRouter(t)
 	orgID := seedOrg(t, rt, "Acme", "alice")
+	mirrorOrg(t, rt, orgID) // a policy needs its organisation in the store
 	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
 
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/policy/save", bearer, map[string]any{
@@ -164,4 +165,51 @@ func TestPolicyDelete_NonMemberForbidden(t *testing.T) {
 		"id":    "pol-1",
 	})
 	checkStatus(t, rr, http.StatusForbidden)
+}
+
+// TestPolicySave_WithoutIDGetsAGeneratedOne: the policy panel creates a policy without an id. Stored under the empty id, every
+// new policy of an organisation overwrote the one before; now each gets an id of its own, answered to the client so
+// its next save updates it, and an explicit id is kept.
+func TestPolicySave_WithoutIDGetsAGeneratedOne(t *testing.T) {
+	rt := newJWTTestRouter(t)
+	orgID := seedOrg(t, rt, "Acme", "alice")
+	mirrorOrg(t, rt, orgID) // a policy needs its organisation in the store
+	bearer := jwtBearer(t, rt, "alice", "alice@example.com")
+
+	save := func(body map[string]any) map[string]any {
+		t.Helper()
+		rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/policy/save", bearer, body)
+		checkStatus(t, rr, http.StatusOK)
+		var saved map[string]any
+		decodeJSON(t, rr, &saved)
+		return saved
+	}
+	first := save(map[string]any{"id": "", "orgId": orgID, "name": "First"})
+	second := save(map[string]any{"orgId": orgID, "name": "Second"})
+	id1, _ := first["id"].(string)
+	id2, _ := second["id"].(string)
+	if id1 == "" || id2 == "" || id1 == id2 {
+		t.Fatalf("ids of two policies saved without one = %q, %q; want two distinct generated ids", id1, id2)
+	}
+	first["name"] = "First, renamed"
+	if again := save(first); again["id"] != id1 {
+		t.Errorf("saving the policy back under its id gave id %v, want %s", again["id"], id1)
+	}
+	kept := save(map[string]any{"id": "pol-explicit", "orgId": orgID, "name": "Explicit"})
+	if kept["id"] != "pol-explicit" {
+		t.Errorf("an explicit id came back as %v", kept["id"])
+	}
+
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/policy/list", bearer, map[string]any{"orgId": orgID})
+	checkStatus(t, rr, http.StatusOK)
+	var list []map[string]any
+	decodeJSON(t, rr, &list)
+	names := map[string]string{}
+	for _, p := range list {
+		id, _ := p["id"].(string)
+		names[id], _ = p["name"].(string)
+	}
+	if len(names) != 3 || names[id1] != "First, renamed" || names[id2] != "Second" || names["pol-explicit"] != "Explicit" {
+		t.Errorf("the organisation's policies = %v; want the three, the first renamed", names)
+	}
 }

@@ -34,13 +34,25 @@ import (
 
 type mockNotifier = service.NilNotifier
 
-// memIdentityStore is an in-memory identity-link store for SSO handler tests.
+// memIdentityStore is an in-memory identity-link store for SSO handler tests; a sign-up's account goes to users.
 type memIdentityStore struct {
 	links map[string]*storageif.IdentityLink // key: provider + "\x00" + subject
+	users storageif.UserStore
 }
 
-func newMemIdentityStore() *memIdentityStore {
-	return &memIdentityStore{links: map[string]*storageif.IdentityLink{}}
+func newMemIdentityStore(users storageif.UserStore) *memIdentityStore {
+	return &memIdentityStore{links: map[string]*storageif.IdentityLink{}, users: users}
+}
+
+// SaveUserWithIdentityLink refuses a linked identity before writing the account, so a refusal writes nothing.
+func (m *memIdentityStore) SaveUserWithIdentityLink(ctx context.Context, user *storageif.User, link *storageif.IdentityLink) error {
+	if _, exists := m.links[link.Provider+"\x00"+link.Subject]; exists {
+		return fmt.Errorf("identity link already exists")
+	}
+	if err := m.users.SaveUser(ctx, user); err != nil {
+		return err
+	}
+	return m.SaveIdentityLink(ctx, link)
 }
 
 func (m *memIdentityStore) ListIdentityLinks(_ context.Context, userID string) ([]*storageif.IdentityLink, error) {

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"pad-analyzer/internal/auth"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 	"pad-core/models"
@@ -45,6 +46,17 @@ const (
 const (
 	maxFlowSnapshots           = 20
 	maxFlowSnapshotBytes int64 = 32 << 20
+)
+
+// The per-user bound across flows (migration 0047): the per-flow one alone let a user editing many flows store 20 ×
+// flows × flow size. The undo menu shows one flow's ring, and a session works on a handful of flows, so 200 keeps the
+// full 20-deep ring of the last ten flows the user touched, and 128 MiB four flows at the per-flow byte bound (far
+// more of typical 100 KiB to 1 MiB sources). Per user, not per organisation: one member's edits must not evict the
+// undo history of every other member, and personal flows have no organisation. Both hold at least one full flow
+// ring, so a snapshot the flow bound keeps is never refused by the user bound.
+const (
+	maxUserSnapshots           = 200
+	maxUserSnapshotBytes int64 = 128 << 20
 )
 
 // ErrSnapshotNotFound: the id names no live snapshot of this flow (never recorded, pruned, expired, or another
@@ -241,8 +253,13 @@ func (s *FlowService) pushSnapshot(ctx context.Context, doc *models.FlowDocument
 		return
 	}
 	if s.durableSnapshots(doc) {
+		// The user bound counts the actor's snapshots; a job (no user) is bounded per flow only.
+		var userID string
+		if a := auth.ActorFromContext(ctx); a != nil {
+			userID = a.UserID
+		}
 		err := s.snapshotDB.PushFlowSnapshot(ctx, &storageif.FlowSnapshot{
-			ID: snap.ID, FlowID: doc.ID, Label: snap.Label, CreatedAt: snap.CreatedAt, Bytes: snap.Bytes,
+			ID: snap.ID, FlowID: doc.ID, Label: snap.Label, UserID: userID, CreatedAt: snap.CreatedAt, Bytes: snap.Bytes,
 			Source: snap.source, Files: snap.Files,
 		}, s.snapshotLimits)
 		switch {
@@ -549,6 +566,7 @@ func (s *FlowService) GetSourceMeta(doc *models.FlowDocument) (*SourceMeta, erro
 func WithSnapshotStore(store storageif.FlowSnapshotStore) FlowOption {
 	return func(s *FlowService) {
 		s.snapshotDB = store
-		s.snapshotLimits = storageif.FlowSnapshotLimits{Keep: maxFlowSnapshots, MaxBytes: maxFlowSnapshotBytes}
+		s.snapshotLimits = storageif.FlowSnapshotLimits{Keep: maxFlowSnapshots, MaxBytes: maxFlowSnapshotBytes,
+			UserKeep: maxUserSnapshots, UserMaxBytes: maxUserSnapshotBytes}
 	}
 }

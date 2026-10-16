@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/config"
 )
 
 // TestRateLimitGroup_AuthPathsInclusive is the regression test for the
@@ -44,6 +45,9 @@ func TestRateLimitGroup_OtherBuckets(t *testing.T) {
 		{"POST", "/api/chat/stream", rlGroupChat},
 		{"POST", "/api/flow/upload", rlGroupUpload},
 		{"GET", "/api/flow/upload", rlGroupGeneral}, // upload bucket is POST-only
+		{"POST", "/api/auth/profile/avatar", route.RateAvatar},
+		{"POST", "/api/v1/auth/profile/avatar", route.RateAvatar},
+		{"DELETE", "/api/auth/profile/avatar", rlGroupGeneral}, // the removal decodes nothing
 		{"GET", "/api/system/info", rlGroupGeneral},
 		{"POST", "/api/flow/list", rlGroupGeneral},
 		// The connection test is billed spend (up to three real chat
@@ -72,6 +76,39 @@ func TestRateLimitGroup_OtherBuckets(t *testing.T) {
 	for _, c := range cases {
 		if got := rateLimitGroup(c.method, &url.URL{Path: c.path}); got != c.want {
 			t.Errorf("rateLimitGroup(%s,%s) = %q, want %q", c.method, c.path, got, c.want)
+		}
+	}
+}
+
+// TestRateLimit_AvatarUploadHasItsOwnBucket: the avatar upload shared the upload bucket with flow uploads, so a
+// client syncing flows refused its user's avatar change, and a burst of avatar picks refused the next flow upload.
+// Each must leave the other's bucket untouched, in every route-policy mode (the legacy classifier decides in two, the
+// declared policy in the third). The refusal is the limiter's 429, ahead of authentication.
+func TestRateLimit_AvatarUploadHasItsOwnBucket(t *testing.T) {
+	const flowUpload, avatar = "/api/flow/upload", "/api/auth/profile/avatar"
+	for _, mode := range allRoutePolicyModes {
+		for _, c := range []struct{ name, drained, other string }{
+			{"flow uploads drained", flowUpload, avatar},
+			{"avatar uploads drained", avatar, flowUpload},
+		} {
+			t.Run(string(mode)+" "+c.name, func(t *testing.T) {
+				h := fullChain(t, newModeTestRouter(t, mode), func(cfg *config.Config) {
+					cfg.Mode = config.ModeCloud
+					cfg.Runtime.RateLimitGeneralRPS, cfg.Runtime.RateLimitGeneralBurst = 1000, 1000
+					cfg.Runtime.RateLimitPerUserRPS, cfg.Runtime.RateLimitPerUserBurst = 1000, 1000
+					cfg.Runtime.RateLimitUploadRPS, cfg.Runtime.RateLimitUploadBurst = 0.001, 1
+					cfg.Runtime.RateLimitAvatarRPS, cfg.Runtime.RateLimitAvatarBurst = 0.001, 1
+				})
+				if rr := serve(h, http.MethodPost, c.drained, ""); rr.Code == http.StatusTooManyRequests {
+					t.Fatalf("first POST %s refused", c.drained)
+				}
+				if rr := serve(h, http.MethodPost, c.drained, ""); rr.Code != http.StatusTooManyRequests {
+					t.Fatalf("second POST %s = %d, want 429 (its bucket holds one)", c.drained, rr.Code)
+				}
+				if rr := serve(h, http.MethodPost, c.other, ""); rr.Code == http.StatusTooManyRequests {
+					t.Errorf("POST %s after POST %s emptied its bucket = 429, want a bucket of its own", c.other, c.drained)
+				}
+			})
 		}
 	}
 }

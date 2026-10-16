@@ -51,6 +51,9 @@ func (s *adminStore) RevokeRefreshTokenForUser(ctx context.Context, jti, userID 
 func (s *adminStore) ListAdmins(context.Context) ([]*storageif.User, error) { return s.admins, nil }
 
 func (s *adminStore) UpdateUserRole(_ context.Context, id string, role auth.Role) error {
+	if role != auth.RoleAdmin && len(s.admins) == 1 && s.admins[0].ID == id {
+		return storageif.ErrLastAdmin
+	}
 	s.updated[id] = role
 	return nil
 }

@@ -23,10 +23,12 @@ const SORT_OPTIONS: {value: LibrarySort; label: SortLabelKey}[] = [
 
 export default function LibraryToolbar({
   total,
+  totalCapped = false,
   isLoading,
   onRefresh,
 }: {
   total: number
+  totalCapped?: boolean
   isLoading: boolean
   onRefresh: () => void
 }) {
@@ -75,7 +77,11 @@ export default function LibraryToolbar({
       </div>
       <div className="ml-auto flex items-center gap-1">
         <span className="text-xs text-text-tertiary tabular-nums" aria-live="polite">
-          {isLoading ? t('toolbar.loading') : t('toolbar.flowsCount', {count: total})}
+          {isLoading
+            ? t('toolbar.loading')
+            : totalCapped
+              ? t('toolbar.flowsCountCapped', {count: total})
+              : t('toolbar.flowsCount', {count: total})}
         </span>
         <IconButton icon={RefreshCw} size="sm" label={t('toolbar.refresh')} onClick={onRefresh} disabled={isLoading} />
       </div>

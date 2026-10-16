@@ -180,19 +180,28 @@ func (s *LibraryService) ListLibraryFlowsWithTagFilter(ctx context.Context, user
 	return s.storage.ListFlows(ctx, filter)
 }
 
+// LibraryTotalCap bounds the library listing's count: a page reports at most this many flows ("10 000+") rather
+// than count every flow the caller can see on every page.
+const LibraryTotalCap = 10_000
+
 // LibraryPage is one page of the library listing with the total under the same
 // filter, plus the facts the per-row permission flags need again.
 type LibraryPage struct {
-	Docs  []*storageif.FlowDocument
-	Total int
+	Docs []*storageif.FlowDocument
+	// HasMore reports flows after the page; Total counts the filter's flows up to LibraryTotalCap (TotalCapped: more).
+	HasMore     bool
+	Total       int
+	TotalCapped bool
 	// Memberships is the caller's complete org-membership list when scope "all"
 	// resolved it (an absent org = not a member); nil when unused. Feed the flags call.
 	Memberships []storageif.OrgMembership
 }
 
 // ListLibraryFlowsPage is list + count in one call: the scope — membership
-// query included — resolves ONCE and one filter serves page and total.
-func (s *LibraryService) ListLibraryFlowsPage(ctx context.Context, userID, orgID string, scope LibraryScope, query, sort string, limit, offset int, tags []string) (page *LibraryPage, err error) {
+// query included — resolves ONCE and one filter serves page and total. after,
+// when set, is the keyset position the page starts after (the updated-at sorts
+// only) and offset is ignored.
+func (s *LibraryService) ListLibraryFlowsPage(ctx context.Context, userID, orgID string, scope LibraryScope, query, sort string, limit, offset int, after *storageif.PageCursor, tags []string) (page *LibraryPage, err error) {
 	defer logger.Guard("LibraryService.ListLibraryFlowsPage", &err)
 	if s.mode == config.ModeLocal {
 		return &LibraryPage{Docs: []*storageif.FlowDocument{}}, nil
@@ -202,13 +211,12 @@ func (s *LibraryService) ListLibraryFlowsPage(ctx context.Context, userID, orgID
 		return nil, err
 	}
 	filter.Tags = tags
-	// Page and total in one statement: the visibility filter (membership
-	// semi-join + RLS) is the read path's most expensive predicate.
-	docs, total, err := s.storage.ListFlowsWithTotal(ctx, filter)
+	filter.After = after
+	p, err := s.storage.ListFlowsPage(ctx, filter, LibraryTotalCap)
 	if err != nil {
 		return nil, err
 	}
-	return &LibraryPage{Docs: docs, Total: total, Memberships: memberships}, nil
+	return &LibraryPage{Docs: p.Docs, HasMore: p.HasMore, Total: p.Total, TotalCapped: p.TotalCapped, Memberships: memberships}, nil
 }
 
 // BatchFlowPermissionsWithRoles is BatchFlowPermissions seeded with the

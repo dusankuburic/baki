@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/platform/secret"
 	"pad-analyzer/internal/redisx"
+	"pad-analyzer/internal/scanner"
 	"pad-analyzer/internal/service"
 	storagedb "pad-analyzer/internal/storage/database"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -55,8 +57,8 @@ const xrSrc = "#Region \"Main\"\n    HTTPClient.InvokeUrl Url: $'''https://x/%s'
 
 // xrProviders registers the stub models the scenarios stream with, once per test binary (ai.RegisterProvider is
 // process-global). xr-blocking streams nothing until its stream is stopped and bills a high price so its reservation
-// shows in the budget. A model that asks for a fix and then answers is registered per stream (startStreamWith): the
-// fix names a block of the flow under test.
+// shows in the budget; xr-unpriced is the same at no price. A model that asks for a fix and then answers is registered
+// per stream (startStreamWith): the fix names a block of the flow under test.
 var xrProviders sync.Once
 
 type xrBlocking struct{ *testutil.FakeProvider }
@@ -68,9 +70,18 @@ func (p *xrBlocking) Stream(ctx context.Context, _ ai.Request, _ func(ai.Chunk))
 
 func (p *xrBlocking) PricePerMillionTokens() ai.Pricing { return ai.Pricing{OutputCostPerM: 10000} }
 
+// xrUnpriced streams nothing until its stream is stopped and costs nothing, so the budget never ends its streams.
+type xrUnpriced struct{ *testutil.FakeProvider }
+
+func (p *xrUnpriced) Stream(ctx context.Context, _ ai.Request, _ func(ai.Chunk)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func registerXRProviders() {
 	xrProviders.Do(func() {
 		ai.RegisterProvider("xr-blocking", func(string) ai.Provider { return &xrBlocking{FakeProvider: &testutil.FakeProvider{}} })
+		ai.RegisterProvider("xr-unpriced", func(string) ai.Provider { return &xrUnpriced{FakeProvider: &testutil.FakeProvider{}} })
 	})
 }
 
@@ -90,6 +101,10 @@ type xrReplica struct {
 	budget   *service.AIBudget
 	chat     *service.ChatService
 	factory  *ai.ProviderFactory
+	analysis *service.AnalysisService
+	// scan is the replica's governance sweep; scanRuns counts the flows it analyzed.
+	scan     *scanner.Scanner
+	scanRuns atomic.Int64
 }
 
 // newXRReplica assembles a replica on rep's Redis client and the given store: the same constructors, in the same
@@ -110,15 +125,27 @@ func newXRReplica(t *testing.T, rep *redisreplica.Replica, backend storageif.Sto
 
 	analyzer := ProvideAnalyzer()
 	r.flows = ProvideFlowService(cfg, r.events, r.settings, r.docs, backend, nil, ProvideASTCache(), r.bus, analyzer, rep.Client)
-	analysis, err := service.NewAnalysisService(r.events, r.settings, nil, service.AnalysisOptions{Analyzer: analyzer, Bus: r.bus})
+	analysis, err := service.NewAnalysisService(r.events, r.settings, nil, service.AnalysisOptions{Analyzer: analyzer, Bus: r.bus, Shared: replicatedClient(rep.Client, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.analysis = analysis
+	// The sweep as internal/app builds it with PAD_MAX_REPLICAS > 1 (provideScanner), without a schedule.
+	r.scan = scanner.New(backend, nil, func(ctx context.Context, doc *models.FlowDocument) (*models.AnalysisReport, error) {
+		r.scanRuns.Add(1)
+		return analysis.AnalyzeFlowBackground(ctx, doc)
+	}, nil, 0, nil, scanner.WithSharedScans(replicatedClient(rep.Client, cfg)))
+	r.scan.SetRuleSetDigest(func(ctx context.Context, orgID string) string {
+		p := r.profiles.Resolve(ctx, orgID)
+		return scanner.DigestRuleSet(p.Settings, p.Rules)
+	})
+	t.Cleanup(r.scan.Stop)
 	r.dash = service.NewDashboardService(backend, analysis, r.flows, nil)
 	r.budget = provideAIBudget(r.settings, backend, rep.Client, nil, cfg)
 	r.factory = ai.NewProviderFactory(func(_, _ string) (string, error) { return "k", nil }, nil, nil, nil)
 	r.chat = service.NewChatService(r.events, t.TempDir(), r.flows, analysis, r.settings, r.factory, backend, config.ModeCloud, service.ChatOptions{
 		Budget: r.budget, Resume: rep.Client, Instance: rep.ID,
+		MultiReplica: multiReplicaClient(rep.Client, cfg) != nil, Health: rep.Health,
 	})
 	r.chat.StartCommands()
 	t.Cleanup(func() { _ = r.chat.Shutdown(context.Background()) })
@@ -238,9 +265,11 @@ func TestTwoReplicas_EndToEnd(t *testing.T) {
 				{"an event emitted on A reaches B's stream and replays after a reconnect", scenarioEventsAndReplay},
 				{"concurrent saves of one conversation, one per replica, have one winner", scenarioConversationSaves},
 				{"an edit on A is undone through B", scenarioUndoOnTheOtherReplica},
+				{"a user's event streams, chat streams and stream ids count on both replicas", scenarioCapsSpanTheReplicas},
 				{"a deployment setting changed on A reaches B before its cache expires", scenarioSettingsReachThePeer},
 				{"a stop and an approval decision on B reach the stream running on A", scenarioStreamCommands},
 				{"the AI budget counts the other replica's running stream", scenarioSharedBudget},
+				{"a flow swept or analyzed on A is not analyzed or recorded again on B, which exports and diffs A's runs", scenarioAnalysesAcrossReplicas},
 				{"Redis killed and restored mid-run: degraded, then healed", scenarioRedisOutage},
 			} {
 				t.Run(step.name, func(t *testing.T) { step.run(t, s) })
@@ -566,6 +595,62 @@ func scenarioStreamCommands(t *testing.T, s *xrStack) {
 	}
 }
 
+// The per-user caps hold across the replicas: 10 event streams on A leave none on B, 3 chat streams on A leave none on
+// B, and a stream id running on A cannot start a second stream on B. Everything is given back at the end.
+func scenarioCapsSpanTheReplicas(t *testing.T, s *xrStack) {
+	user := "u-caps"
+	status := func(r *xrReplica) int {
+		ctx, cancel := context.WithCancel(context.Background())
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, r.srv.URL, nil)
+		req.Header.Set("X-Test-User", user)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cancel(); _ = resp.Body.Close() })
+		return resp.StatusCode
+	}
+	for i := 0; i < 10; i++ {
+		if code := status(s.a); code != http.StatusOK {
+			t.Fatalf("event stream %d on A: %d", i+1, code)
+		}
+	}
+	if code := status(s.b); code != http.StatusServiceUnavailable {
+		t.Errorf("an 11th event stream on B: %d, want 503", code)
+	}
+
+	var ids []string
+	for i := 0; i < 3; i++ {
+		ids = append(ids, startStreamWith(t, s.a, user, s.doc, "xr-unpriced", ""))
+	}
+	_, err := s.b.chat.StreamChatMessage(context.Background(), user, s.doc, nil, models.ChatRequest{
+		Provider: "xr-unpriced", Model: "fake-model", UserMessage: "go", ClientStreamID: uuid.NewString(),
+	})
+	if !errors.Is(err, service.ErrTooManyChatStreams) {
+		t.Errorf("a 4th chat stream on B = %v, want ErrTooManyChatStreams", err)
+	}
+	_, err = s.b.chat.StreamChatMessage(context.Background(), "u-other", s.doc, nil, models.ChatRequest{
+		Provider: "xr-unpriced", Model: "fake-model", UserMessage: "go", ClientStreamID: ids[0],
+	})
+	if err == nil || !strings.Contains(err.Error(), "clientStreamId already in use") {
+		t.Errorf("a stream on B under an id running on A = %v, want the id refused", err)
+	}
+	for _, id := range ids {
+		s.a.chat.CancelStream(id)
+	}
+	redisreplica.Eventually(t, 5*time.Second, "a chat stream slot free on B after A's streams ended", func() bool {
+		id := uuid.NewString()
+		_, err := s.b.chat.StreamChatMessage(context.Background(), user, s.doc, nil, models.ChatRequest{
+			Provider: "xr-unpriced", Model: "fake-model", UserMessage: "go", ClientStreamID: id,
+		})
+		if err == nil {
+			s.b.chat.CancelStream(id)
+		}
+		return err == nil
+	})
+}
+
 func startStream(t *testing.T, r *xrReplica, doc *models.FlowDocument, provider string) string {
 	return startStreamWith(t, r, twoReplicaUser, doc, provider, "")
 }
@@ -610,6 +695,58 @@ func scenarioSharedBudget(t *testing.T, s *xrStack) {
 	redisreplica.Eventually(t, 3*time.Second, "the reservation to be released", func() bool {
 		return s.b.budget.CheckBudget(ctx, twoReplicaUser, "") == nil
 	})
+}
+
+// The governance sweep and an interactive analysis on A; B's sweep after A's analyzes nothing, the same run analyzed on
+// B is not recorded a second time, and after an edit analyzed on A, B exports A's run and diffs against the one before
+// (with the pair per replica, B answered "run analysis first" and had no previous run).
+func scenarioAnalysesAcrossReplicas(t *testing.T, s *xrStack) {
+	ctx := context.Background()
+	s.a.scan.ScanOnce(ctx)
+	if s.a.scanRuns.Load() == 0 {
+		t.Fatal("premise: A's sweep analyzed no flow")
+	}
+	before := s.b.scanRuns.Load()
+	s.b.scan.ScanOnce(ctx)
+	if n := s.b.scanRuns.Load() - before; n != 0 {
+		t.Errorf("B's sweep after A's analyzed %d unchanged flows again, want 0", n)
+	}
+
+	resolve := func(r *xrReplica) *models.FlowDocument {
+		t.Helper()
+		r.docs.Invalidate(s.flowID)
+		doc, err := r.docs.ResolveDoc(ctx, s.flowID)
+		if err != nil {
+			t.Fatalf("resolve on %s: %v", r.id, err)
+		}
+		return doc
+	}
+	r1, fresh, err := s.a.analysis.AnalyzeFlowFresh(ctx, resolve(s.a))
+	if err != nil || !fresh {
+		t.Fatalf("the first interactive analysis on A = fresh %v, %v; want a fresh run", fresh, err)
+	}
+	if _, fresh, err := s.b.analysis.AnalyzeFlowFresh(ctx, resolve(s.b)); err != nil || fresh {
+		t.Errorf("the same run analyzed on B = fresh %v, %v; want it recorded once, on A", fresh, err)
+	}
+
+	docA := resolve(s.a)
+	if _, err := s.a.flows.SaveSource(ctx, docA, strings.Replace(docA.Source, "https://x/", "https://edited.example/", 1), ""); err != nil {
+		t.Fatalf("SaveSource on A: %v", err)
+	}
+	r2, err := s.a.analysis.AnalyzeFlow(ctx, resolve(s.a))
+	if err != nil || r2.ContentHash == r1.ContentHash {
+		t.Fatalf("the analysis of the edit on A = %v (content unchanged: %v)", err, err == nil && r2.ContentHash == r1.ContentHash)
+	}
+	docB := resolve(s.b)
+	if cur, ok := s.b.analysis.CurrentReport(docB); !ok || cur.ContentHash != r2.ContentHash {
+		t.Errorf("B's current report of the flow (the export's) is not A's latest run (ok %v)", ok)
+	}
+	if _, err := s.b.analysis.AnalyzeFlow(ctx, docB); err != nil {
+		t.Fatal(err)
+	}
+	if prev, has := s.b.analysis.PreviousReport(docB); !has || prev.ContentHash != r1.ContentHash {
+		t.Errorf("B's diff has no previous run, or not A's run before the edit (has %v)", has)
+	}
 }
 
 // Redis dies in the middle of it all and comes back with its data.

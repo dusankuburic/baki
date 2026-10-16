@@ -197,6 +197,7 @@ func TestMigration28_UpDownUp(t *testing.T) {
 	// re-applied backfill.
 	stamp := time.Now().Format("150405.000000000")
 	orgID, docID, chunkID := "r3-mig-org-"+stamp, "r3-mig-doc-"+stamp, "r3-mig-chunk-"+stamp
+	seedOrgRow(t, b.db, orgID) // v48, re-applied with it, deletes a document whose organisation does not exist
 	if _, err := b.db.ExecContext(ctx, `INSERT INTO knowledge_documents (id, org_id, filename) VALUES ($1, $2, 'mig.txt')`, docID, orgID); err != nil {
 		t.Fatalf("insert document at v27: %v", err)
 	}

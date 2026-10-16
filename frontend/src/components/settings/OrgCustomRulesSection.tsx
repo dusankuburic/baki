@@ -280,6 +280,15 @@ function RuleEditor({
     setTesting(true)
     try {
       const res = await analysisApi.testCustomRule(cfg, testFlowId)
+      // The server runs a rule under a built-in id so a stored one can be tried; a new one still cannot have it.
+      const v = res.problems
+        ? verdictOf({index: 0, id: cfg.id, valid: true, loaded: false, problems: res.problems}, editing)
+        : null
+      if (v && !v.valid) {
+        setVerdict(v)
+        setTestResult(null)
+        return
+      }
       setTestResult({matches: res.matches, flowName: res.flowName})
     } catch (e) {
       setVerdict(fieldErrorOf(e, 'rule.') ?? invalidVerdict(getErrorMessage(e)))
@@ -287,7 +296,7 @@ function RuleEditor({
     } finally {
       setTesting(false)
     }
-  }, [cfg, testFlowId])
+  }, [cfg, editing, testFlowId])
 
   const save = useCallback(async () => {
     if (!editing && takenIds?.includes(cfg.id.trim())) {

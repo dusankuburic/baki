@@ -41,6 +41,7 @@ func TestSearchKnowledge_PathParity(t *testing.T) {
 	const orgID = "parity-org"
 	const docID = "parity-doc"
 	db := b.DB()
+	seedOrgRow(t, db, orgID)
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(ctx, `DELETE FROM knowledge_chunks WHERE doc_id = $1`, docID)
 		_, _ = db.ExecContext(ctx, `DELETE FROM knowledge_documents WHERE id = $1`, docID)

@@ -45,6 +45,14 @@ const DefaultEmbeddingDim = 1536
 // PAD_KNOWLEDGE_LEASE_CAP is unset; rag.DefaultLeaseCap is the same number for a service built without config.
 const DefaultKnowledgeLeaseCap = 4
 
+// DBIdleTxTimeoutMargin is how much longer than the request timeout a transaction may sit idle before the server ends
+// it, when PAD_DB_IDLE_TX_TIMEOUT is unset (EffectiveDBIdleTxTimeout). A request transaction begins after its request
+// does, so an idle stretch longer than the request timeout belongs to a handler already past its deadline; the
+// margin is room for what may legitimately idle beyond that: a handler persisting its partial work after the deadline
+// (15 s), a post-commit hook's own scope, and off a request a store method's own transaction waiting on one blob
+// operation (45 s, storage's blobOpTimeout, which a test there keeps below this).
+const DBIdleTxTimeoutMargin = time.Minute
+
 // EmbeddingProviderIDs lists the provider ids PAD_EMBEDDING_PROVIDER accepts:
 // the embedding-capable providers. The ai package cannot be imported here (it
 // imports config); an ai test keeps the lists in sync.
@@ -57,6 +65,16 @@ func (s StorageConfig) EffectiveEmbeddingDim() int {
 		return s.EmbeddingDim
 	}
 	return DefaultEmbeddingDim
+}
+
+// EffectiveDBIdleTxTimeout is the idle_in_transaction_session_timeout in force: Storage.DBIdleTxTimeout when it is
+// set (0 = off), else the request timeout plus DBIdleTxTimeoutMargin, derived from whichever request timeout the
+// configuration holds.
+func (c *Config) EffectiveDBIdleTxTimeout() time.Duration {
+	if d, set := c.Storage.DBIdleTxTimeout.Get(); set {
+		return d
+	}
+	return c.Runtime.RequestTimeout.Std() + DBIdleTxTimeoutMargin
 }
 
 // EffectiveKnowledgeLeaseCap is the per-replica cap of org knowledge-base leases in force: KnowledgeLeaseCap, or
@@ -191,8 +209,9 @@ type GovernanceConfig struct {
 	// aged-out audit rows (PAD_RETENTION_PURGE_INTERVAL, default 24h; "0s"
 	// disables). With accounts on the database only — the purge needs a DB.
 	RetentionPurgeInterval Duration
-	// AuditRetentionDays is how long audit_events are kept before the purge
-	// deletes them (0 = keep audit history indefinitely).
+	// AuditRetentionDays is the purge window, in days, of the audit trail, analysis history, usage, alerts and
+	// rule notices (PAD_AUDIT_RETENTION_DAYS; 0 = keep them indefinitely). DefaultCloudAuditRetentionDays in the
+	// cloud profile, 0 for local and desktop; an explicit 0 keeps everything there too.
 	AuditRetentionDays int
 	// AuditSpillDir is the directory for the audit-event on-disk spill queue
 	// used when the in-memory pool overflows. Empty → os.TempDir() (zero-config,
@@ -277,6 +296,10 @@ type StorageConfig struct {
 	// DBStatementTimeout bounds every statement (and lock wait) server-side:
 	// PAD_DB_STATEMENT_TIMEOUT, default 30s; "0s" disables for a maintenance run.
 	DBStatementTimeout Duration
+	// DBIdleTxTimeout ends a session whose transaction sits idle for longer (idle_in_transaction_session_timeout):
+	// PAD_DB_IDLE_TX_TIMEOUT, "0s" disables. Unset, it is the request timeout plus DBIdleTxTimeoutMargin; read it
+	// through EffectiveDBIdleTxTimeout. Validate requires a set value to be longer than the request timeout.
+	DBIdleTxTimeout OptionalDuration
 	// MaxReplicas is how many replicas share the database server at most
 	// (PAD_MAX_REPLICAS, which infra/main.bicep sets); 0 = unknown, counted as
 	// one. Only the boot check of the pool against max_connections reads it.
@@ -292,6 +315,10 @@ type StorageConfig struct {
 	// default (required in cloud, optional in local). Resolved to a bool in
 	// main.provideStorageBackend where the deployment mode is known.
 	DBRequireSSL string
+	// DBAllowBypassRLS (PAD_DB_ALLOW_BYPASSRLS) lets the cloud profile start on a database role that bypasses
+	// Row-Level Security (a superuser or BYPASSRLS), with the warning the other profiles log. Without it the cloud
+	// refuses to start on such a role: every tenant policy would be inert.
+	DBAllowBypassRLS bool
 
 	// EmbeddingDim is the vector dimension the knowledge-base embeddings use.
 	// It gates which chunks are eligible for pgvector server-side search: a
@@ -342,6 +369,10 @@ type RuntimeConfig struct {
 	// admin-chosen public URL for up to 15 s.
 	RateLimitChannelTestRPS   float64
 	RateLimitChannelTestBurst float64
+	// RateLimitAvatar is the avatar upload's own bucket (each call decodes, downscales and re-encodes an image of up
+	// to 16 M pixels), apart from the flow uploads' so neither refuses the other.
+	RateLimitAvatarRPS   float64
+	RateLimitAvatarBurst float64
 	// RateLimitPerUser caps one authenticated user's total WRITE throughput
 	// (POST/PUT/PATCH/DELETE) across all endpoints — an additional ceiling on
 	// the per-group per-IP buckets, so an account can't rotate across
@@ -363,7 +394,7 @@ type RuntimeConfig struct {
 	InstanceID string
 	// ShutdownDrainDelay is how long a stopping server answers "draining" (readiness 503, new streams refused)
 	// while it still serves, before it ends the open streams, so probes and load balancers move traffic first
-	// (PAD_SHUTDOWN_DRAIN_DELAY; ADR 0024). Default 3 s in the cloud profile, 0 for local and desktop; at most 10 s.
+	// (PAD_SHUTDOWN_DRAIN_DELAY; ADR 0024). Default 3 s in the cloud profile, 0 for local and desktop; at most 5 s.
 	ShutdownDrainDelay Duration
 	// AzureFoundryAllowedHosts extends the hosts a user may configure as an
 	// Azure AI Foundry endpoint beyond Microsoft's own suffixes
@@ -395,6 +426,10 @@ func DefaultRuntimeConfig() RuntimeConfig {
 		// Channel tests: six a minute after a burst of three.
 		RateLimitChannelTestRPS:   0.1,
 		RateLimitChannelTestBurst: 3,
+		// Avatar uploads: the upload bucket's rate, which they shared before, so no client loses capacity (several
+		// users behind one NAT address share it).
+		RateLimitAvatarRPS:   1,
+		RateLimitAvatarBurst: 3,
 		// Per-user default: generous enough that a legit user doing one thing at
 		// a time (already bounded by the tighter per-group per-IP caps) never
 		// hits it, but caps a runaway account's total write volume.
@@ -489,7 +524,8 @@ func Default() *Config {
 			// On by default (cloud mode only; see initRetentionPurge). Off, the
 			// expired-token and share-link tables grew forever, and nothing
 			// told an operator the purge existed. "0s" disables; age-based
-			// purges additionally need PAD_AUDIT_RETENTION_DAYS.
+			// purges additionally need PAD_AUDIT_RETENTION_DAYS (the cloud
+			// profile's default, defaultsFor).
 			RetentionPurgeInterval: Duration(24 * time.Hour),
 		},
 	}

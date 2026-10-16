@@ -795,6 +795,26 @@ export const enSettings = {
       "Replace {{placeholder}} with the ID of one of this organisation's flows: the flowId of its exported JSON report.",
     done: 'Done',
   },
+  orgAiProviders: {
+    title: 'Allowed AI providers',
+    subtitle:
+      "The AI providers this organisation's flows and knowledge base may be sent to, whichever key a member chats with.",
+    limit: 'Only allow the providers selected below',
+    allAllowed: 'Every provider this server offers is allowed.',
+    notOffered: '{{id}} (not offered by this server)',
+    noneSelected: 'Select at least one provider, or turn off the limit to allow every provider.',
+    unknownProvider: "The server doesn't know one of the selected providers. Reload the settings and choose again.",
+    unknownProviders_one:
+      "This server doesn't know the provider {{ids}}. It's unchecked now; save again to keep the rest of the list.",
+    unknownProviders_other:
+      "This server doesn't know the providers {{ids}}. They're unchecked now; save again to keep the rest of the list.",
+    save: 'Save',
+    saving: 'Saving…',
+    saved: 'AI providers saved',
+    saveFailed: 'Failed to save the AI providers',
+    loading: 'Loading…',
+    loadFailed: "Couldn't load the organisation's AI providers.",
+  },
   orgs: {
     empty: 'No organizations yet.',
     inviteLinkBody:
@@ -943,7 +963,8 @@ export const enSettings = {
       orgs: {
         label: 'Organizations',
         description: 'Group flows and share them with teammates. Roles control who can view or edit.',
-        keywords: 'organization team members invite roles owner channels webhook custom rules azure foundry shared',
+        keywords:
+          'organization team members invite roles owner channels webhook custom rules azure foundry shared ai providers allowlist allowed',
       },
       knowledge: {
         label: 'Knowledge Base',
@@ -1014,6 +1035,7 @@ export const enSettings = {
     newPolicy: 'New Policy',
     selectOrgHint: 'Select an organization to manage its policies.',
     loading: 'Loading policies…',
+    loadFailed: "Couldn't load the policies.",
     empty: 'No policies yet. Create one to define a quality gate for your team.',
     rulesEnabled_one: '{{count}} rule enabled',
     rulesEnabled_other: '{{count}} rules enabled',

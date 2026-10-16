@@ -18,7 +18,7 @@ import (
 // and the config's inline rules, narrowed by -rules; and the library rules
 // -rules leaves in. Exit 2 on a custom rule this bakicli cannot read, a named
 // custom-rules file that does not exist, or a -rules list matching nothing.
-func selectRules(rulesFlag, customRulesPath string, inline []analyzer.CustomRuleConfig) ([]analyzer.Rule, []analyzer.LibraryRule) {
+func selectRules(rulesFlag, customRulesPath string, inline []analyzer.CustomRuleEntry) ([]analyzer.Rule, []analyzer.LibraryRule) {
 	all := append(analyzer.AllRules(), loadCustomRules(customRulesPath, inline)...)
 	library := analyzer.LibraryRules()
 	if rulesFlag == "" {
@@ -53,7 +53,7 @@ func selectRules(rulesFlag, customRulesPath string, inline []analyzer.CustomRule
 // schemaVersion this bakicli does not run, a named file that does not exist,
 // or a file that is not valid JSON exits 2: running without the rule would
 // weaken the gate silently.
-func loadCustomRules(path string, inline []analyzer.CustomRuleConfig) []analyzer.Rule {
+func loadCustomRules(path string, inline []analyzer.CustomRuleEntry) []analyzer.Rule {
 	var out []analyzer.Rule
 	tooNew := 0
 	compile := func(source string, index int, cfg analyzer.CustomRuleConfig) {
@@ -105,8 +105,14 @@ func loadCustomRules(path string, inline []analyzer.CustomRuleConfig) []analyzer
 			}
 		}
 	}
-	for i, cfg := range inline {
-		compile("config customRulesInline", i, cfg)
+	const inlineSource = "config customRulesInline"
+	for _, e := range inline {
+		if e.Err != nil { // a newer release's rule whose fields do not decode (inlineRules keeps no other)
+			tooNew++
+			fmt.Fprintf(os.Stderr, "bakicli: %s: entry %d (rule %q): %v; %s\n", inlineSource, e.Index, e.Err.RuleID, e.Err, newerBakicliHint)
+			continue
+		}
+		compile(inlineSource, e.Index, e.Config)
 	}
 	if tooNew > 0 {
 		fmt.Fprintf(os.Stderr, "bakicli: %d custom rule(s) need a newer bakicli\n", tooNew)
@@ -116,6 +122,48 @@ func loadCustomRules(path string, inline []analyzer.CustomRuleConfig) []analyzer
 }
 
 const newerBakicliHint = "the rule needs a newer bakicli"
+
+// inlineRules is a config's customRulesInline, decoded entry by entry as a
+// rules file is: a newer release's rule whose fields do not decode (a later
+// schemaVersion may retype a field) is kept as its error, so loadCustomRules
+// reports it as needing a newer bakicli; it used to fail the whole config. Any
+// other JSON type error still fails the config, with encoding/json's message.
+type inlineRules []analyzer.CustomRuleEntry
+
+func (r *inlineRules) UnmarshalJSON(data []byte) error {
+	// A config that fails fails with the message it always had: the array
+	// decoded whole names the field's path in the config.
+	failWhole := func(err error) error {
+		var all []analyzer.CustomRuleConfig
+		if jerr := json.Unmarshal(data, &all); jerr != nil {
+			return jerr
+		}
+		return err
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(data, &items); err != nil {
+		return failWhole(err)
+	}
+	if items == nil {
+		return nil
+	}
+	entries := make(inlineRules, len(items))
+	for i, raw := range items {
+		cfg, err := analyzer.DecodeCustomRule(raw)
+		var ce *analyzer.CustomRuleError
+		switch {
+		case errors.As(err, &ce) && ce.IsNewerRelease():
+			ce.Index = i
+			entries[i] = analyzer.CustomRuleEntry{Index: i, Err: ce}
+		case err != nil:
+			return failWhole(err)
+		default:
+			entries[i] = analyzer.CustomRuleEntry{Index: i, Config: cfg}
+		}
+	}
+	*r = entries
+	return nil
+}
 
 // needsNewerBakicli: a kind, or a schemaVersion above the newest, that this
 // build cannot run (every mode refuses it; running it as a block rule would

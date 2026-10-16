@@ -64,7 +64,7 @@ func NewCopilotProvider(token string) *CopilotProvider {
 		modelsKey: key,
 		openaiBase: openaiBase{
 			tokenFn:       func(_ context.Context) (string, error) { return token, nil },
-			client:        sharedHTTPClient,
+			client:        fixedHostClient(),
 			baseURL:       &copilotBaseURL,
 			providerLabel: "copilot",
 			extraHeaders:  func(req *http.Request, _ string) { setCopilotHeaders(req.Header) },
@@ -84,7 +84,7 @@ func NewCopilotProviderWithAuth(auth *CopilotAuth, githubToken string) *CopilotP
 			tokenFn: func(ctx context.Context) (string, error) {
 				return auth.GetSessionToken(ctx, githubToken)
 			},
-			client:        sharedHTTPClient,
+			client:        fixedHostClient(),
 			baseURL:       &copilotBaseURL,
 			providerLabel: "copilot",
 			extraHeaders:  func(req *http.Request, _ string) { setCopilotHeaders(req.Header) },

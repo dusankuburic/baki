@@ -60,6 +60,8 @@ func New(t testing.TB, n int) *Cluster {
 			ReadTimeout:           500 * time.Millisecond,
 			WriteTimeout:          500 * time.Millisecond,
 			MaxRetries:            -1,
+			// The handshake stays as production sends it (CLIENT SETINFO, which miniredis refuses like a Redis before
+			// 7.2): redisx.Health must not count it, and these replicas prove that it does not.
 		})
 		t.Cleanup(func() { _ = client.Close() })
 		c.Replicas = append(c.Replicas, &Replica{ID: fmt.Sprintf("replica-%d", i), Client: client, Health: redisx.NewHealth(client)})

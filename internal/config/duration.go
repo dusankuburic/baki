@@ -84,3 +84,66 @@ func jsonKind(s string) string {
 	}
 	return "number " + s
 }
+
+// OptionalDuration is a Duration that tells "not set" from an explicit "0s", for a setting whose default is derived
+// from other settings once the configuration has loaded (Storage.DBIdleTxTimeout follows the request timeout), so
+// no default can be written into Default before the sources are read. "" and null leave it unset, as they leave a
+// Duration's default; it marshals as null when unset, so a configuration written out and read back keeps the
+// difference.
+type OptionalDuration struct {
+	d   Duration
+	set bool
+}
+
+// ExplicitDuration is d as an explicitly set OptionalDuration.
+func ExplicitDuration(d time.Duration) OptionalDuration {
+	return OptionalDuration{d: Duration(d), set: true}
+}
+
+// Get is the duration and whether it was set.
+func (o OptionalDuration) Get() (time.Duration, bool) { return o.d.Std(), o.set }
+
+// IsSet reports whether the setting was given.
+func (o OptionalDuration) IsSet() bool { return o.set }
+
+// String is the duration in Go's notation, or "unset".
+func (o OptionalDuration) String() string {
+	if !o.set {
+		return "unset"
+	}
+	return o.d.String()
+}
+
+// MarshalJSON writes null when unset, else the string form.
+func (o OptionalDuration) MarshalJSON() ([]byte, error) {
+	if !o.set {
+		return []byte("null"), nil
+	}
+	return o.d.MarshalJSON()
+}
+
+// UnmarshalJSON reads what Duration reads; "" and null leave it unset.
+func (o *OptionalDuration) UnmarshalJSON(b []byte) error {
+	if s := string(b); s == "null" || s == `""` {
+		return nil
+	}
+	var d Duration
+	if err := d.UnmarshalJSON(b); err != nil {
+		return err
+	}
+	*o = OptionalDuration{d: d, set: true}
+	return nil
+}
+
+// UnmarshalText reads a duration string, the form of a PAD_* variable; empty leaves it unset.
+func (o *OptionalDuration) UnmarshalText(b []byte) error {
+	if len(b) == 0 {
+		return nil
+	}
+	var d Duration
+	if err := d.UnmarshalText(b); err != nil {
+		return err
+	}
+	*o = OptionalDuration{d: d, set: true}
+	return nil
+}

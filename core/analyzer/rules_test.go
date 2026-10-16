@@ -811,6 +811,83 @@ func TestDuplicateActionRule_MultiSubflow_NoPanic(t *testing.T) {
 	_ = report
 }
 
+// TestSiblingRules_CollidingGroupKeys: documents the parser never emits (hand-built, or a future parser's) where two
+// sibling groups share a key, two subflows under one ID or two parents under one block ID. The earlier group's
+// sibling indexes pointed into the later group's blocks, and duplicate-action (and missing-delay and
+// redundant-action, which index the previous sibling the same way) read past its end: a panic the engine recovered
+// by dropping the rule for the whole flow. Now the earlier group is skipped by these rules and the later one, whose
+// indexes hold, is still checked.
+func TestSiblingRules_CollidingGroupKeys(t *testing.T) {
+	run := func(sf, prefix string, n int, rawType string, distinct bool) []models.Block {
+		out := make([]models.Block, n)
+		for i := range out {
+			out[i] = *makeBlock(fmt.Sprintf("%s-%d", prefix, i), "Step", models.BlockTypeAction, rawType, 0)
+			out[i].SubflowID = sf
+			out[i].Properties = map[string]string{"Target": "btn"}
+			if distinct {
+				out[i].Properties["Target"] = fmt.Sprintf("btn%d", i)
+			}
+		}
+		return out
+	}
+	rules := []BlockRule{&DuplicateActionRule{}, &MissingDelayRule{}, &RedundantActionRule{}}
+	check := func(t *testing.T, flow *models.FlowDocument) map[string][]models.Finding {
+		t.Helper()
+		ctx := buildContext(flow, nil)
+		got := map[string][]models.Finding{}
+		walkBlocks(flow, func(b *models.Block) {
+			for _, r := range rules {
+				func() {
+					defer func() {
+						if p := recover(); p != nil {
+							t.Errorf("%s panicked on block %s: %v", r.ID(), b.ID, p)
+						}
+					}()
+					got[r.ID()] = append(got[r.ID()], r.Check(b, ctx)...)
+				}()
+			}
+		})
+		if skipped := RunAnalysis(flow, AllRules(), nil, nil).Stats.RulesSkipped; skipped != 0 {
+			t.Errorf("RunAnalysis skipped %d rule(s) (recovered panics)", skipped)
+		}
+		return got
+	}
+
+	for _, rawType := range []string{"WebAutomation.Click", "Variables.ConvertTextToNumber"} {
+		t.Run("duplicate subflow ids "+rawType, func(t *testing.T) {
+			flow := &models.FlowDocument{ID: "dup-sf", Subflows: []models.Subflow{
+				{ID: "sf", Name: "Long", Blocks: run("sf", "a", 6, rawType, false)},
+				{ID: "sf", Name: "Short", Blocks: run("sf", "b", 3, rawType, false)},
+			}}
+			got := check(t, flow)
+			dup := got["duplicate-action"]
+			if len(dup) != 1 || dup[0].BlockID != "b-0" || dup[0].Metadata["repeatCount"] != 3 {
+				t.Errorf("duplicate-action = %+v, want one finding on b-0 with repeatCount 3", dup)
+			}
+			if rawType == "WebAutomation.Click" && len(got["missing-delay"]) != 2 {
+				t.Errorf("missing-delay = %+v, want b-1 and b-2", got["missing-delay"])
+			}
+		})
+	}
+
+	t.Run("duplicate parent block ids", func(t *testing.T) {
+		parent := func(kids []models.Block) models.Block {
+			p := *makeBlock("p", "If", models.BlockTypeCondition, "IF", 0)
+			p.SubflowID = "sf"
+			for i := range kids {
+				kids[i].ParentID = "p"
+			}
+			p.Children = kids
+			return p
+		}
+		flow := &models.FlowDocument{ID: "dup-parent", Subflows: []models.Subflow{{ID: "sf", Name: "Main", Blocks: []models.Block{
+			parent(run("sf", "a", 6, "WebAutomation.Click", false)),
+			parent(run("sf", "b", 3, "File.Copy", true)),
+		}}}}
+		check(t, flow)
+	})
+}
+
 func TestHardcodedURLRule(t *testing.T) {
 	rule := &HardcodedURLRule{}
 

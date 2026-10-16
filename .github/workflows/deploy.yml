@@ -236,15 +236,30 @@ jobs:
         id: current
         run: |
           set -euo pipefail
-          IMAGE=$(az containerapp show \
+          READY=$(az containerapp show \
             --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-            --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+            --query properties.latestReadyRevisionName -o tsv 2>/dev/null || true)
+          IMAGE=""
+          if [ -n "$READY" ]; then
+            IMAGE=$(az containerapp revision show \
+              --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --revision "$READY" \
+              --query properties.template.containers[0].image -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "$IMAGE" ]; then
+            IMAGE=$(az containerapp show \
+              --name "${{ secrets.AZURE_CONTAINER_APP_NAME }}" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          fi
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Serving revision: ${READY:-<none>}"
           echo "Previously deployed image: ${IMAGE:-<none, first deploy>}"
 
-      # An old binary refuses to start against a newer schema (postgres_migrations.go), so once this release's
-      # migrations have run, putting the previous image back would only crash-loop it. Decide BEFORE deploying
+      # An old binary refuses to start against a schema with a newer `breaking` step (postgres_migrations.go), so
+      # once such a step has run, putting the previous image back would only crash-loop it. Decide BEFORE deploying
       # whether this release changes the migration sources relative to the serving image: "false" allows the
       # automatic rollback below; "true" or "unknown" (first deploy, untagged image, failed lookup) blocks it in
       # favour of a manual decision. The images carry their short commit SHA as a tag (docker/metadata-action).
@@ -336,7 +351,11 @@ jobs:
           # (docs/architecture/operations.md) are repository variables too; an
           # int parameter cannot be empty, so an unset one renders the
           # template's own default (internal/config/deploy_pool_test.go keeps
-          # the two equal).
+          # the two equal). AZURE_ACA_SUBNET_ID is private networking's subnet
+          # (infra/postgres.bicep's acaInfrastructureSubnetId output); unset keeps
+          # the environment off any network. Setting it on a running deployment
+          # needs a new environment (docs/architecture/operations.md, "Private
+          # networking").
           parameters: >-
             appName="${{ secrets.AZURE_CONTAINER_APP_NAME }}"
             registryName="${{ secrets.AZURE_CONTAINER_REGISTRY }}"
@@ -362,6 +381,7 @@ jobs:
             aiAllowPrivateEgress=${{ vars.PAD_AI_ALLOW_PRIVATE_EGRESS == 'true' }}
             embeddingProvider="${{ vars.PAD_EMBEDDING_PROVIDER }}"
             embeddingDim="${{ vars.PAD_EMBEDDING_DIM }}"
+            infrastructureSubnetId="${{ vars.AZURE_ACA_SUBNET_ID }}"
             dbMaxOpenConns="${{ vars.PAD_DB_MAX_OPEN_CONNS }}"
             dbServerMaxConnections=${{ vars.PAD_DB_SERVER_MAX_CONNS || 0 }}
             dbReservedConnections=${{ vars.DB_RESERVED_CONNECTIONS || 20 }}
@@ -412,10 +432,19 @@ jobs:
           echo "::error::Readiness check failed after 66 attempts (5.5+ minutes)"
           exit 1
 
-      # The template runs in Single revision mode, so the new revision is
-      # already live by the time the smoke test runs. If it failed, put the
-      # previous image back rather than leaving a broken revision serving --
-      # but only when this release changed no migrations (see the schema step).
+      - name: Report failed revision
+        if: failure() && steps.deploy.outcome == 'failure'
+        run: |
+          echo "::error::The new revision did not become ready; in Single revision mode the previous revision keeps serving traffic."
+          echo "::notice::Verify which revision is serving with: az containerapp show --name \"${{ secrets.AZURE_CONTAINER_APP_NAME }}\" --resource-group \"${{ secrets.AZURE_RESOURCE_GROUP }}\" --query \"{serving:properties.latestReadyRevisionName, latest:properties.latestRevisionName}\""
+          echo "::notice::Read the new revision's console log for 'v48 changed nothing' (resolve the groups: docs/deployment.md, Before deploying v48 / bakicli migrate preflight) or 'could not get a table lock' (end the holder: long transaction, pg_dump, manual VACUUM, CIC)."
+          echo "::warning::The failed revision keeps restarting and applies the migration and takes traffic by itself once the database allows. Deactivate it ('az containerapp revision deactivate') or redeploy the serving image to stop that."
+
+      # In Single revision mode, the new revision is already live by the time
+      # the smoke test runs only when the Deploy step succeeded. If the smoke
+      # test failed, put the previous image back rather than leaving a broken
+      # revision serving -- but only when this release changed no migrations
+      # (see the schema step).
       - name: Roll back on smoke-test failure
         if: failure() && steps.smoke.outcome == 'failure' && steps.current.outputs.image != '' && steps.schema.outputs.migrations_changed == 'false'
         run: |
@@ -427,13 +456,15 @@ jobs:
             --image "${{ steps.current.outputs.image }}"
           echo "Rollback issued. The deploy job still fails so the bad build is not treated as shipped."
 
-      # With migrations changed (or unknown) the previous image would refuse the newer schema and crash-loop, so an
-      # automatic rollback would trade a failed revision for an outage. Fail with the manual options instead.
+      # With migrations changed (or unknown) the previous image refuses the newer schema if a new step is `breaking`
+      # and would crash-loop, so an automatic rollback could trade a failed revision for an outage. Fail with the
+      # manual options instead.
       - name: Block rollback when the schema may have advanced
         if: failure() && steps.smoke.outcome == 'failure' && steps.current.outputs.image != '' && steps.schema.outputs.migrations_changed != 'false'
         run: |
-          echo "::error::Smoke test failed, but NOT rolling back automatically: this release's schema migrations may already have run (migrations_changed=${{ steps.schema.outputs.migrations_changed || 'unknown' }}), and the previous image refuses a newer schema, so it would crash-loop."
-          echo "::error::Fix forward with a new deploy, or roll the schema back first (bakicli migrate down <latest version the previous image knows>) and then redeploy ${{ steps.current.outputs.image }}."
+          echo "::error::Smoke test failed, but NOT rolling back automatically: this release's schema migrations may already have run (migrations_changed=${{ steps.schema.outputs.migrations_changed || 'unknown' }}), and the previous image refuses a schema with a newer breaking step, so it would crash-loop."
+          echo "::error::If the new revision's log says 'schema migration drift detected', the database ran another text of a step this release ships: redeploy the previous image, then reconcile per operations.md#migration-status: bakicli migrate adopt-checksum when the shape is the shipped one, else the build that applied it runs migrate down."
+          echo "::error::Fix forward with a new deploy. Or roll back: if every new step is '-- baki:compat expand', redeploy ${{ steps.current.outputs.image }} as it is (it runs on the newer schema; no down). If one is 'breaking', stop the app first (a running new image re-applies the steps), run bakicli migrate down <latest version the previous image knows> using the NEW release's bakicli (release artifact or 'go run ./cmd/bakicli' from that checkout; the image ships no bakicli), then redeploy ${{ steps.current.outputs.image }}."
 
       - name: Deployment summary
         if: always()
@@ -446,6 +477,7 @@ jobs:
             echo "| App URL | ${{ steps.deploy.outputs.appUrl || 'n/a' }} |"
             echo "| Image digest | \`${{ needs.build-and-push.outputs.image-digest }}\` |"
             echo "| Previous image | \`${{ steps.current.outputs.image || 'none (first deploy)' }}\` |"
+            echo "| Deploy | ${{ steps.deploy.outcome || 'skipped' }} |"
             echo "| Migrations changed | ${{ steps.schema.outputs.migrations_changed || 'n/a' }} |"
             echo "| Smoke test | ${{ steps.smoke.outcome || 'skipped' }} |"
           } >> "$GITHUB_STEP_SUMMARY"

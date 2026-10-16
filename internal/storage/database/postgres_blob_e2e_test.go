@@ -65,7 +65,10 @@ func e2eRawClient(t *testing.T) *azblob.Client {
 // blob-enabled backend, so blob offloading can't drift from the semantics the
 // plain-Postgres and filesystem backends guarantee.
 func TestE2E_ContractSuite(t *testing.T) {
-	contract.RunSuite(t, newE2EBackend(t))
+	contract.RunSuite(t, newE2EBackend(t), contract.FreshStore(func(t *testing.T) interfaces.StorageBackend {
+		b, _ := openIsolatedMigrationDB(t)
+		return b
+	}))
 }
 
 func TestE2E_SaveLoadRoundTrip(t *testing.T) {

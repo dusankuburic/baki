@@ -36,6 +36,10 @@ func TestSearchKnowledge_Pgvector_ServerSideRanking(t *testing.T) {
 	db := b.DB()
 	orgID := "test-pgvector-org"
 	docID := "test-pgvector-doc"
+	// A document needs its organisation (v48).
+	if _, err := db.ExecContext(ctx, `INSERT INTO organisations (id, name, owner_id) VALUES ($1, $1, '') ON CONFLICT (id) DO NOTHING`, orgID); err != nil {
+		t.Fatalf("seed organisation: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(ctx, `DELETE FROM knowledge_chunks WHERE doc_id = $1`, docID)
 		_, _ = db.ExecContext(ctx, `DELETE FROM knowledge_documents WHERE id = $1`, docID)

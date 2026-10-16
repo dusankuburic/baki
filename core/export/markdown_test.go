@@ -207,3 +207,33 @@ func TestReportToMarkdown_NilDocAndReport(t *testing.T) {
 		t.Errorf("expected duration in output, got: %s", out)
 	}
 }
+
+// TestReportToMarkdown_EscapesFlowControlledText: markdown is the one export
+// format rendered by tools that pass raw HTML through (VS Code preview, many
+// wikis), so flow-derived text must be HTML-escaped like the HTML/CSV exports
+// — an onerror payload in a flow name must not survive as markup.
+func TestReportToMarkdown_EscapesFlowControlledText(t *testing.T) {
+	report := makeReport(models.Finding{
+		RuleID:      "r1<img src=x onerror=alert(1)>",
+		Severity:    models.SeverityError,
+		Title:       `Evil <img src=x onerror=alert(1)>`,
+		BlockID:     `b"><script>`,
+		Description: `Desc <script>alert(1)</script> & "quotes"`,
+		Suggestion:  `Try <b>bold</b>`,
+	})
+	doc := makeDoc(`Flow"><script>alert(1)</script>`, `C:\flows\<weird>.txt`)
+	out := ReportToMarkdown(report, doc)
+
+	// The markup OPENERS are what matter: once < and > are escaped, attribute
+	// names like onerror= riding along are inert text.
+	for _, raw := range []string{"<img", "<script>", `<b>bold`} {
+		if strings.Contains(out, raw) {
+			t.Errorf("raw markup %q survived into markdown output:\n%s", raw, out)
+		}
+	}
+	for _, want := range []string{"&lt;img", "&lt;script&gt;", `&#34;quotes&#34;`, "&lt;b&gt;bold&lt;/b&gt;"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected escaped form %q in output:\n%s", want, out)
+		}
+	}
+}

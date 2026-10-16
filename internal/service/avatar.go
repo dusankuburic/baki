@@ -35,7 +35,8 @@ const (
 // stored-size cap. The wrapping message is safe to show the user; the sentinel maps to HTTP 400.
 var ErrAvatarImage = errors.New("invalid avatar image")
 
-// normalizeAvatarImage decodes data, downscales it to avatarMaxDimension on its longest side, and re-encodes it.
+// normalizeAvatarImage decodes data, downscales it to avatarMaxDimension on its longest side, turns a JPEG upright
+// by its EXIF Orientation, and re-encodes it.
 // The re-encode is the point, not an implementation detail: what is stored never carries the uploaded file's
 // metadata (EXIF with its GPS coordinates), animation frames or payloads — only pixels this code produced. The
 // accepted formats are exactly the registered decoders (PNG, JPEG); the upload's declared content type is never
@@ -60,6 +61,12 @@ func normalizeAvatarImage(data []byte) (mimeType string, out []byte, err error) 
 		dst := image.NewRGBA(image.Rect(0, 0, w, h))
 		draw.ApproxBiLinear.Scale(dst, dst.Rect, src, b, draw.Src, nil)
 		src = dst
+	}
+	// The EXIF Orientation is turned into pixels, since the re-encode drops the tag a viewer would have applied. After
+	// the downscale, which gives the same image (scaleDown treats both sides alike): the turned copy is then at most
+	// 512 px a side, not a second full-size canvas on top of the decode the caps above budget for.
+	if format == "jpeg" {
+		src = orientImage(src, jpegOrientation(data))
 	}
 
 	var buf bytes.Buffer
@@ -106,12 +113,9 @@ func (s *AuthService) SaveAvatar(ctx context.Context, userID string, data []byte
 		return err
 	}
 	// The URL write is a second statement: if it fails the stored image is inert (nothing points at it) until the
-	// user retries, which self-heals; a transaction across two store calls would widen the storage contract.
-	user, err := s.backend.LoadUserByID(ctx, userID)
-	if err != nil {
-		return err
-	}
-	return s.backend.UpdateUserProfile(ctx, userID, user.DisplayName, url)
+	// user retries, which self-heals; a transaction across two store calls would widen the storage contract. It
+	// writes the URL alone: a name read here and written back would undo a rename landing in between.
+	return s.backend.UpdateUserAvatarURL(ctx, userID, url)
 }
 
 // DeleteAvatar removes the stored image. The avatar URL is cleared only when it pointed at url (the serving
@@ -127,7 +131,7 @@ func (s *AuthService) DeleteAvatar(ctx context.Context, userID, url string) erro
 	if user.AvatarURL != url {
 		return nil
 	}
-	return s.backend.UpdateUserProfile(ctx, userID, user.DisplayName, "")
+	return s.backend.UpdateUserAvatarURL(ctx, userID, "")
 }
 
 // Avatar loads a user's stored image for the serving route; ErrNotFound when they never uploaded one.

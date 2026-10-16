@@ -33,7 +33,7 @@ type GeminiProvider struct {
 func NewGeminiProvider(apiKey string) *GeminiProvider {
 	return &GeminiProvider{
 		apiKey: apiKey,
-		client: sharedHTTPClient,
+		client: fixedHostClient(),
 	}
 }
 

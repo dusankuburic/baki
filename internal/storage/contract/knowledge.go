@@ -114,4 +114,61 @@ func runKnowledgeScenarios(ctx context.Context, b interfaces.StorageBackend, run
 			t.Errorf("counts after the update = %+v, want every row current", counts)
 		}
 	})
+
+	// An upload's document and chunks are one write: a refused chunk leaves no document, a refused document no chunk.
+	run("Knowledge_document_and_chunks_written_together", func(t *testing.T) {
+		admin := "contract-kbw-admin-" + runID
+		if err := b.CreateUser(ctx, &interfaces.User{ID: admin, Email: admin + "@example.com", Password: "x", Role: auth.RoleMember}); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		t.Cleanup(func() { _ = b.DeleteUser(context.Background(), admin) })
+		orgID := "contract-kbw-org-" + runID
+		if err := b.SaveOrg(ctx, &interfaces.Organisation{ID: orgID, Name: "KBW", OwnerID: admin, Members: []interfaces.OrgMember{{UserID: admin, Role: auth.RoleAdmin}}}); err != nil {
+			t.Fatalf("SaveOrg: %v", err)
+		}
+		t.Cleanup(func() { _ = b.DeleteOrg(context.Background(), orgID) })
+		vec := []float32{1, 0, 0}
+		chunk := func(id, docID string) interfaces.KnowledgeChunk {
+			return interfaces.KnowledgeChunk{ID: id, DocID: docID, OrgID: orgID, Content: "text of " + id, Embedding: vec, EmbeddingIdentity: "A"}
+		}
+		listed := func() map[string]int {
+			t.Helper()
+			docs, err := b.ListKnowledgeDocuments(ctx, orgID, 0, 0)
+			if err != nil {
+				t.Fatalf("ListKnowledgeDocuments: %v", err)
+			}
+			out := map[string]int{}
+			for _, d := range docs {
+				out[d.ID] = d.ChunkCount
+			}
+			return out
+		}
+
+		doc := "contract-kbw-doc-" + runID
+		if err := b.SaveKnowledgeDocumentWithChunks(ctx, admin, &interfaces.KnowledgeDocument{ID: doc, OrgID: orgID, Filename: "kbw.md", ChunkerVersion: 1},
+			[]interfaces.KnowledgeChunk{chunk(doc+"-1", doc), chunk(doc+"-2", doc)}); err != nil {
+			t.Fatalf("SaveKnowledgeDocumentWithChunks: %v", err)
+		}
+		if got := listed(); len(got) != 1 || got[doc] != 2 {
+			t.Errorf("documents after the upload = %v, want %s with 2 chunks", got, doc)
+		}
+
+		// A chunk the store refuses (an id already stored): the new document is not written either.
+		refused := doc + "-refused"
+		if err := b.SaveKnowledgeDocumentWithChunks(ctx, admin, &interfaces.KnowledgeDocument{ID: refused, OrgID: orgID, Filename: "kbw2.md", ChunkerVersion: 1},
+			[]interfaces.KnowledgeChunk{chunk(refused+"-1", refused), chunk(doc+"-1", refused)}); err == nil {
+			t.Error("an upload with a chunk id already stored succeeded")
+		}
+		// A document the store refuses (an id already stored): its chunks are not written.
+		if err := b.SaveKnowledgeDocumentWithChunks(ctx, admin, &interfaces.KnowledgeDocument{ID: doc, OrgID: orgID, Filename: "kbw.md", ChunkerVersion: 1},
+			[]interfaces.KnowledgeChunk{chunk(doc+"-3", doc)}); err == nil {
+			t.Error("an upload with a document id already stored succeeded")
+		}
+		if got := listed(); len(got) != 1 || got[doc] != 2 {
+			t.Errorf("documents after the refused uploads = %v, want only %s with its 2 chunks", got, doc)
+		}
+		if counts, err := b.CountKnowledgeChunksByIdentity(ctx, orgID, "A"); err != nil || counts.Total != 2 {
+			t.Errorf("chunks after the refused uploads = %+v, %v; want the first upload's 2", counts, err)
+		}
+	})
 }

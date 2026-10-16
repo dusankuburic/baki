@@ -252,7 +252,7 @@ func TestAPIToken_ScopeCheckedOnTheDispatchedRoute(t *testing.T) {
 	checkStatus(t, doRequestWithAuth(t, rt, http.MethodPut, "/api/probe/a%2Fb", writer, nil), http.StatusOK)
 }
 
-// rlsProbeBackend claims Postgres RLS support but fails each BeginRLS, so a mutation NOT exempted is refused 503 (rlsMiddleware fails closed) while a read runs on; the count tells the tests whether the RLS layer was skipped.
+// rlsProbeBackend claims Postgres RLS support but fails each BeginRLS, so a mutation NOT exempted is refused 503 (rlsMiddleware fails closed), and so is a read once it queries; the count tells the tests whether the RLS layer was skipped.
 type rlsProbeBackend struct {
 	storageif.StorageBackend
 	begins atomic.Int32

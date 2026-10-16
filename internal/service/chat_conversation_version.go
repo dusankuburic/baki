@@ -56,7 +56,26 @@ var chatPersistGiveUpsTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Server conversation writes (a turn's question at stream start, its answer at stream end) that lost every compare-and-swap round to concurrent writers and were dropped; the answer then exists only in a still-open client. A steady rate means one thread is written from several replicas faster than the retry bound absorbs.",
 })
 
-func init() { metrics.MustRegister(chatBlindSavesTotal, chatPersistGiveUpsTotal) }
+// chatConversationConflictsTotal counts every lost compare-and-swap on a conversation by where it happened, so
+// contention on shared threads is visible before it costs a turn: client_save and client_clear are the 409
+// CONVERSATION_CONFLICT answers (a tab saved or cleared over a version it had not seen), retry a server write's round
+// that lost and runs again on the fresh history, retry_exhausted a server write that lost every round (also counted in
+// pad_chat_persist_giveups_total).
+var chatConversationConflictsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "pad_chat_conversation_conflicts_total",
+	Help: "Lost compare-and-swaps on a stored conversation, by source: client_save and client_clear (answered 409 CONVERSATION_CONFLICT: the client reloads, merges and saves again), retry (a server write's round lost to another writer and run again on the fresh history), retry_exhausted (a server write lost every round and was dropped, as pad_chat_persist_giveups_total). A rising retry rate is one thread written from several replicas or tabs at once.",
+}, []string{"source"})
+
+// conversationConflictSources is the closed value set of the source label.
+var conversationConflictSources = []string{"client_save", "client_clear", "retry", "retry_exhausted"}
+
+func init() {
+	metrics.MustRegister(chatBlindSavesTotal, chatPersistGiveUpsTotal, chatConversationConflictsTotal)
+	// Every source is exported from the first scrape, so a rate over it starts at zero instead of absent.
+	for _, src := range conversationConflictSources {
+		chatConversationConflictsTotal.WithLabelValues(src)
+	}
+}
 
 // conversationLogID is what a log line says about a conversation: a short hash of its flow and key, enough to
 // correlate lines of one hot thread without writing the (user-chosen) key or the flow id.
@@ -137,10 +156,12 @@ func (s *ChatService) mutateConversationAt(ctx context.Context, flowID, key stri
 		}
 		if attempt >= mutateConversationAttempts {
 			chatPersistGiveUpsTotal.Inc()
+			chatConversationConflictsTotal.WithLabelValues("retry_exhausted").Inc()
 			logger.Warn("chat: gave up a conversation write after losing every round to concurrent writers",
 				"conversation", conversationLogID(flowID, key), "attempts", attempt)
 			return mutation{}, err
 		}
+		chatConversationConflictsTotal.WithLabelValues("retry").Inc()
 		if d := mutateConversationBackoff(attempt); d > 0 {
 			select {
 			case <-time.After(d):
@@ -190,6 +211,7 @@ func (s *ChatService) SaveClientConversation(ctx context.Context, flowID, provid
 	}
 	version, err := s.backend.SaveConversationIf(ctx, flowID, provider, *base, toStorageMessages(normalizeConversation(messages)))
 	if errors.Is(err, storageif.ErrConversationConflict) {
+		chatConversationConflictsTotal.WithLabelValues("client_save").Inc()
 		return ConversationSaved{}, conversationConflict(err, version)
 	}
 	if err != nil {
@@ -211,6 +233,7 @@ func (s *ChatService) ClearConversationIf(ctx context.Context, flowID, provider 
 	if !errors.Is(err, storageif.ErrConversationConflict) {
 		return err
 	}
+	chatConversationConflictsTotal.WithLabelValues("client_clear").Inc()
 	// Only a hint for the client: when the read fails it learns the version by reloading.
 	_, current, lerr := s.backend.LoadConversationVersioned(ctx, flowID, provider)
 	if lerr != nil {

@@ -240,7 +240,7 @@ F-025 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#
 F-026 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#7 sf=Main fp=unhandled-error:070f03f7d1cc1986
 F-027 warning/medium unhandled-error [Reliability] fix=wrap-error-handler @Main#8 sf=Main fp=unhandled-error:14d481cfc809e708
 F-028 warning/low uninitialized-variable [Logic] fix=init-variable @Main#8 sf=Main fp=uninitialized-variable:a38cd179f260e230
-F-029 warning/high parse-error [-] fix=- @- sf=Main fp=parse-error:
+F-029 warning/high parse-error [Syntax] fix=- @- sf=Main fp=parse-error:
     title: Parse error (line 11)
     desc: malformed line
     meta: {"column":0,"line":11,"snippet":"WebAutomation.CloseWindow"}

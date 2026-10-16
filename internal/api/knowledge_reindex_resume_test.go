@@ -36,6 +36,7 @@ func TestKnowledgeReindex_CursorRoundTrip(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	store := &auditRecordingBackend{FakeBackend: &testutil.FakeBackend{}}
+	store.SeedOrgs(org.ID) // the knowledge base needs its organisation
 	const docs, ceiling = 2, 10000
 	for d := range docs {
 		_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: fmt.Sprintf("doc-%d", d), OrgID: org.ID, Filename: fmt.Sprintf("doc-%d.md", d)})
@@ -174,6 +175,7 @@ func TestKnowledge_DeadlineIs504(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs(org.ID) // the knowledge base needs its organisation
 	_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", []storageif.KnowledgeChunk{{ID: "c1", DocID: "doc-1", Content: "retry every call", Embedding: []float32{1, 0}}})
 	knowledge := rag.NewKnowledgeService(store, nil, nil, rag.WithEmbedder(deadlineEmbedder{}))
@@ -286,6 +288,7 @@ func TestKnowledgeReindex_FailedPageCarriesResumeCursor(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	store := &auditRecordingBackend{FakeBackend: &testutil.FakeBackend{}}
+	store.SeedOrgs(org.ID) // the knowledge base needs its organisation
 	_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
 	// 501 chunks: page 1 commits the first 500 (five 100-input batches), the
 	// sixth batch is throttled.

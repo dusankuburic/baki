@@ -97,6 +97,10 @@ func seedFlow(t *testing.T, b storageif.StorageBackend, id string) {
 // seedOrgFlow seeds a flow in orgID; a flow's organisation is set when it is created (a later save keeps it).
 func seedOrgFlow(t *testing.T, b storageif.StorageBackend, id, orgID string) {
 	t.Helper()
+	// The organisation exists too: its channels and rules need it (the store's foreign keys).
+	if fake, ok := b.(interface{ SeedOrgs(...string) }); ok && orgID != "" {
+		fake.SeedOrgs(orgID)
+	}
 	if err := b.SaveFlow(context.Background(), &storageif.FlowDocument{
 		ID:             id,
 		Name:           id,

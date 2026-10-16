@@ -57,7 +57,8 @@ func (rt *Router) selfTestRoutes() error {
 			errs = append(errs, fmt.Errorf("route policy: %s %s (sample %s) resolves to the %s policy %q", p.Method, p.Pattern, sample, got.Kind, got.Label))
 		}
 		switch p.RateLimit {
-		case "", route.RateNone, route.RateGeneral, route.RateAuth, route.RateAnalysis, route.RateChat, route.RateUpload, route.RateChannelTest:
+		case "", route.RateNone, route.RateGeneral, route.RateAuth, route.RateAnalysis, route.RateChat, route.RateUpload, route.RateChannelTest,
+			route.RateAvatar:
 		default:
 			errs = append(errs, fmt.Errorf("route policy: %s %s: unknown rate-limit bucket %q", p.Method, p.Pattern, p.RateLimit))
 		}

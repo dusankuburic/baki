@@ -72,6 +72,7 @@ func runReindexToEnd(t *testing.T, svc *KnowledgeService, force bool) []ReindexR
 func TestReindexOrg_ResumesAcrossRequests(t *testing.T) {
 	lowerReindexLimits(t, 3, 7)
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	const n = 20
 	seedManyChunks(store, 2, n)
 	emb := &countingEmbedder{}
@@ -138,6 +139,7 @@ func TestReindexOrg_PageFailureKeepsEarlierPages(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			lowerReindexLimits(t, 3, 10000)
 			store := &testutil.FakeBackend{EmbeddingDim: 1}
+			store.SeedOrgs("org-1") // the knowledge base needs its organisation
 			seedManyChunks(store, 2, 10)
 			svc := guardService(store, tc.setup(store))
 
@@ -206,6 +208,7 @@ func (c *cancelOnCallEmbedder) Embed(ctx context.Context, text []string) ([][]fl
 func TestReindexOrg_DeadlineAfterAPageIsResumable(t *testing.T) {
 	lowerReindexLimits(t, 3, 10000)
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedManyChunks(store, 2, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -228,6 +231,7 @@ func TestReindexOrg_DeadlineAfterAPageIsResumable(t *testing.T) {
 
 	// Before any page committed: an error carrying the context's cause.
 	fresh := &testutil.FakeBackend{EmbeddingDim: 1}
+	fresh.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedManyChunks(fresh, 2, 10)
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
@@ -266,6 +270,7 @@ func TestReindexOrg_GuardOnlyOnFirstRequest(t *testing.T) {
 	lowerReindexLimits(t, 2, 5)
 	modelA, modelB := []float32{1, 0}, []float32{0, 1}
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedModelCorpus(store, 3, 4, modelA)
 	svcB := guardService(store, &fixedEmbedder{vec: modelB})
 	svcA := guardService(store, &fixedEmbedder{vec: modelA})
@@ -320,6 +325,7 @@ func TestReindexOrg_GuardOnlyOnFirstRequest(t *testing.T) {
 // another model's corpus, allowed forced.
 func TestReindexOrg_ResumeWithNothingConvertedIsAFirstRequest(t *testing.T) {
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedModelCorpus(store, 2, 2, []float32{1, 0})
 	svc := guardService(store, &fixedEmbedder{vec: []float32{0, 1}})
 	before := interfaces.KnowledgeChunkCursor{DocID: "a", ID: "a"}
@@ -345,6 +351,7 @@ func TestReindexOrg_RequestBudgetStopsWithCursor(t *testing.T) {
 	lowerReindexLimits(t, 3, 10000)
 
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedManyChunks(store, 2, 10)
 	emb := &countingEmbedder{}
 	svc := guardService(store, emb)
@@ -384,6 +391,7 @@ func TestReindexOrg_RequestBudgetStopsWithCursor(t *testing.T) {
 	// A corpus that fits one page is complete: the budget must not add a
 	// cursor (the short-page break lands before it).
 	small := &testutil.FakeBackend{EmbeddingDim: 1}
+	small.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedManyChunks(small, 1, 2)
 	done, err := guardService(small, &countingEmbedder{}).ReindexOrg(context.Background(), "scope", "org-1", true, interfaces.KnowledgeChunkCursor{})
 	if err != nil || done.Chunks != 2 || done.NextCursor != nil || done.Truncated {

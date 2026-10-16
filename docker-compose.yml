@@ -6,7 +6,10 @@ services:
   app:
     build: .
     ports:
-      - "${PAD_PORT:-8080}:${PAD_PORT:-8080}"
+      # Loopback only: this stack serves plaintext HTTP (see the warning above),
+      # so credentials must not be reachable from the LAN. Caddy in the prod
+      # overlay reaches the app over the compose network, not through this port.
+      - "127.0.0.1:${PAD_PORT:-8080}:${PAD_PORT:-8080}"
     environment:
       # The container must listen on the port the mapping above publishes. The
       # image defaults PAD_PORT to 8080 and this was never passed through, so

@@ -34,6 +34,7 @@ func TestReindexInBackground_RunsToCompletion(t *testing.T) {
 	maxReindexChunks = 4
 	t.Cleanup(func() { maxReindexChunks = old })
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1")      // the knowledge base needs its organisation
 	seedManyChunks(store, 2, 10) // width 3, stranded at the fake's width 1
 	emb := &namedEmbedder{identity: "A", vec: []float32{1}}
 	svc := guardService(store, emb)
@@ -57,6 +58,7 @@ func TestReindexInBackground_RunsToCompletion(t *testing.T) {
 // ErrKnowledgeBusy; once it ends a new run starts.
 func TestReindexInBackground_BusyWhileRunning(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedManyChunks(store, 1, 3)
 	release := make(chan struct{})
 	emb := &blockingEmbedder{release: release}
@@ -111,6 +113,7 @@ func (b *blockingEmbedder) Embed(ctx context.Context, text []string) ([][]float3
 // with ErrEmbeddingOrgCredentialRequired, and the synchronous path stays open to them.
 func TestReindexInBackground_RefusesPersonalKey(t *testing.T) {
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedManyChunks(store, 1, 2)
 	memberCalls, orgCalls := 0, 0
 	personal := orgKeysFactory(map[string]string{"openai": "sk-member"}, map[string]string{}, &memberCalls, &orgCalls)

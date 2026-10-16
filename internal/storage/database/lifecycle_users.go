@@ -17,7 +17,9 @@ func init() {
 				noPurge: "accounts are erased on request, never aged out"},
 			{table: "user_avatars", export: "avatar", erase: erasedByCascade, org: orgNotKeyed,
 				noPurge: "an avatar lives until its owner removes it"},
-			{table: "refresh_tokens", export: "sessions", erase: erasedByStep, org: orgNotKeyed},
+			// The step deletes them; since v48 the users row's foreign key does too (the step stays for a database
+			// rolled back below v48).
+			{table: "refresh_tokens", export: "sessions", erase: erasedByStep | erasedByCascade, org: orgNotKeyed},
 			{table: "token_blacklist", noExport: "revoked token ids, no user identity",
 				erase: notPersonal, eraseWhy: "a token id (jti) and its expiry", org: orgNotKeyed},
 			{table: "identity_links", noExport: "not in the bundle yet (open: the SSO links are personal data)",
@@ -80,6 +82,9 @@ func init() {
 			eraseByEmail(eraseIdentity, "audit_events", `UPDATE audit_events SET resource_id = '', user_agent = NULL
 		WHERE resource_type = 'email' AND lower(resource_id) = lower($1)`),
 			eraseByUser(erasePersonal, "refresh_tokens", `DELETE FROM refresh_tokens WHERE user_id = $1`),
+			// Spend billed to an organisation is the organisation's: deleting it would lower its daily budget sum
+			// and its cost history. It stays without the user (the identity phase runs first); the rest is personal.
+			eraseByUser(eraseIdentity, "usage_metrics", `UPDATE usage_metrics SET user_id = '' WHERE user_id = $1 AND org_id <> ''`),
 			eraseByUser(erasePersonal, "usage_metrics", `DELETE FROM usage_metrics WHERE user_id = $1`),
 			eraseByUser(erasePersonal, "provider_keys", `DELETE FROM provider_keys WHERE user_id = $1`),
 			// api_tokens, user_tokens, identity_links, idempotency_keys, user_settings, flow_collaborators and the
@@ -87,7 +92,9 @@ func init() {
 			eraseByUser(eraseAccount, "users", `DELETE FROM users WHERE id = $1`),
 		},
 		purge: []purgeStep{
-			{table: "refresh_tokens", cond: `expires_at < NOW()`,
+			// A row per sign-in and per refresh (rotation), so batched: a backlog in one DELETE ran into the
+			// statement timeout and never shrank.
+			{table: "refresh_tokens", cond: `expires_at < NOW()`, batched: true,
 				count: func(r *interfaces.PurgeResult) *int { return &r.RefreshTokens }},
 			{table: "api_tokens", cond: `expires_at IS NOT NULL AND expires_at < NOW()`,
 				count: func(r *interfaces.PurgeResult) *int { return &r.APITokens }},

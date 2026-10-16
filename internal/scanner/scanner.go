@@ -82,6 +82,8 @@ type Scanner struct {
 	// "new rules" note that scan made, if any, which a skip notes again.
 	lastScan  map[string]string
 	lastNotes map[string]*noticeNote
+	// shared is the same memory in Redis, every replica's (WithSharedScans); nil: this process's own only.
+	shared *sharedScans
 
 	// ruleSetDigest is optional; nil disables skipping. ruleDigests memoizes
 	// it per org for the current sweep (under orgChMu, reset with orgNotifiers).
@@ -131,6 +133,13 @@ var scanJob = lifecycle.DeclareJob(lifecycle.JobDecl{
 // lockRetry is how soon a sweep skipped for a lock error is tried again, when sooner than the interval.
 const lockRetry = 5 * time.Minute
 
+// manualSweepTimeout bounds a sweep ScanNow starts when no schedule does (PAD_SCAN_INTERVAL 0). Generous: a full
+// library sweep takes minutes, each flow bounded on its own.
+const manualSweepTimeout = 30 * time.Minute
+
+// ErrScanUnavailable: the scanner has no store or no analyzer to sweep with.
+var ErrScanUnavailable = errors.New("scanner: no storage backend or analyzer to sweep with")
+
 // Option configures a Scanner.
 type Option func(*Scanner)
 
@@ -168,8 +177,10 @@ func New(backend storageif.StorageBackend, locker lock.GlobalLocker, analyze Ana
 	s.job = lifecycle.NewSingleton(lifecycle.Job{
 		Spec:  scanJob,
 		Every: max(interval, 0),
-		// A sweep is bounded by the interval: the next one is due then.
-		Timeout:          max(interval, 0),
+		// A sweep is bounded by the interval: the next one is due then. Without a schedule only ScanNow starts one,
+		// bounded by manualSweepTimeout so a stalled sweep does not keep the lock, and refuse every later one, until
+		// the stop.
+		Timeout:          cmp.Or(max(interval, 0), manualSweepTimeout),
 		RetryOnLockError: lockRetry,
 		Run:              s.sweep,
 	}, s.leaser, state)
@@ -201,6 +212,9 @@ func (s *Scanner) SetSingleTenant(single bool) { s.singleTenant = single }
 
 // SingleTenant reports what SetSingleTenant set.
 func (s *Scanner) SingleTenant() bool { return s.singleTenant }
+
+// SharesScans reports whether the flows' last complete scans are shared with other replicas (WithSharedScans).
+func (s *Scanner) SharesScans() bool { return s.shared != nil }
 
 // enabled reports whether periodic scanning should run: a backend, an analyzer
 // and a positive interval; PAD_NOTIFY_* is NOT required (in-app alerts still record).
@@ -257,6 +271,18 @@ func (s *Scanner) ScanOnce(ctx context.Context) {
 		return
 	}
 	_ = s.job.RunOnce(ctx) // the job logs and counts what it skipped or why it failed
+}
+
+// ScanNow starts a sweep in the background, as the scan job, and reports whether it started: nil when it did (the
+// sweep then runs, bounded like a scheduled one and cancelled by Stop), lifecycle.ErrJobHeld while a sweep runs on
+// this or another replica, lifecycle.ErrJobLockUnavailable when the lock cannot be asked for, lifecycle.ErrJobStopped
+// after Stop, ctx's error when ctx ends before the lock answers, ErrScanUnavailable without a store or an analyzer.
+// The admin "scan now", which reports what became of the sweep instead of a start that then skipped.
+func (s *Scanner) ScanNow(ctx context.Context) error {
+	if s.backend == nil || s.analyze == nil {
+		return ErrScanUnavailable
+	}
+	return s.job.RunNow(ctx)
 }
 
 // sweep is the scan job's run: the error is why the sweep did not complete.
@@ -384,6 +410,12 @@ func (s *Scanner) scanFlow(ctx context.Context, hdr *storageif.FlowDocument, pag
 			s.addNote(hdr.ID, note, true)
 			return
 		}
+		// Another replica's complete scan of the same inputs counts as this one's.
+		if rec, ok := page.shared[hdr.ID]; ok && rec.key == in.key {
+			s.setLastScan(hdr.ID, rec.key, rec.note)
+			s.addNote(hdr.ID, rec.note, true)
+			return
+		}
 	}
 	// Forget the previous key until this scan completes: a scan that fails or
 	// panics part-way must not leave a key a later sweep matches.
@@ -405,6 +437,7 @@ func (s *Scanner) scanFlow(ctx context.Context, hdr *storageif.FlowDocument, pag
 	if doc == nil {
 		// Unparseable content stays unparseable until it changes.
 		s.setLastScanKey(lf.ID, in.key)
+		s.shared.store(ctx, lf.ID, in.key, nil)
 		return
 	}
 	doc.ID = lf.ID
@@ -460,6 +493,7 @@ func (s *Scanner) scanFlow(ctx context.Context, hdr *storageif.FlowDocument, pag
 	s.addNote(lf.ID, note, false)
 	if complete {
 		s.setLastScan(lf.ID, in.key, note)
+		s.shared.store(ctx, lf.ID, in.key, note)
 	}
 }
 
@@ -485,6 +519,8 @@ type pageInputs struct {
 	health         map[string]*storageif.HealthSnapshot
 	baselineFailed map[string]struct{}
 	healthFailed   map[string]struct{}
+	// shared holds the page's records of other replicas' complete scans (nil without Redis or when it failed).
+	shared map[string]sharedScan
 }
 
 // loadPageInputs reads the page's baselines and health, each in one batched
@@ -502,6 +538,7 @@ func (s *Scanner) loadPageInputs(ctx context.Context, flows []*storageif.FlowDoc
 		s.backend.GetFlowBaselinesBatch, s.backend.GetFlowBaseline)
 	page.health = readPageInput(ctx, ids, page.healthFailed, "health",
 		s.backend.LoadFlowHealthBatch, s.backend.LoadFlowHealth)
+	page.shared = s.shared.load(ctx, ids)
 	return page
 }
 

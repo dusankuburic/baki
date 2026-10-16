@@ -118,6 +118,10 @@ func TestLoad_ConfigFileOfTodaysFormatKeepsWorking(t *testing.T) {
 	if cfg.Runtime.InstanceID == "" {
 		t.Error("no instance id resolved")
 	}
+	// The file predates the avatar bucket: it gets the default rate and burst, not a zero bucket that refuses every upload.
+	if def := DefaultRuntimeConfig(); cfg.Runtime.RateLimitAvatarRPS != def.RateLimitAvatarRPS || cfg.Runtime.RateLimitAvatarBurst != def.RateLimitAvatarBurst {
+		t.Errorf("avatar bucket %v/%v, want the defaults %v/%v", cfg.Runtime.RateLimitAvatarRPS, cfg.Runtime.RateLimitAvatarBurst, def.RateLimitAvatarRPS, def.RateLimitAvatarBurst)
+	}
 	// The file's credentials are plain strings under the same names; they arrive as secret.Value.
 	if got := cfg.Auth.Secret.Reveal(); got != "a-long-random-cloud-signing-secret-of-a-fixture" {
 		t.Errorf("Auth.Secret = %q, want the file's", got)
@@ -193,7 +197,8 @@ func TestLoad_InstanceIDResolution(t *testing.T) {
 
 // TestLoad_ShutdownDrainDelay: PAD_SHUTDOWN_DRAIN_DELAY, the pause between "draining" and ending the streams (ADR
 // 0024): 3 s by default in the cloud profile, 0 for local and desktop; an explicit value wins, 0 included, on both
-// load paths; at most 10 s, so the stop budget holds.
+// load paths; at most 5 s, what the stop budget absorbs: a longer pause is refused, naming the budget, rather than
+// letting the stop overrun fx.StopTimeout and cut the audit flush.
 func TestLoad_ShutdownDrainDelay(t *testing.T) {
 	cloudEnv := func(t *testing.T) {
 		clearLoadEnv(t)
@@ -214,7 +219,7 @@ func TestLoad_ShutdownDrainDelay(t *testing.T) {
 		{"local env", func(t *testing.T) { clearLoadEnv(t); t.Setenv("PAD_MODE", "local") }, 0},
 		{"cloud env", cloudEnv, 3 * time.Second},
 		{"cloud env, explicit 0s", func(t *testing.T) { cloudEnv(t); t.Setenv("PAD_SHUTDOWN_DRAIN_DELAY", "0s") }, 0},
-		{"cloud env, explicit 10s", func(t *testing.T) { cloudEnv(t); t.Setenv("PAD_SHUTDOWN_DRAIN_DELAY", "10s") }, 10 * time.Second},
+		{"cloud env, explicit 5s", func(t *testing.T) { cloudEnv(t); t.Setenv("PAD_SHUTDOWN_DRAIN_DELAY", "5s") }, 5 * time.Second},
 		{"local env, explicit 2s", func(t *testing.T) {
 			clearLoadEnv(t)
 			t.Setenv("PAD_MODE", "local")
@@ -237,7 +242,7 @@ func TestLoad_ShutdownDrainDelay(t *testing.T) {
 			}
 		})
 	}
-	for _, bad := range []string{"11s", "-1s"} {
+	for _, bad := range []string{"5100ms", "10s", "11s", "-1s"} {
 		t.Run(bad+" refused", func(t *testing.T) {
 			cloudEnv(t)
 			t.Setenv("PAD_SHUTDOWN_DRAIN_DELAY", bad)
@@ -246,6 +251,12 @@ func TestLoad_ShutdownDrainDelay(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a refusal over the budget says why", func(t *testing.T) {
+		writeConfigFile(t, cloudFile+`,"Runtime":{"ShutdownDrainDelay":"8s"}}`)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "Runtime.ShutdownDrainDelay") || !strings.Contains(err.Error(), "stop budget") {
+			t.Errorf("a file's 8s drain delay: err = %v, want a refusal naming the field and the stop budget", err)
+		}
+	})
 }
 
 // TestLoad_SlicesAreDetached: the configuration hands out every slice with its own backing array and no spare
@@ -422,7 +433,7 @@ func TestValidate_DurationRanges(t *testing.T) {
 		{"PAD_RETRY_BASE_DELAY", func(c *Config, d Duration) { c.Runtime.RetryBaseDelay = d },
 			[]time.Duration{time.Millisecond}, []time.Duration{0, -time.Second}},
 		{"PAD_SHUTDOWN_DRAIN_DELAY", func(c *Config, d Duration) { c.Runtime.ShutdownDrainDelay = d },
-			[]time.Duration{0, 10 * time.Second}, []time.Duration{-time.Second, 10*time.Second + 1}},
+			[]time.Duration{0, 5 * time.Second}, []time.Duration{-time.Second, 5*time.Second + 1, 10 * time.Second}},
 	} {
 		for _, d := range tc.ok {
 			cfg := Default()

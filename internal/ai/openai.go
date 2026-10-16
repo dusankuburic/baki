@@ -19,7 +19,7 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	return &OpenAIProvider{
 		openaiBase: openaiBase{
 			apiKey:                apiKey,
-			client:                sharedHTTPClient,
+			client:                fixedHostClient(),
 			baseURL:               &openAIBaseURL,
 			providerLabel:         "openai",
 			embeddingModel:        "text-embedding-3-small",

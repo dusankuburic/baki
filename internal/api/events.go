@@ -16,6 +16,7 @@ import (
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/platform/drain"
 	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/redisx"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
@@ -126,6 +127,8 @@ type EventManager struct {
 	// fan is the cross-replica backplane (WithFanout); nil is today's behaviour: this process's clients only, no
 	// event ids, no replay.
 	fan *eventFan
+	// connSlots counts a user's streams across the replicas (WithConnCap); nil is this replica's cap only.
+	connSlots *redisx.SlotCap
 }
 
 // dropWarnInterval is the minimum gap between two "send buffer full" warnings; the drops in
@@ -605,9 +608,16 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The user's streams on every replica count too (WithConnCap); asked before the lock every delivery takes.
+	releaseSlot, ok := m.connSlots.Acquire(r.Context(), userID)
+	if !ok {
+		render.Error(w, fmt.Errorf("too many connections"), http.StatusServiceUnavailable)
+		return
+	}
 	m.clientsMu.Lock()
-	if m.sseConnCount[key] >= 10 {
+	if m.sseConnCount[key] >= maxSSEConnsPerClient {
 		m.clientsMu.Unlock()
+		releaseSlot()
 		render.Error(w, fmt.Errorf("too many connections"), http.StatusServiceUnavailable)
 		return
 	}
@@ -627,6 +637,7 @@ func (m *EventManager) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			delete(m.sseConnCount, key)
 		}
 		m.clientsMu.Unlock()
+		releaseSlot()
 		m.fan.notePresence(userID)
 		sseClientEnd()
 	}()

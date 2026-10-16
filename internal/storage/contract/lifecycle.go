@@ -291,6 +291,7 @@ func runLifecycleScenarios(ctx context.Context, b interfaces.StorageBackend, run
 		admin := createUser(t, "orgdel-admin")
 		orgID, otherOrg := "contract-lc-orgdel-"+runID, "contract-lc-orgdel-other-"+runID
 		saveOrg(t, &interfaces.Organisation{ID: orgID, Name: "Doomed", OwnerID: admin, Members: []interfaces.OrgMember{{UserID: admin, Role: auth.RoleAdmin}}})
+		saveOrg(t, &interfaces.Organisation{ID: otherOrg, Name: "Other", OwnerID: admin, Members: []interfaces.OrgMember{{UserID: admin, Role: auth.RoleAdmin}}})
 		flowID := "contract-lc-orgdel-flow-" + runID
 		saveFlow(t, &interfaces.FlowDocument{ID: flowID, Name: "Org flow", OwnerID: admin, OrganizationID: orgID})
 
@@ -477,6 +478,7 @@ func runLifecycleScenarios(ctx context.Context, b interfaces.StorageBackend, run
 
 		again := invite("first", base)
 		again.ID = "contract-lc-inv-again-" + runID
+		again.TokenHash = "contract-lc-inv-hash-again-" + runID
 		if err := b.SaveOrgInvite(ctx, again); !errors.Is(err, interfaces.ErrOrgInviteExists) {
 			t.Errorf("a second pending invite for the email: %v, want ErrOrgInviteExists", err)
 		}

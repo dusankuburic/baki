@@ -76,6 +76,12 @@ func runReport(args []string) {
 		fmt.Fprintln(os.Stderr, "bakicli report: refusing to send an API token over plain HTTP: use an https endpoint (or a loopback address)")
 		os.Exit(2)
 	}
+	// The HMAC credential never travels, so a warning suffices — but the VERDICT
+	// comes back over the same plaintext link, and a network attacker can forge
+	// the "passed" summary the gate exits 0 on. Loopback stays silent (local dev).
+	if caller.token == "" && caller.secret != "" && plainHTTPRemote(url) {
+		fmt.Fprintln(os.Stderr, "bakicli report: warning: plain-HTTP endpoint — the signed report is safe in transit, but the returned verdict is not authenticated and a network attacker could forge a pass")
+	}
 	if *flowID == "" && fs.NArg() == 1 {
 		rep, err := readReport(fs.Arg(0))
 		if err != nil {

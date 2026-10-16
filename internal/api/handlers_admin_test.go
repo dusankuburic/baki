@@ -2,14 +2,18 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/lifecycle"
+	"pad-analyzer/internal/platform/lock"
 )
 
 // TestAdminUserList_FiltersAndPages pins the paged envelope the admin table
@@ -279,15 +283,16 @@ func TestScannerScan_Unconfigured_Returns503(t *testing.T) {
 }
 
 // TestScannerScan_Configured_TriggersAndReturnsStarted verifies that when a
-// ScanNowFunc is wired, the endpoint returns {started: true} and actually
-// invokes the function (on a detached goroutine). The test router wires nil by
-// default; we mutate the Admin handler's field directly (in-package) — the
-// registered route reads it at call time off the same *AdminHandler pointer.
+// ScanNowFunc is wired, the endpoint returns {started: true} once it reports the
+// sweep started. The test router wires nil by default; we mutate the Admin
+// handler's field directly (in-package) — the registered route reads it at call
+// time off the same *AdminHandler pointer.
 func TestScannerScan_Configured_TriggersAndReturnsStarted(t *testing.T) {
 	triggered := make(chan struct{}, 1)
 	rt := newJWTTestRouter(t)
-	moduleOf[*AdminHandler](t, rt).scanNow = func(context.Context) {
+	moduleOf[*AdminHandler](t, rt).scanNow = func(context.Context) error {
 		triggered <- struct{}{}
+		return nil
 	}
 	seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
 	bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
@@ -323,5 +328,68 @@ func TestScannerScan_NonAdmin_Forbidden(t *testing.T) {
 	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/admin/scanner/scan", bearer, nil)
 	if rr.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for non-admin, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
+// testAdminScanJob stands in for the scanner's job: the admin trigger starts it as the scanner's ScanNow does.
+var testAdminScanJob = lifecycle.DeclareJob(lifecycle.JobDecl{Name: "test_admin_scan", Schedule: "tests only"})
+
+// TestScannerScan_ReportsTheSweepsOutcome: the answer says what became of the sweep. It used to be {started: true}
+// whenever the request reached the handler, also when the sweep then skipped because one ran on another replica, the
+// lock could not be asked for, or the scanner had stopped.
+func TestScannerScan_ReportsTheSweepsOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		locker  *fakeLocker
+		stopped bool
+		status  int
+		code    string
+	}{
+		{"lock free: started", &fakeLocker{acquired: true, released: make(chan struct{})}, false, http.StatusOK, ""},
+		{"a sweep runs on another replica", &fakeLocker{}, false, http.StatusConflict, "SCAN_ALREADY_RUNNING"},
+		{"the lock cannot be asked for", &fakeLocker{err: errors.New("connection refused")}, false, http.StatusServiceUnavailable, "SCAN_UNAVAILABLE"},
+		{"the scanner has stopped", &fakeLocker{acquired: true, released: make(chan struct{})}, true, http.StatusServiceUnavailable, "SERVER_RESTARTING"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var runs atomic.Int32
+			ran := make(chan struct{}, 1)
+			job := lifecycle.NewSingleton(lifecycle.Job{Spec: testAdminScanJob, Run: func(context.Context) error {
+				runs.Add(1)
+				ran <- struct{}{}
+				return nil
+			}}, lock.AsLeaser(tc.locker), nil)
+			t.Cleanup(job.Stop)
+			if tc.stopped {
+				job.Stop()
+			}
+			rt := newJWTTestRouter(t)
+			moduleOf[*AdminHandler](t, rt).scanNow = job.RunNow
+			seedUserWithRole(t, rt, "admin-1", "admin@example.com", auth.RoleAdmin)
+			bearer := jwtBearer(t, rt, "admin-1", "admin@example.com")
+
+			rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/admin/scanner/scan", bearer, nil)
+			if rr.Code != tc.status {
+				t.Fatalf("status %d (body: %s), want %d", rr.Code, rr.Body.String(), tc.status)
+			}
+			var resp map[string]any
+			decodeJSON(t, rr, &resp)
+			if tc.code == "" {
+				if resp["started"] != true {
+					t.Errorf("body %v, want started=true", resp)
+				}
+				select {
+				case <-ran:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the sweep it reported started never ran")
+				}
+				return
+			}
+			if resp["code"] != tc.code {
+				t.Errorf("code %v (body %v), want %s", resp["code"], resp, tc.code)
+			}
+			if n := runs.Load(); n != 0 {
+				t.Errorf("the sweep ran %d time(s), want none", n)
+			}
+		})
 	}
 }

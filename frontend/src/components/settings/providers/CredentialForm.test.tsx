@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {render, screen, fireEvent, waitFor, act} from '@testing-library/react'
+import {render, screen, fireEvent, waitFor, act, within} from '@testing-library/react'
 import CredentialForm from './CredentialForm'
 import {providersApi} from '@/api'
 import {ApiError} from '@/api/client'
@@ -78,6 +78,26 @@ describe('CredentialForm: api_key', () => {
     expect(screen.getByLabelText('Endpoint')).toHaveAccessibleDescription('Optional.')
     fireEvent.click(save)
     await waitFor(() => expect(api.saveApiKey).toHaveBeenCalledWith('mistral', 'sk-1', {region: 'eu'}))
+  })
+
+  it("names a select's options by their label, and by the value where a server sends none", async () => {
+    const options = [{value: 'eu', label: 'Europe'}, {value: 'us', label: ''}, {value: 'apac'}]
+    render(
+      <CredentialForm
+        spec={spec({
+          id: 'mistral',
+          credential: {
+            kind: 'api_key',
+            fields: [API_KEY_FIELD, {name: 'region', label: 'Region', type: 'select', required: true, options}],
+          },
+        })}
+        onConfigured={vi.fn()}
+      />,
+    )
+    const region = await screen.findByLabelText('Region')
+    expect(within(region).getByRole('option', {name: 'Europe'})).toHaveValue('eu')
+    expect(within(region).getByRole('option', {name: 'us'})).toHaveValue('us')
+    expect(within(region).getByRole('option', {name: 'apac'})).toHaveValue('apac')
   })
 
   it('keeps a blank secret on a configured provider as "unchanged": Replace key posts nothing until a key is typed', async () => {

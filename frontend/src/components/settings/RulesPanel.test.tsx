@@ -1,7 +1,14 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {render, screen, fireEvent, waitFor} from '@testing-library/react'
 import RulesPanel from './RulesPanel'
 import {ToastProvider} from '@/components/shared/Toast'
+import {clearRequestCache} from '@/api/client'
+
+vi.mock('@/platform/adapters', () => ({
+  createAdapter: () => ({
+    getBackendConfig: vi.fn().mockResolvedValue({apiUrl: 'http://localhost:9999', token: 'mock-token', port: 9999}),
+  }),
+}))
 
 const getRules = vi.fn()
 const setRuleEnabled = vi.fn()
@@ -126,6 +133,73 @@ describe('RulesPanel scoping (R4)', () => {
     await waitFor(() => expect(updateOrgSettings).toHaveBeenCalled())
     expect(setRuleEnabled).not.toHaveBeenCalled()
     expect(updateOrgSettings.mock.calls[0]![0]).toBe('org-1')
+  })
+
+  describe('against the org settings route, through the real client and its GET cache', () => {
+    let posts: {analysis: {rules: Record<string, unknown>}}[]
+
+    beforeEach(async () => {
+      const real = (await vi.importActual<typeof import('@/api/settings')>('@/api/settings')).settingsApi
+      getOrgSettings.mockImplementation(real.getOrgSettings)
+      updateOrgSettings.mockImplementation(real.updateOrgSettings)
+      let stored: Record<string, unknown> = {
+        version: 1,
+        profile: {},
+        general: {firstRunCompleted: false},
+        appearance: {},
+        layout: {},
+        ai: {activeProvider: '', providers: {}},
+        parser: {maxFileSizeMB: 0},
+        analysis: {rules: {}, autoAnalyzeOnOpen: false},
+      }
+      posts = []
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+        if (init?.method === 'GET') return new Response(JSON.stringify(stored), {status: 200})
+        const body = JSON.parse(String(init?.body))
+        posts.push(body)
+        stored = {...stored, ...body}
+        return new Response(null, {status: 204})
+      })
+      getRules.mockResolvedValue([
+        {id: 'rule-a', name: 'Rule A', description: 'A.', defaultSeverity: 'warning', category: 'Style', enabled: true},
+        {id: 'rule-b', name: 'Rule B', description: 'B.', defaultSeverity: 'warning', category: 'Style', enabled: true},
+      ])
+      signIn({id: 'u1', role: 'member'}, [
+        {id: 'org-1', name: 'Acme', ownerId: 'u1', members: [{userId: 'u1', role: 'admin'}]},
+      ])
+    })
+
+    afterEach(() => {
+      vi.restoreAllMocks()
+      clearRequestCache()
+    })
+
+    // The panel's switches: auto-analyze first, then one per rule in order.
+    const ruleSwitches = async () => {
+      await screen.findByText('Rule B')
+      const all = screen.getAllByRole('switch')
+      return {a: all.at(-2)!, b: all.at(-1)!}
+    }
+
+    it('a second toggle keeps the first one, which the cached read had not seen', async () => {
+      renderPanel()
+      fireEvent.click((await ruleSwitches()).a)
+      await waitFor(() => expect(posts).toHaveLength(1))
+      fireEvent.click((await ruleSwitches()).b)
+      await waitFor(() => expect(posts).toHaveLength(2))
+      expect(Object.keys(posts[1]!.analysis.rules).sort()).toEqual(['rule-a', 'rule-b'])
+      // The panel's own re-read after each write sees it too.
+      await waitFor(() => expect(screen.getAllByText('Overridden')).toHaveLength(2))
+    })
+
+    it('two toggles at once both land', async () => {
+      renderPanel()
+      const {a, b} = await ruleSwitches()
+      fireEvent.click(a)
+      fireEvent.click(b)
+      await waitFor(() => expect(posts).toHaveLength(2))
+      expect(Object.keys(posts[1]!.analysis.rules).sort()).toEqual(['rule-a', 'rule-b'])
+    })
   })
 
   it('merges into the org profile rather than replacing it', async () => {

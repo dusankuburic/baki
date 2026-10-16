@@ -41,7 +41,7 @@ func newSSOTestRig(t *testing.T) (*Router, *fakeSSOClient, *memIdentityStore) {
 	t.Helper()
 	store := testutil.NewFakeBackend()
 	client := &fakeSSOClient{identities: map[string]*sso.Identity{}}
-	ids := newMemIdentityStore()
+	ids := newMemIdentityStore(store)
 	rt := newTestRouterSSO(store, true, client, ids)
 	return rt, client, ids
 }

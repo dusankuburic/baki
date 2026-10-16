@@ -15,7 +15,7 @@ func NewXAIProvider(apiKey string) *XAIProvider {
 	return &XAIProvider{
 		openaiBase: openaiBase{
 			apiKey:        apiKey,
-			client:        sharedHTTPClient,
+			client:        fixedHostClient(),
 			baseURL:       &xaiBaseURL,
 			providerLabel: "xai",
 		},

@@ -37,6 +37,11 @@ type CommandBus struct {
 
 	cmdReady   atomic.Bool
 	replyReady atomic.Bool
+	// cmdSince and replySince are when each subscription was last (re)established, in unix nanoseconds (UpSince).
+	cmdSince   atomic.Int64
+	replySince atomic.Int64
+	// onSubscribed runs each time the command subscription is (re)established (OnSubscribed); set before Start.
+	onSubscribed func()
 
 	mu      sync.Mutex
 	waiters map[string]chan []byte
@@ -90,6 +95,28 @@ func (b *CommandBus) Instance() string { return b.instance }
 // Ready reports whether both subscriptions are established.
 func (b *CommandBus) Ready() bool { return b.cmdReady.Load() && b.replyReady.Load() }
 
+// Listening reports whether the command subscription is established: whether a command sent to this replica now is
+// received.
+func (b *CommandBus) Listening() bool { return b.cmdReady.Load() }
+
+// UpSince is when both subscriptions became established, the later of the two; up is false while either is not. A
+// subscription is re-established after any break of its connection, a Redis restart among them, so a recent time
+// says this replica's view of Redis was interrupted a moment ago.
+func (b *CommandBus) UpSince() (since time.Time, up bool) {
+	if !b.Ready() {
+		return time.Time{}, false
+	}
+	return time.Unix(0, max(b.cmdSince.Load(), b.replySince.Load())), true
+}
+
+// OnSubscribed has fn run (on the subscribing goroutine, so it must not block) each time the command subscription is
+// established, the first time and after every break. Call it before Start.
+func (b *CommandBus) OnSubscribed(fn func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.onSubscribed = fn
+}
+
 // Start subscribes to this replica's two channels and serves commands with handle until Stop. handle returns the
 // reply payload (nil sends none); it runs on its own goroutine, so a slow one delays nothing else. Both
 // subscriptions are re-established after any break, with a backoff, for as long as the bus runs.
@@ -101,14 +128,15 @@ func (b *CommandBus) Start(handle func(ctx context.Context, payload []byte) []by
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
+	subscribed := b.onSubscribed
 	b.wg.Add(2)
 	go func() {
 		defer b.wg.Done()
-		b.follow(ctx, b.cmd.Key(b.instance), &b.cmdReady, func(payload []byte) { b.dispatch(ctx, payload, handle) })
+		b.follow(ctx, b.cmd.Key(b.instance), &b.cmdReady, &b.cmdSince, subscribed, func(payload []byte) { b.dispatch(ctx, payload, handle) })
 	}()
 	go func() {
 		defer b.wg.Done()
-		b.follow(ctx, b.reply.Key(b.instance), &b.replyReady, b.deliverReply)
+		b.follow(ctx, b.reply.Key(b.instance), &b.replyReady, &b.replySince, nil, b.deliverReply)
 	}()
 }
 
@@ -127,13 +155,22 @@ func (b *CommandBus) Stop() {
 	b.replyReady.Store(false)
 }
 
-// follow keeps one channel subscribed until ctx ends.
-func (b *CommandBus) follow(ctx context.Context, channel string, ready *atomic.Bool, on func([]byte)) {
+// follow keeps one channel subscribed until ctx ends; since records when it was last established, and subscribed (nil:
+// none) runs each time it is.
+func (b *CommandBus) follow(ctx context.Context, channel string, ready *atomic.Bool, since *atomic.Int64, subscribed func(), on func([]byte)) {
 	const minBackoff, maxBackoff = 250 * time.Millisecond, 5 * time.Second
 	backoff := minBackoff
 	warned := false
+	established := func() {
+		since.Store(time.Now().UnixNano())
+		ready.Store(true)
+		backoff, warned = minBackoff, false
+		if subscribed != nil {
+			subscribed()
+		}
+	}
 	for ctx.Err() == nil {
-		err := b.ps.Subscribe(ctx, channel, func() { ready.Store(true); backoff = minBackoff; warned = false }, on)
+		err := b.ps.Subscribe(ctx, channel, established, on)
 		ready.Store(false)
 		if ctx.Err() != nil {
 			return

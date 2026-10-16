@@ -222,6 +222,46 @@ describe('api/client', () => {
       expect(second).toEqual({account: 'next-user'})
     })
 
+    it('a write to a path drops the cached read of that path, and only that path', async () => {
+      let version = 1
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+        if (init?.method === 'POST') version++
+        return new Response(JSON.stringify({version}), {status: 200})
+      })
+      const {request} = await getClient()
+
+      await request('/api/system/settings/org/o1', {method: 'GET'})
+      await request('/api/other', {method: 'GET'})
+      await request('/api/system/settings/org/o1', {body: {version: 2}})
+
+      expect(await request('/api/system/settings/org/o1', {method: 'GET'})).toEqual({version: 2})
+      expect(await request('/api/other', {method: 'GET'})).toEqual({version: 1})
+      expect(fetchSpy).toHaveBeenCalledTimes(4)
+    })
+
+    it('a GET in flight across a write to its path does not refill the cache with the pre-write answer', async () => {
+      let resolveFetch!: (body: string) => void
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        () =>
+          new Promise(resolve => {
+            resolveFetch = body => resolve(new Response(body, {status: 200}))
+          }),
+      )
+      const {request} = await getClient()
+
+      const pending = request<{v: number}>('/api/doc', {method: 'GET'})
+      await new Promise(r => setTimeout(r, 0))
+      const readBeforeWrite = resolveFetch
+      fetchSpy.mockImplementationOnce(async () => new Response(null, {status: 204}))
+      await request('/api/doc', {body: {v: 2}})
+      readBeforeWrite(JSON.stringify({v: 1}))
+      expect(await pending).toEqual({v: 1})
+
+      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({v: 2}), {status: 200}))
+      expect(await request('/api/doc', {method: 'GET'})).toEqual({v: 2})
+      expect(fetchSpy).toHaveBeenCalledTimes(3)
+    })
+
     it('POSTs are never deduped or cached', async () => {
       const fetchSpy = vi
         .spyOn(globalThis, 'fetch')

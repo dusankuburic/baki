@@ -18,7 +18,7 @@ func TestProvideAnalysisService_ListsLibraryRulesWhereTheyRun(t *testing.T) {
 	for _, accounts := range []bool{true, false} {
 		cfg := &config.Config{}
 		cfg.Auth.Enabled = accounts
-		svc, err := ProvideAnalysisService(nil, nil, nil, cfg, nil, nil, nil, nil)
+		svc, err := ProvideAnalysisService(nil, nil, nil, cfg, nil, nil, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("ProvideAnalysisService: %v", err)
 		}

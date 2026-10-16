@@ -19,6 +19,11 @@ func (rt *Router) registerRoutes() *route.Builder {
 	// Cross-cutting middleware — applied to every request in order.
 	r.Use(rt.securityHeaders)
 	r.Use(rt.corsHeaders)
+	// Local (no-JWT) mode: every mutating route is unauthenticated behind the
+	// loopback bind; refuse browser requests that arrive cross-origin, so no
+	// website can drive any of them (now or added later) with a preflight-free
+	// "simple" POST. Pass-through in cloud mode and for non-mutating methods.
+	r.Use(rt.localOriginGuard)
 
 	// API version alias: the rewrite must stay identical to canonicalRequestPath (middleware_chain.go),
 	// which the rate-limit classifier runs outside this mux — the copies drifted once into a bypass.

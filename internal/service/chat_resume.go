@@ -77,10 +77,13 @@ type ResumeResult struct {
 // resume/authz request landing on a different replica can be authorized.
 type resumeSnapshot struct {
 	// V and Kind are the Redis envelope (redisx.Envelope), Replica the instance running the stream, where its
-	// commands go. The store stamps all three on the way out; a v0 snapshot has none and cannot be commanded.
+	// commands go. The store stamps all three on the way out; a v0 snapshot has none and cannot be commanded. Live says
+	// the owner keeps a liveness key (redisx.ReplicaLiveKey), so its absence means the stream died with the replica;
+	// without it (one replica configured, or the release before) the owner's silence proves nothing.
 	V              int            `json:"v,omitempty"`
 	Kind           string         `json:"kind,omitempty"`
 	Replica        string         `json:"replica,omitempty"`
+	Live           bool           `json:"live,omitempty"`
 	Owner          string         `json:"owner"`
 	Text           string         `json:"text"`
 	Done           bool           `json:"done"`
@@ -121,6 +124,8 @@ func (noopResumeStore) Load(context.Context, string) (resumeSnapshot, bool) {
 type redisResumeStore struct {
 	c        *redis.Client
 	instance string
+	// live: this replica keeps its liveness key, which every snapshot it writes then says (resumeSnapshot.Live).
+	live bool
 }
 
 func (redisResumeStore) enabled() bool { return true }
@@ -131,7 +136,7 @@ func (redisResumeStore) key(streamID string) string { return resumeKey.Key(strea
 const resumeStoreOpTimeout = 2 * time.Second
 
 func (r redisResumeStore) Save(ctx context.Context, streamID string, snap resumeSnapshot, ttl time.Duration) bool {
-	snap.V, snap.Kind, snap.Replica = resumeKey.Spec().Version, resumeKey.Name(), r.instance
+	snap.V, snap.Kind, snap.Replica, snap.Live = resumeKey.Spec().Version, resumeKey.Name(), r.instance, r.live
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return false
@@ -279,6 +284,7 @@ func (s *ChatService) mirrorStream(ctx context.Context, streamID string, ctl *st
 			}
 			if s.resumeBackplane().Save(ctx, streamID, snap, maxChatStreamDuration+resumeRetention) {
 				published = mark
+				ctl.published.Store(true)
 			} else {
 				published = unpublishedMark
 			}
@@ -406,7 +412,8 @@ func (s *ChatService) Shutdown(ctx context.Context) error {
 
 // forceServerRestarting ends, in their worker's place, the active streams that recorded no terminal state: it
 // records ChatErrServerRestarting, emits it to a begun stream's owner and mirrors it. A stuck worker that finishes
-// later may emit its own terminal event too; the client acts on the first. Returns how many it ended.
+// later sends no terminal event of its own (recordTerminal claims it), and its answer is not stored. Returns how
+// many it ended.
 func (s *ChatService) forceServerRestarting(ctx context.Context) int {
 	n := 0
 	s.activeStreams.Range(func(_, value interface{}) bool {

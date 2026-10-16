@@ -114,7 +114,7 @@ func (h *AuthHandler) beginSSOFlow(w http.ResponseWriter, r *http.Request, linkU
 		Path:     "/api/auth/sso",
 		MaxAge:   int(auth.SSOFlowTTL.Seconds()),
 		HttpOnly: true,
-		Secure:   requestIsTLS(r),
+		Secure:   requestIsTLS(r, h.security.TrustedProxies),
 		SameSite: http.SameSiteLaxMode,
 	})
 	return authURL, true
@@ -238,7 +238,7 @@ func (h *AuthHandler) handleSSOCallback(w http.ResponseWriter, r *http.Request) 
 	// #nosec G124 -- HttpOnly+SameSite always set; Secure tracks request TLS.
 	http.SetCookie(w, &http.Cookie{
 		Name: ssoFlowCookie, Value: "", Path: "/api/auth/sso", MaxAge: -1,
-		HttpOnly: true, Secure: requestIsTLS(r), SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: requestIsTLS(r, h.security.TrustedProxies), SameSite: http.SameSiteLaxMode,
 	})
 
 	q := r.URL.Query()
@@ -356,7 +356,7 @@ func (h *AuthHandler) handleSSOExchange(w http.ResponseWriter, r *http.Request) 
 	// SSO sessions are always persistent (the web client treats them as
 	// remembered): set the same HttpOnly refresh cookie login sets, so the web
 	// build can drop its localStorage copy of the token.
-	setRefreshCookie(w, r, pair.RefreshToken, pair.RefreshExpiresAt, true)
+	setRefreshCookie(w, r, h.security.TrustedProxies, pair.RefreshToken, pair.RefreshExpiresAt, true)
 
 	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionSSOLogin, ResourceType: "user", ResourceID: user.ID, Meta: map[string]string{"provider": h.ssoClient.ProviderName()}})
 	// Mirrors handleAuthLogin: the client's LoginResponseSchema requires the
@@ -388,9 +388,11 @@ func redirectSSOError(w http.ResponseWriter, r *http.Request, msg string) {
 }
 
 // requestIsTLS reports whether the request reached us over HTTPS, directly or
-// via a TLS-terminating proxy.
-func requestIsTLS(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+// via X-Forwarded-Proto from a peer configured in trustedProxies. Untrusted
+// peers must not influence the cookie Secure flag.
+func requestIsTLS(r *http.Request, trustedProxies []string) bool {
+	return r.TLS != nil ||
+		(strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") && middleware.PeerIsTrusted(r, trustedProxies))
 }
 
 // randomToken returns a 43-character URL-safe random string (256 bits); it errors rather than

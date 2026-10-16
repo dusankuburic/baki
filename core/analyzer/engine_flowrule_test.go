@@ -225,6 +225,46 @@ func TestSeverityOverride_OnlyWhenDifferentFromDefault(t *testing.T) {
 	}
 }
 
+// TestParseErrorFallback_CarriesTheRuleCategory: the engine's block-less parse-error findings are parse-error's,
+// so they carry its category like the anchored ones the walk stamps (the Findings tab, exports and the category
+// filters group by it); also when parse-error is not in the run's rule list, and on the truncation summary.
+func TestParseErrorFallback_CarriesTheRuleCategory(t *testing.T) {
+	want := (&ParseErrorRule{}).Category()
+	anchored := threeBlockFlow()
+	anchored.ParseErrors = []models.ParseError{{Line: 1, Message: "e", Severity: "error"}}
+	fallback := threeBlockFlow()
+	fallback.Subflows[0].Blocks = nil
+	for i := 0; i <= maxParseErrorFindings; i++ {
+		fallback.ParseErrors = append(fallback.ParseErrors, models.ParseError{Line: i + 1, Message: "e", Severity: "warning"})
+	}
+	for _, tc := range []struct {
+		name  string
+		doc   *models.FlowDocument
+		rules []Rule
+		n     int
+	}{
+		{"anchored", anchored, []Rule{&ParseErrorRule{}}, 1},
+		{"block-less", fallback, []Rule{&ParseErrorRule{}}, maxParseErrorFindings + 1},
+		{"block-less, parse-error not run", fallback, nil, maxParseErrorFindings + 1},
+	} {
+		var n, wrong int
+		for _, f := range RunAnalysis(tc.doc, tc.rules, nil, nil).Findings {
+			if f.RuleID != "parse-error" {
+				continue
+			}
+			n++
+			if f.Category != want {
+				if wrong++; wrong == 1 {
+					t.Errorf("%s: %q (block %q) has category %q, want %q", tc.name, f.Title, f.BlockID, f.Category, want)
+				}
+			}
+		}
+		if n != tc.n {
+			t.Errorf("%s: %d parse-error findings, want %d", tc.name, n, tc.n)
+		}
+	}
+}
+
 // TestDefaultSettings_MatchNilSettings is the CLI-vs-server parity: bakicli
 // without a config passes nil settings, the server the seeded defaults; over
 // the whole corpus the two must produce the same report.
@@ -325,9 +365,6 @@ func TestCollectFindings_VisitSeesTheCollectedFindings(t *testing.T) {
 	rules := append(AllRules(), reversed)
 	sharded := false
 	for _, d := range oracleDocs(t, 60) {
-		if hasDuplicateSubflowIDs(d.doc) {
-			continue
-		}
 		for si, settings := range oracleSettings() {
 			var enabled []Rule
 			for _, r := range rules {

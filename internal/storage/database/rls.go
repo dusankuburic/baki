@@ -37,7 +37,8 @@ type RLSScope struct {
 	// shorter-lived context of whichever call starts it — a sub-call's timeout must not roll back the
 	// request-long transaction.
 	base context.Context
-	// failOpen: a start failure lets the request run on the pool (reads).
+	// failOpen: a start failure lets the request run on the pool. No request scope asks for it any more: the RLS
+	// middleware refuses a read that cannot start, as it does a mutation.
 	// Otherwise every scoped statement fails with ErrRLSUnavailable.
 	failOpen bool
 

@@ -3,6 +3,8 @@ package app
 import (
 	"testing"
 
+	"github.com/redis/go-redis/v9"
+
 	"pad-analyzer/internal/config"
 )
 
@@ -24,10 +26,34 @@ func TestProvideScanner_NoticesOfADeploymentWithoutAccountsAreTheDeployments(t *
 			cfg := &config.Config{Mode: tc.mode}
 			cfg.Storage.Backend = config.StorageDatabase
 			cfg.Auth.Enabled = tc.auth
-			s := provideScanner(cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+			s := provideScanner(cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 			if got := s.SingleTenant(); got != tc.single {
 				t.Errorf("SingleTenant() = %v, want %v", got, tc.single)
 			}
 		})
+	}
+}
+
+// TestProvideScanner_SharesItsScansOnlyWithSeveralReplicas: the scan records go to Redis only where a second replica
+// can sweep (PAD_MAX_REPLICAS > 1); a single replica keeps them in memory even with PAD_REDIS_URL set, so a Redis
+// outage costs it nothing.
+func TestProvideScanner_SharesItsScansOnlyWithSeveralReplicas(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}) // never dialled: the option only keeps it
+	t.Cleanup(func() { _ = client.Close() })
+	for _, tc := range []struct {
+		replicas int
+		client   *redis.Client
+		want     bool
+	}{
+		{1, client, false},
+		{2, client, true},
+		{2, nil, false},
+	} {
+		cfg := serverStoreConfig(config.ModeCloud, true)
+		cfg.Storage.MaxReplicas = tc.replicas
+		s := provideScanner(cfg, nil, nil, nil, nil, nil, nil, nil, nil, tc.client)
+		if got := s.SharesScans(); got != tc.want {
+			t.Errorf("replicas %d, client %v: SharesScans() = %v, want %v", tc.replicas, tc.client != nil, got, tc.want)
+		}
 	}
 }

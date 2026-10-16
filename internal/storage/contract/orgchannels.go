@@ -19,6 +19,8 @@ func runOrgChannelScenarios(ctx context.Context, b interfaces.StorageBackend, ru
 	run("SaveOrgChannel_cannot_retarget_another_orgs_channel", func(t *testing.T) {
 		victimOrg := "contract-org-victim-" + runID
 		attackerOrg := "contract-org-attacker-" + runID
+		seedOrg(ctx, t, b, victimOrg, "contract-ch-admin-"+runID)
+		seedOrg(ctx, t, b, attackerOrg, "contract-ch-admin-"+runID)
 		channelID := "contract-channel-" + runID
 
 		victim := &interfaces.OrgChannel{
@@ -83,6 +85,7 @@ func runOrgChannelScenarios(ctx context.Context, b interfaces.StorageBackend, ru
 	// secret as empty: the service keeps a secret an edit omits by re-saving the stored one.
 	run("OrgChannel_secret_round_trip", func(t *testing.T) {
 		org := "contract-org-secret-" + runID
+		seedOrg(ctx, t, b, org, "contract-ch-admin-"+runID)
 		ch := &interfaces.OrgChannel{ID: "contract-ch-secret-" + runID, OrgID: org, Name: "ops", Kind: "slack",
 			URL: "https://hooks.slack.com/services/T0/B0/" + runID, Secret: "s3cret-" + runID, Enabled: true,
 			CreatedAt: time.Now().UTC()}
@@ -106,6 +109,7 @@ func runOrgChannelScenarios(ctx context.Context, b interfaces.StorageBackend, ru
 	// enabledOnly is the scanner's read: a paused channel is listed for the settings page and never delivered to.
 	run("ListOrgChannels_enabledOnly_skips_paused", func(t *testing.T) {
 		org := "contract-org-paused-" + runID
+		seedOrg(ctx, t, b, org, "contract-ch-admin-"+runID)
 		on := &interfaces.OrgChannel{ID: "contract-ch-on-" + runID, OrgID: org, Name: "on", Kind: "webhook",
 			URL: "https://hooks.example.com/on", Enabled: true, CreatedAt: time.Now().UTC()}
 		off := &interfaces.OrgChannel{ID: "contract-ch-off-" + runID, OrgID: org, Name: "off", Kind: "webhook",
@@ -130,6 +134,7 @@ func runOrgChannelScenarios(ctx context.Context, b interfaces.StorageBackend, ru
 	// conflict, and the fake must not take the caller's either (B9).
 	run("SaveOrgChannel_update_keeps_created_at", func(t *testing.T) {
 		org := "contract-org-created-" + runID
+		seedOrg(ctx, t, b, org, "contract-ch-admin-"+runID)
 		first := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
 		ch := &interfaces.OrgChannel{ID: "contract-ch-created-" + runID, OrgID: org, Name: "ops", Kind: "webhook",
 			URL: "https://hooks.example.com/x", Enabled: true, CreatedAt: first}
@@ -156,6 +161,7 @@ func runOrgChannelScenarios(ctx context.Context, b interfaces.StorageBackend, ru
 	// what a caller changes after a save or a read never reaches the store.
 	run("OrgChannel_fields_and_events_round_trip", func(t *testing.T) {
 		org := "contract-org-fields-" + runID
+		seedOrg(ctx, t, b, org, "contract-ch-admin-"+runID)
 		ch := &interfaces.OrgChannel{ID: "contract-ch-fields-" + runID, OrgID: org, Name: "jira", Kind: "jira",
 			URL: "https://acme.atlassian.net", Config: map[string]string{"email": "bot@acme.io", "project": "PAD"},
 			Secrets: map[string]string{"token": "tok-" + runID}, Events: []string{"drift", "new_rules"}, Enabled: true,
@@ -187,6 +193,7 @@ func runOrgChannelScenarios(ctx context.Context, b interfaces.StorageBackend, ru
 	// organisation's other recipients stay), whether or not the user is still a member.
 	run("DeleteUser_leaves_email_channel_recipients", func(t *testing.T) {
 		org := "contract-org-recipients-" + runID
+		seedOrg(ctx, t, b, org, "contract-ch-admin-"+runID)
 		gone, stays := "contract-rcpt-gone-"+runID, "contract-rcpt-stays-"+runID
 		for _, id := range []string{gone, stays} {
 			if err := b.CreateUser(ctx, &interfaces.User{ID: id, Email: id + "@example.com", Password: "hash"}); err != nil {

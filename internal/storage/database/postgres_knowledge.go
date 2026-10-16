@@ -24,7 +24,27 @@ func (b *PostgresStorageBackend) SaveKnowledgeDocument(ctx context.Context, user
 		// chunker_version 0 is "unsaid": the column's default (1), the geometry every document before the column had.
 		_, err := tx.ExecContext(ctx, `INSERT INTO knowledge_documents (id, org_id, filename, chunker_version) VALUES ($1, $2, $3, $4)`,
 			doc.ID, doc.OrgID, doc.Filename, max(doc.ChunkerVersion, 1))
+		if isUnknownOrg(err, "knowledge_documents_org_id_fkey") {
+			return interfaces.ErrOrgNotFound
+		}
 		return err
+	})
+}
+
+// SaveKnowledgeDocumentWithChunks writes the document and its chunks in one transaction as the caller (the request's
+// when one is on ctx; the upload route runs without one): the two methods it calls join it. Committed apart, a crash
+// between them left a document with no chunks.
+func (b *PostgresStorageBackend) SaveKnowledgeDocumentWithChunks(ctx context.Context, userID string, doc *interfaces.KnowledgeDocument, chunks []interfaces.KnowledgeChunk) error {
+	return b.withTxAs(ctx, userID, func(txCtx context.Context, tx *sql.Tx) error {
+		// The org's chunk-write lock before the document row, as a chunk write alone takes it before its rows: an
+		// upload and a re-index page of one org queue for it in the same order.
+		if err := lockKnowledgeOrgs(txCtx, tx, []interfaces.KnowledgeChunk{{OrgID: doc.OrgID}}); err != nil {
+			return err
+		}
+		if err := b.SaveKnowledgeDocument(txCtx, userID, doc); err != nil {
+			return err
+		}
+		return b.SaveKnowledgeChunks(txCtx, userID, chunks)
 	})
 }
 
@@ -46,14 +66,16 @@ func (b *PostgresStorageBackend) DeleteKnowledgeDocumentByName(ctx context.Conte
 // listKnowledgeDocumentsSQL is the ListKnowledgeDocuments statement: the org's documents, newest first,
 // cut to the page FIRST, then each returned document's chunk counts by one keyed LATERAL probe (the LEFT
 // JOIN … GROUP BY … LIMIT form it replaced aggregated every chunk of the org before the LIMIT could drop a
-// single document). Two literal statements: the embedding_vec column exists only where pgvector is installed.
+// single document). The id breaks created_at ties, so pages neither skip nor repeat a document, and the order is
+// knowledge_documents_org_created_idx's (v49): the page is read in index order, not sorted. Two literal statements:
+// the embedding_vec column exists only where pgvector is installed.
 func listKnowledgeDocumentsSQL(pgvector bool) string {
 	if pgvector {
 		return `
 		SELECT d.id, d.org_id, d.filename, d.created_at, d.chunker_version, c.chunk_count, c.indexed_count
 		FROM (SELECT id, org_id, filename, created_at, chunker_version FROM knowledge_documents
 		      WHERE org_id = $1
-		      ORDER BY created_at DESC
+		      ORDER BY created_at DESC, id
 		      LIMIT CASE WHEN $2 > 0 THEN $2 ELSE NULL END
 		      OFFSET GREATEST($3, 0)) d
 		CROSS JOIN LATERAL (
@@ -61,13 +83,13 @@ func listKnowledgeDocumentsSQL(pgvector bool) string {
 			       COUNT(*) FILTER (WHERE c.embedding_vec IS NOT NULL)::int AS indexed_count
 			FROM knowledge_chunks c
 			WHERE c.org_id = d.org_id AND c.doc_id = d.id) c
-		ORDER BY d.created_at DESC`
+		ORDER BY d.created_at DESC, d.id`
 	}
 	return `
 		SELECT d.id, d.org_id, d.filename, d.created_at, d.chunker_version, c.chunk_count, c.indexed_count
 		FROM (SELECT id, org_id, filename, created_at, chunker_version FROM knowledge_documents
 		      WHERE org_id = $1
-		      ORDER BY created_at DESC
+		      ORDER BY created_at DESC, id
 		      LIMIT CASE WHEN $2 > 0 THEN $2 ELSE NULL END
 		      OFFSET GREATEST($3, 0)) d
 		CROSS JOIN LATERAL (
@@ -75,7 +97,7 @@ func listKnowledgeDocumentsSQL(pgvector bool) string {
 			       0::int AS indexed_count
 			FROM knowledge_chunks c
 			WHERE c.org_id = d.org_id AND c.doc_id = d.id) c
-		ORDER BY d.created_at DESC`
+		ORDER BY d.created_at DESC, d.id`
 }
 
 // ListKnowledgeDocuments joins per-doc chunk counts and vector-indexed counts: a doc with chunks
@@ -472,17 +494,34 @@ func (b *PostgresStorageBackend) ListKnowledgeChunkContents(ctx context.Context,
 	return chunks, rows.Err()
 }
 
-// SampleKnowledgeChunkEmbeddings returns up to n of the org's chunks with their stored embeddings — ONE per
-// document — for the RAG embedding-model mismatch guard (DISTINCT ON spreads the sample over the corpus; "the
-// n lowest ids" would be a fixed subset a partially converted corpus can hide from). With pgvector, each
-// document's indexed chunk is picked first; the CASE-form jsonb guard keeps rows without an embedding array
-// out (jsonb_array_length would error on a scalar, and Postgres need not short-circuit an AND).
-func (b *PostgresStorageBackend) SampleKnowledgeChunkEmbeddings(ctx context.Context, orgID string, n int) ([]interfaces.KnowledgeChunk, error) {
-	if n <= 0 {
-		return nil, nil
+// sampleKnowledgeChunkEmbeddingsSQL is the SampleKnowledgeChunkEmbeddings statement (exposed for the plan tests).
+// Two literal statements (not a spliced ORDER BY): embedding_vec exists only with pgvector.
+//
+// With pgvector a chunk in the vector index has an embedding (embedding_vec is written from the JSON array, never
+// from an empty one), and IS NOT NULL reads the row's null bitmap only: the JSON embedding (15-30 KB, TOASTed) is
+// detoasted for the guard only where embedding_vec is NULL, the OR's second arm (Postgres evaluates an OR's arms in
+// order and stops at the first true one; plans_knowledge_sample_test.go measures the blocks read). The sample is
+// picked on ids, and only the n picked rows are read back for their content and embedding.
+func sampleKnowledgeChunkEmbeddingsSQL(pgvector bool) string {
+	if pgvector {
+		return `
+		SELECT c.id, c.doc_id, c.content, c.embedding FROM (
+			SELECT id, doc_id, unindexed FROM (
+				SELECT DISTINCT ON (c.doc_id) c.id, c.doc_id, (c.embedding_vec IS NULL) AS unindexed
+				FROM knowledge_chunks c
+				WHERE c.org_id = $1
+				  AND (c.embedding_vec IS NOT NULL
+				       OR CASE WHEN jsonb_typeof(c.embedding) = 'array'
+				               THEN jsonb_array_length(c.embedding) ELSE 0 END > 0)
+				ORDER BY c.doc_id, (c.embedding_vec IS NULL), c.id
+			) d
+			ORDER BY unindexed, doc_id
+			LIMIT $2
+		) s
+		JOIN knowledge_chunks c ON c.id = s.id
+		ORDER BY s.unindexed, s.doc_id`
 	}
-	// Two literal statements (not a spliced ORDER BY): embedding_vec exists only with pgvector.
-	query := `
+	return `
 		SELECT id, doc_id, content, embedding FROM (
 			SELECT DISTINCT ON (c.doc_id) c.id, c.doc_id, c.content, c.embedding
 			FROM knowledge_chunks c
@@ -493,21 +532,18 @@ func (b *PostgresStorageBackend) SampleKnowledgeChunkEmbeddings(ctx context.Cont
 		) s
 		ORDER BY doc_id
 		LIMIT $2`
-	if b.hasPgvector {
-		query = `
-		SELECT id, doc_id, content, embedding FROM (
-			SELECT DISTINCT ON (c.doc_id) c.id, c.doc_id, c.content, c.embedding,
-			       (c.embedding_vec IS NULL) AS unindexed
-			FROM knowledge_chunks c
-			WHERE c.org_id = $1
-			  AND CASE WHEN jsonb_typeof(c.embedding) = 'array'
-			           THEN jsonb_array_length(c.embedding) ELSE 0 END > 0
-			ORDER BY c.doc_id, (c.embedding_vec IS NULL), c.id
-		) s
-		ORDER BY unindexed, doc_id
-		LIMIT $2`
+}
+
+// SampleKnowledgeChunkEmbeddings returns up to n of the org's chunks with their stored embeddings — ONE per
+// document — for the RAG embedding-model mismatch guard (DISTINCT ON spreads the sample over the corpus; "the
+// n lowest ids" would be a fixed subset a partially converted corpus can hide from). With pgvector, each
+// document's indexed chunk is picked first; the CASE-form jsonb guard keeps rows without an embedding array
+// out (jsonb_array_length would error on a scalar, and Postgres need not short-circuit an AND).
+func (b *PostgresStorageBackend) SampleKnowledgeChunkEmbeddings(ctx context.Context, orgID string, n int) ([]interfaces.KnowledgeChunk, error) {
+	if n <= 0 {
+		return nil, nil
 	}
-	rows, err := b.query(ctx).QueryContext(ctx, query, orgID, n)
+	rows, err := b.query(ctx).QueryContext(ctx, sampleKnowledgeChunkEmbeddingsSQL(b.hasPgvector), orgID, n)
 	if err != nil {
 		return nil, err
 	}

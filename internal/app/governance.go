@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/api"
@@ -62,7 +63,10 @@ func (a mailSvcAdapter) SendAlert(ctx context.Context, to, subject, plainBody, h
 // always record in-app and route to each org's own channels; PAD_NOTIFY_* only
 // adds a deployment-wide sink. The sweeps take the database's lease (nil without
 // one: the process sweeps alone), so a sweep whose lock is lost is cancelled.
-func provideScanner(cfg *config.Config, backend storageif.StorageBackend, leaser lock.Leaser, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher, channels *service.ChannelService, eventMgr *api.EventManager, ruleProfiles *service.RuleProfileResolver, dashboard *service.DashboardService) *scanner.Scanner {
+// With more than one replica (PAD_MAX_REPLICAS > 1) the flows' last complete
+// scans are shared through Redis, so a sweep skips what another replica's
+// sweep already analyzed; a single replica keeps them in memory only.
+func provideScanner(cfg *config.Config, backend storageif.StorageBackend, leaser lock.Leaser, analysisSvc *service.AnalysisService, notifier *notify.Dispatcher, channels *service.ChannelService, eventMgr *api.EventManager, ruleProfiles *service.RuleProfileResolver, dashboard *service.DashboardService, redisClient *redis.Client) *scanner.Scanner {
 	var analyze scanner.AnalyzeFunc
 	if analysisSvc != nil {
 		// Background, not AnalyzeFlow: the sweep's context carries no user, so
@@ -75,7 +79,11 @@ func provideScanner(cfg *config.Config, backend storageif.StorageBackend, leaser
 	if channels != nil {
 		orgChannels = channels
 	}
-	s := scanner.New(backend, nil, analyze, notifier, cfg.Governance.ScanInterval.Std(), orgChannels, scanner.WithLeaser(leaser))
+	opts := []scanner.Option{scanner.WithLeaser(leaser)}
+	if cfg.Storage.MaxReplicas > 1 {
+		opts = append(opts, scanner.WithSharedScans(redisClient))
+	}
+	s := scanner.New(backend, nil, analyze, notifier, cfg.Governance.ScanInterval.Std(), orgChannels, opts...)
 	// Real-time SSE push: a newly-detected alert pings connected clients who
 	// can see the flow. EventManager is always non-nil in the fx graph; safe
 	// even in local mode.
@@ -132,10 +140,11 @@ func provideMigrationRunner(cfg *config.Config, dst storageif.StorageBackend, le
 
 // provideScanNowFunc wires the admin "scan now" action to the scanner wherever
 // there is a server store to sweep (cloud and local+db, as the scheduled sweep);
-// without one it returns nil so the endpoint 503s.
+// without one it returns nil so the endpoint 503s. ScanNow starts the sweep and
+// says whether it did, so the endpoint reports a sweep that could not start.
 func provideScanNowFunc(s *scanner.Scanner, cfg *config.Config) api.ScanNowFunc {
 	if s == nil || !capability.Of(cfg).Has(capability.ServerStore) {
 		return nil
 	}
-	return s.ScanOnce
+	return s.ScanNow
 }

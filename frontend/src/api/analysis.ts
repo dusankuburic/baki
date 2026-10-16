@@ -1,6 +1,6 @@
 import {request, requestText, requestValidated} from './client'
 import {useFlowStore} from '@/stores/flowStore'
-import {getAnalysisReportSchema} from './schemas'
+import {getAnalysisReportSchema, getPoliciesSchema, getPolicySchema} from './schemas'
 
 const BATCH_ANALYSIS_TIMEOUT_MS = 300_000
 import type {
@@ -143,9 +143,11 @@ export const analysisApi = {
   deleteComment: (flowId: string, commentId: string): Promise<void> =>
     request('/api/analysis/comments/delete', {body: {flowId, commentId}}),
 
-  savePolicy: (policy: Policy): Promise<Policy> => request('/api/analysis/policy/save', {body: policy}),
+  savePolicy: async (policy: Policy): Promise<Policy> =>
+    requestValidated('/api/analysis/policy/save', await getPolicySchema(), {body: policy}),
 
-  listPolicies: (orgId: string): Promise<Policy[]> => request('/api/analysis/policy/list', {body: {orgId}}),
+  listPolicies: async (orgId: string): Promise<Policy[]> =>
+    requestValidated('/api/analysis/policy/list', await getPoliciesSchema(), {body: {orgId}}),
 
   deletePolicy: (orgId: string, id: string): Promise<void> =>
     request('/api/analysis/policy/delete', {body: {orgId, id}}),
@@ -182,4 +184,7 @@ export interface CustomRuleTestResult {
   matches: number
   flowName: string
   findings: {ruleId: string; title: string; blockId: string}[]
+  /** What the strict check says of the rule it ran (warnings, and a built-in rule's id); absent before the server
+   * ran rules under a built-in id. */
+  problems?: CustomRuleProblem[]
 }

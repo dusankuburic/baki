@@ -106,15 +106,32 @@ func (h *LibraryHandler) toLibraryFlowWithPerms(doc *storageif.FlowDocument, req
 	}
 }
 
+// libraryCursorOrder is the keyset order of a library sort: only the updated-at sorts page by cursor (their key is
+// the flow's updated_at, the id breaking ties); "" for the others, which page by offset.
+func libraryCursorOrder(sort string) string {
+	switch service.ParseFlowSort(sort) {
+	case storageif.FlowSortUpdatedDesc:
+		return "updated_desc"
+	case storageif.FlowSortUpdatedAsc:
+		return "updated_asc"
+	}
+	return ""
+}
+
 // @Summary      List library flows
-// @Description  Returns a list of flow documents stored in the library, with optional filtering by organization and search query.
+// @Description  Returns one page of the flows visible to the caller, with optional filtering by organization, scope, name and tags. total counts the matching flows up to 10 000; totalCapped is true when more match. A page reached by cursor reports the total the first page counted (its cursor carries it). hasMore reports flows after the page that the client can reach. With the updated-at sorts the page carries nextCursor (absent on the last page, and on a page reached by offset whose flows' ids are all too long for a cursor: then page on by offset): pass it as ?cursor= with the same filters and sort for the next page, which then ignores offset; cursors reach every flow. Without a cursor the page starts at offset, at most 10 000 (hasMore is false where the next offset would pass it), so the name and block sorts reach offsets up to and including 10 000 (so 10 000 + one page by offset).
 // @Tags         library
 // @Param        orgId query string false "orgId"
-// @Param        q query string false "q"
-// @Param        limit query integer false "limit"
-// @Param        offset query integer false "offset"
+// @Param        scope query string false "all (default), mine or shared"
+// @Param        q query string false "name filter: a case-insensitive substring, a prefix without a run of 3 letters or digits"
+// @Param        tags query string false "comma-separated tags; a flow with any of them matches"
+// @Param        sort query string false "updated_desc (default), updated_asc, name_asc, name_desc or blocks_desc"
+// @Param        limit query integer false "page size (default and maximum 200)"
+// @Param        offset query integer false "rows to skip, at most 10 000 (ignored with a cursor)"
+// @Param        cursor query string false "the previous page's nextCursor"
 // @Produce      json
-// @Success      200 {object} []map[string]interface{} "OK"
+// @Success      200 {object} render.PagedResponse[api.libraryFlow] "One page of flows"
+// @Failure      400 {object} render.ErrorResponse "BAD_REQUEST: a malformed limit or offset, an offset above 10 000 without a cursor, or a cursor not issued for these filters and sort"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/library [get]
 func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +146,7 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	offset, ok := clampListOffset(w, q.Get("offset"))
+	offset, ok := listOffset(w, q.Get("offset"), q.Get("cursor") != "")
 	if !ok {
 		return
 	}
@@ -143,10 +160,17 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
+	order := libraryCursorOrder(sort)
+	filters := listFilterDigest(userID, orgID, string(scope), query, strings.Join(tagFilter, ","))
+	after, err := decodeListCursor(q.Get("cursor"), order, filters)
+	if err != nil {
+		render.Error(w, err, http.StatusBadRequest)
+		return
+	}
 
 	// One page call resolves the caller's org memberships once and reuses
 	// them for the list, total and per-flow permission flags.
-	page, err := h.libSvc.ListLibraryFlowsPage(r.Context(), userID, orgID, scope, query, sort, limit, offset, tagFilter)
+	page, err := h.libSvc.ListLibraryFlowsPage(r.Context(), userID, orgID, scope, query, sort, limit, offset, after, tagFilter)
 	if err != nil {
 		render.Error(w, err, 0)
 		return
@@ -172,11 +196,20 @@ func (h *LibraryHandler) handleLibraryList(w http.ResponseWriter, r *http.Reques
 		items[i] = h.toLibraryFlowWithPerms(d, userID, ownerNames[d.OwnerID], p)
 	}
 
+	// The cursor carries the total this page reports (counted on the first page), so the pages it leads to read only
+	// their rows.
+	next := ""
+	if page.HasMore && order != "" && len(docs) > 0 {
+		next = nextFlowCursor(order, filters, docs, after, page.Total, page.TotalCapped)
+	}
 	render.JSON(w, render.PagedResponse[libraryFlow]{
-		Items:  items,
-		Total:  page.Total,
-		Offset: offset,
-		Limit:  limit,
+		Items:       items,
+		Total:       page.Total,
+		Offset:      offset,
+		Limit:       limit,
+		HasMore:     offsetPageHasMore(page.HasMore, next, after != nil, offset, limit),
+		NextCursor:  next,
+		TotalCapped: page.TotalCapped,
 	})
 }
 

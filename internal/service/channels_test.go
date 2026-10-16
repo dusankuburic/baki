@@ -28,6 +28,7 @@ func boolPtr(b bool) *bool    { return &b }
 
 func TestChannelService_OrgScoped(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("org-a", "org-b") // a channel needs its organisation
 	svc := newTestChannels(t, b, egress.BlockInternal)
 	ctx := context.Background()
 
@@ -67,6 +68,7 @@ func TestChannelService_OrgScoped(t *testing.T) {
 // a secret is never shown, only that there is one.
 func TestChannelService_ListRedactsForEveryone(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	svc := newTestChannels(t, b, egress.BlockInternal)
 	ctx := context.Background()
 	_ = b.SaveOrgChannel(ctx, &storageif.OrgChannel{ID: "c1", OrgID: "o", Kind: "slack", URL: "https://hooks.slack.com/services/T/B/SECRET", Secret: "s", Enabled: true})
@@ -100,6 +102,7 @@ func TestChannelService_ListRedactsForEveryone(t *testing.T) {
 // keeps the stored URL; clear removes the secret.
 func TestChannelService_SaveKeepsWhatAnEditOmits(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	svc := newTestChannels(t, b, egress.AllowLoopback)
 	ctx := context.Background()
 	const url = "http://127.0.0.1:9/services/T/B/SECRET"
@@ -165,6 +168,7 @@ func TestChannelService_SaveKeepsWhatAnEditOmits(t *testing.T) {
 
 func TestChannelService_SaveRefuses(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	svc := newTestChannels(t, b, egress.BlockInternal)
 	ctx := context.Background()
 	_ = b.SaveOrgChannel(ctx, &storageif.OrgChannel{ID: "t1", OrgID: "o", Kind: "teams", URL: "https://203.0.113.10/t", Enabled: true})
@@ -206,6 +210,7 @@ func TestChannelService_SaveRefuses(t *testing.T) {
 // the marker is refused, and the listed form has no scheme, so no release's validation accepts it.
 func TestChannelService_RedactedURLIsNeverStored(t *testing.T) {
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	svc := newTestChannels(t, b, egress.BlockInternal)
 	ctx := context.Background()
 	const moved = "https://203.0.113.20/hook/NEW"
@@ -251,6 +256,7 @@ func TestChannelService_TestAnswersCoarsely(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(int(status.Load())) }))
 	defer srv.Close()
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	svc := newTestChannels(t, b, egress.AllowLoopback)
 	ctx := context.Background()
 	_ = b.SaveOrgChannel(ctx, &storageif.OrgChannel{ID: "c1", OrgID: "o", Kind: "webhook", URL: srv.URL + "/hook?token=SECRET", Enabled: true})
@@ -296,6 +302,7 @@ func TestChannelService_EnqueueStampsAndSignalsDone(t *testing.T) {
 	}))
 	defer srv.Close()
 	b := testutil.NewFakeBackend()
+	b.SeedOrgs("o") // a channel needs its organisation
 	svc := newTestChannels(t, b, egress.AllowLoopback)
 	ctx := context.Background()
 	_ = b.SaveOrgChannel(ctx, &storageif.OrgChannel{ID: "c1", OrgID: "o", Kind: "webhook", URL: srv.URL, Enabled: true})

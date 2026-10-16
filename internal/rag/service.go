@@ -573,13 +573,6 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 		ChunkerVersion: chunkerVersion,
 	}
 	docID = doc.ID
-	// ORDERING: write the new version FIRST, delete the old only once the new document AND its chunks
-	// have committed — deleting first meant a failure left the org with NEITHER version. No cross-call
-	// transaction exists, so write-new-then-delete-old makes a failed re-upload a no-op.
-	if err := s.store.SaveKnowledgeDocument(ctx, userID, doc); err != nil {
-		return err
-	}
-
 	knowledgeChunks := make([]interfaces.KnowledgeChunk, len(chunks))
 	for i := range chunks {
 		knowledgeChunks[i] = interfaces.KnowledgeChunk{
@@ -592,10 +585,12 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 		}
 	}
 
-	if err := s.store.SaveKnowledgeChunks(ctx, userID, knowledgeChunks); err != nil {
-		// Roll back the orphaned document so it doesn't appear "indexed" with no chunks; the
-		// previous version is untouched and still serves retrieval.
-		_ = s.store.DeleteKnowledgeDocument(ctx, userID, orgID, doc.ID)
+	// ORDERING: write the new version FIRST, delete the old only once the new document AND its chunks
+	// have committed — deleting first meant a failure left the org with NEITHER version, so a failed
+	// re-upload is a no-op. The document and its chunks are one transaction: written apart, a crash
+	// between them left a document with no chunks (a failure there was rolled back by a delete, which a
+	// crash never runs). The previous version is untouched either way and still serves retrieval.
+	if err := s.store.SaveKnowledgeDocumentWithChunks(ctx, userID, doc, knowledgeChunks); err != nil {
 		return err
 	}
 

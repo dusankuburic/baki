@@ -29,6 +29,7 @@ var errBudgetSpent = errors.New("daily AI budget exceeded")
 // own error (the HTTP layer renders it 429 BUDGET_EXCEEDED).
 func TestKnowledge_BudgetGatesUploadAndReindex(t *testing.T) {
 	store := testutil.NewFakeBackend()
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1, 0}, "existing guideline")
 	emb := &fixedEmbedder{vec: []float32{1, 0}}
 	svc := guardService(store, emb)
@@ -72,6 +73,7 @@ func (azureEmbedder) ID() string { return azureFoundryProviderID }
 func TestKnowledge_AzureEmbedderIgnoresAnExhaustedBudget(t *testing.T) {
 	ctx := context.Background()
 	store := testutil.NewFakeBackend()
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1, 0}, "existing guideline")
 	emb := &fixedEmbedder{vec: []float32{1, 0}}
 	svc := guardService(store, azureEmbedder{emb})

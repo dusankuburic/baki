@@ -1,8 +1,9 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {render, screen, fireEvent, waitFor} from '@testing-library/react'
+import {render, screen, fireEvent, waitFor, act} from '@testing-library/react'
 import {ToastProvider} from '@/components/shared/Toast'
 import {useAdminStore} from '@/stores/adminStore'
-import type {AuditEvent, AuditFilter} from '@/api/admin'
+import {ApiError} from '@/api/client'
+import type {AuditEvent, AuditFilter, AuditPage} from '@/api/admin'
 
 const listAuditEvents = vi.fn()
 const listAuditActions = vi.fn()
@@ -33,12 +34,31 @@ function event(i: number, over: Partial<AuditEvent> = {}): AuditEvent {
 
 const EVENTS = Array.from({length: 40}, (_, i) => event(i))
 
-function respond(filter: AuditFilter) {
+function page(events: AuditEvent[], nextCursor?: string): AuditPage {
+  return {events, nextCursor}
+}
+
+// As the server answers: a cursor (here the offset it stands for) wins over the offset, an offset past 10 000
+// without one is refused, and X-Next-Cursor comes while events follow.
+function respond(filter: AuditFilter, rows: (from: number, to: number) => AuditEvent[] = filtered(filter)) {
+  const offset = filter.cursor ? Number(filter.cursor.slice(1)) : (filter.offset ?? 0)
+  if (!filter.cursor && offset > 10_000) return Promise.reject(new ApiError('at most 10000', 400))
+  const limit = filter.limit ?? 100
+  const out = rows(offset, offset + limit + 1)
+  return Promise.resolve(page(out.slice(0, limit), out.length > limit ? `c${offset + limit}` : undefined))
+}
+
+function filtered(filter: AuditFilter) {
   let rows = EVENTS
   if (filter.action) rows = rows.filter(e => e.action === filter.action)
   if (filter.userId) rows = rows.filter(e => e.userId === filter.userId)
-  const offset = filter.offset ?? 0
-  return Promise.resolve(rows.slice(offset, offset + (filter.limit ?? 100)))
+  return (from: number, to: number) => rows.slice(from, to)
+}
+
+// A log of n events, made as they are asked for.
+function longLog(n: number) {
+  return (from: number, to: number) =>
+    Array.from({length: Math.max(0, Math.min(to, n) - from)}, (_, i) => event(from + i))
 }
 
 function renderSection() {
@@ -80,8 +100,85 @@ describe('AuditLogSection', () => {
     expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled()
   })
 
+  it('follows X-Next-Cursor past the offset cap of 10 000', async () => {
+    listAuditEvents.mockImplementation((filter: AuditFilter) => respond(filter, longLog(20_000)))
+    useAdminStore.getState().setAuditPage(666) // offset 9990: the next page would start at 10 005
+    renderSection()
+    await screen.findAllByText('Changed settings')
+    const next = screen.getByRole('button', {name: 'Next page'})
+    expect(next).toBeEnabled()
+    // The last page in offset reach asks for its own events: the cursor it answers leads past the cap.
+    expect(listAuditEvents).toHaveBeenLastCalledWith(
+      expect.objectContaining({offset: 9990, limit: 15, cursor: undefined}),
+      expect.anything(),
+    )
+
+    fireEvent.click(next)
+    const nav = screen.getByRole('navigation', {name: 'Audit log pagination'})
+    await waitFor(() => expect(nav).toHaveTextContent('Showing 10006–10020'))
+    expect(listAuditEvents).toHaveBeenLastCalledWith(
+      expect.objectContaining({cursor: 'c10005', limit: 15}),
+      expect.anything(),
+    )
+    expect(screen.queryByText("Couldn't load the audit log")).toBeNull()
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Next page'})).toBeEnabled())
+  })
+
+  it('against a server without cursors, keeps a deep full page open until the page after it is empty', async () => {
+    // The release before: no cursor, no offset cap; 10 005 events end a full page.
+    listAuditEvents.mockImplementation((filter: AuditFilter) => {
+      const from = filter.offset ?? 0
+      return Promise.resolve(page(longLog(10_005)(from, from + (filter.limit ?? 100))))
+    })
+    useAdminStore.getState().setAuditPage(666)
+    renderSection()
+    await screen.findAllByText('Changed settings')
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    await waitFor(() =>
+      expect(listAuditEvents).toHaveBeenLastCalledWith(expect.objectContaining({offset: 10005}), expect.anything()),
+    )
+    await waitFor(() => expect(useAdminStore.getState().audit.page).toBe(666))
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled())
+    expect(screen.getByRole('navigation', {name: 'Audit log pagination'})).toHaveTextContent('Showing 9991–10005')
+  })
+
+  it('waits for the page it asked for before Next leads on', async () => {
+    let release: () => void = () => {}
+    renderSection()
+    await screen.findAllByText('Changed settings')
+    listAuditEvents.mockImplementationOnce(
+      (filter: AuditFilter) => new Promise(resolve => (release = () => resolve(respond(filter)))),
+    )
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled()
+    release()
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Next page'})).toBeEnabled())
+  })
+
+  it('keeps Next off after a page fails, until that page answers', async () => {
+    listAuditEvents.mockImplementation((filter: AuditFilter) => respond(filter, longLog(50_000)))
+    useAdminStore.getState().setAuditPage(666)
+    renderSection()
+    await screen.findAllByText('Changed settings')
+    listAuditEvents.mockImplementationOnce(() => Promise.reject(new ApiError('network', 0)))
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    expect(await screen.findByText("Couldn't load the audit log")).toBeInTheDocument()
+    // The failed page told no cursor: the page after it has none, and past 10 000 its offset is refused.
+    expect(screen.getByRole('button', {name: 'Next page'})).toBeDisabled()
+    act(() => useAdminStore.getState().refresh())
+    const nav = screen.getByRole('navigation', {name: 'Audit log pagination'})
+    await waitFor(() => expect(nav).toHaveTextContent('Showing 10006–10020'))
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Next page'})).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}))
+    await waitFor(() => expect(nav).toHaveTextContent('Showing 10021–10035'))
+    expect(listAuditEvents).toHaveBeenLastCalledWith(
+      expect.objectContaining({cursor: 'c10020', limit: 15}),
+      expect.anything(),
+    )
+  })
+
   it('disables Next on an exactly full last page', async () => {
-    listAuditEvents.mockResolvedValue(EVENTS.slice(0, 15))
+    listAuditEvents.mockResolvedValue(page(EVENTS.slice(0, 15)))
     renderSection()
     await screen.findAllByText('Changed settings')
     expect(screen.getAllByRole('row')).toHaveLength(16)
@@ -112,7 +209,7 @@ describe('AuditLogSection', () => {
   })
 
   it("reveals an event's metadata on request, and says when there is none", async () => {
-    listAuditEvents.mockResolvedValue([event(1, {meta: {new_role: 'member'}}), event(2, {meta: null})])
+    listAuditEvents.mockResolvedValue(page([event(1, {meta: {new_role: 'member'}}), event(2, {meta: null})]))
     renderSection()
     await screen.findAllByText('Changed settings')
     const toggles = screen.getAllByRole('button', {name: 'Show details'})
@@ -127,9 +224,9 @@ describe('AuditLogSection', () => {
 
   it('filters by the user of a row, including the subject of a failed sign-in', async () => {
     listAuditEvents
-      .mockResolvedValueOnce([
-        event(1, {userId: '', email: '', action: 'auth.login_failure', resourceType: 'user', resourceId: 'u9'}),
-      ])
+      .mockResolvedValueOnce(
+        page([event(1, {userId: '', email: '', action: 'auth.login_failure', resourceType: 'user', resourceId: 'u9'})]),
+      )
       .mockImplementation((filter: AuditFilter) => respond(filter))
     renderSection()
     const subject = await screen.findByRole('button', {name: 'user u9'})
@@ -146,7 +243,7 @@ describe('AuditLogSection', () => {
   })
 
   it('tells an empty log from an empty filter result', async () => {
-    listAuditEvents.mockResolvedValue([])
+    listAuditEvents.mockResolvedValue(page([]))
     renderSection()
     expect(await screen.findByText('No audit events yet')).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: 'Clear filters'})).not.toBeInTheDocument()

@@ -4,54 +4,22 @@ How a storage write gets its transaction, and why there is no public `Tx(ctx, fn
 
 ## The request transaction
 
-An authenticated request in a deployment with row-level security runs in one transaction, which the RLS middleware
-opens through `reqtx.Opener` and commits before the first response byte (ADR 0004). Every storage call of the
-request joins it: reads through `b.query(ctx)`, writes through `withTx`. So a service's store calls within one
-request are atomic together, and the row-level policies see the caller.
-
-Routes declared `route.NoTx()` (streaming, CPU-heavy, the knowledge upload and re-index), the public routes and the
-background jobs run without it. There each store method is its own transaction.
+An authenticated request in a deployment with row-level security runs in one transaction, which the RLS middleware opens through `reqtx.Opener` and commits before the first response byte (ADR 0004). Every storage call of the request joins it — reads through `b.query(ctx)`, writes through `withTx` — so a service's store calls within one request are atomic together and the row-level policies see the caller. Both start lazily-or-eagerly and fail closed when the transaction cannot start: a mutation is refused before its handler, and a read's statements return `ErrRLSUnavailable` (503 with `Retry-After: 1`) instead of running on the pool, where the policies allow every row. Routes declared `route.NoTx()` (streams, CPU-heavy routes, the knowledge upload and re-index), the public routes and the background jobs run without it — there each store method is its own transaction. `idle_in_transaction_session_timeout` ends a transaction idle past the request timeout plus a minute ([operations](operations.md#idle-transactions)); every route in the request transaction has the default deadline, so a route needing a longer deadline must be `NoTx`.
 
 ## `withTx` and its variants (`internal/storage/database/rls.go`)
 
 | | In a request transaction | Without one |
 |---|---|---|
-| `withTx(ctx, fn)` | joins it | opens its own, with no user: the policies allow every row |
-| `withTxAs(ctx, userID, fn)` | joins it | opens its own as `userID` (`app.current_user_id` set), so the `WITH CHECK` policies are evaluated; its post-commit hooks get a fresh scope for the same user |
-| `withOwnTx(ctx, isolation, fn)` | never joins: its own connection and transaction | the same; at `sql.LevelSerializable` a serialization failure reruns `fn` in a new transaction, five attempts in all |
+| `withTx(ctx, fn)` | joins it | opens its own, with no user — the policies allow every row |
+| `withTxAs(ctx, userID, fn)` | joins it | opens its own as `userID` (`app.current_user_id` set, so `WITH CHECK` policies are evaluated); its post-commit hooks get a fresh scope for the same user |
+| `withOwnTx(ctx, isolation, fn)` | never joins — its own connection and transaction | the same; at `sql.LevelSerializable` a serialization failure reruns `fn` in a new transaction, five attempts in all |
 
-- `withTxAs` serves the writes whose policies check the writer even off the request transaction: the knowledge
-  document, chunk and embedding writes, and the batch triage upsert.
-- `withOwnTx` serves the writes that must be durable when the request rolls back, on tables without row-level
-  security: `CreateUser` (serializable, so the first user alone becomes admin) and `SaveAuditEvents`.
-- A fail-closed request scope that could not start makes `withTx` and `withTxAs` return `ErrRLSUnavailable` rather
-  than open a transaction of their own.
-- When they open their own transaction, `fn` gets a context carrying it, so nested store calls join it, and a
-  post-commit registry (`txhook`).
-- All three open their transactions through `openTx`, and so does `BeginRLS` (the request's scope).
-  `TestArch_TransactionsOpenedOnlyWhereAllowed` counts the calls of `BeginTx`, `BeginRLS` and `openTx`: only
-  `rls.go` and the migration runner have any.
+`withTxAs` serves writes whose policies check the writer even off the request transaction (the knowledge document, chunk and embedding writes, the batch triage upsert). `withOwnTx` serves writes that must be durable when the request rolls back, on tables without row-level security: `CreateUser` (an advisory lock while the table is empty, so the first user alone becomes admin), `UpdateUserRole` other than a change between non-admin roles, `SaveUserWithIdentityLink` and `SaveAuditEvents`. A fail-closed request scope makes `withTx` and `withTxAs` return `ErrRLSUnavailable` rather than open one of their own. When they open their own transaction, `fn` gets a context carrying it (nested store calls join) and a post-commit registry (`txhook`). All three open through `openTx`, as does `BeginRLS`; `TestArch_TransactionsOpenedOnlyWhereAllowed` counts the calls of `BeginTx`, `BeginRLS` and `openTx`: only `rls.go` and the migration runner have any.
+
+## Account writes: one statement, their own columns
+
+Each account write changes only the columns its operation owns: the password (also lifting a lockout; a reset with its token, `RedeemPasswordReset`), the role between non-admin roles, the verification, the profile, the avatar URL, the failed-login counter. Those in `postgres_users.go` are pool autocommits (`b.db`), so a failed login's counter outlives the 401's rollback. `RecordFailedLogin` increments in the `UPDATE` and repeats the lock check in its `WHERE` — parallel wrong passwords each count and exactly one locks the account. `ResetFailedLogins` clears the counter with the same lock check in its `WHERE`, so a right password that read the account before a parallel burst locked it is refused as locked too. `UpdateUserRole` keeps the deployment's last admin (`ErrLastAdmin`): a change between other roles is one `UPDATE` whose `WHERE` refuses an admin row; a demotion locks every admin row in id order (`SELECT … FOR NO KEY UPDATE`) in a transaction of its own, then counts and writes, so two concurrent demotions cannot both pass, and one waiting for an admin's erasure counts what it leaves. Not `FOR UPDATE`: that waits on foreign-key key shares and deadlocks with concurrent child writes (`postgres_users.go:UpdateUserRole`). `RedeemPasswordReset` claims the token and updates the password in a `withOwnTx` transaction, locking the user row before the token row to match account erasure order (`postgres_usertokens.go:RedeemPasswordReset`). `SaveUser`, which writes every column, is for seeding and tests (`TestArch_SaveUserOnlyInStorageAndTests`).
 
 ## No public `Tx(ctx, fn)`
 
-The Phase 3 proposal asked for a public transactional entry point. It is not added, because no service needs one:
-
-- Inside a request, the request transaction already makes a service's store calls atomic together.
-- A service that needs several store calls atomic outside a request can open the scope the middleware opens:
-  `reqtx.Opener.Open(ctx, userID, false)`, the calls, then `Commit` (with `HookRunner` for the post-commit hooks).
-  Every store call joins it as it joins the request's. It is a database-only fx value, nil without row-level
-  security (ADR 0010). No service does this today.
-- A single store method that must be atomic opens its transaction itself, with `withTx` or a variant.
-
-Two multi-call writes run outside a request transaction today:
-
-- **Knowledge upload** (`rag.KnowledgeService.AddDocument`, a `NoTx` route because embedding takes seconds) saves
-  the new document, then its chunks, then deletes the versions it supersedes, each in a transaction of its own. The
-  order makes a failure safe: a failed chunk save deletes the new document, and a failed delete leaves a duplicate,
-  not a gap (`internal/rag/adddoc_atomicity_test.go`). A crash between the first two writes leaves a document
-  without chunks; opening a scope through `reqtx.Opener` after the embedding would close that window.
-- **SSO sign-up** (`service.IdentityService.ResolveSSOUser`, a public route) creates the user, then the identity
-  link. If the link fails, the account stays without it: the next sign-in through the provider is refused, because
-  the email belongs to a verified account, and the account has no password. A transaction around both calls would
-  not help, because `CreateUser` commits on its own by design; this needs one store method that writes both, or a
-  compensating delete.
+Inside a request the request transaction already makes the calls atomic. A service that needs several store calls atomic outside a request opens the scope the middleware opens — `reqtx.Opener.Open(ctx, userID, false)`, the calls, then `Commit` (with `HookRunner` for the post-commit hooks); it is a database-only fx value, nil without row-level security (ADR 0010), and no service does this today. A single store method that must be atomic opens its own transaction with `withTx` or a variant. Two multi-write operations run outside a request transaction, each as one store method so the fake and the contract hold them all-or-nothing: the knowledge upload (`rag.KnowledgeService.AddDocument`, a `NoTx` route because embedding takes seconds) saves the document with its chunks in one `withTxAs` transaction, then deletes the versions it supersedes — a failure leaves nothing, a failed delete leaves a duplicate the next upload supersedes; and SSO sign-up (`service.IdentityService.ResolveSSOUser`) writes the account and its identity link in one `withOwnTx` transaction, adopting an unverified account only while the row is still unverified (the conflict `WHERE` holds the row lock; otherwise `ErrAccountVerified`).

@@ -3,12 +3,13 @@ import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {Search, X, ChevronRight, FileCode} from 'lucide-react'
 import {useFlowStore} from '@/stores/flowStore'
-import {flowApi, libraryApi} from '@/api'
+import {flowApi, libraryApi, ApiError} from '@/api'
 import {useDebouncedSearch} from '@/hooks/useDebouncedSearch'
 import {useListNavigation} from '@/hooks/useListNavigation'
 import {useDialogFocus} from '@/hooks/useDialogFocus'
 import {toggleSetMember} from '@/lib/collections'
 import {logger} from '@/lib/logger'
+import {MIN_SEARCH_TERM_RUN, shortSearchTerm} from '@/lib/searchTerm'
 import type {SearchResult, BlockType} from '@/types'
 
 type GlobalSearchOverlayProps = {
@@ -48,6 +49,8 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
   const [isSearching, setIsSearching] = useState(false)
   const [activeTypes, setActiveTypes] = useState<Set<BlockType>>(new Set())
   const [scope, setScope] = useState<Scope>('this-flow')
+  // The last all-flows term the server refused as too short: its Unicode tables and database decide (lib/searchTerm).
+  const [refusedQuery, setRefusedQuery] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -109,6 +112,13 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
         setResults([])
         return
       }
+      if (scope === 'all-flows' && shortSearchTerm(q)) {
+        // Not sent (the server would refuse it); the empty state says why. A request still in flight is stale.
+        searchReqIdRef.current++
+        setResults([])
+        setIsSearching(false)
+        return
+      }
       const reqId = ++searchReqIdRef.current
       setIsSearching(true)
       try {
@@ -127,6 +137,12 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
         setActiveIndex(0)
       } catch (err) {
         if (reqId !== searchReqIdRef.current) return
+        // The server may count fewer word characters than this client: no results and the hint, not a failure.
+        if (err instanceof ApiError && err.code === 'QUERY_TOO_SHORT') {
+          setResults([])
+          setRefusedQuery(q.trim())
+          return
+        }
         logger.warn('Global search failed:', err)
       } finally {
         if (reqId === searchReqIdRef.current) setIsSearching(false)
@@ -287,6 +303,10 @@ export default function GlobalSearchOverlay({isOpen, onClose}: GlobalSearchOverl
                   </div>
                 )
               })}
+            </div>
+          ) : scope === 'all-flows' && (shortSearchTerm(query) || refusedQuery === query.trim()) ? (
+            <div className="py-12 text-center text-sm text-text-disabled">
+              {t('overlay.minChars', {count: MIN_SEARCH_TERM_RUN})}
             </div>
           ) : query.length > 0 && !isSearching ? (
             <div className="py-12 text-center">

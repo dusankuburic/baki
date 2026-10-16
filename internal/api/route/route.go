@@ -100,6 +100,9 @@ const (
 	RateUpload   = "upload"
 	// RateChannelTest: the notification channel test, which makes the server POST to an admin-chosen URL.
 	RateChannelTest = "channel_test"
+	// RateAvatar: the avatar upload, a decode and re-encode of up to 16 M pixels per call. Not RateUpload, so a
+	// client syncing flows and a user picking an avatar do not refuse each other.
+	RateAvatar = "avatar"
 	// RatePerUser: the per-user write limiter, a limiter group of its own but never a route's bucket (the Router
 	// charges every authenticated write to it, after the route's own). Keys: ratelimit:peruser:<sha256 of the user
 	// id> and ratelimit:peruser:ip:<address> for an anonymous write.

@@ -95,6 +95,7 @@ func seedKnowledge(t *testing.T, b *PostgresStorageBackend, docs map[string]stri
 		}
 	})
 	for doc, org := range docs {
+		seedOrgRow(t, db, org)
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO knowledge_documents (id, org_id, filename) VALUES ($1, $2, $3)
 			ON CONFLICT (id) DO NOTHING`, doc, org, doc+".txt"); err != nil {

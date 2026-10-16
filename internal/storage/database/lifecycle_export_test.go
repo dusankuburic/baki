@@ -70,8 +70,8 @@ func TestPostgres_Lifecycle_ExportStreamedEqualsBuffered(t *testing.T) {
 	_, err := NewPostgresAzureRegistry(b).CreateConnection(ctx, interfaces.AzureUserOwner(u), interfaces.AzureConnectionRecord{ID: "default", Name: "mine"})
 	f.ok("CreateConnection", err)
 
-	// As the export route does: a read scope for the user, fail-open.
-	rctx, scope := WithLazyRLS(ctx, b, u, true)
+	// As the export route does: a read scope for the user, fail-closed.
+	rctx, scope := WithLazyRLS(ctx, b, u, false)
 	defer func() { _ = scope.Rollback() }()
 
 	buffered, err := b.ExportUserData(rctx, u)

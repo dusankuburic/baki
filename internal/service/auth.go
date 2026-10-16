@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	mailer "pad-analyzer/internal/mail"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -171,8 +172,11 @@ type LoginResult struct {
 //
 // Do not reorder these checks.
 //
-// On a wrong password it increments the counter and locks at failedLoginLockThreshold; on success it resets it.
-// Both updates are best-effort — a SaveUser failure is logged but does not fail the login/lockout decision.
+// On a wrong password it increments the counter and locks at failedLoginLockThreshold; on a right one it resets it,
+// unless the account is locked by then (a parallel burst locked it during the bcrypt check: refused as locked).
+// Both are single-statement writes of those columns alone, never the row read above: parallel attempts each count,
+// and a reset or role change landing during the bcrypt check is not undone. Both are best-effort — a store failure is
+// logged but does not fail the login/lockout decision.
 func (s *AuthService) Authenticate(ctx context.Context, email, password string) LoginResult {
 	user, err := s.backend.LoadUserByEmail(ctx, email)
 	if err != nil {
@@ -189,27 +193,35 @@ func (s *AuthService) Authenticate(ctx context.Context, email, password string) 
 	}
 
 	if !passwordValid {
-		user.FailedLoginAttempts++
-		justLocked := false
-		if user.FailedLoginAttempts >= failedLoginLockThreshold {
-			until := time.Now().UTC().Add(accountLockDuration)
-			user.LockedUntil = &until
-			justLocked = true
-			logger.Warn("account locked due to too many failed login attempts", "email", user.Email, "userID", user.ID)
+		attempts, lockedUntil, err := s.backend.RecordFailedLogin(ctx, user.ID, failedLoginLockThreshold, accountLockDuration)
+		if errors.Is(err, storageif.ErrAccountLocked) {
+			// A parallel attempt locked the account after this one read it: refused as locked, as it would have been
+			// had it read the lock, and not counted.
+			return LoginResult{Outcome: LoginAccountLocked, User: user}
 		}
-		if err := s.backend.SaveUser(ctx, user); err != nil {
+		if err != nil {
 			logger.Error("failed to update failed login attempts", "error", err, "userID", user.ID)
+			return LoginResult{Outcome: LoginInvalidPassword, User: user}
+		}
+		user.FailedLoginAttempts, user.LockedUntil = attempts, lockedUntil
+		// The store counts only while the account is unlocked, so the attempt that reaches the threshold is the one
+		// that locked it.
+		justLocked := attempts >= failedLoginLockThreshold
+		if justLocked {
+			logger.Warn("account locked due to too many failed login attempts", "email", audit.RedactEmail(user.Email), "userID", user.ID)
 		}
 		return LoginResult{Outcome: LoginInvalidPassword, User: user, AccountJustLocked: justLocked}
 	}
 
-	if user.FailedLoginAttempts > 0 || user.LockedUntil != nil {
-		user.FailedLoginAttempts = 0
-		user.LockedUntil = nil
-		if err := s.backend.SaveUser(ctx, user); err != nil {
-			logger.Error("failed to reset failed login attempts", "error", err, "userID", user.ID)
-		}
+	// On every right password, the lock again, as the row is now, in the write that clears the counter: a parallel
+	// burst of wrong passwords may have locked the account during this attempt's bcrypt check, and the read above
+	// does not know.
+	if err := s.backend.ResetFailedLogins(ctx, user.ID); errors.Is(err, storageif.ErrAccountLocked) {
+		return LoginResult{Outcome: LoginAccountLocked, User: user}
+	} else if err != nil {
+		logger.Error("failed to reset failed login attempts", "error", err, "userID", user.ID)
 	}
+	user.FailedLoginAttempts, user.LockedUntil = 0, nil
 
 	// Correct password, unverified email: blocks the shadow-registration takeover — an attacker who registered
 	// a victim's email with a known password still can't get a session. Placed after the reset so a correct
@@ -261,17 +273,25 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) (*
 	return user, nil
 }
 
-// ResetPassword redeems a password-reset token and sets a new password.
+// ResetPassword redeems a password-reset token and sets a new password: hashed first, then the token consumed and the
+// password written in one store change. Consumed before the bcrypt time and written after it, a reset wrote its
+// password over an SSO adoption that had invalidated the token and cleared the password meanwhile. A read-only check
+// refuses a bad token before the hash.
 func (s *AuthService) ResetPassword(ctx context.Context, token, newPassword string) (userID string, err error) {
-	userID, err = s.backend.ConsumeUserToken(ctx, storageif.TokenPurposePasswordReset, auth.HashOpaqueToken(token))
-	if err != nil {
+	tokenHash := auth.HashOpaqueToken(token)
+	if ok, err := s.backend.UserTokenValid(ctx, storageif.TokenPurposePasswordReset, tokenHash); err != nil {
+		return "", err
+	} else if !ok {
 		return "", ErrInvalidResetToken
 	}
 	hashed, err := auth.HashPassword(newPassword)
 	if err != nil {
 		return "", err
 	}
-	if err := s.backend.UpdateUserPassword(ctx, userID, hashed); err != nil {
+	userID, err = s.backend.RedeemPasswordReset(ctx, tokenHash, hashed)
+	if errors.Is(err, storageif.ErrNotFound) {
+		return "", ErrInvalidResetToken
+	} else if err != nil {
 		return "", err
 	}
 	// Revoke other outstanding reset/verify tokens so a possibly-leaked link can't be redeemed after recovery.

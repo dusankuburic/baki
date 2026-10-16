@@ -107,6 +107,7 @@ func TestChunkText_GoldenGeometry(t *testing.T) {
 // and the document the chunker version it was split with.
 func TestAddDocument_StampsIdentityAndChunkerVersion(t *testing.T) {
 	store := &tu.FakeBackend{}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	emb := &namedEmbedder{identity: "openai|https://api.openai.com/v1|text-embedding-3-small|1536", vec: []float32{1}}
 	svc := guardService(store, emb)
 	if err := svc.AddDocument(context.Background(), "u1", "org-1", "guide.md", "a guideline about retries"); err != nil {
@@ -127,6 +128,7 @@ func TestAddDocument_StampsIdentityAndChunkerVersion(t *testing.T) {
 // not searched — the search answers nothing and counts a stranded search, not a width mismatch.
 func TestSearch_OtherIdentityChunksNotReturned(t *testing.T) {
 	store := &tu.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(store, []float32{1}, "B", "B")
 	emb := &namedEmbedder{identity: "A", vec: []float32{1}}
 	svc := guardService(store, emb)
@@ -147,6 +149,7 @@ func TestSearch_OtherIdentityChunksNotReturned(t *testing.T) {
 // every caller, as they were.
 func TestSearch_LegacyNullIdentityMatchesAnyIdentity(t *testing.T) {
 	store := &tu.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(store, []float32{1}, "", "A")
 	svc := guardService(store, &namedEmbedder{identity: "A", vec: []float32{1}})
 	got, err := svc.Search(context.Background(), "u1", "org-1", "retries?")
@@ -164,6 +167,7 @@ func TestSearch_LegacyNullIdentityMatchesAnyIdentity(t *testing.T) {
 // above the relevance floor — bumps neither metric; a corpus of another width bumps the width metric only.
 func TestSearch_EmptyResultClassification(t *testing.T) {
 	store := &tu.FakeBackend{EmbeddingDim: 2}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(store, []float32{1, 0}, "A")
 	stranded, dim := testutil.ToFloat64(ragStrandedSearchTotal), testutil.ToFloat64(ragDimMismatchTotal)
 	svc := guardService(store, &namedEmbedder{identity: "A", vec: []float32{0, 1}})
@@ -188,6 +192,7 @@ func TestSearch_EmptyResultClassification(t *testing.T) {
 // legacy rows stamps them with the caller's identity, so the next upload needs no billed sample at all.
 func TestAddDocument_StampsLegacyOnProvenMatch(t *testing.T) {
 	store := &tu.FakeBackend{EmbeddingDim: 2}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(store, []float32{1, 0}, "", "", "")
 	emb := &namedEmbedder{identity: "A", vec: []float32{1, 0}}
 	svc := guardService(store, emb)
@@ -211,6 +216,7 @@ func TestAddDocument_StampsLegacyOnProvenMatch(t *testing.T) {
 	}
 	// A model that does not reproduce the legacy vectors is still refused, and stamps nothing.
 	legacy := &tu.FakeBackend{EmbeddingDim: 2}
+	legacy.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(legacy, []float32{1, 0}, "", "")
 	other := guardService(legacy, &namedEmbedder{identity: "B", vec: []float32{0, 1}})
 	if err := other.AddDocument(context.Background(), "u1", "org-1", "new.md", "text"); !errors.Is(err, ErrEmbeddingModelChanged) {
@@ -227,6 +233,7 @@ func TestAddDocument_StampsLegacyOnProvenMatch(t *testing.T) {
 // without a billed sample call, whatever the vectors say.
 func TestCheckCorpusModel_SkippedWhenIdentityMatches(t *testing.T) {
 	store := &tu.FakeBackend{EmbeddingDim: 2}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(store, []float32{1, 0}, "A", "A")
 	// The vectors point elsewhere: a sample would have refused this model.
 	emb := &namedEmbedder{identity: "A", vec: []float32{0, 1}}
@@ -243,6 +250,7 @@ func TestCheckCorpusModel_SkippedWhenIdentityMatches(t *testing.T) {
 // the sample happens to agree (the identity knows what the sample cannot).
 func TestCheckCorpusModel_StrandedIdentityRefuses(t *testing.T) {
 	store := &tu.FakeBackend{EmbeddingDim: 2}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(store, []float32{1, 0}, "B", "B")
 	emb := &namedEmbedder{identity: "A", vec: []float32{1, 0}}
 	svc := guardService(store, emb)
@@ -259,6 +267,7 @@ func TestCheckCorpusModel_StrandedIdentityRefuses(t *testing.T) {
 // the proof; a legacy corpus the caller's model reproduces is stamped by the proof and not re-bought.
 func TestReindexOrg_StampsIdentity_WalksOnlyForeignChunks(t *testing.T) {
 	store := &tu.FakeBackend{EmbeddingDim: 2}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(store, []float32{1, 0}, "A", "A", "B", "B", "")
 	emb := &namedEmbedder{identity: "A", vec: []float32{1, 0}}
 	svc := guardService(store, emb)
@@ -281,6 +290,7 @@ func TestReindexOrg_StampsIdentity_WalksOnlyForeignChunks(t *testing.T) {
 	}
 
 	legacy := &tu.FakeBackend{EmbeddingDim: 2}
+	legacy.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(legacy, []float32{1, 0}, "", "", "")
 	emb = &namedEmbedder{identity: "A", vec: []float32{1, 0}}
 	svc = guardService(legacy, emb)
@@ -302,6 +312,7 @@ func TestReindexOrg_StampsIdentity_WalksOnlyForeignChunks(t *testing.T) {
 // vector index) still proceeds unforced and leaves every chunk under the new identity.
 func TestReindexOrg_WidthRecoveryStampsNewIdentity(t *testing.T) {
 	store := &tu.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(store, []float32{1, 0}, "A|1536", "A|1536")
 	emb := &namedEmbedder{identity: "A|3072", vec: []float32{1}}
 	svc := guardService(store, emb)
@@ -320,6 +331,7 @@ func TestReindexOrg_WidthRecoveryStampsNewIdentity(t *testing.T) {
 // identity than the caller's; a caller without an embedder sees no stranded count.
 func TestListDocuments_CarriesEmbeddingStranded(t *testing.T) {
 	store := &tu.FakeBackend{EmbeddingDim: 2}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedIdentityChunks(store, []float32{1, 0}, "A", "B", "")
 	svc := guardService(store, &namedEmbedder{identity: "A", vec: []float32{1, 0}})
 	docs, err := svc.ListDocuments(context.Background(), "u1", "org-1", 0, 0)

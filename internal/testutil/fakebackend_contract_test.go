@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"pad-analyzer/internal/storage/contract"
+	"pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 )
 
@@ -11,7 +12,8 @@ import (
 // no known divergences: a test passing against the fake has to hold on Postgres too. Keep it that way; a scenario
 // the fake cannot meet is a bug in the fake.
 func TestFakeBackend_Contract(t *testing.T) {
-	contract.RunSuite(t, testutil.NewFakeBackend())
+	contract.RunSuite(t, testutil.NewFakeBackend(),
+		contract.FreshStore(func(*testing.T) interfaces.StorageBackend { return testutil.NewFakeBackend() }))
 }
 
 // TestFakeBackend_AuditContract holds the fake's audit log to the contract Postgres meets.

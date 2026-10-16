@@ -4,6 +4,7 @@ import {formatCount} from '@/lib/format'
 import {scoreColor} from '@/lib/scoring'
 import {severityTone} from '@/lib/severityTone'
 import type {BatchAnalysis} from '@/types'
+import {BatchLibraryFindings} from './BatchLibraryFindings'
 
 export function BatchResultsTable({
   batch,
@@ -76,6 +77,7 @@ export function BatchResultsTable({
           </div>
         ))}
       </div>
+      {batch.library && <BatchLibraryFindings report={batch.library} />}
     </div>
   )
 }

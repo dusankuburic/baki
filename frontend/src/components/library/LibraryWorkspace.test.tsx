@@ -253,3 +253,237 @@ describe('LibraryWorkspace', () => {
     expect(await screen.findByText('Updated')).toBeInTheDocument()
   })
 })
+
+describe('LibraryWorkspace paging', () => {
+  const page = (ids: string[], extra: Record<string, unknown>) => ({
+    items: ids.map(id => flow(id)),
+    total: 50,
+    offset: 0,
+    limit: 24,
+    ...extra,
+  })
+
+  it('reaches the next page by the cursor the page before answered, beside the offset', async () => {
+    list.mockResolvedValueOnce(page(['a'], {hasMore: true, nextCursor: 'cur-1'}))
+    list.mockResolvedValueOnce(page(['b'], {offset: 24, hasMore: true, nextCursor: 'cur-2'}))
+    list.mockResolvedValue(page(['a'], {hasMore: true, nextCursor: 'cur-1'}))
+    renderWorkspace()
+    await screen.findByText('Flow a')
+    expect(list.mock.calls[0]![0]).toMatchObject({offset: 0, cursor: undefined})
+
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    await screen.findByText('Flow b')
+    expect(list.mock.calls.at(-1)![0]).toMatchObject({offset: 24, cursor: 'cur-1'})
+
+    // Back to the first page: no cursor; and a new filter starts over without the old cursors.
+    fireEvent.click(screen.getByRole('button', {name: /Prev/}))
+    await waitFor(() => expect(list.mock.calls.at(-1)![0]).toMatchObject({offset: 0, cursor: undefined}))
+    await screen.findByText('Flow a')
+    list.mockResolvedValue(page(['a'], {hasMore: true})) // a name sort pages by offset: no cursor
+    act(() => useLibraryBrowseStore.getState().setSort('name_asc'))
+    await waitFor(() => expect(list.mock.calls.at(-1)![0]).toMatchObject({sort: 'name_asc', offset: 0}))
+    await screen.findByText('Flow a')
+    act(() => useLibraryBrowseStore.getState().setPage(1))
+    await waitFor(() => expect(list.mock.calls.at(-1)![0]).toMatchObject({sort: 'name_asc', offset: 24, cursor: undefined}))
+  })
+
+  it('pages by offset against a server that answers no cursor', async () => {
+    list.mockResolvedValueOnce({items: [flow('a')], total: 50, offset: 0, limit: 24})
+    list.mockResolvedValue({items: [flow('b')], total: 50, offset: 24, limit: 24})
+    renderWorkspace()
+    await screen.findByText('Flow a')
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    await screen.findByText('Flow b')
+    expect(list.mock.calls.at(-1)![0]).toMatchObject({offset: 24, cursor: undefined})
+    expect(screen.getByText('Page 2 of 3')).toBeInTheDocument()
+  })
+
+  it('shows a capped total as "more than", and lets hasMore decide whether a next page exists', async () => {
+    list.mockResolvedValue(page(['a'], {total: 10000, totalCapped: true, hasMore: true, nextCursor: 'cur-1'}))
+    renderWorkspace()
+    await screen.findByText('Flow a')
+    expect(screen.getAllByText('More than 10000 flows')).toHaveLength(2) // the toolbar's count and the pager's
+    expect(screen.getByText('Page 1')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /Next/})).toBeEnabled()
+
+    list.mockResolvedValue(page(['z'], {offset: 9984, total: 10000, totalCapped: true, hasMore: false}))
+    act(() => useLibraryBrowseStore.getState().setPage(416))
+    await screen.findByText('Flow z')
+    expect(screen.getByRole('button', {name: /Next/})).toBeDisabled()
+  })
+
+  it('stops paging by offset at the server cap, where only a cursor leads further', async () => {
+    list.mockResolvedValue(page(['a'], {total: 10000, totalCapped: true, hasMore: true}))
+    renderWorkspace()
+    await screen.findByText('Flow a')
+    // A name sort (no cursor) at the page whose next offset passes 10 000: the server would refuse it.
+    list.mockResolvedValue(page(['y'], {offset: 9984, total: 10000, totalCapped: true, hasMore: true}))
+    act(() => useLibraryBrowseStore.getState().setPage(416))
+    await screen.findByText('Flow y')
+    expect(screen.getByRole('button', {name: /Next/})).toBeDisabled()
+    // With a cursor for the next page, it goes on.
+    list.mockResolvedValue(
+      page(['z'], {offset: 9960, total: 10000, totalCapped: true, hasMore: true, nextCursor: 'cur-416'}),
+    )
+    act(() => useLibraryBrowseStore.getState().setPage(415))
+    await screen.findByText('Flow z')
+    expect(screen.getByRole('button', {name: /Next/})).toBeEnabled()
+  })
+
+  it('starts over at the first page when a page past the cap has no cursor to reach it', async () => {
+    list.mockResolvedValue({items: [], total: 0, offset: 0, limit: 24, hasMore: false})
+    renderWorkspace()
+    await waitFor(() => expect(list).toHaveBeenCalled())
+    list.mockClear()
+    act(() => useLibraryBrowseStore.getState().setPage(500))
+    await waitFor(() => expect(useLibraryBrowseStore.getState().page).toBe(0))
+    for (const call of list.mock.calls) expect(call[0].offset).toBeLessThanOrEqual(10000)
+  })
+
+  it('pages past the cap by offset against a server that predates the cursors (no cap there)', async () => {
+    // The release before answers no hasMore and no cursor, and serves any offset.
+    list.mockImplementation((q: {offset: number}) =>
+      Promise.resolve({items: [flow(`p${q.offset / 24}`)], total: 12000, offset: q.offset, limit: 24}),
+    )
+    renderWorkspace()
+    await screen.findByText('Flow p0')
+    act(() => useLibraryBrowseStore.getState().setPage(416))
+    await screen.findByText('Flow p416')
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    expect(await screen.findByText('Flow p417')).toBeInTheDocument()
+    expect(useLibraryBrowseStore.getState().page).toBe(417)
+    expect(list.mock.calls.at(-1)![0]).toMatchObject({offset: 10008, cursor: undefined})
+  })
+
+  it('waits for the page it asked for before Next leads on', async () => {
+    list.mockImplementation((q: {offset: number}) =>
+      Promise.resolve(
+        page([`p${q.offset / 24}`], {offset: q.offset, hasMore: true, nextCursor: `c${q.offset / 24 + 1}`}),
+      ),
+    )
+    renderWorkspace()
+    await screen.findByText('Flow p0')
+    let release: () => void = () => {}
+    list.mockImplementationOnce(
+      (q: {offset: number}) =>
+        new Promise(
+          resolve => (release = () => resolve(page(['p1'], {offset: q.offset, hasMore: true, nextCursor: 'c2'}))),
+        ),
+    )
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    // A second click now would reach page 3 before page 2 told its cursor.
+    expect(screen.getByRole('button', {name: /Next/})).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    act(() => release())
+    await screen.findByText('Flow p1')
+    expect(useLibraryBrowseStore.getState().page).toBe(1)
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    await screen.findByText('Flow p2')
+    expect(list.mock.calls.at(-1)![0]).toMatchObject({offset: 48, cursor: 'c2'})
+  })
+
+  it('counts no fewer pages than it shows when a cursor carries an older total, and Refresh counts again', async () => {
+    // Page 1 counted 30 flows; 40 were added since: the cursors carry the 30.
+    list.mockImplementation((q: {offset: number; cursor?: string; limit: number}) => {
+      if (q.limit === 1) return Promise.resolve(page(['n'], {total: 70, hasMore: true}))
+      const n = q.offset / 24
+      return Promise.resolve(
+        page([`p${n}`], {offset: q.offset, total: 30, hasMore: n < 2, nextCursor: n < 2 ? `c${n + 1}` : undefined}),
+      )
+    })
+    renderWorkspace()
+    await screen.findByText('Flow p0')
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    await screen.findByText('Flow p1')
+    expect(screen.getByText('Page 2 of 3')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /Next/})).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    await screen.findByText('Flow p2')
+    expect(screen.getByText('Page 3 of 3')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {name: /Refresh/}))
+    await waitFor(() =>
+      expect(list).toHaveBeenCalledWith(expect.objectContaining({limit: 1, offset: 0}), expect.anything()),
+    )
+    expect(await screen.findByText('70 flows')).toBeInTheDocument()
+    expect(screen.getByText('Page 3 of 3')).toBeInTheDocument()
+  })
+
+  it('keeps the pager on a page past the first whatever the count comes to', async () => {
+    list.mockResolvedValueOnce(page(['a'], {total: 25, hasMore: true, nextCursor: 'cur-1'}))
+    list.mockResolvedValue(page(['b'], {offset: 24, total: 25, hasMore: false}))
+    get.mockResolvedValue(flow('b'))
+    versions.mockResolvedValue([])
+    renderWorkspace()
+    await screen.findByText('Flow a')
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    fireEvent.click(await screen.findByText('Flow b'))
+    fireEvent.click(await screen.findByRole('button', {name: 'Delete'}))
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', {name: 'Delete'}))
+    // 24 flows fit one page, but this is the second: the way back stays.
+    expect(await screen.findByText('24 flows')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /Prev/})).toBeEnabled()
+  })
+
+  it('keeps the pager on the first page when a delete brings the count within it but a page still follows', async () => {
+    list.mockResolvedValueOnce(page(['a', 'b'], {total: 25, hasMore: true, nextCursor: 'cur-1'}))
+    list.mockResolvedValue(page(['y'], {offset: 24, total: 25, hasMore: false}))
+    get.mockResolvedValue(flow('a'))
+    versions.mockResolvedValue([])
+    renderWorkspace()
+    fireEvent.click(await screen.findByText('Flow a'))
+    fireEvent.click(await screen.findByRole('button', {name: 'Delete'}))
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', {name: 'Delete'}))
+    // 24 flows fit one page, but the page shown was made with 25: the one after it still holds the last flow.
+    expect(await screen.findByText('24 flows')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    await screen.findByText('Flow y')
+    expect(list.mock.calls.at(-1)![0]).toMatchObject({offset: 24, cursor: 'cur-1'})
+  })
+
+  it('takes the count of a server that predates the cursors on a page reached by cursor', async () => {
+    // A rolling deploy: new replicas answer up to page 417 with cursors and a capped count; the release before
+    // answers page 418 with its own full count and no cursor, and serves any offset.
+    list.mockImplementation((q: {offset: number}) => {
+      const n = q.offset / 24
+      if (n === 418) return Promise.resolve({items: [flow(`p${n}`)], total: 12000, offset: q.offset, limit: 24})
+      return Promise.resolve(
+        page([`p${n}`], {offset: q.offset, total: 10000, totalCapped: true, hasMore: true, nextCursor: `c${n + 1}`}),
+      )
+    })
+    renderWorkspace()
+    await screen.findByText('Flow p0')
+    act(() => useLibraryBrowseStore.getState().setPage(416))
+    await screen.findByText('Flow p416')
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    await screen.findByText('Flow p417')
+    await waitFor(() => expect(screen.getByRole('button', {name: /Next/})).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    await screen.findByText('Flow p418')
+    expect(list.mock.calls.at(-1)![0]).toMatchObject({offset: 10032, cursor: 'c418'})
+    await waitFor(() => expect(screen.getByRole('button', {name: /Next/})).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    await waitFor(() => expect(list.mock.calls.at(-1)![0]).toMatchObject({offset: 10056, cursor: undefined}))
+    expect(useLibraryBrowseStore.getState().page).toBe(419)
+  })
+
+  it('keeps a delete on the count across pages reached by cursor', async () => {
+    list.mockImplementation((q: {offset: number}) => {
+      const n = q.offset / 24
+      return Promise.resolve(page([`p${n}`], {offset: q.offset, total: 50, hasMore: true, nextCursor: `c${n + 1}`}))
+    })
+    get.mockResolvedValue(flow('p1'))
+    versions.mockResolvedValue([])
+    renderWorkspace()
+    await screen.findByText('Flow p0')
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    fireEvent.click(await screen.findByText('Flow p1'))
+    fireEvent.click(await screen.findByRole('button', {name: 'Delete'}))
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', {name: 'Delete'}))
+    expect(await screen.findByText('49 flows')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: /Next/}))
+    await screen.findByText('Flow p2')
+    expect(screen.getByText('49 flows')).toBeInTheDocument() // the cursor carries the 50 counted before the delete
+  })
+})

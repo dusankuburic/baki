@@ -98,6 +98,7 @@ func TestReindexInBackground_StopsWhenTheOrgCredentialGoes(t *testing.T) {
 	}
 
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1")      // the knowledge base needs its organisation
 	seedManyChunks(store, 2, 10) // width 3, stranded at the fake's width 1: three pages of four
 	svc := NewKnowledgeService(store, keys.factory(), stubSettings{&models.AppSettings{}}, WithEmbeddingProvider("reembed-stub"))
 	t.Cleanup(svc.StopJobs)

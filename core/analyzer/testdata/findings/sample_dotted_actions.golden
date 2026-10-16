@@ -236,7 +236,7 @@ F-021 warning/low uninitialized-variable [Logic] fix=init-variable @DataProcessi
 F-022 info/low unused-variable [Style] fix=remove-block @Main#8 sf=Main fp=unused-variable:20a83c667b8fc256
 F-023 info/low unused-variable [Style] fix=remove-block @Main#10 sf=Main fp=unused-variable:6a1f2073e235c43b
 F-024 info/low unused-variable [Style] fix=remove-block @DataProcessing#2 sf=DataProcessing fp=unused-variable:51addaf0c7f6b49a
-F-025 warning/high parse-error [-] fix=- @- sf=Main fp=parse-error:
+F-025 warning/high parse-error [Syntax] fix=- @- sf=Main fp=parse-error:
     title: Parse error (line 24)
     desc: malformed line
     meta: {"column":0,"line":24,"snippet":"    Excel.ReadFromExcelExcelFileToRead: CurrentExcelFile Instance: %ExcelInstance% ReadOption: Excel.ReadOption.CellRange Range: $'''A1:D100''' =\u003e ExcelData"}

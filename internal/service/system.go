@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -14,6 +17,7 @@ import (
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/platform/eventbus"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-analyzer/internal/storage/settingsdoc"
 	"pad-core/logger"
 	"pad-core/models"
 )
@@ -122,14 +126,76 @@ func (s *SystemService) GetUserSettings(ctx context.Context, userID string) (set
 	return settingsToModel(ifaceSettings), nil
 }
 
-// UpdateUserSettings saves userID's own settings; an empty userID saves the deployment's (see GetUserSettings).
-func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, settings models.AppSettings) (err error) {
+// SettingsSections is the set of top-level sections a settings write names (SettingsSectionsOf). A section the write
+// leaves out keeps its stored value, so a client that predates a section, or one that sends only what it changed,
+// cannot wipe the others; a named section is replaced, and an explicit {} or null clears it. nil names every
+// section: the write is the whole document.
+type SettingsSections map[string]bool
+
+// serverOwnedSettingsKey is the one key of the document no settings write sets: the recent files are the server's
+// list (AddRecentFile, RemoveRecentFile, ClearRecentFiles), and the web client echoes the document it loaded, so a
+// write from a page loaded before a file was opened would take the list back.
+const serverOwnedSettingsKey = "recentFiles"
+
+// SettingsSectionsOf returns the sections a settings body names, each under the document's key for it (a body key
+// matches as encoding/json matches it, regardless of case). A body that is not an object names none, and no body
+// names the server-owned recent files.
+func SettingsSectionsOf(body []byte) SettingsSections {
+	var top map[string]json.RawMessage
+	_ = json.Unmarshal(body, &top)
+	named := SettingsSections{}
+	for _, key := range settingsdoc.DocumentKeys(models.AppSettings{}) {
+		if key == serverOwnedSettingsKey {
+			continue
+		}
+		for k := range top {
+			if strings.EqualFold(k, key) {
+				named[key] = true
+			}
+		}
+	}
+	return named
+}
+
+// keepUnnamed sets each section of settings the write does not name to stored's.
+func (n SettingsSections) keepUnnamed(settings, stored *models.AppSettings) {
+	if n == nil || stored == nil {
+		return
+	}
+	dst, src := reflect.ValueOf(settings).Elem(), reflect.ValueOf(stored).Elem()
+	for i := range dst.NumField() {
+		key, _, _ := strings.Cut(dst.Type().Field(i).Tag.Get("json"), ",")
+		if key != settingsdoc.DocVersionKey && !n[key] {
+			dst.Field(i).Set(src.Field(i))
+		}
+	}
+}
+
+// UpdateUserSettings saves userID's own settings; an empty userID saves the deployment's (see GetUserSettings). The
+// sections the write does not name keep their stored values (SettingsSections). The stored document is read before
+// the write, not under its lock: two writers naming different sections at the same moment can still lose one's
+// change, as two whole-document writes always could.
+func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, settings models.AppSettings, sections SettingsSections) (err error) {
 	defer logger.Guard("SystemService.UpdateUserSettings", &err)
 	if err := validateProfileSection(settings.Profile); err != nil {
 		return err
 	}
 	if s.backend == nil || userID == "" {
+		if sections != nil {
+			stored, err := s.GetSettings(ctx)
+			if err != nil {
+				return err
+			}
+			sections.keepUnnamed(&settings, stored)
+		}
 		return s.UpdateSettings(ctx, settings)
+	}
+	if sections != nil {
+		stored, err := s.backend.LoadUserSettings(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("load user settings: %w", err)
+		}
+		sections.keepUnnamed(&settings, settingsToModel(stored))
 	}
 	if err := s.backend.SaveUserSettings(ctx, userID, settingsFromModel(&settings)); err != nil {
 		return err
@@ -157,31 +223,64 @@ type OrgSettingsWrite struct {
 	// AllowedProvidersSet: the write names ai.allowedProviders (an empty list clears it). Unset, the stored list
 	// is kept — a partial write (the Rules panel posts {analysis:{rules}}) must not wipe the org's policy.
 	AllowedProvidersSet bool
+	// Sections: the top-level sections the write names; the others keep their stored values (SettingsSections).
+	Sections SettingsSections
 }
 
-// UpdateOrgSettings replaces the org's settings document with settings, keeping the stored allowed-provider
-// list unless the write names it (OrgSettingsWrite). A named list is validated: an id the registry does not
-// know is ErrProviderUnknown (the list is fail-closed, so a typo would lock the org out of every provider).
+// UnknownProvidersError is ErrProviderUnknown for an allowed-provider list, naming every id no spec describes so the
+// route can report them (details.providers) and the settings UI can uncheck them.
+type UnknownProvidersError struct{ IDs []string }
+
+func (e *UnknownProvidersError) Error() string {
+	quoted := make([]string, len(e.IDs))
+	for i, id := range e.IDs {
+		quoted[i] = fmt.Sprintf("%q", id)
+	}
+	return fmt.Sprintf("%v: %s in allowedProviders", ErrProviderUnknown, strings.Join(quoted, ", "))
+}
+
+func (e *UnknownProvidersError) Unwrap() error { return ErrProviderUnknown }
+
+// UpdateOrgSettings replaces the sections of the org's settings document the write names (OrgSettingsWrite),
+// keeping the stored allowed-provider list unless the write names it. A named list is validated: ids the registry
+// does not know are an *UnknownProvidersError, which is ErrProviderUnknown (the list is fail-closed, so a typo would
+// lock the org out of every provider).
 func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, settings models.AppSettings, write OrgSettingsWrite) (err error) {
 	defer logger.Guard("SystemService.UpdateOrgSettings", &err)
 	if write.AllowedProvidersSet {
+		var unknown []string
 		for _, id := range settings.AI.AllowedProviders {
 			if !ai.KnownProvider(id) {
-				return fmt.Errorf("%w: %q in allowedProviders", ErrProviderUnknown, id)
+				unknown = append(unknown, id)
 			}
+		}
+		if len(unknown) > 0 {
+			return &UnknownProvidersError{IDs: unknown}
 		}
 	}
 	if s.backend == nil {
+		if write.Sections != nil {
+			stored, err := s.GetSettings(ctx)
+			if err != nil {
+				return err
+			}
+			write.Sections.keepUnnamed(&settings, stored)
+		}
 		return s.UpdateSettings(ctx, settings)
 	}
-	if !write.AllowedProvidersSet {
+	if write.Sections != nil || !write.AllowedProvidersSet {
 		stored, err := s.backend.LoadOrgSettings(ctx, orgID)
 		if err != nil {
 			return fmt.Errorf("load org settings: %w", err)
 		}
-		settings.AI.AllowedProviders = nil
 		if stored != nil {
-			settings.AI.AllowedProviders = stored.AI.AllowedProviders
+			write.Sections.keepUnnamed(&settings, settingsToModel(stored))
+		}
+		if !write.AllowedProvidersSet {
+			settings.AI.AllowedProviders = nil
+			if stored != nil {
+				settings.AI.AllowedProviders = stored.AI.AllowedProviders
+			}
 		}
 	}
 	if err := s.backend.SaveOrgSettings(ctx, orgID, settingsFromModel(&settings)); err != nil {

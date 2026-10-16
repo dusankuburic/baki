@@ -15,8 +15,9 @@ func init() {
 		},
 		purge: []purgeStep{
 			// The retention window, as for gov_alerts, counted from the last sweep that touched the notice: one the
-			// scanner still raises stays, since a purged notice would be inserted and announced again.
-			{table: "rule_notices", cond: `updated_at < NOW() - ($1 * INTERVAL '1 day')`, windowed: true,
+			// scanner still raises stays, since a purged notice would be inserted and announced again. Batched: a row per
+			// scope and rule set, and the first sweep after a window is set meets the whole backlog.
+			{table: "rule_notices", cond: `updated_at < NOW() - ($1 * INTERVAL '1 day')`, batched: true, windowed: true,
 				count: func(r *interfaces.PurgeResult) *int { return &r.RuleNotices }},
 		},
 	})

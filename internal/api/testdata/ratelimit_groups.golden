@@ -5,3 +5,4 @@ chat | chat | ratelimit:chat:<addr>
 upload | upload | ratelimit:upload:<addr>
 channel_test | channel_test | ratelimit:channel_test:<addr>
 peruser | peruser | ratelimit:peruser:<sha256(userID)> ; ratelimit:peruser:ip:<addr>
+avatar | avatar | ratelimit:avatar:<addr>

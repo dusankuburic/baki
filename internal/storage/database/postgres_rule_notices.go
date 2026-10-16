@@ -22,11 +22,16 @@ const ruleNoticeListDefaultLimit = 10
 // IS the application-layer tenant boundary (RLS is inert under a BYPASSRLS role) — THE TWO MUST STAY IN SYNC. The
 // policy admits an app notice only outside a user's scope; the scanner writes app notices only in a deployment
 // without accounts (one tenant), so here every caller sees them.
+//
+// It names the generated columns, the policy scope and scope_id: user_id is scope_id exactly when scope = 'user' (NULL
+// otherwise), org_id exactly when scope = 'org', so the rows are the same, and each arm is a probe of its own index
+// (rule_notices_user_idx, rule_notices_org_idx, and rule_notices_app_idx since v49) combined in a BitmapOr. The member
+// organisations are an uncorrelated ARRAY sub-select, evaluated once per statement: an EXISTS inside the OR could only
+// run per row.
 func ruleNoticeVisible(user string) string {
 	return fmt.Sprintf(`(scope = 'app'
-		 OR (scope = 'user' AND scope_id = %[1]s)
-		 OR (scope = 'org' AND EXISTS (SELECT 1 FROM org_members om
-		                                WHERE om.org_id = rule_notices.scope_id AND om.user_id = %[1]s)))`, user)
+		 OR user_id = %[1]s
+		 OR org_id = ANY(ARRAY(SELECT om.org_id FROM org_members om WHERE om.user_id = %[1]s)))`, user)
 }
 
 // upsertRuleNoticesSQL inserts a page's notices, skipping those whose user or organisation is gone (the foreign key
@@ -184,22 +189,32 @@ func (b *PostgresStorageBackend) ListRuleNotices(ctx context.Context, userID str
 	return out, rows.Err()
 }
 
-// UnreadRuleNoticeCount counts the caller's visible notices that are neither read nor dismissed.
-func (b *PostgresStorageBackend) UnreadRuleNoticeCount(ctx context.Context, userID string) (int, error) {
+// unreadRuleNoticeCountSQL is the UnreadRuleNoticeCount statement (exposed for the plan tests).
+func unreadRuleNoticeCountSQL(userID string) (string, []any) {
 	var args sqlArgs
 	vis := ruleNoticeVisible(args.add(userID))
+	return `SELECT COUNT(*) FROM rule_notices WHERE read_at IS NULL AND dismissed_at IS NULL AND ` + vis, args
+}
+
+// UnreadRuleNoticeCount counts the caller's visible notices that are neither read nor dismissed.
+func (b *PostgresStorageBackend) UnreadRuleNoticeCount(ctx context.Context, userID string) (int, error) {
+	q, args := unreadRuleNoticeCountSQL(userID)
 	var n int
-	err := b.query(ctx).QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM rule_notices WHERE read_at IS NULL AND dismissed_at IS NULL AND `+vis, args...).Scan(&n)
+	err := b.query(ctx).QueryRowContext(ctx, q, args...).Scan(&n)
 	return n, err
+}
+
+// markAllRuleNoticesReadSQL is the MarkAllRuleNoticesRead statement (exposed for the plan tests).
+func markAllRuleNoticesReadSQL(userID string) (string, []any) {
+	var args sqlArgs
+	vis := ruleNoticeVisible(args.add(userID))
+	return `UPDATE rule_notices SET read_at = NOW() WHERE read_at IS NULL AND dismissed_at IS NULL AND ` + vis, args
 }
 
 // MarkAllRuleNoticesRead stamps read_at on the caller's visible unread notices.
 func (b *PostgresStorageBackend) MarkAllRuleNoticesRead(ctx context.Context, userID string) error {
-	var args sqlArgs
-	vis := ruleNoticeVisible(args.add(userID))
-	_, err := b.query(ctx).ExecContext(ctx,
-		`UPDATE rule_notices SET read_at = NOW() WHERE read_at IS NULL AND dismissed_at IS NULL AND `+vis, args...)
+	q, args := markAllRuleNoticesReadSQL(userID)
+	_, err := b.query(ctx).ExecContext(ctx, q, args...)
 	return err
 }
 

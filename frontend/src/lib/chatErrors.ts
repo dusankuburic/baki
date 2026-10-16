@@ -8,6 +8,7 @@ export const CHAT_ERROR_CODES = {
   serverRestarting: 'SERVER_RESTARTING',
   interrupted: 'STREAM_INTERRUPTED',
   replicaUnreachable: 'REPLICA_UNREACHABLE',
+  streamIdInUse: 'STREAM_ID_IN_USE',
 } as const
 
 export function classifyChatFailure(message: string, code?: string | null): ChatFailureKind {

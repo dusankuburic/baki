@@ -144,6 +144,15 @@ func flowFilesAtRev(target, rev string) (map[string]string, error) {
 	if !info.IsDir() {
 		base = filepath.Dir(abs)
 	}
+	// git reports its top level as the physical path. Resolve both sides the same way, or a target named through a
+	// symlink or junction (a linked CI workspace, macOS's /var -> /private/var) has no path inside the repository
+	// and every finding counts as new.
+	if r, rerr := filepath.EvalSymlinks(root); rerr == nil {
+		root = r
+	}
+	if b, berr := filepath.EvalSymlinks(base); berr == nil {
+		base = b
+	}
 
 	out := make(map[string]string, len(live))
 	for name := range live {

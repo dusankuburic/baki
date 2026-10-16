@@ -9,8 +9,9 @@ import (
 // account erasure deletes the invitations to the user's email and clears the user as an inviter; the retention sweep
 // removes expired invites and those accepted more than seven days ago.
 type OrgInviteStore interface {
-	// SaveOrgInvite inserts the invite, stamping a zero CreatedAt (on invite). An id already stored, or a second
-	// pending invite for the same organisation and email, is ErrOrgInviteExists; the organisation must exist.
+	// SaveOrgInvite inserts the invite, stamping a zero CreatedAt (on invite). An id or token hash already stored, or
+	// a second pending invite for the same organisation and email, is ErrOrgInviteExists; a pending invite for them
+	// that has expired is deleted instead, in the same transaction. The organisation must exist.
 	SaveOrgInvite(ctx context.Context, invite *OrgInvite) error
 	// ListOrgInvites returns the organisation's invites, pending and resolved, newest first.
 	ListOrgInvites(ctx context.Context, orgID string) ([]*OrgInvite, error)

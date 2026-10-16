@@ -17,6 +17,8 @@ func runOrgCustomRuleScenarios(ctx context.Context, b interfaces.StorageBackend,
 	run("OrgCustomRules_isolated_per_org", func(t *testing.T) {
 		orgA := "contract-rules-orgA-" + runID
 		orgB := "contract-rules-orgB-" + runID
+		seedOrg(ctx, t, b, orgA, "contract-rules-admin-"+runID)
+		seedOrg(ctx, t, b, orgB, "contract-rules-admin-"+runID)
 		const sharedRuleID = "house-style"
 
 		// Postgres stores config as JSONB and hands it back re-serialized — assert on parsed fields,

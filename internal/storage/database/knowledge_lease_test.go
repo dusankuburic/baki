@@ -65,11 +65,20 @@ func (g *gateEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, 
 	return out, nil
 }
 
-func (g *gateEmbedder) waitEntered(t *testing.T) {
+func (g *gateEmbedder) waitEntered(t *testing.T, async ...<-chan error) {
 	t.Helper()
 	select {
 	case <-g.entered:
 	case <-time.After(10 * time.Second):
+		for _, ch := range async {
+			select {
+			case err := <-ch:
+				if err != nil {
+					t.Fatalf("timed out waiting for the embedder; upload failed with: %v", err)
+				}
+			default:
+			}
+		}
 		t.Fatal("timed out waiting for the embedder to be reached")
 	}
 }
@@ -78,6 +87,7 @@ func (g *gateEmbedder) waitEntered(t *testing.T) {
 func leaseTestOrg(t *testing.T, b *PostgresStorageBackend, name string) string {
 	t.Helper()
 	org := fmt.Sprintf("lease-%s-%d", name, time.Now().UnixNano())
+	seedOrgRow(t, b.DB(), org)
 	t.Cleanup(func() {
 		ctx := context.Background()
 		_, _ = b.DB().ExecContext(ctx, `DELETE FROM knowledge_chunks WHERE doc_id IN (SELECT id FROM knowledge_documents WHERE org_id = $1)`, org)
@@ -323,7 +333,7 @@ func TestKnowledgeLease_CapsPinnedConnections(t *testing.T) {
 	svc := rag.NewKnowledgeService(ba, nil, nil, rag.WithEmbedder(gate), rag.WithJobLeaser(ba), rag.WithLeaseCap(1))
 
 	one := errAsync(func() error { return upload(svc, org1, "a.md") })
-	gate.waitEntered(t)
+	gate.waitEntered(t, one)
 	if err := upload(svc, org2, "a.md"); !errors.Is(err, rag.ErrKnowledgeBusy) {
 		t.Errorf("second org beyond the cap: %v, want ErrKnowledgeBusy", err)
 	}

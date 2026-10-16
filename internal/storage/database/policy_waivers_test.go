@@ -16,6 +16,13 @@ func TestPostgres_PolicyWaivers_ThePreviousReleaseKeepsThem(t *testing.T) {
 	ctx := context.Background()
 	run := itoa(time.Now().UnixNano())
 	orgID := "polw-org-" + run
+	// A policy needs its organisation (v48).
+	if _, err := b.DB().ExecContext(ctx, `INSERT INTO organisations (id, name, owner_id) VALUES ($1, $1, '')`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = b.DB().ExecContext(context.Background(), `DELETE FROM organisations WHERE id = $1`, orgID)
+	})
 	t.Cleanup(func() {
 		_, _ = b.DB().ExecContext(context.Background(), `DELETE FROM policies WHERE org_id = $1`, orgID)
 	})

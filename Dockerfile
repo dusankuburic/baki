@@ -34,7 +34,9 @@ ARG VERSION=0.1.0
 RUN sed -i "s|__BAKI_VERSION__|${VERSION}|" dist-nomaps/index.html
 
 # Stage 2: Build the backend
-FROM golang:1.25-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS backend-builder
+# 1.26-alpine resolves to Go 1.26.9 — the toolchain with the stdlib security fixes
+# (net/http, crypto/tls, html/template, …; go.mod pins toolchain go1.26.9 to match).
+FROM golang:1.26-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS backend-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 COPY core/go.mod core/go.sum ./core/

@@ -1,4 +1,4 @@
-import {request, requestValidated} from './client'
+import {request, requestValidated, requestValidatedWithHeaders} from './client'
 import {type AuthUser} from './auth'
 import {getAdminUsersPageSchema, getAuditActionsSchema, getAuditEventsSchema, getUserStatsSchema} from './schemas'
 import type {PagedResponse} from '@/types'
@@ -42,6 +42,14 @@ export interface AuditFilter {
   action?: string
   limit?: number
   offset?: number
+  // The page before's nextCursor: the server then ignores offset (an older one ignores the cursor).
+  cursor?: string
+}
+
+export interface AuditPage {
+  events: AuditEvent[]
+  // X-Next-Cursor: the ?cursor= of the next page, sent while events follow (never by an older server).
+  nextCursor?: string
 }
 
 export type UserRole = AuthUser['role']
@@ -64,6 +72,8 @@ export interface UserQuery {
   role?: RoleFilter
   limit: number
   offset: number
+  // The page before's nextCursor: the server then ignores offset (an older one ignores the cursor).
+  cursor?: string
 }
 
 export interface UserStats {
@@ -111,6 +121,7 @@ export const adminApi = {
     const params = new URLSearchParams({limit: String(query.limit), offset: String(query.offset)})
     if (query.q) params.set('q', query.q)
     if (query.role) params.set('role', query.role)
+    if (query.cursor) params.set('cursor', query.cursor)
     return requestValidated(`/api/admin/users/list?${params.toString()}`, await getAdminUsersPageSchema(), {
       method: 'GET',
       noDedup: true,
@@ -131,18 +142,20 @@ export const adminApi = {
   listAuditActions: async (signal?: AbortSignal): Promise<string[]> =>
     requestValidated('/api/admin/audit/actions', await getAuditActionsSchema(), {method: 'GET', noDedup: true, signal}),
 
-  listAuditEvents: async (filter: AuditFilter = {}, signal?: AbortSignal): Promise<AuditEvent[]> => {
+  listAuditEvents: async (filter: AuditFilter = {}, signal?: AbortSignal): Promise<AuditPage> => {
     const params = new URLSearchParams()
     if (filter.userId) params.set('userId', filter.userId)
     if (filter.action) params.set('action', filter.action)
     if (filter.limit) params.set('limit', String(filter.limit))
     if (filter.offset !== undefined) params.set('offset', String(filter.offset))
+    if (filter.cursor) params.set('cursor', filter.cursor)
     const qs = params.toString()
-    return requestValidated(`/api/admin/audit${qs ? '?' + qs : ''}`, await getAuditEventsSchema(), {
-      method: 'GET',
-      noDedup: true,
-      signal,
-    })
+    const {value, headers} = await requestValidatedWithHeaders(
+      `/api/admin/audit${qs ? '?' + qs : ''}`,
+      await getAuditEventsSchema(),
+      {method: 'GET', noDedup: true, signal},
+    )
+    return {events: value, nextCursor: headers.get('X-Next-Cursor') || undefined}
   },
 }
 

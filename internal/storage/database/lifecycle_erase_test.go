@@ -189,6 +189,9 @@ func TestPostgres_Lifecycle_ErasureSweep(t *testing.T) {
 		f.ok("SaveFlowVersion", b.SaveFlowVersion(ctx, fv))
 	}
 	f.ok("SetFlowBaseline", b.SetFlowBaseline(ctx, &interfaces.FlowBaseline{FlowID: shared, Keys: []string{"r:1"}, CreatedBy: u}))
+	// An undo snapshot the user's edit left on someone else's flow (the per-user bound's identity, v47).
+	f.ok("PushFlowSnapshot", b.PushFlowSnapshot(ctx, &interfaces.FlowSnapshot{ID: "snap-shared-" + run, FlowID: shared, UserID: u, Source: "x"},
+		interfaces.FlowSnapshotLimits{Keep: 20, MaxBytes: 1 << 20, UserKeep: 200, UserMaxBytes: 1 << 20}))
 	for _, st := range []*interfaces.FindingStatus{
 		{FlowID: shared, FindingKey: "r:1", RuleID: "r", Status: "acknowledged", AssigneeID: u, UpdatedBy: u},
 		{FlowID: orgFlow, FindingKey: "r:2", RuleID: "r", Status: "open", AssigneeID: u, UpdatedBy: v},
@@ -306,6 +309,9 @@ func TestPostgres_Lifecycle_ErasureSweep(t *testing.T) {
 	}
 	if n := f.count(`SELECT count(*) FROM org_ci_credentials WHERE id = $1 AND created_by = ''`, "ci-"+run); n != 1 {
 		t.Error("the CI credential the user minted must stay the organisation's, without its minter")
+	}
+	if n := f.count(`SELECT count(*) FROM flow_snapshots WHERE id = $1 AND user_id = ''`, "snap-shared-"+run); n != 1 {
+		t.Error("the undo snapshot the user left on another's flow must stay the flow's, without the user")
 	}
 	if got := f.str(`SELECT ip FROM audit_events WHERE id = $1`, "ev-pre-"+run); got != "203.0.113.3" {
 		t.Errorf("the pre-auth row's address = %q, kept as before", got)

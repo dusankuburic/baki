@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/lifecycle"
+	"pad-analyzer/internal/platform/lock"
 )
 
 // vectorIndexLockKey is the advisory lock replicas take while building the
@@ -52,19 +53,31 @@ var vectorIndexJob = lifecycle.DeclareJob(lifecycle.JobDecl{
 // EXISTS would keep it forever and the planner never uses an invalid index.
 // A job on one replica at a time (vectorIndexJob: its lease ends the build when
 // the lock is lost), with session timeouts lifted (a large corpus takes
-// minutes). Best effort: failures are logged and reported as nil — the search
-// works without the index, only slower; the caller's context ending is
-// returned as-is.
+// minutes); while the pool has no connection to spare for its lease it asks
+// again (runWhenTheDatabaseAllows). Best effort: failures are logged and
+// reported as nil — the search works without the index, only slower; the
+// caller's context ending is returned as-is.
 func (b *PostgresStorageBackend) EnsureVectorIndex(ctx context.Context, dims int) error {
+	return b.ensureVectorIndex(ctx, dims, lifecycle.NewSingleton)
+}
+
+// ensureVectorIndex is EnsureVectorIndex with the job built by newJob (a test's own leaser or lifecycle group).
+func (b *PostgresStorageBackend) ensureVectorIndex(ctx context.Context, dims int, newJob func(lifecycle.Job, lock.Leaser, lifecycle.JobState) *lifecycle.Singleton) error {
 	if dims <= 0 || !b.hasPgvector {
 		return nil
 	}
-	job := lifecycle.NewSingleton(lifecycle.Job{
+	// Two connections, like the schema upkeep's: a smaller pool would hand the lease its only one and wait.
+	if n := b.db.Stats().MaxOpenConnections; n > 0 && n < upkeepMinPool {
+		slog.Warn("knowledge vector index: build skipped: the pool cannot spare the two connections it holds; raise PAD_DB_MAX_OPEN_CONNS",
+			"max_open_conns", n, "needs", upkeepMinPool)
+		return nil
+	}
+	job := newJob(lifecycle.Job{
 		Spec: vectorIndexJob,
 		Run:  func(ctx context.Context) error { return b.buildVectorIndex(ctx, dims) },
 	}, b, b)
 	defer job.Stop()
-	if err := job.RunOnce(ctx); errors.Is(err, lifecycle.ErrJobHeld) {
+	if err := runWhenTheDatabaseAllows(ctx, job, "knowledge vector index", false); errors.Is(err, lifecycle.ErrJobHeld) {
 		slog.Info("knowledge vector index: another replica holds the build lock; skipping", "index", knowledgeVectorIndexName(dims))
 	} else if err != nil {
 		return ctx.Err() // the job logged why

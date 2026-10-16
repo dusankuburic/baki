@@ -35,6 +35,7 @@ func TestSearch_ScrubsQueryBeforeEmbedding(t *testing.T) {
 	emb := &recordingEmbedder{}
 	// One indexed chunk: an org with nothing indexed skips the embedding.
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1}, "retry policy: three attempts")
 	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(emb))
 

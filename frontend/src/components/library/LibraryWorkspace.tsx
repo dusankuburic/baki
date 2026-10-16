@@ -11,6 +11,7 @@ import {useToast, useConfirm} from '@/components/shared'
 import type {FlowDocument, PagedResponse} from '@/types'
 import {logger} from '@/lib/logger'
 import {SEARCH_DEBOUNCE_MS} from '@/lib/constants'
+import {EMPTY_TRAIL, MAX_LIST_OFFSET, recordPage, trailCursor, type PageTrail} from '@/lib/pageTrail'
 import LibraryFilterRail from './LibraryFilterRail'
 import LibraryToolbar from './LibraryToolbar'
 import LibraryGrid from './LibraryGrid'
@@ -53,9 +54,20 @@ export default function LibraryWorkspace() {
 
   const [items, setItems] = useState<LibraryFlow[]>([])
   const [total, setTotal] = useState(0)
+  const [totalCapped, setTotalCapped] = useState(false)
+  const [hasMore, setHasMore] = useState<boolean | undefined>(undefined)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  // The nextCursor each page answered, by the page it leads to, for the filters in cursorsKey: a page reached by its
+  // cursor costs the server one index descent instead of skipping every earlier flow. Any filter change starts over
+  // at page 0, which needs none; a server that predates the cursors answers none, and the offset alone pages.
+  const trailRef = useRef<PageTrail>(EMPTY_TRAIL)
+  // The last answer came from a server that predates the cursors (no hasMore): it has no offset cap either.
+  const olderServerRef = useRef(false)
+  // The page whose answer is shown (cursorsKey#page): until the page asked for answers, Next waits, since the cursor
+  // of the page after it is not known yet.
+  const [shownKey, setShownKey] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState(query)
   const [openingId, setOpeningId] = useState<string | null>(null)
   useEffect(() => {
@@ -75,34 +87,62 @@ export default function LibraryWorkspace() {
     return only ? only : undefined
   }, [selectedOrgIds])
 
+  const tags = useMemo(() => (selectedTags.size > 0 ? [...selectedTags] : undefined), [selectedTags])
+  const cursorsKey = useMemo(
+    () => JSON.stringify([scope, sort, requestOrgId, debouncedQuery, tags, pageSize]),
+    [scope, sort, requestOrgId, debouncedQuery, tags, pageSize],
+  )
+
   const fetchPage = useCallback(
-    async (silent: boolean) => {
+    async (silent: boolean, recount = false) => {
       abortRef.current?.abort()
       const ac = new AbortController()
       abortRef.current = ac
       if (!silent) setIsLoading(true)
       setError(null)
+      const cursor = page > 0 ? trailCursor(trailRef.current, cursorsKey, page) : undefined
+      if (!cursor && page * pageSize > MAX_LIST_OFFSET && !olderServerRef.current) {
+        // No offset reaches this page (the server refuses one past the cap) and no cursor is known for it, as after
+        // a remount: start over. A server that predates the cursors has no cap: it takes the offset.
+        setPage(0)
+        return
+      }
+      const filter = {scope, sort, orgId: requestOrgId, query: debouncedQuery || undefined, tags}
+      // A page reached by cursor reports the total its first page counted: Refresh counts again beside it.
+      const counted = recount && cursor ? libraryApi.list({...filter, limit: 1, offset: 0}, ac.signal) : undefined
+      counted?.catch(() => {})
       try {
         const res: PagedResponse<LibraryFlow> = await libraryApi.list(
-          {
-            scope,
-            sort,
-            orgId: requestOrgId,
-            query: debouncedQuery || undefined,
-            tags: selectedTags.size > 0 ? [...selectedTags] : undefined,
-            limit: pageSize,
-            offset: page * pageSize,
-          },
+          {...filter, limit: pageSize, offset: page * pageSize, cursor},
           ac.signal,
         )
         if (ac.signal.aborted) return
+        trailRef.current = recordPage(trailRef.current, cursorsKey, page, res.nextCursor)
+        olderServerRef.current = res.hasMore === undefined
         let pageItems = res.items
         if (selectedOrgIds && selectedOrgIds.size > 1) {
           pageItems = pageItems.filter(f => selectedOrgIds.has(f.organizationId ?? ''))
         }
         setItems(pageItems)
-        setTotal(res.total)
+        setShownKey(`${cursorsKey}#${page}`)
+        // The count shown is the one this list last made (and adjusted since): a cursor's would undo that. A server
+        // that predates the cursors counted afresh, without a cap.
+        if (!cursor || res.hasMore === undefined) {
+          setTotal(res.total)
+          setTotalCapped(res.totalCapped === true)
+        }
+        // Past the offset cap only a cursor reaches the next page (a name sort has none).
+        setHasMore(
+          res.hasMore === undefined
+            ? undefined
+            : res.hasMore && (res.nextCursor !== undefined || (page + 1) * pageSize <= MAX_LIST_OFFSET),
+        )
         setKnownTags(prev => mergeTags(prev, res.items))
+        const fresh = await counted?.catch((e: unknown) => logger.warn('Library: recount failed', e))
+        if (fresh && !ac.signal.aborted) {
+          setTotal(fresh.total)
+          setTotalCapped(fresh.totalCapped === true)
+        }
       } catch (e) {
         if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return
         const msg = getErrorMessage(e)
@@ -112,7 +152,7 @@ export default function LibraryWorkspace() {
         if (!ac.signal.aborted) setIsLoading(false)
       }
     },
-    [scope, sort, requestOrgId, debouncedQuery, selectedTags, page, pageSize, selectedOrgIds],
+    [scope, sort, requestOrgId, debouncedQuery, tags, cursorsKey, page, pageSize, selectedOrgIds, setPage],
   )
 
   useEffect(() => {
@@ -223,7 +263,10 @@ export default function LibraryWorkspace() {
     [toast, reportWriteError, reloadAfterConflict, t],
   )
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  // The count can trail the pages (a page reached by cursor keeps the one last made): never fewer pages than the one
+  // shown and the one hasMore promises.
+  const totalPages = Math.max(1, Math.ceil(total / pageSize), page + 1 + (hasMore ? 1 : 0))
+  const settled = shownKey === `${cursorsKey}#${page}`
   const showEmpty = !isLoading && items.length === 0
   const showSkeleton = isLoading && items.length === 0
 
@@ -235,7 +278,12 @@ export default function LibraryWorkspace() {
         </aside>
 
         <section className="flex-1 flex flex-col overflow-hidden min-w-0">
-          <LibraryToolbar total={total} isLoading={isLoading} onRefresh={() => fetchPage(true)} />
+          <LibraryToolbar
+            total={total}
+            totalCapped={totalCapped}
+            isLoading={isLoading}
+            onRefresh={() => fetchPage(true, true)}
+          />
 
           {error && (
             <div className="mx-4 my-3 px-3 py-2 text-sm bg-semantic-error/10 border border-semantic-error/30 rounded-lg text-semantic-error">
@@ -271,9 +319,17 @@ export default function LibraryWorkspace() {
             )}
           </div>
 
-          {total > pageSize && (
+          {(total > pageSize || page > 0 || hasMore === true) && (
             <div className="border-t border-border-subtle px-4 py-2 shrink-0">
-              <LibraryPager page={page} totalPages={totalPages} total={total} onChange={setPage} />
+              <LibraryPager
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                totalCapped={totalCapped}
+                hasMore={hasMore}
+                busy={!settled}
+                onChange={setPage}
+              />
             </div>
           )}
         </section>

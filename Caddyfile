@@ -18,6 +18,10 @@
 	# when BAKI_SITE_ADDRESS is a local name such as "localhost", because Caddy
 	# then issues from its own internal CA instead of talking to an ACME server.
 	email {$ACME_EMAIL}
+	# The admin endpoint is not used in this deployment (no runtime config
+	# reloads); close it rather than leave a local API listening in the container —
+	# the same stance the replicas stack's lb config takes.
+	admin off
 }
 
 # BAKI_SITE_ADDRESS is the public origin, e.g. https://baki.example.com.

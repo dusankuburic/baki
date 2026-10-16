@@ -237,7 +237,10 @@ func ExecuteTool(name string, input json.RawMessage, tctx ToolContext) string {
 		if tctx.Ctx != nil && tctx.Ctx.Err() != nil && errors.Is(tctx.Ctx.Err(), context.DeadlineExceeded) {
 			return fmt.Sprintf("error: tool %s timed out after %s — simplify the request or try fewer results", name, timeout)
 		}
-		return "error: " + err.Error()
+		// Every success path scrubs; the error branch must too — a handler whose
+		// error embeds flow content would otherwise bypass the scrubber on the
+		// provider path.
+		return "error: " + scrubber.ScrubText(err.Error())
 	}
 	return truncateResult(res)
 }

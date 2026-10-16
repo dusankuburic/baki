@@ -9,13 +9,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	"pad-analyzer/internal/redisx"
 )
 
 // maxConnsPerUser bounds live WebSocket connections per user; without it one
 // authenticated account can exhaust the process's memory/goroutines. Mirrors
-// the SSE cap in events.go (10). Per-process, not global: with the Redis
-// backplane and N replicas one account can hold 10×N sockets (a global cap
-// would need a shared counter in Redis).
+// the SSE cap in events.go (10). Per process, and with more than one replica
+// configured also across the replicas (ShareConnCap, conn_cap.go); while that
+// Redis count cannot be read, one account can hold 10×N sockets.
 const maxConnsPerUser = 10
 
 // presenceDeleteWait bounds how long Leave waits for the presence writer's
@@ -29,6 +31,8 @@ type Hub struct {
 	mu           sync.RWMutex
 	rooms        map[string]*room // keyed by flowID
 	connsPerUser map[string]int   // userID -> open connection count
+	// connSlots counts a user's sockets across the replicas (ShareConnCap); nil is this hub's cap only.
+	connSlots *redisx.SlotCap
 
 	// backplane is nil for single-replica/desktop (pure in-memory). When set
 	// (multi-replica, PAD_REDIS_URL), room broadcasts fan out over pub/sub and
@@ -210,27 +214,41 @@ func (h *Hub) Shutdown(ctx context.Context) error {
 // AcquireConn atomically reserves a WebSocket connection slot for userID,
 // honoring the per-user cap (maxConnsPerUser); returns a release callback
 // (idempotent) and ok=false at the cap. Enforced before the WS upgrade so a
-// refused connection never allocates goroutines or buffers.
+// refused connection never allocates goroutines or buffers. With the shared
+// cap (ShareConnCap) the user's sockets on every replica count too.
 func (h *Hub) AcquireConn(userID string) (release func(), ok bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.connsPerUser[userID] >= maxConnsPerUser {
+		h.mu.Unlock()
 		return func() {}, false
 	}
 	h.connsPerUser[userID]++
+	h.mu.Unlock()
+	// Outside the hub's lock: a Redis round trip must not hold up every room.
+	shared, ok := h.connSlots.Acquire(context.Background(), userID)
+	if !ok {
+		h.dropConn(userID)
+		return func() {}, false
+	}
 	var released bool
 	return func() {
 		if released {
 			return
 		}
 		released = true
-		h.mu.Lock()
-		h.connsPerUser[userID]--
-		if h.connsPerUser[userID] <= 0 {
-			delete(h.connsPerUser, userID)
-		}
-		h.mu.Unlock()
+		h.dropConn(userID)
+		shared()
 	}, true
+}
+
+// dropConn gives back one of userID's local connection slots.
+func (h *Hub) dropConn(userID string) {
+	h.mu.Lock()
+	h.connsPerUser[userID]--
+	if h.connsPerUser[userID] <= 0 {
+		delete(h.connsPerUser, userID)
+	}
+	h.mu.Unlock()
 }
 
 // Join registers a client in the room for flowID, announces it with

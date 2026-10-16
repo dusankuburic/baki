@@ -3,6 +3,7 @@ package interfaces
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"pad-analyzer/internal/auth"
@@ -10,6 +11,10 @@ import (
 
 // ErrOrgInviteExists is returned when an org+email pair already has an active (unaccepted) invite (map to HTTP 409).
 var ErrOrgInviteExists = errors.New("an active invite for this email already exists")
+
+// ErrOrgNotFound is a write of an organisation's policy, channel, custom rule or knowledge document refused because the
+// organisation does not exist (the foreign keys of migration 0048). It is an ErrNotFound.
+var ErrOrgNotFound = fmt.Errorf("%w: no such organisation", ErrNotFound)
 
 // ErrOrgInviteAlreadyAccepted is returned by MarkOrgInviteAccepted when the invite was already accepted or no longer exists; single-use is enforced via `WHERE accepted_at IS NULL`.
 var ErrOrgInviteAlreadyAccepted = errors.New("org invite has already been accepted or no longer exists")

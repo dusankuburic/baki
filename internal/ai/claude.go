@@ -43,7 +43,7 @@ type ClaudeProvider struct {
 func NewClaudeProvider(apiKey string) *ClaudeProvider {
 	return &ClaudeProvider{
 		apiKey: apiKey,
-		client: sharedHTTPClient,
+		client: fixedHostClient(),
 	}
 }
 

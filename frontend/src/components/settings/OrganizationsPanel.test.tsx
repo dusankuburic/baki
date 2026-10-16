@@ -144,6 +144,16 @@ describe('OrganizationsPanel', () => {
     expect(screen.getByText('2 members')).toBeInTheDocument()
   })
 
+  it("offers the organisation's AI provider allowlist to its admins only", async () => {
+    const {unmount} = renderPanel()
+    expect(await screen.findByRole('heading', {name: 'Allowed AI providers'})).toBeInTheDocument()
+    unmount()
+    useAuthStore.setState({user: {id: 'u-2', email: 'bob@acme.io', role: 'member'} as never})
+    renderPanel()
+    await screen.findByText('Acme')
+    expect(screen.queryByRole('heading', {name: 'Allowed AI providers'})).toBeNull()
+  })
+
   it('creates an org, activates it, and closes the form', async () => {
     createOrg.mockResolvedValue({id: 'org-2', name: 'NewCo'})
     renderPanel()

@@ -130,7 +130,7 @@ F-005 info/low unused-variable [Style] fix=remove-block @Main#4 sf=Main fp=unuse
 F-006 info/low unused-variable [Style] fix=remove-block @Main#5 sf=Main fp=unused-variable:bcaf666d7d45344f
 F-007 info/low unused-variable [Style] fix=remove-block @Main#22 sf=Main fp=unused-variable:8cd8f1fc6065548f
 F-008 info/low unused-variable [Style] fix=remove-block @Main#23 sf=Main fp=unused-variable:c6c5b826f92ce02f
-F-009 warning/high parse-error [-] fix=- @- sf=Main fp=parse-error:
+F-009 warning/high parse-error [Syntax] fix=- @- sf=Main fp=parse-error:
     title: Parse error (line 24)
     desc: ELSE outside IF
     meta: {"column":1,"line":24,"snippet":"ELSE"}

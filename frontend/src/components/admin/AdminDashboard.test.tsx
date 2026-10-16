@@ -79,7 +79,7 @@ describe('AdminDashboard', () => {
       locked: 0,
     })
     getMigrationStatus.mockResolvedValue({configured: false, running: false})
-    listAuditEvents.mockResolvedValue([])
+    listAuditEvents.mockResolvedValue({events: []})
     listAuditActions.mockResolvedValue([])
     systemHealth.mockResolvedValue({
       database: {status: 'ok'},

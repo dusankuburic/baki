@@ -236,13 +236,35 @@ func (rt *Router) corsHeaders(next http.Handler) http.Handler {
 		if rt.isOriginAllowed(origin) && origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			// A cross-origin client (the desktop webview, a dev server) may read only the headers listed here.
-			w.Header().Set("Access-Control-Expose-Headers", BuildVersionHeader+", "+idempotentReplayedHeader)
+			w.Header().Set("Access-Control-Expose-Headers", BuildVersionHeader+", "+idempotentReplayedHeader+", "+nextCursorHeader)
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key, Last-Event-ID")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// localOriginGuard is the local-mode CSRF stand-in, applied router-wide: with
+// no JWT auth every mutating endpoint is unauthenticated, so any website can
+// fire a preflight-free "simple" POST at the loopback server. The response is
+// cross-origin unreadable (corsHeaders reflects no ACAO for foreign origins),
+// but side effects still execute — this middleware refuses the request before
+// they can. Sits after corsHeaders so the OPTIONS preflight short-circuit has
+// already answered; inert in cloud mode and for non-mutating methods.
+func (rt *Router) localOriginGuard(next http.Handler) http.Handler {
+	if rt.security.JWTEnabled {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+			if rt.security.rejectForeignOrigin(w, r) {
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -487,6 +509,7 @@ func (rt *Router) isOriginAllowed(origin string) bool {
 var localhostHosts = map[string]bool{
 	"localhost":       true,
 	"127.0.0.1":       true,
+	"::1":             true, // a Vite dev server bound to IPv6 loopback (localhost often resolves to ::1 first)
 	"tauri.localhost": true,
 }
 

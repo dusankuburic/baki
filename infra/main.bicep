@@ -96,7 +96,7 @@ param encryptionKey string = ''
 @secure()
 param encryptionKeyPrevious string = ''
 
-@description('Postgres connection string (sslmode=require or verify-full). Becomes a Container App secret.')
+@description('Postgres connection string, with sslmode=verify-full (infra/postgres.bicep\'s appConnectionStringTemplate): require is accepted but does not verify the server. Becomes a Container App secret.')
 @secure()
 param databaseUrl string
 
@@ -181,10 +181,10 @@ param logLevel string = ''
 ])
 param routePolicy string = ''
 
-@description('Max open Postgres connections PER REPLICA (PAD_DB_MAX_OPEN_CONNS). Wins over the derivation from dbServerMaxConnections. Empty uses that derivation when dbServerMaxConnections is set, else the app default of 25. Right-size against the Flexible Server SKU\'s connection cap — a Burstable B1ms tops out around 35.')
+@description('Max open Postgres connections PER REPLICA (PAD_DB_MAX_OPEN_CONNS). Never below 3: schema_upkeep and the knowledge index build pin two connections and skip a smaller pool (WARN at every boot). Wins over the derivation from dbServerMaxConnections. Empty uses that derivation when dbServerMaxConnections is set, else the app default of 25. Right-size against the Flexible Server SKU\'s connection cap — a Burstable B1ms tops out around 35.')
 param dbMaxOpenConns string = ''
 
-@description('The Flexible Server\'s max_connections (SHOW max_connections; infra/postgres.bicep outputs it as maxConnections), e.g. 50 on Burstable B1ms, 859 on General Purpose D2ds_v5. When set and dbMaxOpenConns is empty, each replica\'s pool is (this - dbReservedConnections) / (maxReplicas + max(minReplicas, 1)), at least 1 and at most the app default of 25: the second term is the rolling deploy, whose new revision starts its minReplicas beside the old replicas until the swap (maxReplicas + 1 by default). Also passed to the app (PAD_DB_SERVER_MAX_CONNS). 0 = unknown: the pool stays at the app default. See docs/architecture/operations.md.')
+@description('The Flexible Server\'s max_connections (SHOW max_connections; infra/postgres.bicep outputs it as maxConnections), e.g. 50 on Burstable B1ms, 859 on General Purpose D2ds_v5. When set and dbMaxOpenConns is empty, each replica\'s pool is (this - dbReservedConnections) / (maxReplicas + max(minReplicas, 1)), at least 1 and at most the app default of 25: the second term is the rolling deploy, whose new revision starts its minReplicas beside the old replicas until the swap (maxReplicas + 1 by default). Never below 3 in practice: schema_upkeep and the knowledge index build pin two connections and skip a smaller pool (WARN at every boot). Also passed to the app (PAD_DB_SERVER_MAX_CONNS). 0 = unknown: the pool stays at the app default. See docs/architecture/operations.md.')
 @minValue(0)
 param dbServerMaxConnections int = 0
 
@@ -239,7 +239,7 @@ param notifyWebhookUrl string = ''
 @description('Hosts organisation notification channels may point at, comma-separated: exact hosts or *.suffix globs (PAD_NOTIFY_ALLOWED_HOSTS). Checked when a channel is saved and at every delivery; the deployment channels are not restricted. Empty allows any public host.')
 param notifyAllowedHosts string = ''
 
-@description('Age-based purge window for audit events, analysis history, usage metrics and governance alerts (PAD_AUDIT_RETENTION_DAYS). Empty keeps the app default of 0 = forever, which grows Postgres without bound.')
+@description('Age-based purge window, in days, for audit events, analysis history, usage metrics, governance alerts and rule notices (PAD_AUDIT_RETENTION_DAYS). Empty passes nothing, so the app default applies: 400 days in cloud mode. "0" keeps them forever, which grows Postgres without bound.')
 param auditRetentionDays string = ''
 
 @description('On-disk spill queue for audit events when the in-memory pool overflows (PAD_AUDIT_SPILL_DIR). Defaults to /tmp, which on ACA is an ephemeral EmptyDir — spilled events do not survive a restart. Set "off" to drop the spill instead of pretending it is durable.')
@@ -251,8 +251,11 @@ param disableSignUp bool = false
 @description('Extra hosts allowed for Azure AI Foundry endpoints, comma-separated: exact hosts or *.suffix globs such as an API Management front (PAD_AZURE_FOUNDRY_ALLOWED_HOSTS). A glob over a public multi-tenant Azure zone (*.azure-api.net, *.azurewebsites.net, ...) refuses to boot — list exact hosts there. Empty uses the built-in allow-list.')
 param azureFoundryAllowedHosts string = ''
 
-@description('Allow AI endpoints that resolve to private addresses (PAD_AI_ALLOW_PRIVATE_EGRESS): private-link Foundry resources whose hosts resolve to private addresses by design. Needs VNet integration, which this template does NOT provision — without it a private-link endpoint stays unreachable. Opens RFC 1918 and IPv6 unique-local addresses only; loopback, link-local and metadata addresses stay refused.')
+@description('Allow AI endpoints that resolve to private addresses (PAD_AI_ALLOW_PRIVATE_EGRESS): private-link Foundry resources whose hosts resolve to private addresses by design. Needs the environment in a virtual network that reaches them (infrastructureSubnetId) — without it a private-link endpoint stays unreachable. Opens RFC 1918 and IPv6 unique-local addresses only; loopback, link-local and metadata addresses stay refused.')
 param aiAllowPrivateEgress bool = false
+
+@description('Private networking, the recommended production setup (docs/architecture/operations.md, "Private networking"): the subnet the Container Apps environment joins, the acaInfrastructureSubnetId output of infra/postgres.bicep deployed with privateAccess = true (delegated to Microsoft.App/environments). The environment then runs with the Consumption workload profile inside that network and reaches the database over its private endpoint; the app\'s ingress stays public. Empty (the default) keeps the environment off any network. An environment cannot be moved into a network once created: switching an existing deployment needs a new environment, so deploy under a new appName and move traffic over.')
+param infrastructureSubnetId string = ''
 
 @description('Knowledge-base embedding provider for the whole deployment (PAD_EMBEDDING_PROVIDER): one of openai, gemini, glm, github-models, azure-foundry — anything else refuses to boot. azure-foundry is the only way the knowledge base embeds with Azure AI Foundry; keep every member\'s embedding deployment on the same model. Empty uses the Embedding Assistant setting (default openai).')
 param embeddingProvider string = ''
@@ -361,6 +364,16 @@ resource env 'Microsoft.App/managedEnvironments@2024-10-02-preview' = {
   location: location
   tags: tags
   properties: {
+    // Private networking: a workload-profiles environment in the delegated subnet, apps on its Consumption
+    // profile, priced as the consumption-only environment it otherwise is. Fixed at creation (see
+    // infrastructureSubnetId).
+    vnetConfiguration: empty(infrastructureSubnetId) ? null : {
+      infrastructureSubnetId: infrastructureSubnetId
+      internal: false
+    }
+    workloadProfiles: empty(infrastructureSubnetId) ? null : [
+      { name: 'Consumption', workloadProfileType: 'Consumption' }
+    ]
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
@@ -566,7 +579,8 @@ var goMemLimit = '${memoryMiB * 8 / 10}MiB'
 // what the reserve leaves, shared by maxReplicas plus the rolling deploy's surge (in Single revision mode the new
 // revision starts its minReplicas, at least one, beside the old revision's replicas until the swap; with the
 // default minReplicas = 1 that is maxReplicas + 1), so every pool full at once still fits mid-deploy. At least 1:
-// the app reads 0 as "unset" and opens its default. At most that default: a big server is no reason to open more
+// the app reads 0 as "unset" and opens its default (never below 3 in practice: schema_upkeep and the knowledge
+// index build pin two connections and skip a smaller pool, logging a WARN at every boot). At most that default: a big server is no reason to open more
 // than the app does without a cap (an explicit dbMaxOpenConns can, and wins).
 // docs/architecture/operations.md has the arithmetic; internal/config/deploy_pool_test.go evaluates it.
 var dbAppDefaultMaxOpenConns = 25 // storagedb.DefaultConfig; TestBicepPoolCeiling_IsTheAppDefault keeps them equal
@@ -670,6 +684,7 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
   }
   properties: {
     managedEnvironmentId: env.id
+    workloadProfileName: empty(infrastructureSubnetId) ? null : 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {

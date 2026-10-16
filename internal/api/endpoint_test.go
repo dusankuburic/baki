@@ -193,8 +193,8 @@ func TestJSONEndpoint_OversizedBodyAnswersAsDecodeBody(t *testing.T) {
 // fn runs on the request's own context: the actor jwtAuth authenticated, the request's reqinfo.Info with the
 // route's policy, and the request's lazy RLS scope, which fn's first store access begins.
 func TestTypedEndpoint_RunsOnTheRequestContext(t *testing.T) {
-	store := testutil.NewFakeBackend()
-	backend := &rlsProbeBackend{StorageBackend: store}
+	// A transaction that starts: a read whose start fails is refused (503) since reads fail closed.
+	backend := newLazyRLSBackend(t)
 	rt := newTestRouterSSO(backend, true, nil, nil)
 	var actor *auth.Actor
 	var info *reqinfo.Info

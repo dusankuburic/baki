@@ -1,6 +1,7 @@
 import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import type {RoleFilter, SystemHealth} from '@/api/admin'
+import {EMPTY_TRAIL, recordEnd, recordPage, type PageTrail} from '@/lib/pageTrail'
 
 export const USERS_PAGE_SIZE = 10
 export const USERS_PAGE_SIZES = [10, 25, 50]
@@ -30,6 +31,10 @@ interface AdminState {
   pending: number
   lastUpdated: number | null
   health: SystemHealth | null
+  // The cursors the user list's and audit log's pages answered, kept across remounts (the page is): a page past the
+  // server's offset cap is reached only by one.
+  usersTrail: PageTrail
+  auditTrail: PageTrail
 
   setUsersQuery: (q: string) => void
   setUsersRole: (role: RoleFilter) => void
@@ -49,6 +54,9 @@ interface AdminState {
   endLoad: () => void
   markUpdated: () => void
   setHealth: (health: SystemHealth | null) => void
+  noteUsersPage: (key: string, page: number, next: string | undefined) => void
+  noteAuditPage: (key: string, page: number, next: string | undefined, sentCursor: boolean) => void
+  noteAuditEnd: (key: string, page: number) => void
   reset: () => void
 }
 
@@ -64,6 +72,8 @@ const DEFAULTS = {
   pending: 0,
   lastUpdated: null as number | null,
   health: null as SystemHealth | null,
+  usersTrail: EMPTY_TRAIL,
+  auditTrail: EMPTY_TRAIL,
 }
 
 export const useAdminStore = create<AdminState>()((set, get) => ({
@@ -85,12 +95,17 @@ export const useAdminStore = create<AdminState>()((set, get) => ({
     if (id) set({pendingSection: null})
     return id
   },
-  refresh: () => set(s => ({nonce: s.nonce + 1})),
+  // A refresh may find events past the page found empty.
+  refresh: () => set(s => ({nonce: s.nonce + 1, auditTrail: {...s.auditTrail, end: undefined}})),
   touchUsers: () => set(s => ({usersNonce: s.usersNonce + 1})),
   beginLoad: () => set(s => ({pending: s.pending + 1})),
   endLoad: () => set(s => ({pending: Math.max(0, s.pending - 1)})),
   markUpdated: () => set({lastUpdated: Date.now()}),
   setHealth: health => set({health}),
+  noteUsersPage: (key, page, next) => set(s => ({usersTrail: recordPage(s.usersTrail, key, page, next)})),
+  noteAuditPage: (key, page, next, sentCursor) =>
+    set(s => ({auditTrail: recordPage(s.auditTrail, key, page, next, sentCursor)})),
+  noteAuditEnd: (key, page) => set(s => ({auditTrail: recordEnd(s.auditTrail, key, page)})),
   reset: () => set(DEFAULTS),
 }))
 

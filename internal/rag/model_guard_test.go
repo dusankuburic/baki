@@ -33,6 +33,7 @@ func (f *fixedEmbedder) Embed(_ context.Context, text []string) ([][]float32, er
 // seedCorpus stores one document of org-1 with chunks whose stored embedding
 // is vec — a corpus some earlier model indexed.
 func seedCorpus(store *testutil.FakeBackend, vec []float32, contents ...string) {
+	store.SeedOrgs("org-1")
 	_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-1", OrgID: "org-1", Filename: "policy.md"})
 	chunks := make([]interfaces.KnowledgeChunk, len(contents))
 	for i, c := range contents {
@@ -77,6 +78,7 @@ func guardService(store *testutil.FakeBackend, emb ai.Provider) *KnowledgeServic
 // every chunk with the caller's model.
 func TestReindexOrg_ModelChangedRefusedUnlessForced(t *testing.T) {
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule", "gamma rule", "delta rule")
 	before := storedEmbeddings(store)
 	emb := &fixedEmbedder{vec: []float32{0, 1}}
@@ -115,6 +117,7 @@ func TestReindexOrg_ModelChangedRefusedUnlessForced(t *testing.T) {
 // reproduces its vectors (up to noise) — no confirmation needed.
 func TestReindexOrg_SameModelPasses(t *testing.T) {
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule")
 	svc := guardService(store, &fixedEmbedder{vec: []float32{0.999, 0.02}})
 
@@ -150,6 +153,7 @@ func TestReindexOrg_WidthChangePassesWithoutForce(t *testing.T) {
 // corpus's model — refused before embedding, nothing written.
 func TestAddDocument_ModelChangedRefused(t *testing.T) {
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule")
 	before := storedEmbeddings(store)
 	emb := &fixedEmbedder{vec: []float32{0, 1}}
@@ -183,6 +187,7 @@ func TestAddDocument_ModelChangedRefused(t *testing.T) {
 // pair is corpusOtherWidth.
 func TestCheckCorpusModel_WorstSameWidthPairDecides(t *testing.T) {
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	for _, d := range []string{"d1", "d2", "d3"} {
 		_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: d, OrgID: "org-1"})
 	}
@@ -199,6 +204,7 @@ func TestCheckCorpusModel_WorstSameWidthPairDecides(t *testing.T) {
 	}
 
 	zeros := &testutil.FakeBackend{}
+	zeros.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	_ = zeros.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "d", OrgID: "org-1"})
 	_ = zeros.SaveKnowledgeChunks(context.Background(), "", []interfaces.KnowledgeChunk{
 		{ID: "a", DocID: "d", Content: "one", Embedding: []float32{0, 0}},
@@ -224,6 +230,7 @@ func TestCheckCorpusModel_WorstSameWidthPairDecides(t *testing.T) {
 func TestCheckCorpusModel_MixedCorpusRefusesBothModels(t *testing.T) {
 	newMixed := func() *testutil.FakeBackend {
 		store := &testutil.FakeBackend{}
+		store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 		_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-a", OrgID: "org-1", Filename: "a.md"})
 		_ = store.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-b", OrgID: "org-1", Filename: "b.md"})
 		_ = store.SaveKnowledgeChunks(context.Background(), "", []interfaces.KnowledgeChunk{
@@ -268,6 +275,7 @@ func TestCheckCorpusModel_MixedCorpusRefusesBothModels(t *testing.T) {
 func TestAddDocument_WidthChangeRefused(t *testing.T) {
 	for _, dim := range []int{0, 2, 3} {
 		store := &testutil.FakeBackend{EmbeddingDim: dim}
+		store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 		seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule")
 		before := storedEmbeddings(store)
 		emb := &fixedEmbedder{vec: []float32{0, 0, 1}}
@@ -325,6 +333,7 @@ func TestReindexOrg_WidthChangeRefusedWhenCorpusIndexed(t *testing.T) {
 // — while the same caller is still refused when another document remains.
 func TestAddDocument_ReplacingOnlyDocumentSkipsGuard(t *testing.T) {
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	seedCorpus(store, []float32{1, 0}, "alpha rule", "beta rule")
 	emb := &fixedEmbedder{vec: []float32{0, 1}}
 	svc := guardService(store, emb)
@@ -347,6 +356,7 @@ func TestAddDocument_ReplacingOnlyDocumentSkipsGuard(t *testing.T) {
 
 	// Another document survives the replace: the guard protects it.
 	two := &testutil.FakeBackend{}
+	two.SeedOrgs("org-1", "org-2") // the knowledge base needs its organisation
 	seedCorpus(two, []float32{1, 0}, "alpha rule")
 	_ = two.SaveKnowledgeDocument(context.Background(), "", &interfaces.KnowledgeDocument{ID: "doc-2", OrgID: "org-1", Filename: "other.md"})
 	_ = two.SaveKnowledgeChunks(context.Background(), "", []interfaces.KnowledgeChunk{{ID: "chunk-o", DocID: "doc-2", Content: "other rule", Embedding: []float32{1, 0}}})

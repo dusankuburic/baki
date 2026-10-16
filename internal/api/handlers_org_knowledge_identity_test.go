@@ -38,6 +38,7 @@ func newKnowledgeIdentityRouter(t *testing.T, corpusIdentity string, callerIdent
 		t.Fatalf("create org: %v", err)
 	}
 	store := &auditRecordingBackend{FakeBackend: &testutil.FakeBackend{EmbeddingDim: 2}}
+	store.SeedOrgs(org.ID) // the knowledge base needs its organisation
 	_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", []storageif.KnowledgeChunk{
 		{ID: "c1", DocID: "doc-1", Content: "retry every call", Embedding: []float32{1, 0}, EmbeddingIdentity: corpusIdentity},
@@ -127,6 +128,7 @@ func TestKnowledgeReindex_BackgroundRefusesPersonalKey(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	store := &auditRecordingBackend{FakeBackend: &testutil.FakeBackend{}}
+	store.SeedOrgs(org.ID) // the knowledge base needs its organisation
 	_ = store.SaveKnowledgeDocument(bgCtx(), "", &storageif.KnowledgeDocument{ID: "doc-1", OrgID: org.ID, Filename: "policy.md"})
 	_ = store.SaveKnowledgeChunks(bgCtx(), "", []storageif.KnowledgeChunk{{ID: "c1", DocID: "doc-1", Content: "retry every call", Embedding: []float32{1, 0}}})
 	factory := ai.NewProviderFactory(func(_, provider string) (string, error) {

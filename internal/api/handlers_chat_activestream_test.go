@@ -144,3 +144,53 @@ func TestHandleGetConversation_ReportsActiveStream(t *testing.T) {
 		t.Errorf("messages after finish = %s, want the question and the stored answer", body.Messages)
 	}
 }
+
+// TestHandleStreamChatMessage_StreamIDInUseIsAConflict: a start whose clientStreamId already names a stream (the
+// resend of a start that went through) is a 409 STREAM_ID_IN_USE, which the client answers by resuming that stream; it
+// was a masked 500. The id stays taken after the stream finished, for as long as a resume can still reach it.
+func TestHandleStreamChatMessage_StreamIDInUseIsAConflict(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("APPDATA", cfgDir)
+	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+	t.Setenv("HOME", cfgDir)
+	p := &blockingStreamProvider{FakeProvider: &testutil.FakeProvider{}, release: make(chan struct{})}
+	defer p.closeOnce.Do(func() { close(p.release) })
+	ai.RegisterProvider("idinuse-blocking", func(string) ai.Provider { return p })
+
+	store := testutil.NewFakeBackend()
+	rt := newTestRouter(store, true)
+	if err := rt.security.Backend.SaveFlow(context.Background(), &interfaces.FlowDocument{ID: "f-idinuse", Name: "t", OwnerID: "u1"}); err != nil {
+		t.Fatalf("seed flow: %v", err)
+	}
+	auth := jwtBearer(t, rt, "u1", "u1@example.com")
+	start := map[string]any{
+		"flowId": "f-idinuse", "provider": "idinuse-blocking", "userMessage": "q",
+		"conversationId": "11111111-2222-4333-8444-555555555556", "clientStreamId": "99999999-9999-4999-8999-99999999999a",
+	}
+	checkStatus(t, doRequestWithAuth(t, rt, http.MethodPost, "/api/chat/stream", auth, start), http.StatusOK)
+
+	inUse := func(when string) {
+		t.Helper()
+		rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/chat/stream", auth, start)
+		var env struct{ Code, Message string }
+		_ = json.Unmarshal(rr.Body.Bytes(), &env)
+		if rr.Code != http.StatusConflict || env.Code != "STREAM_ID_IN_USE" || !strings.Contains(env.Message, "clientStreamId") {
+			t.Errorf("%s: the same clientStreamId again = %d %s, want 409 STREAM_ID_IN_USE", when, rr.Code, rr.Body.String())
+		}
+	}
+	inUse("while the stream runs")
+
+	p.closeOnce.Do(func() { close(p.release) })
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/chat/resume", auth, map[string]any{"id": start["clientStreamId"]})
+		if rr.Code == http.StatusOK && strings.Contains(rr.Body.String(), `"done":true`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the stream never finished: %d %s", rr.Code, rr.Body.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	inUse("after the stream finished")
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"reflect"
 	"strconv"
@@ -193,18 +194,32 @@ func LoadFromEnvRaw() (*Config, error) {
 // period of a load balancer in front, so it sees the stopping replica's 503 before the streams end (ADR 0024).
 const DefaultCloudShutdownDrainDelay = 3 * time.Second
 
-// maxShutdownDrainDelay bounds PAD_SHUTDOWN_DRAIN_DELAY: the pause comes out of the stop budget (StopTimeout),
-// which the rest of the stop needs.
-const maxShutdownDrainDelay = 10 * time.Second
+// DefaultCloudAuditRetentionDays is PAD_AUDIT_RETENTION_DAYS's default in the cloud: the audit trail, analysis
+// history, usage, alerts and rule notices older than this are purged. Without a window they grew without bound; an
+// explicit 0 still keeps them forever. Local and the desktop default to 0.
+const DefaultCloudAuditRetentionDays = 400
+
+// maxShutdownDrainDelay bounds PAD_SHUTDOWN_DRAIN_DELAY: the pause comes out of the stop budget (fx.StopTimeout,
+// 28 s), which the rest of the stop needs. ADR 0024's table fits the stop as designed in 26 s with the cloud default,
+// so the 2 s of slack is all a longer pause can take; past it the stop overruns the timeout and the audit flush and
+// the pool close are cut. Refused, not lowered: an operator who set a longer pause needs to know it is not honoured.
+const maxShutdownDrainDelay = DefaultCloudShutdownDrainDelay + 2*time.Second
+
+// durationMaxReasons says why a duration has its ceiling, for the refusal of a value above it.
+var durationMaxReasons = map[string]string{
+	"PAD_SHUTDOWN_DRAIN_DELAY": "the pause comes out of the server's 28 s stop budget, which has room for no more (ADR 0024)",
+}
 
 // defaultsFor is Default with the defaults that depend on the deployment mode. Load applies them before the file
 // or the environment, so an explicit setting, 0 included, wins. The cloud ones are those of capability's Cloud
 // profile, which is the cloud mode; this package cannot ask capability.Of (capability is derived from a Config), so
-// internal/app's TestDrainDelayDefault_FollowsTheCloudProfile holds the two together.
+// internal/app's TestDrainDelayDefault_FollowsTheCloudProfile and TestAuditRetentionDefault_FollowsTheCloudProfile
+// hold the two together.
 func defaultsFor(mode DeploymentMode) *Config {
 	cfg := Default()
 	if mode == ModeCloud {
 		cfg.Runtime.ShutdownDrainDelay = Duration(DefaultCloudShutdownDrainDelay)
+		cfg.Governance.AuditRetentionDays = DefaultCloudAuditRetentionDays
 	}
 	return cfg
 }
@@ -348,6 +363,9 @@ var envBindings = []envBinding{
 	durEnv("PAD_DB_CONN_MAX_LIFETIME", func(c *Config, d Duration) { c.Storage.DBConnMaxLifetime = d }),
 	durEnv("PAD_DB_CONN_MAX_IDLE_TIME", func(c *Config, d Duration) { c.Storage.DBConnMaxIdleTime = d }),
 	durEnv("PAD_DB_STATEMENT_TIMEOUT", func(c *Config, d Duration) { c.Storage.DBStatementTimeout = d }),
+	durEnv("PAD_DB_IDLE_TX_TIMEOUT", func(c *Config, d Duration) { c.Storage.DBIdleTxTimeout = ExplicitDuration(d.Std()) }),
+	// The cloud profile refuses a role that bypasses row-level security unless this is set.
+	boolEnv("PAD_DB_ALLOW_BYPASSRLS", func(c *Config, b bool) { c.Storage.DBAllowBypassRLS = b }),
 	// What the deployment knows about the server, for the pool's boot check (infra/main.bicep sets both).
 	intEnv("PAD_MAX_REPLICAS", func(c *Config, n int) { c.Storage.MaxReplicas = n }),
 	intEnv("PAD_DB_SERVER_MAX_CONNS", func(c *Config, n int) { c.Storage.DBServerMaxConns = n }),
@@ -391,6 +409,8 @@ var envBindings = []envBinding{
 	floatEnv("PAD_RATE_LIMIT_UPLOAD_BURST", func(c *Config, f float64) { c.Runtime.RateLimitUploadBurst = f }),
 	floatEnv("PAD_RATE_LIMIT_CHANNEL_TEST_RPS", func(c *Config, f float64) { c.Runtime.RateLimitChannelTestRPS = f }),
 	floatEnv("PAD_RATE_LIMIT_CHANNEL_TEST_BURST", func(c *Config, f float64) { c.Runtime.RateLimitChannelTestBurst = f }),
+	floatEnv("PAD_RATE_LIMIT_AVATAR_RPS", func(c *Config, f float64) { c.Runtime.RateLimitAvatarRPS = f }),
+	floatEnv("PAD_RATE_LIMIT_AVATAR_BURST", func(c *Config, f float64) { c.Runtime.RateLimitAvatarBurst = f }),
 	floatEnv("PAD_RATE_LIMIT_PER_USER_RPS", func(c *Config, f float64) { c.Runtime.RateLimitPerUserRPS = f }),
 	floatEnv("PAD_RATE_LIMIT_PER_USER_BURST", func(c *Config, f float64) { c.Runtime.RateLimitPerUserBurst = f }),
 
@@ -493,7 +513,7 @@ func applyStorageBackendEnv(cfg *Config) error {
 }
 
 // applyAuditRetentionEnv parses PAD_AUDIT_RETENTION_DAYS and rejects negatives
-// (0 = keep audit history indefinitely).
+// (0 = keep audit history indefinitely; unset keeps the profile's default, defaultsFor).
 func applyAuditRetentionEnv(cfg *Config) error {
 	v := os.Getenv("PAD_AUDIT_RETENTION_DAYS")
 	if v == "" {
@@ -625,10 +645,12 @@ func Validate(cfg *Config) error {
 	if cfg.Auth.Enabled && !cfg.Auth.Secret.IsSet() {
 		return errors.New("config: auth.secret is required when auth.enabled is true")
 	}
-	// In cloud (multi-user) mode the JWT secret protects every account, so reject
-	// short or placeholder secrets that would make token forgery trivial.
-	if cfg.Mode == ModeCloud && cfg.Auth.Enabled && isWeakSecret(cfg.Auth.Secret.Reveal()) {
-		return fmt.Errorf("config: auth.secret must be at least %d characters and not a known placeholder in cloud mode (set PAD_AUTH_SECRET to a long random value)", minSecretLength)
+	// Whenever authentication is on, the JWT secret protects every account —
+	// not just in cloud mode: a local-mode instance behind an operator-run
+	// proxy would forge tokens just as easily. Ephemeral per-process secrets
+	// can't reach here (they are only minted with auth disabled).
+	if cfg.Auth.Enabled && isWeakSecret(cfg.Auth.Secret.Reveal()) {
+		return fmt.Errorf("config: auth.secret must be at least %d characters and not a known placeholder (set PAD_AUTH_SECRET to a long random value)", minSecretLength)
 	}
 	// The dedicated encryption key protects stored provider credentials at rest
 	// (AES-256-GCM); apply the same strength gate so a weak PAD_ENCRYPTION_KEY
@@ -698,6 +720,9 @@ func Validate(cfg *Config) error {
 	if err := validateDurations(cfg); err != nil {
 		return err
 	}
+	if err := validateDBIdleTxTimeout(cfg); err != nil {
+		return err
+	}
 	for _, n := range []struct {
 		env, field string
 		v          int
@@ -718,7 +743,30 @@ func Validate(cfg *Config) error {
 	if cfg.Storage.MaxReplicas > 1 && !cfg.Redis.URL.IsSet() {
 		return fmt.Errorf("config: PAD_MAX_REPLICAS=%d needs PAD_REDIS_URL: replicas share rate limits, collaboration rooms and stream resume only through Redis (set PAD_REDIS_URL, or run a single replica)", cfg.Storage.MaxReplicas)
 	}
+	// The pub/sub channels that fan out auth revocations, WebSocket room
+	// frames and SSE events are not MAC-signed (only the command bus is), so a
+	// cloud Redis reachable without a password lets anyone who can reach it
+	// publish force-logouts and inject tenant events. Refuse that deployment
+	// shape: the URL must carry a password (rediss:// for TLS is the better
+	// form). Local-mode dev stacks run on a private compose network and are
+	// deliberately unaffected.
+	if cfg.Mode == ModeCloud && cfg.Storage.MaxReplicas > 1 && cfg.Redis.URL.IsSet() && !redisURLHasPassword(cfg.Redis.URL.Reveal()) {
+		return errors.New("config: PAD_REDIS_URL carries no password: a multi-replica cloud backplane must not be reachable unauthenticated (revocation, room and SSE fanout frames are published to it) — set a password in the URL, prefer rediss://")
+	}
 	return validateRoutePolicy(cfg.Server.RoutePolicy)
+}
+
+// redisURLHasPassword reports whether a redis(s):// URL authenticates. A bare
+// username without a password does not count.
+func redisURLHasPassword(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return false
+	}
+	if _, ok := u.User.Password(); ok {
+		return true
+	}
+	return false
 }
 
 // validateDurations holds every duration to its range, whichever source set it: a config file's used to go
@@ -747,8 +795,28 @@ func validateDurations(cfg *Config) error {
 		case d < 0:
 			return fmt.Errorf("config: %s (%s) must not be negative, not %q", r.env, r.field, r.d)
 		case r.max > 0 && d > r.max:
+			if why := durationMaxReasons[r.env]; why != "" {
+				return fmt.Errorf("config: %s (%s) must be at most %s, not %q: %s", r.env, r.field, r.max, r.d, why)
+			}
 			return fmt.Errorf("config: %s (%s) must be at most %s, not %q", r.env, r.field, r.max, r.d)
 		}
+	}
+	return nil
+}
+
+// validateDBIdleTxTimeout holds an explicit PAD_DB_IDLE_TX_TIMEOUT above the request timeout. A request transaction
+// idles while its handler calls out or computes between statements, and lives until the handler returns: a timeout
+// within the request's deadline would end the transaction of a handler still inside it. The derived default (the
+// request timeout plus DBIdleTxTimeoutMargin) always fits; "0s" turns the timeout off.
+func validateDBIdleTxTimeout(cfg *Config) error {
+	d, set := cfg.Storage.DBIdleTxTimeout.Get()
+	switch request := cfg.Runtime.RequestTimeout.Std(); {
+	case !set || d == 0:
+		return nil
+	case d < 0:
+		return fmt.Errorf("config: PAD_DB_IDLE_TX_TIMEOUT (Storage.DBIdleTxTimeout) must not be negative, not %q", d)
+	case d <= request:
+		return fmt.Errorf("config: PAD_DB_IDLE_TX_TIMEOUT (Storage.DBIdleTxTimeout) must be longer than PAD_REQUEST_TIMEOUT (%s), not %q, or \"0s\" to turn it off: it may only end the transaction of a request already past its deadline (unset, it is the request timeout plus %s)", request, d, DBIdleTxTimeoutMargin)
 	}
 	return nil
 }

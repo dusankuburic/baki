@@ -336,3 +336,49 @@ func TestTestCustomRule_IsStrict(t *testing.T) {
 	checkStatus(t, post(map[string]any{"flowId": created.ID, "rule": map[string]any{"id": "t"}, "extra": 1}), http.StatusBadRequest)
 	checkStatus(t, post(map[string]any{"flowId": created.ID, "rule": map[string]any{"id": "t", "rawTypeMatch": "^SET$"}}), http.StatusOK)
 }
+
+// Try it runs a rule under a built-in rule's id (Phase 4a keeps such legacy rows editable, so their editor must be
+// able to test them) and lists the id as a problem, which the editor shows for a new rule; every other strict
+// error still refuses, and saving a new rule under the id stays refused (TestOrgRules_SaveIsStrict).
+func TestTestCustomRule_RunsARuleUnderABuiltInID(t *testing.T) {
+	backend := &testutil.FakeBackend{}
+	rt := newTestRouter(backend, true)
+	seedUserWithRole(t, rt, "dev", "dev@acme.io", auth.RoleMember)
+	dev := jwtBearer(t, rt, "dev", "dev@acme.io")
+	rr := doRequestWithAuth(t, rt, http.MethodPost, "/api/library", dev, map[string]any{
+		"name": "Main",
+		"content": map[string]any{"name": "Main", "subflows": []map[string]any{{
+			"name": "Main", "blocks": []map[string]any{{"rawType": "SET", "name": "Set variable", "type": "action"}}}}},
+	})
+	checkStatus(t, rr, http.StatusCreated)
+	var created struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, rr, &created)
+	post := func(rule map[string]any) *httptest.ResponseRecorder {
+		return doRequestWithAuth(t, rt, http.MethodPost, "/api/analysis/custom-rules/test", dev,
+			map[string]any{"flowId": created.ID, "rule": rule})
+	}
+
+	rr = post(map[string]any{"id": "dead-code", "rawTypeMatch": "^SET$"})
+	checkStatus(t, rr, http.StatusOK)
+	var res struct {
+		Matches  int `json:"matches"`
+		Problems []struct {
+			Field   string `json:"field"`
+			Reason  string `json:"reason"`
+			Warning bool   `json:"warning"`
+		} `json:"problems"`
+	}
+	decodeJSON(t, rr, &res)
+	if res.Matches != 1 {
+		t.Errorf("matches = %d, want 1", res.Matches)
+	}
+	if len(res.Problems) != 1 || res.Problems[0].Field != "id" || res.Problems[0].Reason != "RESERVED_ID" || res.Problems[0].Warning {
+		t.Errorf("problems = %+v, want the built-in id (RESERVED_ID on id, not a warning: a save of a new rule refuses it)", res.Problems)
+	}
+
+	wantFieldError(t, post(map[string]any{"id": "dead-code", "rawTypeMatch": "^SET$", "nameMatches": "x"}),
+		"rule.nameMatches", "UNKNOWN_FIELD")
+	wantFieldError(t, post(map[string]any{"id": "dead-code", "rawTypeMatch": "^SET("}), "rule.rawTypeMatch", "INVALID_PATTERN")
+}

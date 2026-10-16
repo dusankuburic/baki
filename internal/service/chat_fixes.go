@@ -269,15 +269,18 @@ type chatFixOutcome struct {
 	Detail string
 }
 
-// ModelSummary renders the outcome for the model's next turn.
+// ModelSummary renders the outcome for the model's next turn. Scrubbed: the
+// detail can carry apply-path error text, and model-visible strings never
+// bypass the scrubber (chat messages, tool results, and summaries all pass
+// through it; the provider boundary is not re-scrubbing here).
 func (o chatFixOutcome) ModelSummary() string {
 	switch o.Status {
 	case "applied":
-		return "APPLIED and verified: " + o.Detail
+		return scrubber.ScrubText("APPLIED and verified: " + o.Detail)
 	case "applied-unresolved":
-		return "APPLIED, but " + o.Detail
+		return scrubber.ScrubText("APPLIED, but " + o.Detail)
 	default:
-		return "apply failed: " + o.Detail
+		return scrubber.ScrubText("apply failed: " + o.Detail)
 	}
 }
 
@@ -434,7 +437,7 @@ func (o batchOutcome) ModelSummary() string {
 	if o.Final != nil {
 		b.WriteString("\nThe flow was re-parsed: ALL block IDs have changed — call list_findings again before referencing any block.")
 	}
-	return b.String()
+	return scrubber.ScrubText(b.String())
 }
 
 // applyApprovedFixes applies an approved batch against the REAL flow one fix at a time: each apply re-parses

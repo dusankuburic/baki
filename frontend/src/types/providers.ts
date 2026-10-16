@@ -48,7 +48,9 @@ export const PROVIDER_CAP_EMBEDDINGS = 'embeddings'
 
 export interface CredentialFieldOption {
   value: string
-  label: string
+  /** What a person reads; the client shows the value where it is missing or empty (older servers sent the value
+   * itself here). */
+  label?: string
 }
 
 export interface CredentialField {

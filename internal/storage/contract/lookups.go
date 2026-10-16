@@ -15,8 +15,8 @@ import (
 )
 
 // runLookupScenarios holds every backend to the methods that were optional capabilities of the Postgres backend
-// before Phase 3 folded them into the role interfaces: the point lookups, the page with its total, the streamed
-// export, refresh tokens and identity links.
+// before Phase 3 folded them into the role interfaces: the point lookups, the streamed export, refresh tokens and
+// identity links. The page with its total is runKeysetPageScenarios' (ListFlowsPage).
 func runLookupScenarios(ctx context.Context, b interfaces.StorageBackend, runID string, run func(name string, fn func(t *testing.T))) {
 	run("GetFindingStatus_reads_one_row_or_nil", func(t *testing.T) {
 		flowID := "contract-flow-getstatus-" + runID
@@ -137,45 +137,6 @@ func runLookupScenarios(ctx context.Context, b interfaces.StorageBackend, runID 
 		}
 	})
 
-	run("ListFlowsWithTotal_pages_with_the_unpaginated_total", func(t *testing.T) {
-		owner := "contract-pagetotal-owner-" + runID
-		var ids []string
-		for _, suffix := range []string{"a", "b", "c"} {
-			id := "contract-pagetotal-" + suffix + "-" + runID
-			ids = append(ids, id)
-			if err := b.SaveFlow(ctx, &interfaces.FlowDocument{ID: id, Name: id, Content: json.RawMessage(`{}`), OwnerID: owner}); err != nil {
-				t.Fatalf("SaveFlow %s: %v", id, err)
-			}
-		}
-		filter := interfaces.FlowFilter{UserID: owner, SortBy: interfaces.FlowSortIDAsc, Limit: 2, MetadataOnly: true}
-		docs, total, err := b.ListFlowsWithTotal(ctx, filter)
-		if err != nil {
-			t.Fatalf("ListFlowsWithTotal: %v", err)
-		}
-		if len(docs) != 2 || docs[0].ID != ids[0] || docs[1].ID != ids[1] || total != 3 {
-			t.Fatalf("page = %d docs, total %d; want %s, %s of 3", len(docs), total, ids[0], ids[1])
-		}
-		if count, err := b.CountFlows(ctx, filter); err != nil || count != total {
-			t.Errorf("CountFlows = (%d, %v), want the page's total %d", count, err, total)
-		}
-		filter.Offset = 2
-		if docs, total, err := b.ListFlowsWithTotal(ctx, filter); err != nil || len(docs) != 1 || docs[0].ID != ids[2] || total != 3 {
-			t.Errorf("second page = %d docs, total %d, %v; want %s of 3", len(docs), total, err, ids[2])
-		}
-		// A page past the end has no rows to carry the total; it still reports the real one.
-		filter.Offset = 10
-		if docs, total, err := b.ListFlowsWithTotal(ctx, filter); err != nil || len(docs) != 0 || total != 3 {
-			t.Errorf("past the end = %d docs, total %d, %v; want none of 3", len(docs), total, err)
-		}
-		filter.UserID = owner + "-nobody"
-		for _, offset := range []int{0, 10} {
-			filter.Offset = offset
-			if docs, total, err := b.ListFlowsWithTotal(ctx, filter); err != nil || len(docs) != 0 || total != 0 {
-				t.Errorf("no match at offset %d = %d docs, total %d, %v; want none of 0", offset, len(docs), total, err)
-			}
-		}
-	})
-
 	run("ExportUserDataTo_streams_the_bundle_in_field_order", func(t *testing.T) {
 		user := "contract-export-" + runID
 		if err := b.CreateUser(ctx, &interfaces.User{ID: user, Email: "contract-export-" + runID + "@example.com", Password: "hash"}); err != nil {
@@ -202,6 +163,7 @@ func runLookupScenarios(ctx context.Context, b interfaces.StorageBackend, runID 
 
 	run("RefreshTokens_store_rotate_list_revoke", func(t *testing.T) {
 		user := "contract-rt-user-" + runID
+		seedUser(ctx, t, b, user)
 		jti := func(n string) string { return "contract-rt-" + n + "-" + runID }
 		later := time.Now().Add(time.Hour)
 		for _, tok := range []struct {
@@ -320,6 +282,122 @@ func runLookupScenarios(ctx context.Context, b interfaces.StorageBackend, runID 
 		}
 	})
 
+	run("SaveUserWithIdentityLink_writes_both_or_neither", func(t *testing.T) {
+		email := func(name string) string { return "contract-signup-" + name + "-" + runID + "@example.com" }
+		subject := func(name string) string { return "contract-signup-subject-" + name + "-" + runID }
+		user := &interfaces.User{ID: "contract-signup-user-" + runID, Email: email("user"), EmailVerified: true, Role: auth.RoleMember, DisplayName: "Signed Up"}
+		if err := b.SaveUserWithIdentityLink(ctx, user, &interfaces.IdentityLink{Provider: "oidc", Subject: subject("a"), UserID: user.ID, Email: user.Email}); err != nil {
+			t.Fatalf("SaveUserWithIdentityLink: %v", err)
+		}
+		if got, err := b.LoadUserByID(ctx, user.ID); err != nil || got.Email != user.Email || !got.EmailVerified || got.Password != "" || got.DisplayName != "Signed Up" {
+			t.Errorf("the signed-up user = (%+v, %v)", got, err)
+		}
+		if link, err := b.LoadIdentityLink(ctx, "oidc", subject("a")); err != nil || link.UserID != user.ID {
+			t.Errorf("the sign-up's link = (%+v, %v), want one to %s", link, err, user.ID)
+		}
+
+		// An identity already linked: the new account is not written either.
+		other := &interfaces.User{ID: "contract-signup-other-" + runID, Email: email("other"), EmailVerified: true, Role: auth.RoleMember}
+		if err := b.SaveUserWithIdentityLink(ctx, other, &interfaces.IdentityLink{Provider: "oidc", Subject: subject("a"), UserID: other.ID}); err == nil {
+			t.Error("an identity already linked was linked again")
+		}
+		if got, err := b.LoadUserByID(ctx, other.ID); !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("the refused sign-up's account = (%+v, %v), want ErrNotFound", got, err)
+		}
+		// A taken email: ErrEmailExists, and the identity is not linked.
+		taken := &interfaces.User{ID: "contract-signup-taken-" + runID, Email: user.Email, EmailVerified: true, Role: auth.RoleMember}
+		if err := b.SaveUserWithIdentityLink(ctx, taken, &interfaces.IdentityLink{Provider: "oidc", Subject: subject("b"), UserID: taken.ID}); !errors.Is(err, interfaces.ErrEmailExists) {
+			t.Errorf("a taken email: %v, want ErrEmailExists", err)
+		}
+		if link, err := b.LoadIdentityLink(ctx, "oidc", subject("b")); !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("the refused sign-up's link = (%+v, %v), want ErrNotFound", link, err)
+		}
+
+		// An existing account is updated (an adopted unverified account) and linked in the same write.
+		adopted := &interfaces.User{ID: "contract-signup-adopted-" + runID, Email: email("adopted"), Password: "hash", Role: auth.RoleMember}
+		if err := b.CreateUser(ctx, adopted); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		before, err := b.LoadUserByID(ctx, adopted.ID)
+		if err != nil {
+			t.Fatalf("LoadUserByID: %v", err)
+		}
+		before.EmailVerified, before.Password = true, ""
+		if err := b.SaveUserWithIdentityLink(ctx, before, &interfaces.IdentityLink{Provider: "oidc", Subject: subject("c"), UserID: adopted.ID}); err != nil {
+			t.Fatalf("SaveUserWithIdentityLink (existing account): %v", err)
+		}
+		if got, err := b.LoadUserByID(ctx, adopted.ID); err != nil || !got.EmailVerified || got.Password != "" || !got.CreatedAt.Equal(before.CreatedAt) {
+			t.Errorf("the adopted account = (%+v, %v); want verified, no password, created at %v", got, err, before.CreatedAt)
+		}
+		if links, err := b.ListIdentityLinks(ctx, adopted.ID); err != nil || len(links) != 1 || links[0].Subject != subject("c") {
+			t.Errorf("the adopted account's links = (%+v, %v), want the one", links, err)
+		}
+	})
+
+	// The adoption writes from a row read before it: only its verification and password change, and only while the
+	// stored row is still unverified. It upserted the whole stale row, restoring the role, display name and lockout
+	// as read, and stripped the password of an account its owner had verified in between.
+	run("SaveUserWithIdentityLink_adopts_only_a_still_unverified_account", func(t *testing.T) {
+		subject := func(name string) string { return "contract-adopt-subject-" + name + "-" + runID }
+		account := func(name string) *interfaces.User {
+			t.Helper()
+			u := &interfaces.User{ID: "contract-adopt-" + name + "-" + runID, Email: "contract-adopt-" + name + "-" + runID + "@example.com", Password: "hash", Role: auth.RoleMember, DisplayName: "As read"}
+			if err := b.CreateUser(ctx, u); err != nil {
+				t.Fatalf("CreateUser: %v", err)
+			}
+			t.Cleanup(func() { _ = b.DeleteUser(context.Background(), u.ID) }) // it is made an admin below
+			read, err := b.LoadUserByID(ctx, u.ID)
+			if err != nil {
+				t.Fatalf("LoadUserByID: %v", err)
+			}
+			return read
+		}
+		changeStored := func(id string, change func(*interfaces.User)) {
+			t.Helper()
+			u, err := b.LoadUserByID(ctx, id)
+			if err != nil {
+				t.Fatalf("LoadUserByID: %v", err)
+			}
+			change(u)
+			if err := b.SaveUser(ctx, u); err != nil {
+				t.Fatalf("SaveUser: %v", err)
+			}
+		}
+
+		// Changed in between, still unverified: adopted, and the other changes stand.
+		stale := account("changed")
+		until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+		changeStored(stale.ID, func(u *interfaces.User) {
+			u.Role, u.DisplayName, u.FailedLoginAttempts, u.LockedUntil = auth.RoleAdmin, "Renamed", 3, &until
+		})
+		stale.EmailVerified, stale.Password = true, ""
+		if err := b.SaveUserWithIdentityLink(ctx, stale, &interfaces.IdentityLink{Provider: "oidc", Subject: subject("changed"), UserID: stale.ID}); err != nil {
+			t.Fatalf("adopting an account changed in between: %v", err)
+		}
+		got, err := b.LoadUserByID(ctx, stale.ID)
+		if err != nil || !got.EmailVerified || got.Password != "" {
+			t.Fatalf("the adopted account = (%+v, %v), want verified without a password", got, err)
+		}
+		if got.Role != auth.RoleAdmin || got.DisplayName != "Renamed" || got.FailedLoginAttempts != 3 || got.LockedUntil == nil || !got.LockedUntil.Equal(until) {
+			t.Errorf("the adoption reverted what changed in between: role %q, name %q, failed %d, locked until %v",
+				got.Role, got.DisplayName, got.FailedLoginAttempts, got.LockedUntil)
+		}
+
+		// Verified in between: refused, nothing written.
+		stale = account("verified")
+		changeStored(stale.ID, func(u *interfaces.User) { u.EmailVerified = true })
+		stale.EmailVerified, stale.Password = true, ""
+		if err := b.SaveUserWithIdentityLink(ctx, stale, &interfaces.IdentityLink{Provider: "oidc", Subject: subject("verified"), UserID: stale.ID}); !errors.Is(err, interfaces.ErrAccountVerified) {
+			t.Errorf("adopting an account verified in between: %v, want ErrAccountVerified", err)
+		}
+		if got, err := b.LoadUserByID(ctx, stale.ID); err != nil || got.Password != "hash" {
+			t.Errorf("the verified account after the refused adoption = (%+v, %v), want its password kept", got, err)
+		}
+		if link, err := b.LoadIdentityLink(ctx, "oidc", subject("verified")); !errors.Is(err, interfaces.ErrNotFound) {
+			t.Errorf("the refused adoption's link = (%+v, %v), want ErrNotFound", link, err)
+		}
+	})
+
 	run("DeleteUser_removes_sessions_and_identity_links", func(t *testing.T) {
 		user := "contract-erase-sessions-" + runID
 		if err := b.CreateUser(ctx, &interfaces.User{ID: user, Email: "contract-erase-sessions-" + runID + "@example.com", Password: "hash"}); err != nil {
@@ -342,6 +420,22 @@ func runLookupScenarios(ctx context.Context, b interfaces.StorageBackend, runID 
 		}
 		if _, err := b.LoadIdentityLink(ctx, "oidc", "contract-erase-subject-"+runID); !errors.Is(err, interfaces.ErrNotFound) {
 			t.Errorf("identity link after erasure: %v, want ErrNotFound", err)
+		}
+	})
+
+	// The empty id names no account, but rows keyed by it: erasing it took every flow without an owner and every usage
+	// row of the local user or of an erased member.
+	run("DeleteUser_refuses_the_empty_id", func(t *testing.T) {
+		flow := &interfaces.FlowDocument{ID: "contract-erase-unowned-" + runID, Name: "Unowned", Content: []byte(`{"subflows":[]}`)}
+		if err := b.SaveFlow(ctx, flow); err != nil {
+			t.Fatalf("SaveFlow: %v", err)
+		}
+		t.Cleanup(func() { _ = b.DeleteFlow(context.Background(), flow.ID) })
+		if err := b.DeleteUser(ctx, ""); !errors.Is(err, interfaces.ErrUserIDRequired) {
+			t.Errorf("DeleteUser of the empty id: %v, want ErrUserIDRequired", err)
+		}
+		if _, err := b.LoadFlow(ctx, flow.ID); err != nil {
+			t.Errorf("the flow without an owner after DeleteUser of the empty id: %v", err)
 		}
 	})
 }

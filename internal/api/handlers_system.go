@@ -81,7 +81,7 @@ func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request
 }
 
 // @Summary      Update app settings
-// @Description  Updates the application settings.
+// @Description  Updates the application settings. Each top-level section the body names (profile, appearance, ai, ...) replaces the stored one, and an explicit {} or null clears it; a section the body leaves out keeps its stored value.
 // @Tags         system
 // @Param        settings body object true "settings"
 // @Accept       json
@@ -91,13 +91,20 @@ func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/system/settings [post]
 func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	var body json.RawMessage
+	if !decodeBody(w, r, &body) {
+		return
+	}
 	var req models.AppSettings
-	if !decodeBody(w, r, &req) {
+	if err := json.Unmarshal(body, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 
 	userID := h.security.CallerID(r)
-	if err := h.sysSvc.UpdateUserSettings(r.Context(), h.security.KeyScope(r), req); err != nil {
+	// A client that predates a section does not send it: the sections the body names are the write, so its write
+	// cannot clear the others.
+	if err := h.sysSvc.UpdateUserSettings(r.Context(), h.security.KeyScope(r), req, service.SettingsSectionsOf(body)); err != nil {
 		if errors.Is(err, service.ErrSettingsInvalid) {
 			render.Error(w, err, http.StatusBadRequest)
 			return
@@ -130,13 +137,13 @@ func (h *SystemHandler) handleGetOrgSettings(w http.ResponseWriter, r *http.Requ
 }
 
 // @Summary      Update org settings
-// @Description  handleUpdateOrgSettings overwrites org-wide settings. Writing requires org admin. The organisation's allowed-provider list (ai.allowedProviders, ADR 0028) is replaced only when the body names it — an explicit [] clears it (every provider allowed); a body without the field keeps the stored list. Each listed id must be a registered provider.
+// @Description  handleUpdateOrgSettings writes org-wide settings. Writing requires org admin. Each top-level section the body names replaces the stored one; a section the body leaves out keeps its stored value. The organisation's allowed-provider list (ai.allowedProviders, ADR 0028) is replaced only when the body names it — an explicit [] clears it (every provider allowed); a body without the field keeps the stored list. Each listed id must be a registered provider.
 // @Tags         system
 // @Param        id path string true "Org ID"
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "Updated"
-// @Failure      400 {object} render.ErrorResponse "Malformed body, or an id in ai.allowedProviders that no provider spec describes (PROVIDER_UNKNOWN)"
+// @Failure      400 {object} render.ErrorResponse "Malformed body, or ids in ai.allowedProviders that no provider spec describes (PROVIDER_UNKNOWN; details.providers lists them)"
 // @Router       /api/system/settings/org/{id} [post]
 func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "id")
@@ -162,10 +169,11 @@ func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.R
 		} `json:"ai"`
 	}
 	_ = json.Unmarshal(body, &named)
-	write := service.OrgSettingsWrite{AllowedProvidersSet: named.AI != nil && named.AI.AllowedProviders != nil}
+	write := service.OrgSettingsWrite{AllowedProvidersSet: named.AI != nil && named.AI.AllowedProviders != nil, Sections: service.SettingsSectionsOf(body)}
 	if err := h.sysSvc.UpdateOrgSettings(r.Context(), orgID, req, write); err != nil {
-		if errors.Is(err, service.ErrProviderUnknown) {
-			render.ErrorWithCode(w, err, http.StatusBadRequest, service.ProviderCodeUnknown)
+		if unknown := (*service.UnknownProvidersError)(nil); errors.As(err, &unknown) {
+			render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, service.ProviderCodeUnknown,
+				map[string]any{"providers": unknown.IDs})
 			return
 		}
 		render.Error(w, err, http.StatusInternalServerError)

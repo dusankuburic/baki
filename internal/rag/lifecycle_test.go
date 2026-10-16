@@ -29,6 +29,7 @@ func (s *stubEmbedder) Embed(_ context.Context, text []string) ([][]float32, err
 func newStubService() (*KnowledgeService, *testutil.FakeBackend, *stubEmbedder) {
 	emb := &stubEmbedder{}
 	store := &testutil.FakeBackend{}
+	store.SeedOrgs("org-1", "org-empty", "org-A", "org-B") // the knowledge base needs its organisation
 	svc := NewKnowledgeService(store, nil, nil)
 	svc.embedOverride = emb
 	return svc, store, emb

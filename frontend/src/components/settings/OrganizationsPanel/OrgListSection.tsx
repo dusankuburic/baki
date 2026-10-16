@@ -6,6 +6,7 @@ import clsx from 'clsx'
 import type {AuthUser} from '@/api/auth'
 import type {Organisation, OrgRole} from '@/stores/orgStore'
 import {Badge} from '@/components/shared'
+import OrgAIProvidersSection from '../OrgAIProvidersSection'
 import OrgChannelsSection from '../OrgChannelsSection'
 import OrgCICredentialsSection from '../OrgCICredentialsSection'
 import OrgCustomRulesSection from '../OrgCustomRulesSection'
@@ -202,6 +203,7 @@ export default function OrgListSection({
               <div className="p-4 border-t border-border-subtle space-y-4 bg-surface-1/50">
                 <OrgChannelsSection orgId={org.id} isAdmin={canManageMembers} members={members} />
                 {canManageMembers && <OrgCICredentialsSection orgId={org.id} members={members} />}
+                {canManageMembers && <OrgAIProvidersSection orgId={org.id} />}
                 <OrgCustomRulesSection orgId={org.id} isAdmin={canManageMembers} />
                 {!orgAzureUnavailable && (
                   <OrgAzureSection

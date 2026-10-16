@@ -4,6 +4,7 @@ import {useTranslation} from 'react-i18next'
 import {adminApi, type AdminUser, type UserRole} from '@/api/admin'
 import {ApiError} from '@/api/client'
 import {useConfirm, useToast} from '@/components/shared'
+import {trailCursor} from '@/lib/pageTrail'
 import {useAdminStore} from '@/stores/adminStore'
 import {useAuthStore} from '@/stores/authStore'
 import {roleLabel} from '../roles'
@@ -16,6 +17,7 @@ export function useAdminUsers() {
   const usersNonce = useAdminStore(s => s.usersNonce)
   const setUsersPage = useAdminStore(s => s.setUsersPage)
   const touchUsers = useAdminStore(s => s.touchUsers)
+  const noteUsersPage = useAdminStore(s => s.noteUsersPage)
   const currentUserId = useAuthStore(s => s.user?.id)
   const {confirm} = useConfirm()
   const toast = useToast()
@@ -34,18 +36,29 @@ export function useAdminUsers() {
     }),
     [list.q, list.role, list.page, list.pageSize],
   )
+  // A page past the first goes by the cursor its page before answered (beside the offset an older server pages by):
+  // past the server's offset cap no other way leads.
+  const trailKey = [list.q, list.role, list.pageSize].join('\u0000')
   const result = useAdminQuery(
     key,
-    signal => adminApi.listUsers(query, signal),
+    async signal => {
+      const cursor = trailCursor(useAdminStore.getState().usersTrail, trailKey, list.page)
+      const res = await adminApi.listUsers({...query, cursor}, signal)
+      noteUsersPage(trailKey, list.page, res.nextCursor)
+      return res
+    },
     message => toastRef.current.error(t('users.loadFailed'), {description: message}),
   )
 
   const {data} = result
+  // This page's own answer, not the page before's still shown while it loads.
+  const settled = !result.isLoading && !result.isRefetching && result.error === null
   useEffect(() => {
-    if (data && data.items.length === 0 && data.total > 0 && list.page > 0) {
-      setUsersPage(Math.max(0, Math.ceil(data.total / list.pageSize) - 1))
+    if (settled && data && data.items.length === 0 && data.total > 0 && list.page > 0) {
+      // Back, never on: a page before this one is reachable (by offset, or by the cursor that led here).
+      setUsersPage(Math.max(0, Math.min(list.page - 1, Math.ceil(data.total / list.pageSize) - 1)))
     }
-  }, [data, list.page, list.pageSize, setUsersPage])
+  }, [settled, data, list.page, list.pageSize, setUsersPage])
 
   const [busyUserId, setBusyUserId] = useState<string | null>(null)
   const changeRole = useCallback(

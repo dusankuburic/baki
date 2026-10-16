@@ -69,6 +69,7 @@ func TestKnowledgeLockKey_NotAJobKey(t *testing.T) {
 // TestKnowledgeLock_LeaseIsOnTheOrgsKey: an upload and a re-index lease the org's key, and nothing else.
 func TestKnowledgeLock_LeaseIsOnTheOrgsKey(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-3") // the knowledge base needs its organisation
 	seedManyChunks(store, 1, 2)
 	leaser := newMemLeaser()
 	svc := replica(store, leaser, &namedEmbedder{identity: "A", vec: []float32{1}})
@@ -89,6 +90,7 @@ func TestKnowledgeLock_LeaseIsOnTheOrgsKey(t *testing.T) {
 // hold the org now) the upload stops at once and writes nothing; busy, because the org is being updated elsewhere.
 func TestKnowledgeLock_LostLeaseStopsTheOperation(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-3") // the knowledge base needs its organisation
 	leaser := newMemLeaser()
 	blocked := &blockingEmbedder{release: make(chan struct{})}
 	svc := replica(store, leaser, blocked)
@@ -117,6 +119,7 @@ func TestKnowledgeLock_LostLeaseStopsTheOperation(t *testing.T) {
 // and the answer is busy, with the partial result's cursor so the admin can resume.
 func TestKnowledgeLock_LostLeaseStopsTheReindex(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-3") // the knowledge base needs its organisation
 	seedManyChunks(store, 1, 3)
 	leaser := newMemLeaser()
 	blocked := &blockingEmbedder{release: make(chan struct{})}
@@ -137,6 +140,7 @@ func TestKnowledgeLock_LostLeaseStopsTheReindex(t *testing.T) {
 // operation with a retryable error and leaves the process-local lock free; it never runs unprotected.
 func TestKnowledgeLock_LeaseUnavailable(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-3") // the knowledge base needs its organisation
 	leaser := newMemLeaser()
 	leaser.err = errors.New("connection refused")
 	emb := &namedEmbedder{identity: "A", vec: []float32{1}}
@@ -162,6 +166,7 @@ func TestKnowledgeLock_LeaseUnavailable(t *testing.T) {
 // alone answers busy, as before.
 func TestKnowledgeLock_NoLeaserKeepsTheLocalLock(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-3") // the knowledge base needs its organisation
 	blocked := &blockingEmbedder{release: make(chan struct{})}
 	svc := NewKnowledgeService(store, nil, nil, WithEmbedder(blocked))
 	upload := asyncUpload(context.Background(), svc, "org-1", "a.md")
@@ -180,6 +185,7 @@ func TestKnowledgeLock_NoLeaserKeepsTheLocalLock(t *testing.T) {
 // slot comes back when an operation ends.
 func TestKnowledgeLock_CapsPinnedConnectionsPerReplica(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-3") // the knowledge base needs its organisation
 	leaser := newMemLeaser()
 	release := make(chan struct{})
 	blocked := &blockingEmbedder{release: release}
@@ -216,6 +222,7 @@ func TestKnowledgeLock_CapsPinnedConnectionsPerReplica(t *testing.T) {
 // unavailable) returns the slot it took.
 func TestKnowledgeLock_CapSlotReleasedOnRefusal(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-3") // the knowledge base needs its organisation
 	leaser := newMemLeaser()
 	emb := &namedEmbedder{identity: "A", vec: []float32{1}}
 	svc := replica(store, leaser, emb, WithLeaseCap(1))
@@ -258,6 +265,7 @@ func TestKnowledgeLock_DefaultCap(t *testing.T) {
 // (the embedder counts concurrent callers) and each either completes or is told busy.
 func TestKnowledgeLock_ConcurrentReplicasNeverOverlap(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-3") // the knowledge base needs its organisation
 	leaser := newMemLeaser()
 	emb := &overlapEmbedder{}
 	var wg sync.WaitGroup
@@ -340,6 +348,7 @@ func TestKnowledgeLock_AskingForTheLeaseIsBounded(t *testing.T) {
 	leaseAcquireTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { leaseAcquireTimeout = old })
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
+	store.SeedOrgs("org-1", "org-2", "org-3") // the knowledge base needs its organisation
 	emb := &namedEmbedder{identity: "A", vec: []float32{1}}
 	svc := replica(store, stuckLeaser{}, emb, WithLeaseCap(1))
 	for range 2 { // the second proves the slot and the local lock came back

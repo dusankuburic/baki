@@ -315,7 +315,16 @@ func flowFilterWhere(filter interfaces.FlowFilter) (string, sqlArgs) {
 		where = append(where, "org_id = ANY("+args.add(textArray(filter.OrganizationIDs))+")")
 	}
 
-	if filter.Query != "" {
+	switch term := strings.TrimSpace(filter.Query); {
+	case term == "":
+		// Blank: no name filter (spaces alone gave the trigram index nothing and read every tenant's names).
+	case filter.QueryPrefix || interfaces.ShortSearchTerm(term):
+		// Without a run of three letters or digits ("ab", "---") no trigram serves the substring, and flow_search was
+		// read for every tenant: a prefix of the name instead, tested on the caller's visible flows only. The
+		// (lower(name), …) index cannot
+		// serve it (LIKE and lower() are not leakproof under FORCE RLS, and the default collation is not C).
+		where = append(where, "lower(name) LIKE lower("+args.add(likeLiteral(term)+"%")+")")
+	default:
 		// Name substring via flow_search (v27): its trigram index is usable, the one on flows never
 		// was (FORCE RLS + non-leakproof operator); flow_search has no RLS — tenant-correct but a weak cross-tenant timing oracle.
 		where = append(where, "id IN (SELECT flow_id FROM flow_search WHERE name ILIKE "+args.add("%"+likeLiteral(filter.Query)+"%")+")")
@@ -329,6 +338,20 @@ func flowFilterWhere(filter interfaces.FlowFilter) (string, sqlArgs) {
 	// Keyset cursor for id-ordered walks: the next page starts after the last id seen instead of OFFSET re-reading.
 	if filter.AfterID != "" {
 		where = append(where, "id > "+args.add(filter.AfterID))
+	}
+	// Keyset cursor for the updated-at orders (the library's pages): the flows after the last one seen in the sort's
+	// direction, the id breaking ties as in flowOrderBy. The leading bound on updated_at alone lets an updated_at
+	// index start at the position. Any other order has no such position: nothing matches.
+	if c := filter.After; c != nil {
+		at, id := args.add(c.At), args.add(c.ID)
+		switch filter.SortBy {
+		case interfaces.FlowSortUpdatedDesc:
+			where = append(where, "updated_at <= "+at+" AND (updated_at < "+at+" OR id > "+id+")")
+		case interfaces.FlowSortUpdatedAsc:
+			where = append(where, "updated_at >= "+at+" AND (updated_at > "+at+" OR id > "+id+")")
+		default:
+			return "1=0", nil
+		}
 	}
 
 	// Tags: ANY-of semantics; delimiter-anchored LIKE over the CSV so 'prod' never matches 'production'.
@@ -365,21 +388,44 @@ func countFlowsSQL(filter interfaces.FlowFilter) (string, []any) {
 
 // listFlowsSQL is the ListFlows statement for filter with its args (exposed for the plan tests).
 func listFlowsSQL(filter interfaces.FlowFilter) (string, []any) {
-	return listFlowsSQLFor(filter, "")
+	return listFlowsSQLFor(filter, false)
 }
 
-// listFlowsWithTotalSQL is the ListFlowsWithTotal statement (plan tests): list + COUNT(*) OVER()
-// riding every row, so the total returns with the rows instead of a second visibility semi-join + RLS evaluation.
-func listFlowsWithTotalSQL(filter interfaces.FlowFilter) (string, []any) {
-	return listFlowsSQLFor(filter, ", COUNT(*) OVER() AS page_total")
+// listFlowsPageSQL is ListFlowsPage's page statement (plan tests): the ListFlows statement asking for one row more
+// than the page, which tells whether another page follows without counting the rest.
+func listFlowsPageSQL(filter interfaces.FlowFilter) (string, []any) {
+	return listFlowsSQLFor(filter, true)
 }
 
-func listFlowsSQLFor(filter interfaces.FlowFilter, extraSelect string) (string, []any) {
+// countFlowsCappedSQL is ListFlowsPage's count (plan tests): CountFlows of the filter without its page bounds (Offset,
+// After), stopped at totalCap+1 rows when totalCap > 0, so a page never pays for counting a library past the cap.
+func countFlowsCappedSQL(filter interfaces.FlowFilter, totalCap int) (string, []any) {
+	filter.Offset, filter.After = 0, nil
+	whereClause, args := flowFilterWhere(filter)
+	if totalCap <= 0 {
+		return "SELECT count(*) FROM flows WHERE " + whereClause, args
+	}
+	return "SELECT count(*) FROM (SELECT 1 FROM flows WHERE " + whereClause + " LIMIT " + args.add(totalCap+1) + ") capped", args
+}
+
+// flowPageLimit is a listing's page size: a limit <= 0 or above 500 is 100.
+func flowPageLimit(limit int) int {
+	if limit <= 0 || limit > 500 {
+		return 100
+	}
+	return limit
+}
+
+func listFlowsSQLFor(filter interfaces.FlowFilter, peek bool) (string, []any) {
 	whereClause, args := flowFilterWhere(filter)
 
-	limit := filter.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 100
+	limit := flowPageLimit(filter.Limit)
+	if peek {
+		limit++
+	}
+	offset := filter.Offset
+	if filter.After != nil {
+		offset = max(filter.After.Skip, 0) // the cursor is the position, the page starts Skip rows after it
 	}
 
 	// Select literals instead of content/source when MetadataOnly, keeping the row shape identical.
@@ -392,12 +438,12 @@ func listFlowsSQLFor(filter interfaces.FlowFilter, extraSelect string) (string, 
 
 	orderClause := flowOrderBy(filter.SortBy)
 	q := fmt.Sprintf(`
-		SELECT id, name, description, %s, %s, metadata, owner_id, org_id, created_at, updated_at, version, tags%s
+		SELECT id, name, description, %s, %s, metadata, owner_id, org_id, created_at, updated_at, version, tags
 		FROM flows
 		WHERE %s
 		%s
 		LIMIT %s OFFSET %s`,
-		contentExpr, sourceExpr, extraSelect, whereClause, orderClause, args.add(limit), args.add(filter.Offset))
+		contentExpr, sourceExpr, whereClause, orderClause, args.add(limit), args.add(offset))
 	return q, args
 }
 
@@ -424,9 +470,13 @@ func flowOrderBy(s interfaces.FlowSort) string {
 
 // CountFlows returns the total matching the filter, ignoring Limit/Offset.
 func (b *PostgresStorageBackend) CountFlows(ctx context.Context, filter interfaces.FlowFilter) (int, error) {
+	filter, err := b.nameQuery(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
 	q, args := countFlowsSQL(filter)
 	var total int
-	err := b.query(ctx).QueryRowContext(ctx, q, args...).Scan(&total)
+	err = b.query(ctx).QueryRowContext(ctx, q, args...).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("count flows: %w", err)
 	}
@@ -436,6 +486,10 @@ func (b *PostgresStorageBackend) CountFlows(ctx context.Context, filter interfac
 // ListFlows returns matching flows: a query/scan phase, then a concurrent blob-content backfill
 // for rows whose content wasn't inlined (only full-content callers with blob storage configured; UI listings use MetadataOnly).
 func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
+	filter, err := b.nameQuery(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
 	result, err := b.queryFlowRows(ctx, filter)
 	if err != nil {
 		return nil, err
@@ -448,74 +502,85 @@ func (b *PostgresStorageBackend) ListFlows(ctx context.Context, filter interface
 	return result, nil
 }
 
-// ListFlowsWithTotal is ListFlows plus the unpaginated total in ONE statement: the visibility
-// semi-join and flows RLS policy are the read path's most expensive predicates. The total rides the
-// rows, so an empty page past the first is counted on its own (CountFlows).
-func (b *PostgresStorageBackend) ListFlowsWithTotal(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, int, error) {
-	docs, total, err := b.queryFlowRowsTotal(ctx, filter, true)
+// ListFlowsPage is a library page: its rows, read with one more than the page holds to tell whether another follows,
+// then the total, counted only when neither the page nor its cursor can tell it (a page reached by offset but the
+// last, a page past the end, a keyset page whose cursor carries no total) and then only up to totalCap. Before v49 a COUNT(*) OVER() rode the rows: every page, however small, evaluated
+// the visibility filter and the RLS policy on every flow the caller could see, sorted them all, and only then cut the
+// page. The two statements read separate snapshots, so a save between them can leave the total off by one.
+func (b *PostgresStorageBackend) ListFlowsPage(ctx context.Context, filter interfaces.FlowFilter, totalCap int) (*interfaces.FlowPage, error) {
+	filter, err := b.nameQuery(ctx, filter)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	if len(docs) == 0 && filter.Offset > 0 {
-		if total, err = b.CountFlows(ctx, filter); err != nil {
-			return nil, 0, err
+	q, args := listFlowsPageSQL(filter)
+	docs, err := b.queryFlowList(ctx, filter, q, args)
+	if err != nil {
+		return nil, err
+	}
+	limit := flowPageLimit(filter.Limit)
+	page := &interfaces.FlowPage{Docs: docs, HasMore: len(docs) > limit}
+	if page.HasMore {
+		page.Docs = docs[:limit]
+	}
+	switch {
+	case filter.After != nil && filter.After.Counted:
+		// The first page counted, and its cursor carries the total: counting again read the caller's whole visible
+		// set a second time, as much as the page itself reads when the caller sees a small part of a large table.
+		page.Total, page.TotalCapped = filter.After.Total, filter.After.TotalCapped
+	case filter.After == nil && !page.HasMore && (len(page.Docs) > 0 || filter.Offset <= 0):
+		page.Total = max(filter.Offset, 0) + len(page.Docs) // the last page: the rows before it, then its own
+	default:
+		cq, cargs := countFlowsCappedSQL(filter, totalCap)
+		if err := b.query(ctx).QueryRowContext(ctx, cq, cargs...).Scan(&page.Total); err != nil {
+			return nil, fmt.Errorf("count flows: %w", err)
 		}
+	}
+	if totalCap > 0 && page.Total > totalCap {
+		page.Total, page.TotalCapped = totalCap, true
 	}
 	if !filter.MetadataOnly && b.blobClient != nil {
-		if err := b.backfillBlobContent(ctx, docs); err != nil {
-			return nil, 0, err
+		if err := b.backfillBlobContent(ctx, page.Docs); err != nil {
+			return nil, err
 		}
 	}
-	return docs, total, nil
+	return page, nil
 }
 
 // queryFlowRows builds and runs the ListFlows SELECT and scans the results (literal content when MetadataOnly).
 func (b *PostgresStorageBackend) queryFlowRows(ctx context.Context, filter interfaces.FlowFilter) ([]*interfaces.FlowDocument, error) {
-	docs, _, err := b.queryFlowRowsTotal(ctx, filter, false)
-	return docs, err
+	q, args := listFlowsSQL(filter)
+	return b.queryFlowList(ctx, filter, q, args)
 }
 
-// queryFlowRowsTotal runs the list SELECT, optionally with COUNT(*) OVER() riding each row.
-func (b *PostgresStorageBackend) queryFlowRowsTotal(ctx context.Context, filter interfaces.FlowFilter, withTotal bool) ([]*interfaces.FlowDocument, int, error) {
-	var q string
-	var args []any
-	if withTotal {
-		q, args = listFlowsWithTotalSQL(filter)
-	} else {
-		q, args = listFlowsSQL(filter)
-	}
+// queryFlowList runs one of filter's list statements and scans its rows.
+func (b *PostgresStorageBackend) queryFlowList(ctx context.Context, filter interfaces.FlowFilter, q string, args []any) ([]*interfaces.FlowDocument, error) {
 	rows, err := b.query(ctx).QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("list flows: %w", err)
+		return nil, fmt.Errorf("list flows: %w", err)
 	}
 	defer rows.Close()
-	return scanFlowList(rows, filter.MetadataOnly, withTotal)
+	return scanFlowList(rows, filter.MetadataOnly)
 }
 
 // flowListColumns are a flow listing's columns in the order scanFlowList reads them (listFlowsSQLFor spells them out
 // to substitute content and source for MetadataOnly).
 const flowListColumns = `id, name, description, content, source, metadata, owner_id, org_id, created_at, updated_at, version, tags`
 
-// scanFlowList reads the rows of a flow listing (flowListColumns, then the page total when withTotal).
-func scanFlowList(rows *sql.Rows, metadataOnly, withTotal bool) ([]*interfaces.FlowDocument, int, error) {
+// scanFlowList reads the rows of a flow listing (flowListColumns).
+func scanFlowList(rows *sql.Rows, metadataOnly bool) ([]*interfaces.FlowDocument, error) {
 	var result []*interfaces.FlowDocument
-	var pageTotal int
 	for rows.Next() {
 		var flow interfaces.FlowDocument
 		var contentRaw, metaRaw []byte
 		var tagsCSV string
-		dests := []any{
+		if err := rows.Scan(
 			&flow.ID, &flow.Name, &flow.Description,
 			&contentRaw, &flow.Source, &metaRaw,
 			&flow.OwnerID, &flow.OrganizationID,
 			&flow.CreatedAt, &flow.UpdatedAt, &flow.Version,
 			&tagsCSV,
-		}
-		if withTotal {
-			dests = append(dests, &pageTotal)
-		}
-		if err := rows.Scan(dests...); err != nil {
-			return nil, 0, fmt.Errorf("scan row: %w", err)
+		); err != nil {
+			return nil, fmt.Errorf("scan row: %w", err)
 		}
 		flow.Content = contentRaw
 		if metadataOnly {
@@ -523,13 +588,13 @@ func scanFlowList(rows *sql.Rows, metadataOnly, withTotal bool) ([]*interfaces.F
 			flow.Content = nil
 		}
 		if err := json.Unmarshal(metaRaw, &flow.Metadata); err != nil {
-			return nil, 0, fmt.Errorf("unmarshal metadata: %w", err)
+			return nil, fmt.Errorf("unmarshal metadata: %w", err)
 		}
 		flow.Tags = interfaces.SplitFlowTags(tagsCSV)
 		result = append(result, &flow)
 	}
 
-	return result, pageTotal, rows.Err()
+	return result, rows.Err()
 }
 
 // backfillBlobContent concurrently downloads full content from blob storage for every flow whose
@@ -1262,6 +1327,17 @@ func (b *PostgresStorageBackend) SearchFlowContents(ctx context.Context, filter 
 	needle = strings.TrimSpace(needle)
 	if needle == "" {
 		return []*interfaces.FlowDocument{}, nil
+	}
+	// A trigram index serves no shorter term: the match would read every tenant's flow text.
+	short, err := b.shortSearchTerm(ctx, needle)
+	if err != nil {
+		return nil, err
+	}
+	if short {
+		return nil, interfaces.ErrQueryTooShort
+	}
+	if filter, err = b.nameQuery(ctx, filter); err != nil {
+		return nil, err
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 200

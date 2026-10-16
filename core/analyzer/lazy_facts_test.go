@@ -301,9 +301,6 @@ func TestLazyFacts_MatchEagerBuild(t *testing.T) {
 		}{in.name, in.build(t)})
 	}
 	for i, doc := range randomGraphDocs(60, 7) {
-		if hasDuplicateSubflowIDs(doc) {
-			continue
-		}
 		docs = append(docs, struct {
 			name string
 			doc  *models.FlowDocument
@@ -382,9 +379,6 @@ func TestLazyFacts_NotBuiltWhenNoRuleNeedsThem(t *testing.T) {
 func TestSortByDocPosition_BuiltInsBuildNoDocPosition(t *testing.T) {
 	multi := 0
 	for _, d := range oracleDocs(t, 150) {
-		if hasDuplicateSubflowIDs(d.doc) {
-			continue
-		}
 		for si, settings := range oracleSettings() {
 			ctx := buildContext(d.doc, settings)
 			report, _ := analyzeContext(context.Background(), ctx, time.Now(), AllRules(), settings, nil, false)

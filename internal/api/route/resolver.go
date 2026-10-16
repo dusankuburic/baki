@@ -208,7 +208,7 @@ func bucketRank(bucket string) int {
 	switch bucket {
 	case RateNone:
 		return 0
-	case RateUpload:
+	case RateUpload, RateAvatar:
 		return 2
 	case RateAnalysis:
 		return 3

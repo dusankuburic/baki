@@ -22,6 +22,14 @@ type Option func(*suiteConfig)
 
 type suiteConfig struct {
 	known map[string]string // scenario name -> why this backend still diverges
+	fresh func(t *testing.T) interfaces.StorageBackend
+}
+
+// FreshStore gives each scenario about the whole deployment (its last admin) an empty store of the backend, from
+// fresh: on the store the suite shares with other scenarios and tests, their admins hide the refusal. Such a scenario
+// fails without it.
+func FreshStore(fresh func(t *testing.T) interfaces.StorageBackend) Option {
+	return func(c *suiteConfig) { c.fresh = fresh }
 }
 
 // KnownDivergence skips scenario name, with the reason, for a backend that does not meet it yet. Only the frozen
@@ -74,12 +82,14 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend, opts ...Option) {
 	runSettingsScenarios(ctx, b, runID, run)
 	runUserQueryScenarios(ctx, b, runID, run)
 	runUserAvatarScenarios(ctx, b, runID, run)
+	runLoginAttemptScenarios(ctx, b, runID, run)
 	runFlowScenarios(ctx, b, runID, run)
 	runFindingStatusScenarios(ctx, b, runID, run)
 	runAPITokenScenarios(ctx, b, runID, run)
 	runFlowBaselineScenarios(ctx, b, runID, run)
 	runGovernanceAlertScenarios(ctx, b, runID, run)
 	runFlowWalkScenarios(ctx, b, runID, run)
+	runSearchMinimumScenarios(ctx, b, runID, run)
 	runOrgCustomRuleScenarios(ctx, b, runID, run)
 	runOrgChannelScenarios(ctx, b, runID, run)
 	runCommentScenarios(ctx, b, runID, run)
@@ -95,4 +105,10 @@ func RunSuite(t *testing.T, b interfaces.StorageBackend, opts ...Option) {
 	runJobDetailScenarios(ctx, b, runID, run)
 	runKnowledgeScenarios(ctx, b, runID, run)
 	runFlowSnapshotScenarios(ctx, b, runID, run)
+	runFlowSnapshotUserBoundScenarios(ctx, b, runID, run)
+	runIntegrityScenarios(ctx, b, runID, run)
+	runKeysetPageScenarios(ctx, b, runID, run)
+	runPageTotalScenarios(ctx, b, runID, run)
+	runPolicyRekeyScenarios(ctx, b, runID, run)
+	runLastAdminScenarios(ctx, cfg.fresh, runID, run)
 }

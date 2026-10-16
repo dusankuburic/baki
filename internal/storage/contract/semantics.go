@@ -592,6 +592,8 @@ func runSemanticsScenarios(ctx context.Context, b interfaces.StorageBackend, run
 
 	run("Policies_upsert_get_list_delete_per_org", func(t *testing.T) {
 		orgA, orgB := "contract-pola-"+runID, "contract-polb-"+runID
+		seedOrg(ctx, t, b, orgA, "contract-pol-admin-"+runID)
+		seedOrg(ctx, t, b, orgB, "contract-pol-admin-"+runID)
 		zeta := &models.Policy{ID: "contract-pol-z-" + runID, OrgID: orgA, Name: "Zeta", GateSeverity: models.SeverityError,
 			Rules: []models.PolicyRule{{RuleID: "hardcoded-credential", Enabled: true}}}
 		alpha := &models.Policy{ID: "contract-pol-a-" + runID, OrgID: orgA, Name: "Alpha"}
@@ -650,6 +652,7 @@ func runSemanticsScenarios(ctx context.Context, b interfaces.StorageBackend, run
 			t.Skip("backend keeps no refresh tokens")
 		}
 		user := "contract-rt-user-" + runID
+		seedUser(ctx, t, b, user)
 		jti := func(n string) string { return "contract-rt-" + n + "-" + runID }
 		in := time.Now().Add(time.Hour)
 		for _, tok := range []struct {

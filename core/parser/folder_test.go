@@ -3,9 +3,12 @@ package parser
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -25,12 +28,16 @@ func writeFolder(t *testing.T, files map[string]string) string {
 	return dir
 }
 
-// symlinkOrSkip links link -> target, skipping where the OS refuses (Windows
-// without the symlink privilege).
+// symlinkOrSkip links link -> target, skipping where Windows refuses this
+// process the privilege (neither Developer Mode nor an elevated token).
 func symlinkOrSkip(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlinks unavailable on this platform: %v", err)
+		const errPrivilegeNotHeld = syscall.Errno(1314) // ERROR_PRIVILEGE_NOT_HELD
+		if runtime.GOOS == "windows" && errors.Is(err, errPrivilegeNotHeld) {
+			t.Skipf("this process may not create symlinks (enable Developer Mode or run elevated): %v", err)
+		}
+		t.Fatalf("symlink: %v", err)
 	}
 }
 
@@ -407,17 +414,78 @@ func TestReadFolder_Errors(t *testing.T) {
 	}
 }
 
-// A symlinked folder lists nothing, as bakicli's walk always did (WalkDir does
-// not follow its root); the flat desktop listing follows it.
+// A symlinked folder named as the root is followed, as the flat desktop listing
+// and the confined read's os.OpenRoot always did (the recursive walk listed
+// nothing: WalkDir does not follow its root). Inside it the tree's policy
+// holds: a symlinked directory is never walked (no loop through a link back to
+// the root) and a confined walk skips a symlinked member.
 func TestListFolder_SymlinkedRoot(t *testing.T) {
-	target := writeFolder(t, map[string]string{"Main.txt": memberFlow})
+	outside := writeFolder(t, map[string]string{"secret.txt": "TOP_SECRET"})
+	target := writeFolder(t, map[string]string{"Main.txt": memberFlow, "sub/Deep.txt": memberFlow})
+	symlinkOrSkip(t, target, filepath.Join(target, "loop"))
+	symlinkOrSkip(t, filepath.Join(outside, "secret.txt"), filepath.Join(target, "leak.txt"))
 	link := filepath.Join(t.TempDir(), "flows")
 	symlinkOrSkip(t, target, link)
-	if keys, err := ListFolder(link, TreeFolder()); err != nil || len(keys) != 0 {
-		t.Errorf("recursive ListFolder of a symlinked root = %v, %v", keys, err)
+	// A link to the link resolves to the same folder.
+	chained := filepath.Join(t.TempDir(), "again")
+	symlinkOrSkip(t, link, chained)
+
+	for _, root := range []string{link, chained} {
+		if keys, err := ListFolder(root, TreeFolder()); err != nil || !slices.Equal(keys, []string{"Main.txt", "sub/Deep.txt"}) {
+			t.Errorf("recursive ListFolder of the symlinked root %s = %v, %v", filepath.Base(root), keys, err)
+		}
+		files, err := ReadFolder(root, TreeFolder())
+		if err != nil || len(files) != 2 || files["sub/Deep.txt"] != memberFlow {
+			t.Errorf("ReadFolder of the symlinked root %s = %v keys, %v", filepath.Base(root), len(files), err)
+		}
+		loose := TreeFolder()
+		loose.Confined = false
+		if keys, err := ListFolder(root, loose); err != nil || !slices.Equal(keys, []string{"Main.txt", "leak.txt", "sub/Deep.txt"}) {
+			t.Errorf("unconfined ListFolder of the symlinked root %s = %v, %v", filepath.Base(root), keys, err)
+		}
+		if keys, err := ListFolder(root, ExportFolder()); err != nil || !slices.Equal(keys, []string{"Main.txt", "leak.txt"}) {
+			t.Errorf("flat ListFolder of the symlinked root %s = %v, %v", filepath.Base(root), keys, err)
+		}
 	}
-	if keys, err := ListFolder(link, ExportFolder()); err != nil || !slices.Equal(keys, []string{"Main.txt"}) {
-		t.Errorf("flat ListFolder of a symlinked root = %v, %v", keys, err)
+	if doc, err := ParseFolderTree(link, TreeFolder()); err != nil {
+		t.Errorf("ParseFolderTree of a symlinked root: %v", err)
+	} else if len(doc.Files) != 2 || doc.FilePath != link {
+		t.Errorf("ParseFolderTree of a symlinked root: %d files, FilePath %q", len(doc.Files), doc.FilePath)
+	}
+
+	// A symlinked file named as the root is still not a folder.
+	fileLink := filepath.Join(t.TempDir(), "file.txt")
+	symlinkOrSkip(t, filepath.Join(target, "Main.txt"), fileLink)
+	if keys, err := ListFolder(fileLink, TreeFolder()); err == nil {
+		t.Errorf("ListFolder of a symlink to a file = %v, want an error", keys)
+	}
+}
+
+// A junction (mklink /J, which needs no privilege) is Windows' usual folder
+// link: named as the root it is followed like a symlink (the walk said "not a
+// directory"), and one inside the tree is not walked.
+func TestListFolder_JunctionRoot(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("junctions are a Windows feature")
+	}
+	junction := func(link, target string) {
+		t.Helper()
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+			t.Skipf("mklink /J: %v: %s", err, out)
+		}
+	}
+	outside := writeFolder(t, map[string]string{"Secret.txt": memberFlow})
+	target := writeFolder(t, map[string]string{"Main.txt": memberFlow})
+	junction(filepath.Join(target, "inner"), outside)
+	link := filepath.Join(t.TempDir(), "flows")
+	junction(link, target)
+	for _, opts := range []FolderOptions{TreeFolder(), ExportFolder()} {
+		if keys, err := ListFolder(link, opts); err != nil || !slices.Equal(keys, []string{"Main.txt"}) {
+			t.Errorf("ListFolder of a junction root (recursive %t) = %v, %v", opts.Recursive, keys, err)
+		}
+	}
+	if files, err := ReadFolder(link, TreeFolder()); err != nil || len(files) != 1 {
+		t.Errorf("ReadFolder of a junction root = %d files, %v", len(files), err)
 	}
 }
 

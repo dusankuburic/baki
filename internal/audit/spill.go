@@ -113,6 +113,8 @@ type spillStore struct {
 	depth int
 	// gauge sums this store with its recorder's other files into the metric; nil: the store alone.
 	gauge *depthGauge
+	// warnedUndecodable: Drain logged the file's first undecodable line; later ones are only counted. Guarded by mu.
+	warnedUndecodable bool
 }
 
 // setDepth records the file's event count and publishes the gauge. The caller holds s.mu.
@@ -208,6 +210,12 @@ func (s *spillStore) removeIfDrained() bool {
 // diverts it to the log fallback) and pad_audit_spill_dropped_total is bumped. Returns whether the event was
 // stored.
 func (s *spillStore) Spill(e *storageif.AuditEvent) bool {
+	return s.spillFor(e, spillReasonFull)
+}
+
+// spillFor is Spill counting the event under reason (spillReasonFull, spillReasonUnreachable). The cap is what
+// keeps a long database outage from filling the disk: past it every event is a counted drop.
+func (s *spillStore) spillFor(e *storageif.AuditEvent, reason string) bool {
 	line, err := json.Marshal(e)
 	if err != nil {
 		return false
@@ -215,6 +223,9 @@ func (s *spillStore) Spill(e *storageif.AuditEvent) bool {
 	line = append(line, '\n')
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.tornTail() {
+		line = append([]byte{'\n'}, line...)
+	}
 	if info, statErr := os.Stat(s.path); statErr == nil {
 		if info.Size()+int64(len(line)) > s.maxBytes {
 			recordAuditSpillDropped()
@@ -230,12 +241,33 @@ func (s *spillStore) Spill(e *storageif.AuditEvent) bool {
 		return false
 	}
 	s.setDepth(s.depth + 1)
-	recordAuditSpilled()
+	recordAuditSpilled(reason)
 	return true
 }
 
-// Drain removes and returns up to max events from the head of the spill file, oldest first. Malformed lines
-// are skipped (a corrupt line can't be replayed).
+// tornTail reports whether the file ends inside a line: a writer died mid-append. An append must then start with a
+// newline, or the new event joins the fragment on one line that never decodes and is lost with it. The caller holds
+// s.mu.
+func (s *spillStore) tornTail() bool {
+	f, err := os.Open(s.path) // #nosec G304 -- a spill file of this process
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || info.Size() == 0 {
+		return false
+	}
+	last := make([]byte, 1)
+	if _, err := f.ReadAt(last, info.Size()-1); err != nil {
+		return false
+	}
+	return last[0] != '\n'
+}
+
+// Drain removes and returns up to max events from the head of the spill file, oldest first. A line that does not
+// decode (a torn append, a damaged file) is skipped and counted, logged once per file, so it never holds up the lines
+// after it.
 func (s *spillStore) Drain(max int) []*storageif.AuditEvent {
 	if max <= 0 {
 		return nil
@@ -247,6 +279,8 @@ func (s *spillStore) Drain(max int) []*storageif.AuditEvent {
 		return nil
 	}
 	var out []*storageif.AuditEvent
+	var undecodable int
+	var firstErr error
 	remaining := data
 	for len(out) < max {
 		nl := bytes.IndexByte(remaining, '\n')
@@ -259,9 +293,14 @@ func (s *spillStore) Drain(max int) []*storageif.AuditEvent {
 			continue
 		}
 		var e storageif.AuditEvent
-		if err := json.Unmarshal(line, &e); err == nil {
-			out = append(out, &e)
+		if err := json.Unmarshal(line, &e); err != nil {
+			undecodable++
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
+		out = append(out, &e)
 	}
 	// Rewrite the file with the unconsumed tail ATOMICALLY (temp + rename): a plain WriteFile truncates first,
 	// so a mid-write failure would lose the unconsumed tail. With rename semantics, any failure leaves the
@@ -283,6 +322,14 @@ func (s *spillStore) Drain(max int) []*storageif.AuditEvent {
 		return nil
 	}
 	s.setDepth(countEvents(remaining)) // not depth-len(out): a corrupt line is skipped without being replayed
+	// Counted once the rewrite took the lines out: a failed rewrite leaves them for the next drain to count.
+	recordAuditSpillUndecodable(undecodable)
+	if undecodable > 0 && !s.warnedUndecodable {
+		s.warnedUndecodable = true
+		// The error, not the line: a fragment of an event can hold personal data.
+		logger.Warn("audit spill: skipped lines that do not decode (a torn append or a damaged file); later ones are only counted in pad_audit_spill_undecodable_total",
+			"file", filepath.Base(s.path), "lines", undecodable, "err", firstErr)
+	}
 	return out
 }
 
@@ -303,11 +350,15 @@ func (s *spillStore) reSpill(events []*storageif.AuditEvent) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	torn := s.tornTail()
 	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) // #nosec G304 -- path is operator-configured, not user input
 	if err != nil {
 		return
 	}
 	defer func() { _ = f.Close() }()
+	if torn {
+		_, _ = f.Write([]byte{'\n'})
+	}
 	for _, e := range events {
 		line, err := json.Marshal(e)
 		if err != nil {

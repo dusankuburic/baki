@@ -73,6 +73,7 @@ func runBugScenarios(ctx context.Context, b interfaces.StorageBackend, runID str
 
 	run("Policies_keep_waivers_and_severity_budgets", func(t *testing.T) {
 		org := "contract-polw-" + runID
+		seedOrg(ctx, t, b, org, "contract-polw-admin-"+runID)
 		expires := time.Date(2031, 1, 2, 3, 4, 5, 0, time.UTC)
 		zero, three, five := 0, 3, 5
 		p := &models.Policy{

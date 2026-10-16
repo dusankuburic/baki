@@ -147,6 +147,7 @@ func settingsToStorage(t *testing.T, s *models.AppSettings) *storageif.AppSettin
 // rule.
 func TestTwoReplicas_AnOrgRuleChangeReachesThePeer(t *testing.T) {
 	backend := testutil.NewFakeBackend()
+	backend.SeedOrgs("org-a") // a rule needs its organisation
 	_, a, b := startStacks(t, backend)
 	ctx := context.Background()
 	hasRule := func(r *service.RuleProfileResolver) bool {

@@ -76,4 +76,4 @@ profiles: rules=32 order=b1c8f0b856dedfd7 blocksChecked=9149
 inventory: none
 findings: 9693
   by rule: file-op-no-error-handler=666 hardcoded-filepath=666 hardcoded-url=663 missing-delay=196 missing-retry=1973 missing-timeout=1973 slow-pattern=135 subflow-no-error-handler=8 unhandled-error=2639 uninitialized-variable=3 unused-variable=670 parse-error=101
-  digest: full=2ced2c73da904fe1 ordered-fingerprints=5752883341edc53b fingerprint-set=f42c282b72016ac4
+  digest: full=346de34b524be7de ordered-fingerprints=5752883341edc53b fingerprint-set=f42c282b72016ac4

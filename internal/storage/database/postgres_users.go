@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -22,13 +23,18 @@ import (
 // updates are single autocommits whose visibility would change if they joined the request transaction.
 
 func (b *PostgresStorageBackend) SaveUser(ctx context.Context, user *interfaces.User) error {
+	return saveUserOn(ctx, b.db, user)
+}
+
+// saveUserOn is SaveUser's upsert on exec: the pool, or the transaction of SaveUserWithIdentityLink.
+func saveUserOn(ctx context.Context, exec DBTX, user *interfaces.User) error {
 	now := time.Now().UTC()
 	if user.CreatedAt.IsZero() {
 		user.CreatedAt = now
 	}
 	user.UpdatedAt = now
 
-	_, err := b.db.ExecContext(ctx, `
+	_, err := exec.ExecContext(ctx, `
 		INSERT INTO users (id, email, password, role, email_verified, failed_login_attempts, locked_until, display_name, avatar_url, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (id) DO UPDATE SET
@@ -266,9 +272,9 @@ func scanListedUser(rows *sql.Rows) (*interfaces.User, error) {
 // stored value counts as interfaces.UserRoleNone.
 const validRolesSQL = `('admin', 'member', 'viewer', 'guest')`
 
-// QueryUsers backs the admin user list: one filtered, ordered page plus the
-// number of matching users, both on the request's RLS executor.
-func (b *PostgresStorageBackend) QueryUsers(ctx context.Context, q interfaces.UserQuery) ([]*interfaces.User, int, error) {
+// queryUsersSQL builds QueryUsers' two statements (exposed for the plan tests): the count of the users matching q's
+// filters, and q's page of them.
+func queryUsersSQL(q interfaces.UserQuery) (count string, countArgs []any, page string, pageArgs []any) {
 	// A cap clamps DOWN to the maximum (see ListAuditEvents).
 	const (
 		defaultUserLimit = 100
@@ -286,9 +292,16 @@ func (b *PostgresStorageBackend) QueryUsers(ctx context.Context, q interfaces.Us
 	args := sqlArgs{}
 	where := []string{}
 	if needle := strings.ToLower(strings.TrimSpace(q.Q)); needle != "" {
-		// strpos rather than LIKE: the needle is data, so nothing to escape.
-		p := args.add(needle)
-		where = append(where, "(strpos(lower(email), "+p+") > 0 OR strpos(lower(display_name), "+p+") > 0)")
+		// LIKE on the indexed expressions, the needle escaped: users_email_trgm_idx and users_display_name_trgm_idx
+		// (v49) serve it as a BitmapOr (strpos, which needed no escaping, could only be checked row by row). A
+		// trigram index draws nothing from a substring without a run of three letters or digits, which would read
+		// every account: such a needle matches a prefix (the index draws the start-of-word trigrams from its letters).
+		pattern := "%" + likeLiteral(needle) + "%"
+		if q.Prefix || interfaces.ShortSearchTerm(needle) {
+			pattern = likeLiteral(needle) + "%"
+		}
+		p := args.add(pattern)
+		where = append(where, "(lower(email) LIKE "+p+" OR lower(display_name) LIKE "+p+")")
 	}
 	switch q.Role {
 	case "":
@@ -297,21 +310,45 @@ func (b *PostgresStorageBackend) QueryUsers(ctx context.Context, q interfaces.Us
 	default:
 		where = append(where, "role = "+args.add(q.Role))
 	}
-	clause := ""
-	if len(where) > 0 {
-		clause = " WHERE " + strings.Join(where, " AND ")
+	clause := func(where []string) string {
+		if len(where) == 0 {
+			return ""
+		}
+		return " WHERE " + strings.Join(where, " AND ")
 	}
 
+	pa := append(sqlArgs{}, args...)
+	pageWhere := where
+	if a := q.After; a != nil {
+		// The users after the cursor in the list's order, served by users_created_id_idx (created_at DESC, id); the
+		// count stays the filters' whole match.
+		at, id := pa.add(a.At), pa.add(a.ID)
+		pageWhere = append(append([]string{}, where...), "created_at <= "+at+" AND (created_at < "+at+" OR id > "+id+")")
+		offset = 0
+	}
+	order := " ORDER BY created_at DESC, id ASC LIMIT " + pa.add(limit) + " OFFSET " + pa.add(offset)
+	// #nosec G202 -- only generated "$N" placeholders and constants are concatenated; all values are parameterized args.
+	return `SELECT COUNT(*) FROM users` + clause(where), args, `SELECT ` + listedUserColumns + ` FROM users` + clause(pageWhere) + order, pa
+}
+
+// QueryUsers backs the admin user list: one filtered, ordered page plus the
+// number of matching users, both on the request's RLS executor.
+func (b *PostgresStorageBackend) QueryUsers(ctx context.Context, q interfaces.UserQuery) ([]*interfaces.User, int, error) {
+	if !q.Prefix {
+		// A term the database draws no trigram from matches a prefix, as a short one does (shortSearchTerm).
+		short, err := b.shortSearchTerm(ctx, strings.ToLower(q.Q))
+		if err != nil {
+			return nil, 0, err
+		}
+		q.Prefix = short
+	}
+	countQ, countArgs, pageQ, pageArgs := queryUsersSQL(q)
 	db := b.query(ctx)
 	var total int
-	// #nosec G202 -- only generated "$N" placeholders and constants are concatenated; all values are parameterized args.
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`+clause, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQ, countArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count users: %w", err)
 	}
-	pageArgs := append(sqlArgs{}, args...)
-	page := " ORDER BY created_at DESC, id ASC LIMIT " + pageArgs.add(limit) + " OFFSET " + pageArgs.add(offset)
-	// #nosec G202 -- see above.
-	rows, err := db.QueryContext(ctx, `SELECT `+listedUserColumns+` FROM users`+clause+page, pageArgs...)
+	rows, err := db.QueryContext(ctx, pageQ, pageArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query users: %w", err)
 	}
@@ -329,8 +366,14 @@ func (b *PostgresStorageBackend) QueryUsers(ctx context.Context, q interfaces.Us
 	return users, total, rows.Err()
 }
 
+// lockedAccountsCountSQL counts the accounts locked now, instance-wide: the dashboard's and the analytics page's
+// security tiles. users_locked_until_idx (v49) holds only the accounts ever locked, so the count reads those instead of
+// every account.
+const lockedAccountsCountSQL = `SELECT COUNT(*)::int FROM users WHERE locked_until IS NOT NULL AND locked_until > NOW()`
+
 // LoadUserStats counts the whole user table in one statement; "none" is what
-// the four valid roles leave over.
+// the four valid roles leave over. Its locked count rides that one pass over the table, which the other counts need
+// anyway, so it does not use users_locked_until_idx.
 func (b *PostgresStorageBackend) LoadUserStats(ctx context.Context) (*interfaces.UserStats, error) {
 	var s interfaces.UserStats
 	var admin, member, viewer, guest int
@@ -356,25 +399,135 @@ func (b *PostgresStorageBackend) LoadUserStats(ctx context.Context) (*interfaces
 }
 
 // UpdateUserRole reports an unknown id as ErrNotFound (as the filesystem backend does) instead of a
-// silent no-op the admin endpoint answered with 200.
+// silent no-op the admin endpoint answered with 200. A change between two roles other than admin is one statement
+// whose WHERE refuses an admin row: it cannot change the number of admins, so it locks no other row. A demotion of an
+// admin first locks every admin row, in id order: of two demotions at once, the second waits there, and at READ
+// COMMITTED it then re-reads the rows it waited for and drops the one the first demoted (or an erasure deleted), so it
+// counts the admins the first left. A count without the lock let both see two admins and both demote. FOR NO KEY
+// UPDATE, not FOR UPDATE, which also waits for the key share of every foreign-key check on a users row: a role change
+// queued behind any request writing a child row of an admin (a session, an Idempotency-Key claim), the admins'
+// sign-ins queued behind it, and a request writing child rows of two admins deadlocked with it. A promotion takes no
+// lock; one landing meanwhile only makes the count low, refusing a demotion it could have allowed.
 func (b *PostgresStorageBackend) UpdateUserRole(ctx context.Context, id string, role auth.Role) error {
-	res, err := b.db.ExecContext(ctx, `UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, string(role), id)
+	if role != auth.RoleAdmin {
+		res, err := b.db.ExecContext(ctx, `UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 AND role <> 'admin'`, string(role), id)
+		if err != nil {
+			return fmt.Errorf("update user role: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return fmt.Errorf("update user role rows affected: %w", err)
+		} else if n == 1 {
+			return nil
+		}
+		// An admin, or an unknown id: the locking path below decides.
+	}
+	return b.withOwnTx(ctx, sql.LevelDefault, func(ctx context.Context, tx *sql.Tx) error {
+		if role != auth.RoleAdmin {
+			admins, err := lockAdmins(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if len(admins) == 1 && admins[0] == id {
+				return interfaces.ErrLastAdmin
+			}
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, string(role), id)
+		if err != nil {
+			return fmt.Errorf("update user role: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("update user role rows affected: %w", err)
+		}
+		if n == 0 {
+			return interfaces.ErrNotFound
+		}
+		return nil
+	})
+}
+
+// lockAdmins locks every admin row in id order, FOR NO KEY UPDATE (UpdateUserRole), and returns their ids.
+func lockAdmins(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM users WHERE role = 'admin' ORDER BY id FOR NO KEY UPDATE`)
 	if err != nil {
-		return fmt.Errorf("update user role: %w", err)
+		return nil, fmt.Errorf("lock admins: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update user role rows affected: %w", err)
+	defer rows.Close()
+	var admins []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, fmt.Errorf("lock admins: %w", err)
+		}
+		admins = append(admins, a)
 	}
-	if n == 0 {
-		return interfaces.ErrNotFound
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("lock admins: %w", err)
 	}
-	return nil
+	return admins, nil
 }
 
 func (b *PostgresStorageBackend) UpdateUserPassword(ctx context.Context, id string, passwordHash string) error {
 	_, err := b.db.ExecContext(ctx, `UPDATE users SET password = $1, failed_login_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = $2`, passwordHash, id)
 	return err
+}
+
+// RecordFailedLogin increments in the UPDATE, so parallel wrong passwords each count, and touches only the counter
+// columns, so a reset or role change landing during the login's bcrypt survives. The lock check is repeated in the
+// WHERE: an attempt that read the account before a concurrent one locked it is refused as locked, uncounted, as if
+// it had read the lock, so exactly one attempt crosses the threshold.
+func (b *PostgresStorageBackend) RecordFailedLogin(ctx context.Context, userID string, threshold int, lockFor time.Duration) (int, *time.Time, error) {
+	var attempts int
+	var lockedUntil *time.Time
+	err := b.db.QueryRowContext(ctx, `
+		UPDATE users SET
+			failed_login_attempts = failed_login_attempts + 1,
+			locked_until = CASE WHEN failed_login_attempts + 1 >= $2 THEN NOW() + $3 * INTERVAL '1 microsecond' ELSE locked_until END,
+			updated_at = NOW()
+		WHERE id = $1 AND (locked_until IS NULL OR locked_until <= NOW())
+		RETURNING failed_login_attempts, locked_until`,
+		userID, threshold, lockFor.Microseconds(),
+	).Scan(&attempts, &lockedUntil)
+	if errors.Is(err, sql.ErrNoRows) {
+		var exists bool
+		if err := b.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)`, userID).Scan(&exists); err != nil {
+			return 0, nil, fmt.Errorf("record failed login: %w", err)
+		}
+		if !exists {
+			return 0, nil, interfaces.ErrNotFound
+		}
+		return 0, nil, interfaces.ErrAccountLocked
+	}
+	if err != nil {
+		return 0, nil, fmt.Errorf("record failed login: %w", err)
+	}
+	return attempts, lockedUntil, nil
+}
+
+// ResetFailedLogins checks the lock in the write that clears it, against the row as it is now (a blocked update
+// re-checks the newest version): a login whose password check ran while a parallel burst locked the account is
+// refused, where its earlier read said unlocked. A row already clear keeps its updated_at.
+func (b *PostgresStorageBackend) ResetFailedLogins(ctx context.Context, userID string) error {
+	var id string
+	err := b.db.QueryRowContext(ctx, `
+		UPDATE users SET failed_login_attempts = 0, locked_until = NULL,
+			updated_at = CASE WHEN failed_login_attempts <> 0 OR locked_until IS NOT NULL THEN NOW() ELSE updated_at END
+		WHERE id = $1 AND (locked_until IS NULL OR locked_until <= NOW())
+		RETURNING id`, userID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		var exists bool
+		if err := b.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)`, userID).Scan(&exists); err != nil {
+			return fmt.Errorf("reset failed logins: %w", err)
+		}
+		if exists {
+			return interfaces.ErrAccountLocked
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reset failed logins: %w", err)
+	}
+	return nil
 }
 
 // UpdateUserProfile updates the user's display name and avatar URL.
@@ -389,6 +542,23 @@ func (b *PostgresStorageBackend) UpdateUserProfile(ctx context.Context, id strin
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("update user profile rows affected: %w", err)
+	}
+	if n == 0 {
+		return interfaces.ErrNotFound
+	}
+	return nil
+}
+
+// UpdateUserAvatarURL is the avatar upload's and removal's write: UpdateUserProfile would need the display name, and
+// one read before the write put back a name changed in between.
+func (b *PostgresStorageBackend) UpdateUserAvatarURL(ctx context.Context, id string, avatarURL string) error {
+	res, err := b.db.ExecContext(ctx, `UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2`, avatarURL, id)
+	if err != nil {
+		return fmt.Errorf("update user avatar url: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update user avatar url rows affected: %w", err)
 	}
 	if n == 0 {
 		return interfaces.ErrNotFound
@@ -686,7 +856,11 @@ const (
 )
 
 func (b *PostgresStorageBackend) ListAuditEvents(ctx context.Context, filter interfaces.AuditFilter) ([]*interfaces.AuditEvent, error) {
-	return b.listAuditEvents(ctx, filter, nil)
+	var after *auditCursor
+	if a := filter.After; a != nil {
+		after = &auditCursor{createdAt: a.At, id: a.ID}
+	}
+	return b.listAuditEvents(ctx, filter, after)
 }
 
 // auditCursor is a keyset position in the audit log's order (created_at
@@ -715,10 +889,10 @@ const auditEventOrder = "ORDER BY created_at DESC, id ASC"
 // single-OR shape this replaces was a BitmapOr plus a Sort of the user's whole history for every page);
 // `user_id <> $1` on the subject arm keeps an event whose actor IS its subject in the actor arm only.
 // after, when set, replaces OFFSET paging with a keyset continuation — rows strictly after
-// (after.createdAt, after.id) — which the data-subject export uses to walk a user's whole history: every page
-// costs one index descent instead of re-reading every earlier page. KNOWN LIMITATION of the OFFSET shape (the
-// admin log): events written WHILE an operator pages shift later rows down and the boundary skips one per new
-// event; fixing that needs a keyset cursor in the AuditFilter contract, deliberately out of scope.
+// (after.createdAt, after.id) — which the data-subject export uses to walk a user's whole history, and the admin log
+// since v49 (AuditFilter.After): every page costs one index descent instead of re-reading every earlier page. The
+// OFFSET shape stays for the admin page's older clients; there, events written WHILE an operator pages shift later
+// rows down and the boundary skips one per new event, which the cursor does not.
 func listAuditEventsSQL(filter interfaces.AuditFilter, limit, offset int, after *auditCursor) (string, []any) {
 	args := sqlArgs{}
 	// Predicates every arm carries, after the arm's own key.
@@ -851,6 +1025,10 @@ func (b *PostgresStorageBackend) GetDailyUsage(ctx context.Context, userID, orgI
 			`SELECT COALESCE(SUM(estimated_cost), 0) FROM usage_metrics
 			 WHERE org_id = $1 AND created_at >= date_trunc('day', now())`, orgID).Scan(&total)
 	} else {
+		// Every row of the user, org rows included: the personal budget and the per-user sub-limit count a member's
+		// org spend (ai_budget.go). "" is the local single user's scope (no accounts), whose org spend counts the same
+		// way. Erasure leaves an erased member's org spend under "" too (lifecycle_users.go), but only a deployment
+		// with accounts erases, and there no caller's scope is "".
 		err = b.query(ctx).QueryRowContext(ctx,
 			`SELECT COALESCE(SUM(estimated_cost), 0) FROM usage_metrics
 			 WHERE user_id = $1 AND created_at >= date_trunc('day', now())`, userID).Scan(&total)
