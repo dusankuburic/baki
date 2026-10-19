@@ -157,7 +157,7 @@ jobs:
       # Gate releases on image vulnerability scanning.
       # Fails the job (and therefore deploy) on any HIGH/CRITICAL finding that
       # has a published fix; unfixed issues are reported but non-blocking.
-      - uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8  # 0.24.0
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
         with:
           image-ref: ghcr.io/${{ env.IMAGE_NAME }}@${{ needs.build-and-push.outputs.image-digest }}
           severity: HIGH,CRITICAL
