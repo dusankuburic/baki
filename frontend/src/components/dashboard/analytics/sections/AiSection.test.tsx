@@ -82,17 +82,17 @@ describe('AiSection model breakdown', () => {
   })
 })
 
-describe('AiSection unpriced Azure AI Foundry rows', () => {
+describe('AiSection provider and model token telemetry', () => {
   beforeEach(() => downloadBlob.mockClear())
 
   function azureData(): DashboardAnalyticsData {
     const data: DashboardAnalyticsData = mockDashboardAnalytics()
     data.ai.byProvider = [
       {provider: 'azure-foundry', cost: 0, tokensIn: 150, tokensOut: 15},
-      {provider: 'openai', cost: 1.02, tokensIn: 12000, tokensOut: 4000},
+      {provider: 'openai', cost: 0, tokensIn: 12000, tokensOut: 4000},
     ]
     data.ai.byModel = [
-      {provider: 'openai', model: 'gpt-5', tokensIn: 12000, tokensOut: 4000, calls: 15, cost: 1.02},
+      {provider: 'openai', model: 'gpt-5', tokensIn: 12000, tokensOut: 4000, calls: 15, cost: 0},
       {
         provider: 'azure-foundry',
         model: 'model-router',
@@ -106,7 +106,7 @@ describe('AiSection unpriced Azure AI Foundry rows', () => {
     return data
   }
 
-  it('shows an em dash for Azure in the by-model table and keeps the number in the CSV', () => {
+  it('renders model token usage and exports CSV without monetary values', () => {
     render(<AiSection data={azureData()} refetching={false} />)
 
     const card = screen.getByRole('region', {name: 'Usage by model'})
@@ -114,21 +114,24 @@ describe('AiSection unpriced Azure AI Foundry rows', () => {
       .getAllByRole('row')
       .slice(1)
     expect(rows).toHaveLength(2)
-    expect(within(rows[0]!).getByText('$1.02')).toBeInTheDocument()
-    expect(within(rows[0]!).queryByText('—')).toBeNull()
-    expect(within(rows[1]!).getByText('—')).toBeInTheDocument()
-    expect(within(rows[1]!).queryByText(/\$/)).toBeNull()
+    // First row: openai, gpt-5, 15 calls, 12K in, 4K out
+    expect(within(rows[0]!).getByText('openai')).toBeInTheDocument()
+    expect(within(rows[0]!).getByText('gpt-5')).toBeInTheDocument()
+    expect(within(rows[0]!).getByText('15')).toBeInTheDocument()
+    // No dollar signs rendered anywhere in table
+    expect(within(card).queryByText(/\$/)).toBeNull()
 
     fireEvent.click(within(card).getByRole('button', {name: 'Download CSV'}))
     expect(downloadBlob).toHaveBeenCalledTimes(1)
     const [content] = downloadBlob.mock.calls[0] as [string]
-    expect(content).not.toContain('—')
-    const azureLine = content.split('\n').find(l => l.startsWith('azure-foundry'))
-    expect(azureLine).toBeDefined()
-    expect(azureLine?.endsWith(',0')).toBe(true)
+    expect(content).not.toContain('$')
+    const openaiLine = content.split('\n').find(l => l.startsWith('openai'))
+    expect(openaiLine).toBeDefined()
+    expect(openaiLine).toContain('12000')
+    expect(openaiLine).toContain('4000')
   })
 
-  it('shows an em dash for Azure in the by-provider table view', () => {
+  it('shows token breakdown for providers in table view', () => {
     render(<AiSection data={azureData()} refetching={false} />)
 
     const card = screen.getByRole('region', {name: 'Cost by provider'})
@@ -140,23 +143,11 @@ describe('AiSection unpriced Azure AI Foundry rows', () => {
       .slice(1)
     expect(rows).toHaveLength(2)
     expect(within(rows[0]!).getByText('openai')).toBeInTheDocument()
-    expect(within(rows[0]!).getByText('$1.02')).toBeInTheDocument()
     expect(within(rows[1]!).getByText('azure-foundry')).toBeInTheDocument()
-    expect(within(rows[1]!).getByText('—')).toBeInTheDocument()
-    expect(within(rows[1]!).queryByText(/\$/)).toBeNull()
+    expect(within(card).queryByText(/\$/)).toBeNull()
   })
 
-  it('names the dash "Not priced by baki" for assistive tech', () => {
-    render(<AiSection data={azureData()} refetching={false} />)
-
-    const card = screen.getByRole('region', {name: 'Usage by model'})
-    const table = within(card).getByRole('table', {name: 'Usage by model'})
-    const cell = within(table).getByRole('cell', {name: 'Not priced by baki'})
-    expect(cell).toHaveTextContent('—')
-    expect(within(cell).getByTitle('Not priced by baki')).toBeInTheDocument()
-  })
-
-  it('leaves Azure out of the cost-by-provider chart (no $0.00 bar label)', () => {
+  it('renders provider token chart without dollar signs', () => {
     useSettingsStore.setState(s => ({
       settings: {...s.settings, appearance: {...s.settings.appearance, reduceMotion: true}},
     }))
@@ -164,17 +155,8 @@ describe('AiSection unpriced Azure AI Foundry rows', () => {
 
     const card = screen.getByRole('region', {name: 'Cost by provider'})
     const texts = (selector: string) => Array.from(card.querySelectorAll(selector), n => n.textContent)
-    expect(texts('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value')).toEqual(['openai'])
-    expect(texts('.recharts-label-list .recharts-label')).toEqual(['$1.02'])
-  })
-
-  it('explains an Azure-only cost-by-provider chart instead of drawing a $0.00 bar', () => {
-    const data = azureData()
-    data.ai.byProvider = [{provider: 'azure-foundry', cost: 0, tokensIn: 150, tokensOut: 15}]
-    render(<AiSection data={data} refetching={false} />)
-
-    const card = screen.getByRole('region', {name: 'Cost by provider'})
-    expect(within(card).getByText('Only Azure AI Foundry was used, and baki does not price it.')).toBeInTheDocument()
-    expect(within(card).queryByText('$0.00')).toBeNull()
+    expect(texts('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value')).toContain('openai')
+    expect(texts('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value')).toContain('azure-foundry')
+    expect(within(card).queryByText(/\$/)).toBeNull()
   })
 })

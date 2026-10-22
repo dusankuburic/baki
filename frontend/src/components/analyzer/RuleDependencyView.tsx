@@ -1,164 +1,126 @@
 import {getErrorMessage} from '@/lib/getErrorMessage'
-import {useRef, useEffect, useState, useCallback} from 'react'
+import {memo, useEffect, useState, useCallback, useMemo} from 'react'
 import {useTranslation} from 'react-i18next'
-import cytoscape from 'cytoscape'
-import dagre from 'cytoscape-dagre'
+import {Position, type Edge, type Node, type NodeMouseHandler, type NodeProps} from '@xyflow/react'
 import {Loader2, AlertTriangle, RefreshCw} from 'lucide-react'
 import {analysisApi} from '@/api'
+import FlowCanvas from '@/components/graph/flow/FlowCanvas'
+import FlowHandles from '@/components/graph/flow/FlowHandles'
+import {arrowMarker} from '@/components/graph/flow/edges'
+import {layoutDagre} from '@/components/graph/flow/layout'
+import {useFlowColors} from '@/components/graph/flow/colors'
 import {useUIStore} from '@/stores/uiStore'
 import {logger} from '@/lib/logger'
 import type {DependencyAnalysis} from '@/types'
 
-cytoscape.use(dagre)
+const RULE_NODE_WIDTH = 180
+const RULE_NODE_HEIGHT = 44
+const RULE_NODE_TYPE = 'rule'
 
-function buildStyle(): cytoscape.StylesheetJson {
-  const cs = getComputedStyle(document.documentElement)
-  const cssVar = (v: string) => cs.getPropertyValue(v).trim()
-  return [
-    {
-      selector: 'node',
-      style: {
-        shape: 'round-rectangle',
-        width: '180px',
-        height: '44px',
-        'background-color': cssVar('--surface-2'),
-        'border-width': 1.5,
-        'border-color': cssVar('--border-strong'),
-        label: 'data(label)',
-        color: cssVar('--text-primary'),
-        'font-size': '11px',
-        'font-family': 'var(--font-mono)',
-        'text-valign': 'center',
-        'text-halign': 'center',
-        'text-wrap': 'ellipsis',
-        padding: '6px',
-      },
-    },
-    {
-      selector: 'edge',
-      style: {
-        width: 1.5,
-        'line-color': cssVar('--border-strong'),
-        'target-arrow-color': cssVar('--border-strong'),
-        'target-arrow-shape': 'triangle',
-        'curve-style': 'bezier',
-        label: 'data(reason)',
-        'font-size': '9px',
-        color: cssVar('--text-tertiary'),
-        'text-background-color': cssVar('--surface-1'),
-        'text-background-padding': '2px',
-        'text-background-opacity': 0.9,
-        'text-rotation': 'autorotate',
-      },
-    },
-    {
-      selector: 'node:selected',
-      style: {'border-color': cssVar('--brand-500'), 'border-width': 3},
-    },
-    {
-      selector: '.cycle-node',
-      style: {'border-color': cssVar('--error'), 'border-width': 2.5},
-    },
-  ]
-}
+type RuleNodeData = {label: string}
+type RuleFlowNode = Node<RuleNodeData, typeof RULE_NODE_TYPE>
+
+const RuleNode = memo(function RuleNode({data}: NodeProps<RuleFlowNode>) {
+  return (
+    <div className="flow-node" style={{width: RULE_NODE_WIDTH, height: RULE_NODE_HEIGHT}}>
+      <FlowHandles source={Position.Bottom} target={Position.Top} />
+      <div className="flow-card flex h-full w-full items-center justify-center rounded-lg border border-border-strong bg-surface-2 px-1.5">
+        <span className="truncate font-mono text-[11px] text-text-primary">{data.label}</span>
+      </div>
+    </div>
+  )
+})
+
+const nodeTypes = {[RULE_NODE_TYPE]: RuleNode}
 
 type RelatedRulesResponse = DependencyAnalysis & {editorial?: boolean; description?: string}
 
 export default function RuleDependencyView() {
   const {t} = useTranslation('analyzer')
-  const containerRef = useRef<HTMLDivElement>(null)
-  const cyRef = useRef<cytoscape.Core | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<RelatedRulesResponse | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
-  const resolvedTheme = useUIStore(s => s.resolvedTheme)
   const setMainPaneView = useUIStore(s => s.setMainPaneView)
-
-  const renderGraph = useCallback((dep: DependencyAnalysis) => {
-    const cy = cyRef.current
-    if (!cy) return
-    const nodeIds = new Set<string>(dep.topoOrder ?? [])
-    for (const d of dep.dependencies ?? []) {
-      nodeIds.add(d.fromRuleId)
-      nodeIds.add(d.toRuleId)
-    }
-    const inCycle = new Set<string>((dep.cycles ?? []).flat())
-
-    const elements = [
-      ...Array.from(nodeIds).map(id => ({
-        data: {id, label: id},
-        classes: inCycle.has(id) ? 'cycle-node' : '',
-      })),
-      ...(dep.dependencies ?? []).map((d, i) => ({
-        data: {id: `e${i}`, source: d.fromRuleId, target: d.toRuleId, reason: shortReason(d.reason)},
-      })),
-    ]
-
-    cy.batch(() => {
-      cy.elements().remove()
-      cy.add(elements)
-    })
-    cy.layout({
-      name: 'dagre',
-      rankDir: 'TB',
-      nodeSep: 50,
-      rankSep: 70,
-      animate: true,
-      animationDuration: 400,
-    } as cytoscape.LayoutOptions).run()
-    cy.fit(undefined, 40)
-  }, [])
+  const colors = useFlowColors()
 
   const load = useCallback(async () => {
-    const inst = cyRef.current
     setLoading(true)
     setError(null)
     try {
-      const dep: RelatedRulesResponse = await analysisApi.getDependencies()
-      setData(dep)
-      if (cyRef.current && cyRef.current === inst) renderGraph(dep)
+      setData(await analysisApi.getDependencies())
     } catch (err) {
-      if (cyRef.current === inst) {
-        setError(getErrorMessage(err))
-        logger.warn('related rules view: load failed', err)
-      }
+      setError(getErrorMessage(err))
+      logger.warn('related rules view: load failed', err)
     } finally {
-      if (cyRef.current === inst) setLoading(false)
+      setLoading(false)
     }
-  }, [renderGraph])
+  }, [])
 
   useEffect(() => {
-    if (!containerRef.current) return
-
-    const instance = cytoscape({
-      container: containerRef.current,
-      style: buildStyle(),
-      minZoom: 0.3,
-      maxZoom: 2.5,
-    })
-
-    instance.on('tap', 'node', (evt: cytoscape.EventObject) => {
-      setSelected(evt.target.id())
-    })
-    instance.on('tap', (evt: cytoscape.EventObject) => {
-      if (evt.target === instance) setSelected(null)
-    })
-
-    cyRef.current = instance
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load()
-    return () => {
-      instance.destroy()
-      cyRef.current = null
-    }
   }, [load])
 
-  const styledFor = useRef(resolvedTheme)
-  useEffect(() => {
-    if (styledFor.current === resolvedTheme) return
-    styledFor.current = resolvedTheme
-    cyRef.current?.style().fromJson(buildStyle()).update()
-  }, [resolvedTheme])
+  const graph = useMemo(() => {
+    const ids = new Set<string>(data?.topoOrder ?? [])
+    for (const dep of data?.dependencies ?? []) {
+      ids.add(dep.fromRuleId)
+      ids.add(dep.toRuleId)
+    }
+    const nodes = [...ids].map(id => ({id, width: RULE_NODE_WIDTH, height: RULE_NODE_HEIGHT}))
+    const edges = (data?.dependencies ?? []).map((dep, i) => ({
+      id: `e${i}`,
+      source: dep.fromRuleId,
+      target: dep.toRuleId,
+      reason: shortReason(dep.reason),
+    }))
+    return {nodes, edges, inCycle: new Set<string>((data?.cycles ?? []).flat())}
+  }, [data])
+
+  const layout = useMemo(
+    () => layoutDagre(graph.nodes, graph.edges, {rankdir: 'TB', nodesep: 50, ranksep: 70}),
+    [graph],
+  )
+
+  const nodes = useMemo<RuleFlowNode[]>(
+    () =>
+      graph.nodes.map(node => ({
+        id: node.id,
+        type: RULE_NODE_TYPE,
+        position: layout.positions.get(node.id) ?? {x: 0, y: 0},
+        width: RULE_NODE_WIDTH,
+        height: RULE_NODE_HEIGHT,
+        data: {label: node.id},
+        className: [
+          'flow-node',
+          graph.inCycle.has(node.id) ? 'flow-node--cycle' : '',
+          node.id === selected ? 'flow-node--selected' : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
+      })),
+    [graph, layout, selected],
+  )
+
+  const edges = useMemo<Edge[]>(
+    () =>
+      graph.edges.map(edge => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        label: edge.reason,
+        labelStyle: {fill: colors.edge, fontSize: 9},
+        labelBgStyle: {fill: colors.surface1, fillOpacity: 0.9},
+        labelBgPadding: [2, 1] as [number, number],
+        style: {stroke: colors.edge, strokeWidth: 1.5},
+        markerEnd: arrowMarker(colors.edge, 0.9),
+      })),
+    [graph, colors],
+  )
+
+  const onNodeClick = useCallback<NodeMouseHandler>((_, node) => setSelected(node.id), [])
+  const onPaneClick = useCallback(() => setSelected(null), [])
 
   const selectedDeps =
     data && selected ? (data.dependencies ?? []).filter(d => d.fromRuleId === selected || d.toRuleId === selected) : []
@@ -166,7 +128,18 @@ export default function RuleDependencyView() {
 
   return (
     <div className="relative w-full h-full bg-surface-1">
-      <div ref={containerRef} className="absolute inset-0" />
+      <FlowCanvas
+        className="absolute inset-0"
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        minZoom={0.3}
+        maxZoom={2.5}
+        fitPadding="40px"
+        fitSignal={`${nodes.length}:${edges.length}`}
+        onNodeClick={onNodeClick}
+        onPaneClick={onPaneClick}
+      />
 
       <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none">
         <div className="flex items-center gap-2 pointer-events-auto">
@@ -230,13 +203,7 @@ export default function RuleDependencyView() {
         <div className="absolute bottom-3 left-3 w-72 max-w-[80%] p-3 rounded-lg bg-surface-2/90 border border-border-subtle backdrop-blur-sm text-xs">
           <div className="flex items-center justify-between mb-2">
             <span className="font-mono font-semibold text-text-primary">{selected}</span>
-            <button
-              onClick={() => {
-                setSelected(null)
-                cyRef.current?.$(':selected').unselect()
-              }}
-              className="text-text-tertiary hover:text-text-primary"
-            >
+            <button onClick={() => setSelected(null)} className="text-text-tertiary hover:text-text-primary">
               ×
             </button>
           </div>

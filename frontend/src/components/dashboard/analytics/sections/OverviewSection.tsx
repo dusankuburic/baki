@@ -1,7 +1,7 @@
 import {useTranslation} from 'react-i18next'
 import {StatTile, type StatDelta} from '@/components/charts'
 import {healthTier} from '@/lib/scoring'
-import {formatCompactIntl, formatCurrency, formatDateLong} from '@/lib/format'
+import {formatCompactIntl, formatDateLong} from '@/lib/format'
 import type {DashboardAnalyticsData, StatValue} from '@/types'
 import {ChartSection} from '../ChartSection'
 
@@ -103,14 +103,6 @@ export function OverviewSection({data}: {data: DashboardAnalyticsData}) {
           unavailable={unavailable(summary.resolved)}
           delta={delta(summary.resolved, 'up')}
           spark={summary.resolved.spark}
-        />
-        <StatTile
-          label={t('analytics.tiles.aiSpend')}
-          value={formatCurrency(summary.aiSpend.value)}
-          sub={t('analytics.tiles.inWindow')}
-          unavailable={unavailable(summary.aiSpend)}
-          delta={delta(summary.aiSpend, 'neutral')}
-          spark={summary.aiSpend.spark}
         />
       </div>
       {applied.derived && <p className="analytics-span-12 text-2xs text-text-tertiary">{t('analytics.derivedNote')}</p>}

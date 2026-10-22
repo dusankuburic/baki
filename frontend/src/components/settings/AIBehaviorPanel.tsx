@@ -139,37 +139,7 @@ export default function AIBehaviorPanel() {
           }
         />
 
-        <SettingRow
-          title={t('behavior.showCosts')}
-          hint={t('behavior.showCostsHint')}
-          control={
-            <Switch
-              label={t('behavior.showCosts')}
-              labelHidden
-              checked={ai.showCostEstimates}
-              onChange={v => updateAI({showCostEstimates: v})}
-            />
-          }
-        />
 
-        {!localBackend && (
-          <SettingRow
-            title={t('behavior.dailyBudget')}
-            hint={t('behavior.dailyBudgetHint')}
-            control={
-              <div className="w-24">
-                <NumberField
-                  step="0.5"
-                  min={0}
-                  fallback={0}
-                  integer={false}
-                  value={ai.dailyBudget}
-                  onCommit={v => updateAI({dailyBudget: v})}
-                />
-              </div>
-            }
-          />
-        )}
       </div>
 
       <div className="pt-2">

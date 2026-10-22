@@ -75,12 +75,12 @@ const doc = {
   ],
 } as unknown as FlowDocument
 
-function renderView() {
+function renderView(subflowId?: string) {
   useFlowStore.setState({selectedBlockIds: new Set(), renamingBlockId: null} as never)
   return render(
     <ToastProvider>
       <ConfirmProvider>
-        <BlockView />
+        <BlockView subflowId={subflowId} />
       </ConfirmProvider>
     </ToastProvider>,
   )
@@ -296,5 +296,13 @@ describe('BlockView canvas legibility (U3a)', () => {
     } finally {
       blockCanvasScrollers.clear()
     }
+  })
+
+  it('cleans up blockCanvasScrollers on unmount to prevent memory leaks', () => {
+    blockCanvasScrollers.set('subflow-test-id', document.createElement('div'))
+    const {unmount} = renderView('subflow-test-id')
+    expect(blockCanvasScrollers.has('subflow-test-id')).toBe(true)
+    unmount()
+    expect(blockCanvasScrollers.has('subflow-test-id')).toBe(false)
   })
 })

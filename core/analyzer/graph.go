@@ -1,4 +1,4 @@
-package analyzer
+﻿package analyzer
 
 import (
 	"strings"
@@ -56,7 +56,7 @@ func resolveCallTargetID(b *models.Block, nameIndex map[string]string) string {
 func BuildExecutionGraph(doc *models.FlowDocument, report *models.AnalysisReport) *models.GraphData {
 	nodes := make([]models.GraphNode, 0, len(doc.Subflows))
 	edges := make([]models.GraphEdge, 0)
-	edgeMap := make(map[string]bool)
+	edgeIndexMap := make(map[string]int)
 
 	errCounts := make(map[string]int)
 	warnCounts := make(map[string]int)
@@ -94,9 +94,18 @@ func BuildExecutionGraph(doc *models.FlowDocument, report *models.AnalysisReport
 				return
 			}
 			edgeKey := sf.ID + "->" + targetID
-			if !edgeMap[edgeKey] {
-				edges = append(edges, models.GraphEdge{Source: sf.ID, Target: targetID})
-				edgeMap[edgeKey] = true
+			idx, exists := edgeIndexMap[edgeKey]
+			if !exists {
+				idx = len(edges)
+				edges = append(edges, models.GraphEdge{
+					Source: sf.ID,
+					Target: targetID,
+				})
+				edgeIndexMap[edgeKey] = idx
+			}
+			edges[idx].CallCount++
+			if b.RawType == "DISABLED_CALL" {
+				edges[idx].DisabledCount++
 			}
 		})
 	}

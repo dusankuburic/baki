@@ -1,5 +1,9 @@
 import {defineConfig, devices} from '@playwright/test'
 
+// E2E_PORT lets a local run avoid a dev server another project already has on the default port.
+const port = Number(process.env.E2E_PORT ?? 5173)
+const baseURL = `http://localhost:${port}`
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -8,7 +12,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL,
     trace: 'on-first-retry',
     serviceWorkers: 'block',
   },
@@ -19,8 +23,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
+    command: `npm run dev -- --port ${port} --strictPort`,
+    url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
   },

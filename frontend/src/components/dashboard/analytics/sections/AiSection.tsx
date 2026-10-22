@@ -3,14 +3,13 @@ import {useTranslation} from 'react-i18next'
 import type {TFunction} from 'i18next'
 import {
   ChartCard,
-  ColumnChart,
   DataTable,
   HBarChart,
   StackedAreaChart,
   useChartTheme,
   type HBarRow,
 } from '@/components/charts'
-import {formatCompactIntl, formatCurrency, formatDateLong} from '@/lib/format'
+import {formatCompactIntl, formatDateLong} from '@/lib/format'
 import type {DashboardAnalyticsData, ModelUsage} from '@/types'
 import {ChartSection} from '../ChartSection'
 
@@ -29,35 +28,25 @@ export function modelLabel(t: TFunction<'dashboard'>, r: Pick<ModelUsage, 'model
   return r.servedModel && r.servedModel !== raw ? `${id} · ${r.servedModel}` : id
 }
 
-const isUnpriced = (provider: string) => provider === 'azure-foundry'
-
-function ProviderCost({provider, cost}: {provider: string; cost: number}) {
-  const {t} = useTranslation('dashboard')
-  if (!isUnpriced(provider)) return formatCurrency(cost)
-  const label = t('analytics.cards.costNotPriced')
-  return (
-    <span title={label}>
-      <span aria-hidden="true">—</span>
-      <span className="sr-only">{label}</span>
-    </span>
-  )
-}
-
 export function AiSection({data, refetching}: {data: DashboardAnalyticsData; refetching: boolean}) {
   const {t} = useTranslation('dashboard')
   const theme = useChartTheme()
   const ai = data.ai
   const failed = data.partial.includes('ai')
   const hasTokens = ai.daily.some(d => d.tokensIn > 0 || d.tokensOut > 0)
-  const hasCost = ai.daily.some(d => d.cost > 0)
   const providers = useMemo<ProviderRow[]>(
     () =>
       [...ai.byProvider]
-        .sort((a, b) => b.cost - a.cost)
-        .map(p => ({key: p.provider, label: p.provider, value: p.cost, tokensIn: p.tokensIn, tokensOut: p.tokensOut})),
+        .sort((a, b) => (b.tokensIn + b.tokensOut) - (a.tokensIn + a.tokensOut))
+        .map(p => ({
+          key: p.provider,
+          label: p.provider,
+          value: p.tokensIn + p.tokensOut,
+          tokensIn: p.tokensIn,
+          tokensOut: p.tokensOut,
+        })),
     [ai.byProvider],
   )
-  const pricedProviders = useMemo(() => providers.filter(p => !isUnpriced(p.key)), [providers])
   const scope =
     ai.scoped === 'org'
       ? t('analytics.cards.aiScopeOrg')
@@ -83,7 +72,7 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
         state={state(hasTokens)}
         refetching={refetching}
         emptyMessage={t('analytics.cards.aiEmpty')}
-        className="analytics-span-7"
+        className="analytics-span-12"
         table={{
           caption: t('analytics.cards.tokens'),
           filename: 'ai-tokens.csv',
@@ -108,39 +97,6 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
         />
       </ChartCard>
       <ChartCard
-        title={t('analytics.cards.cost')}
-        subtitle={t('analytics.cards.costSub')}
-        state={state(hasCost)}
-        refetching={refetching}
-        emptyMessage={t('analytics.cards.aiEmpty')}
-        className="analytics-span-5"
-        table={{
-          caption: t('analytics.cards.cost'),
-          filename: 'ai-cost.csv',
-          rowKey: r => r.date,
-          columns: [
-            dateCol,
-            {
-              key: 'cost',
-              header: t('analytics.columns.cost'),
-              align: 'right',
-              render: r => formatCurrency(r.cost),
-              csv: r => String(r.cost),
-            },
-          ],
-          rows: ai.daily,
-        }}
-      >
-        <ColumnChart
-          data={ai.daily}
-          dataKey="cost"
-          name={t('analytics.columns.cost')}
-          valueFormatter={v => formatCurrency(v)}
-          allowDecimals
-          height={220}
-        />
-      </ChartCard>
-      <ChartCard
         title={t('analytics.cards.byProvider')}
         state={state(providers.length > 0)}
         refetching={refetching}
@@ -148,33 +104,40 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
         className="analytics-span-5"
         table={{
           caption: t('analytics.cards.byProvider'),
-          filename: 'ai-cost-by-provider.csv',
+          filename: 'ai-tokens-by-provider.csv',
           rowKey: r => r.key,
           columns: [
             {key: 'label', header: t('analytics.columns.provider')},
-            {key: 'tokensIn', header: t('analytics.columns.tokensIn'), align: 'right'},
-            {key: 'tokensOut', header: t('analytics.columns.tokensOut'), align: 'right'},
+            {
+              key: 'tokensIn',
+              header: t('analytics.columns.tokensIn'),
+              align: 'right',
+              render: r => formatCompactIntl(r.tokensIn),
+              csv: r => String(r.tokensIn),
+            },
+            {
+              key: 'tokensOut',
+              header: t('analytics.columns.tokensOut'),
+              align: 'right',
+              render: r => formatCompactIntl(r.tokensOut),
+              csv: r => String(r.tokensOut),
+            },
             {
               key: 'value',
-              header: t('analytics.columns.cost'),
+              header: t('analytics.columns.tokens'),
               align: 'right',
-              render: r => <ProviderCost provider={r.key} cost={r.value} />,
+              render: r => formatCompactIntl(r.value),
               csv: r => String(r.value),
             },
           ],
           rows: providers,
         }}
       >
-        {pricedProviders.length > 0 ? (
-          <HBarChart
-            rows={pricedProviders}
-            valueName={t('analytics.columns.cost')}
-            valueFormatter={v => formatCurrency(v)}
-            allowDecimals
-          />
-        ) : (
-          <p className="py-8 text-center text-sm text-text-tertiary">{t('analytics.cards.costOnlyUnpriced')}</p>
-        )}
+        <HBarChart
+          rows={providers}
+          valueName={t('analytics.columns.tokens')}
+          valueFormatter={v => formatCompactIntl(v)}
+        />
       </ChartCard>
       <ChartCard
         title={t('analytics.cards.byModel')}
@@ -209,13 +172,6 @@ export function AiSection({data, refetching}: {data: DashboardAnalyticsData; ref
               align: 'right',
               render: r => formatCompactIntl(r.tokensOut),
               csv: r => String(r.tokensOut),
-            },
-            {
-              key: 'cost',
-              header: t('analytics.columns.cost'),
-              align: 'right',
-              render: r => <ProviderCost provider={r.provider} cost={r.cost} />,
-              csv: r => String(r.cost),
             },
           ]}
           rows={ai.byModel}

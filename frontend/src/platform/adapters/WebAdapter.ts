@@ -44,10 +44,8 @@ export class WebAdapter implements PlatformAdapter {
       }
 
       let settled = false
-      let gotChange = false
       const cleanup = () => {
         if (input.parentNode) document.body.removeChild(input)
-        window.removeEventListener('focus', onFocus)
       }
       const done = (val: string | string[] | null) => {
         if (settled) return
@@ -57,15 +55,8 @@ export class WebAdapter implements PlatformAdapter {
         resolve(val)
       }
       const fallbackTimer = setTimeout(() => done(null), 300_000)
-      const onFocus = () => {
-        setTimeout(() => {
-          if (!settled && !gotChange) done(null)
-        }, 100)
-      }
-      window.addEventListener('focus', onFocus)
 
       input.onchange = e => {
-        gotChange = true
         const files = (e.target as HTMLInputElement).files
         if (!files || files.length === 0) {
           done(null)
@@ -109,17 +100,15 @@ export class WebAdapter implements PlatformAdapter {
   }
 
   async fileOpenDirectory(): Promise<string | null> {
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
       const input = document.createElement('input')
       input.type = 'file'
       input.webkitdirectory = true
       input.style.display = 'none'
 
       let settled = false
-      let gotChange = false
       const cleanup = () => {
         if (input.parentNode) document.body.removeChild(input)
-        window.removeEventListener('focus', onFocus)
       }
       const done = (val: string | null) => {
         if (settled) return
@@ -129,50 +118,66 @@ export class WebAdapter implements PlatformAdapter {
         resolve(val)
       }
       const fallbackTimer = setTimeout(() => done(null), 300_000)
-      const onFocus = () => {
-        setTimeout(() => {
-          if (!settled && !gotChange) done(null)
-        }, 100)
-      }
-      window.addEventListener('focus', onFocus)
 
       input.onchange = async e => {
-        gotChange = true
         const files = (e.target as HTMLInputElement).files
         if (!files || files.length === 0) {
           done(null)
           return
         }
 
+        const validFiles = Array.from(files).filter(file => {
+          const lower = file.name.toLowerCase()
+          return lower.endsWith('.txt') || lower.endsWith('.pad')
+        })
+
+        if (validFiles.length === 0) {
+          logger.warn('No .txt or .pad files found in selected directory', {totalFiles: files.length})
+          cleanup()
+          clearTimeout(fallbackTimer)
+          settled = true
+          reject(new Error('No .txt or .pad flow files found in selected folder'))
+          return
+        }
+
         const fileMap: Record<string, string> = {}
         let directoryName = ''
 
-        const promises = Array.from(files)
-          .filter(file => file.name.toLowerCase().endsWith('.txt'))
-          .map(file => {
-            if (!directoryName && file.webkitRelativePath) {
-              directoryName = file.webkitRelativePath.split('/')[0] ?? ''
+        const promises = validFiles.map(file => {
+          if (!directoryName && file.webkitRelativePath) {
+            directoryName = file.webkitRelativePath.split('/')[0] ?? ''
+          }
+          const relPath = file.webkitRelativePath
+            ? file.webkitRelativePath.split('/').slice(1).join('/') || file.name
+            : file.name
+
+          return new Promise<void>(res => {
+            const maxBytes = 100 * 1024 * 1024
+            if (file.size > maxBytes) {
+              logger.warn('Folder member exceeds 100MB limit, skipping', {name: file.name, size: file.size})
+              res()
+              return
             }
-            return new Promise<void>(res => {
-              const maxBytes = 100 * 1024 * 1024
-              if (file.size > maxBytes) {
-                res()
-                return
-              }
-              const reader = new FileReader()
-              reader.onload = e => {
-                fileMap[file.name] = e.target?.result as string
-                res()
-              }
-              reader.onerror = () => res()
-              reader.readAsText(file)
-            })
+            const reader = new FileReader()
+            reader.onload = ev => {
+              fileMap[relPath] = ev.target?.result as string
+              res()
+            }
+            reader.onerror = () => {
+              logger.warn('Failed to read folder member', {name: file.name})
+              res()
+            }
+            reader.readAsText(file)
           })
+        })
 
         await Promise.all(promises)
 
         if (Object.keys(fileMap).length === 0) {
-          done(null)
+          cleanup()
+          clearTimeout(fallbackTimer)
+          settled = true
+          reject(new Error('Failed to read files from selected folder'))
           return
         }
 

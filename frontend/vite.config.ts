@@ -10,7 +10,7 @@ function vendorChunk(id: string): string | undefined {
 
   if (inPkg(['react', 'react-dom', 'scheduler', 'use-sync-external-store'])) return 'react-vendor'
   if (inPkg(['clsx'])) return 'react-vendor'
-  if (inPkg(['cytoscape', 'cytoscape-dagre', 'dagre'])) return 'graph'
+  if (inPkg(['@xyflow/react', '@xyflow/system', 'dagre', 'd3-zoom', 'd3-drag', 'd3-selection'])) return 'graph'
   if (
     inPkg([
       'recharts',

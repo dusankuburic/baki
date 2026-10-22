@@ -69,6 +69,15 @@ export const THEME_REGISTRY: ThemeMeta[] = [
 export const DARK_THEMES = THEME_REGISTRY.filter(t => t.category === 'dark')
 export const LIGHT_THEMES = THEME_REGISTRY.filter(t => t.category === 'light')
 
+/**
+ * Whether a resolved theme is a light one, by the same registry the theme picker and the `dark:`
+ * variant in `index.css` use. Components that must tell a library (React Flow's `colorMode`) which
+ * scheme it is in ask here instead of keeping their own list.
+ */
+export function isLightTheme(theme: ThemeMode | string): boolean {
+  return THEME_REGISTRY.find(t => t.id === theme)?.category === 'light'
+}
+
 export const SYSTEM_THEME = {
   id: 'system' as ThemeMode,
   label: 'System',

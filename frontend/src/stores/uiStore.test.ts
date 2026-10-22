@@ -1,4 +1,4 @@
-import {describe, it, expect, beforeEach} from 'vitest'
+﻿import {describe, it, expect, beforeEach} from 'vitest'
 import {useUIStore, isSystemView, type MainPaneView} from './uiStore'
 import {resetAllStores} from './storeRegistry'
 
@@ -207,5 +207,34 @@ describe('uiStore settings modal', () => {
     useUIStore.getState().openSettings('accounts', 'provider-azure-foundry')
     await resetAllStores()
     expect(useUIStore.getState().settingsAnchor).toBeNull()
+  })
+
+  describe('subflowMap layout preferences', () => {
+    it('updates layout, direction, and routing', () => {
+      expect(useUIStore.getState().subflowMapLayout).toBe('hierarchy')
+      expect(useUIStore.getState().subflowMapDirection).toBe('LR')
+      expect(useUIStore.getState().subflowMapRouting).toBe('corridor')
+
+      useUIStore.getState().setSubflowMapLayout('radial')
+      expect(useUIStore.getState().subflowMapLayout).toBe('radial')
+
+      useUIStore.getState().setSubflowMapDirection('TB')
+      expect(useUIStore.getState().subflowMapDirection).toBe('TB')
+
+      useUIStore.getState().setSubflowMapRouting('straight')
+      expect(useUIStore.getState().subflowMapRouting).toBe('straight')
+    })
+
+    it('resets map preferences to defaults on resetAllStores', async () => {
+      useUIStore.getState().setSubflowMapLayout('cluster')
+      useUIStore.getState().setSubflowMapDirection('TB')
+      useUIStore.getState().setSubflowMapRouting('straight')
+
+      await resetAllStores()
+
+      expect(useUIStore.getState().subflowMapLayout).toBe('hierarchy')
+      expect(useUIStore.getState().subflowMapDirection).toBe('LR')
+      expect(useUIStore.getState().subflowMapRouting).toBe('corridor')
+    })
   })
 })

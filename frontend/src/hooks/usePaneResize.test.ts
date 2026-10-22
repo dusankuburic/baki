@@ -43,6 +43,29 @@ describe('usePaneResize — DOM-mutation drag contract', () => {
     expect(result.current.sidebarWidth).toBe(280)
   })
 
+  it('tells the graphs nothing: a React Flow graph does not repaint when its pane resizes', () => {
+    const onGraphResize = vi.fn()
+    window.addEventListener('graph:resize', onGraphResize)
+    try {
+      const {result} = renderHook(() => usePaneResize())
+      const sidebar = makeDiv(280)
+      const inspector = makeDiv(320)
+      act(() => {
+        result.current.sidebarRef.current = sidebar
+        result.current.inspectorRef.current = inspector
+      })
+
+      act(() => result.current.handleSidebarDrag(10))
+      act(() => result.current.handleInspectorDrag(-10))
+      act(() => result.current.handleInspectorResizeEnd())
+
+      expect(inspector.style.width).toBe('330px')
+      expect(onGraphResize).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('graph:resize', onGraphResize)
+    }
+  })
+
   it('clamps the sidebar to [200, 480]', () => {
     const {result} = renderHook(() => usePaneResize())
     const div = makeDiv(280)

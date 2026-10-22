@@ -1,4 +1,4 @@
-
+﻿
 export type BlockType =
   | 'ACTION'
   | 'LOOP'
@@ -119,6 +119,8 @@ export interface GraphNode {
 export interface GraphEdge {
   source: string
   target: string
+  callCount?: number
+  disabledCount?: number
 }
 
 export interface GraphData {

@@ -176,13 +176,14 @@ export default function Sidebar() {
   }, [document, t])
 
   const folderName = useMemo(() => {
+    if (document?.name) return document.name
     if (!folderFiles?.length) return ''
     const first = folderFiles[0]
     if (!first) return ''
     const p = first.path
     const parts = p.split(p.includes('\\') ? '\\' : '/')
     return parts.length > 1 ? (parts[parts.length - 2] ?? '') : ''
-  }, [folderFiles])
+  }, [folderFiles, document])
 
   return (
     <div className="flex flex-col h-full bg-surface-1">

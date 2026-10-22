@@ -3727,6 +3727,106 @@ input:-webkit-autofill:active {
   }
 }
 
-.__________cytoscape_container.absolute {
-  position: absolute;
+/*
+ * React Flow graph views (Graph, Map, Local Map, variable lineage, rule dependencies).
+ *
+ * Every per-element state is a class here rather than a stylesheet the renderer re-applies, so
+ * selecting, searching, dimming or switching theme costs one CSS repaint and nothing is
+ * re-rasterized. React Flow puts a node's `className` on its `.react-flow__node` wrapper.
+ */
+.react-flow {
+  --xy-edge-stroke-default: var(--border-strong);
+  --xy-edge-stroke-selected-default: var(--brand-500);
+  --xy-attribution-background-color-default: transparent;
+  --xy-minimap-background-color-default: color-mix(in srgb, var(--surface-1) 85%, transparent);
+  --xy-minimap-mask-background-color-default: color-mix(in srgb, var(--surface-0) 55%, transparent);
+  --xy-minimap-mask-stroke-color-default: var(--brand-500);
+  --xy-minimap-mask-stroke-width-default: 2;
+}
+
+.react-flow__attribution a {
+  color: var(--text-tertiary);
+  font-size: 9px;
+}
+
+.react-flow__minimap {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Handles exist so React Flow can anchor edges; they are not connection targets here. */
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+  min-width: 1px;
+  min-height: 1px;
+  width: 1px;
+  height: 1px;
+  border: 0;
+}
+
+.flow-node {
+  transition:
+    opacity 150ms ease,
+    border-color 150ms ease;
+}
+
+.flow-node--dimmed {
+  opacity: 0.15;
+}
+
+.flow-edge--dimmed {
+  opacity: 0.08;
+}
+
+.react-flow__edge.flow-edge--highlighted .react-flow__edge-path {
+  stroke: var(--brand-500);
+}
+
+.react-flow__node.flow-node--focused .flow-card,
+.react-flow__node.flow-node--selected .flow-card {
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 1px var(--brand-500);
+}
+
+.react-flow__node.flow-node--search-match .flow-card {
+  border-color: var(--warning);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning) 60%, transparent);
+}
+
+.react-flow__node.flow-node--anchor .flow-card {
+  border-style: dashed;
+  border-color: var(--brand-500);
+}
+
+.react-flow__node.flow-node--finding-error .flow-card {
+  border-color: var(--error);
+}
+
+.react-flow__node.flow-node--finding-warning .flow-card {
+  border-color: var(--warning);
+}
+
+.react-flow__node.flow-node--finding-info .flow-card {
+  border-color: var(--info);
+}
+
+.react-flow__node.flow-node--variable-highlighted .flow-card {
+  border-color: var(--warning);
+  border-width: 2px;
+}
+
+.react-flow__node.flow-node--remote-selected .flow-card {
+  border-color: var(--brand-500);
+  border-style: dashed;
+}
+
+.react-flow__node.flow-node--cycle .flow-card {
+  border-color: var(--error);
+}
+
+/* The selection outline React Flow draws by default; ours is on the card itself. */
+.react-flow__node.selected .flow-card {
+  outline: none;
 }

@@ -109,8 +109,12 @@ export function usePaneResize() {
     [handleInspectorDrag, handleInspectorResizeEnd],
   )
 
-  const handleSidebarReset = useCallback(() => updateLayout({sidebarWidth: 280}), [updateLayout])
-  const handleInspectorReset = useCallback(() => updateLayout({inspectorWidth: 320}), [updateLayout])
+  const handleSidebarReset = useCallback(() => {
+    void updateLayout({sidebarWidth: 280})
+  }, [updateLayout])
+  const handleInspectorReset = useCallback(() => {
+    void updateLayout({inspectorWidth: 320})
+  }, [updateLayout])
 
   return {
     sidebarRef,

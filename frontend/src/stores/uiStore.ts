@@ -1,4 +1,4 @@
-import {create} from 'zustand'
+﻿import {create} from 'zustand'
 import {registerStoreReset} from './storeRegistry'
 import type {FlowDiff} from '@/types'
 
@@ -39,6 +39,10 @@ export type ResolvedTheme =
   | 'everforest'
 export type SidebarTab = 'explorer' | 'variables' | 'library'
 export type InspectorTab = 'details' | 'ai' | 'findings' | 'metrics' | 'sharing' | 'history'
+
+export type SubflowMapLayout = 'hierarchy' | 'radial' | 'cluster'
+export type SubflowMapDirection = 'LR' | 'TB'
+export type SubflowMapRouting = 'corridor' | 'straight'
 
 export type SettingsSection =
   | 'general'
@@ -92,6 +96,9 @@ interface UiState {
   sourceEditorDirty: boolean
   showHelpOverlay: boolean
   chatFocus: boolean
+  subflowMapLayout: SubflowMapLayout
+  subflowMapDirection: SubflowMapDirection
+  subflowMapRouting: SubflowMapRouting
 
   setResolvedTheme: (t: ResolvedTheme) => void
   setSidebarTab: (t: SidebarTab) => void
@@ -121,6 +128,9 @@ interface UiState {
   toggleSettings: () => void
   setChatFocus: (on: boolean) => void
   toggleChatFocus: () => void
+  setSubflowMapLayout: (layout: SubflowMapLayout) => void
+  setSubflowMapDirection: (direction: SubflowMapDirection) => void
+  setSubflowMapRouting: (routing: SubflowMapRouting) => void
 }
 
 function isDesktopViewport(): boolean {
@@ -151,6 +161,9 @@ export const useUIStore = create<UiState>((set, get) => ({
   sourceEditorDirty: false,
   showHelpOverlay: false,
   chatFocus: false,
+  subflowMapLayout: 'hierarchy',
+  subflowMapDirection: 'LR',
+  subflowMapRouting: 'corridor',
 
   setResolvedTheme: t => set({resolvedTheme: t}),
   setSidebarTab: t => set({sidebarTab: t}),
@@ -209,6 +222,9 @@ export const useUIStore = create<UiState>((set, get) => ({
       return s.chatFocus ? {chatFocus: false, inspectorTab: 'ai'} : {}
     }),
   toggleChatFocus: () => get().setChatFocus(!get().chatFocus),
+  setSubflowMapLayout: layout => set({subflowMapLayout: layout}),
+  setSubflowMapDirection: direction => set({subflowMapDirection: direction}),
+  setSubflowMapRouting: routing => set({subflowMapRouting: routing}),
 }))
 
 registerStoreReset(() =>
@@ -219,6 +235,9 @@ registerStoreReset(() =>
     sidebarCollapsed: false,
     inspectorCollapsed: false,
     chatFocus: false,
+    subflowMapLayout: 'hierarchy',
+    subflowMapDirection: 'LR',
+    subflowMapRouting: 'corridor',
     commandPaletteOpen: false,
     globalSearchOpen: false,
     complexityMode: false,

@@ -1,4 +1,4 @@
-import {describe, it, expect} from 'vitest'
+﻿import {describe, it, expect} from 'vitest'
 import {readdirSync, readFileSync, statSync} from 'node:fs'
 import {join} from 'node:path'
 
@@ -102,7 +102,10 @@ const NO_USER_FACING_COPY = new Set([
 
   'src/components/flow/BlockConnector.tsx',
   'src/components/flow/index.ts',
-  'src/components/flow/useCytoscapeGraph.ts',
+  'src/components/flow/subflowMap/layout.ts',
+  'src/components/flow/subflowMap/model.ts',
+  'src/components/flow/subflowMap/roles.ts',
+  'src/components/flow/subflowMap/useSubflowMapGraph.ts',
   'src/components/dashboard/home/SkeletonDashboard.tsx',
 
   'src/components/chat/hooks/stream-engine/accumulator.ts',

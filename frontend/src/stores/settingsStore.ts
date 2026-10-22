@@ -132,9 +132,9 @@ export const defaultSettings: AppSettings = {
         contextTokenBudget: 4000,
       },
     },
-    showCostEstimates: true,
+    showCostEstimates: false,
     saveConversationHistory: true,
-    dailyBudget: 5.0,
+    dailyBudget: 0,
     prompts: {
       block: [
         'Explain this block',

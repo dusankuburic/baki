@@ -65,6 +65,15 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 - The overlay's Postgres is tuned to its 2G/1 CPU limit (`shared_buffers=512MB`, `effective_cache_size=1536MB`, `work_mem=16MB`, `random_page_cost=1.1`, `jit=off`, 256m `/dev/shm`); scale with the memory limit. On an existing volume run `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` once as superuser. The `app` service gets 2 CPUs — Go 1.25 floors `GOMAXPROCS` at 2; a half-core quota is CFS-throttled.
 - Frontend only: `npm run build --prefix frontend` → `frontend/dist/`; set `VITE_API_URL` (backend origin, no trailing `/api`) and `PAD_ALLOWED_ORIGINS`; unset, the bundle uses its own origin (one image works at any hostname).
 
+## Building on a memory-capped Docker Desktop
+
+`docker compose build app` runs in Docker Desktop's WSL 2 VM, and `~/.wslconfig` wins over the Docker Desktop memory setting for that VM: with `[wsl2] memory=2GB` / `processors=2`, `docker info` reports 1.9 GiB whatever the settings dialog says. The Dockerfile is sized for that budget, so the plain `docker compose build app` is safe:
+
+- The Node heap is capped (`--max-old-space-size=1280`). In the builder image `tsc` peaks at ~1.0 GiB of heap and `vite build` at ~0.95, above the 977 MiB Node 20 defaults to in a 2 GiB VM (the `heap out of memory` failure); a cap of 4096 only removed the bound.
+- The Go stage starts with a `COPY --from=frontend-builder` marker, so BuildKit builds the two stages one after the other. Built in parallel on this VM (2026-10-16) they exhausted memory and swap and took dockerd down: `docker ps` answered nothing, the backend log repeated `event streamer: error: EOF`, every container of every project died, and only `docker desktop restart` recovered the engine.
+
+Measured on a `--no-cache` build with the baki and kendo stacks running: the Node step (95 s) peaks at 1.5 GiB of the VM's 1.9 (lowest `available` 319 MiB, swap +230 MiB), the Go compile and link (106 s, warm build-cache mount) stay near 0.7 GiB, and the containers stay healthy throughout. Keep the cap and the marker when editing the Dockerfile; for more room raise `memory=` in `~/.wslconfig` and run `wsl --shutdown`. `wsl -d docker-desktop -- free -m` shows the VM's memory during a build.
+
 ## Configuration reference
 
 | Variable | Purpose | Default |

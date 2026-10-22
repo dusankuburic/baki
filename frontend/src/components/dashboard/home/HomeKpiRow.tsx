@@ -2,7 +2,7 @@ import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
 import {StatTile} from '@/components/charts/StatTile'
 import {healthTier} from '@/lib/scoring'
-import {formatCompactIntl, formatCurrency} from '@/lib/format'
+import {formatCompactIntl} from '@/lib/format'
 import type {
   DashboardOverview,
   DashboardFindingsAgg,
@@ -18,7 +18,6 @@ export function HomeKpiRow({
   healthTrend,
   severityTrend,
   fixability,
-  costByProvider,
   onViewFindings,
   onViewFlows,
   className,
@@ -28,7 +27,7 @@ export function HomeKpiRow({
   healthTrend: DailyHealthPoint[]
   severityTrend: DailySeverityPoint[]
   fixability: Fixability
-  costByProvider: ProviderCost[]
+  costByProvider?: ProviderCost[]
   onViewFindings?: () => void
   onViewFlows?: () => void
   className?: string
@@ -42,8 +41,6 @@ export function HomeKpiRow({
   const tier = healthTier(score)
   const healthSpark = healthTrend.filter(d => d.flowCount > 0).map(d => d.avgHealth)
   const findingsSpark = severityTrend.map(d => d.errors + d.warnings + d.info)
-  const totalCost = costByProvider.reduce((s, p) => s + p.cost, 0)
-  const showSpend = costByProvider.length > 0
 
   return (
     <div className={clsx('home-kpis', className)}>
@@ -84,13 +81,6 @@ export function HomeKpiRow({
             : undefined
         }
       />
-      {showSpend && (
-        <StatTile
-          label={t('home.kpiAiSpend')}
-          value={formatCurrency(totalCost)}
-          sub={totalCost > 0 ? t('home.providers', {count: costByProvider.length}) : t('home.noUsage')}
-        />
-      )}
     </div>
   )
 }

@@ -1,18 +1,43 @@
-import {useEffect, useRef, useMemo} from 'react'
+import {memo, useCallback, useMemo} from 'react'
 import {useTranslation} from 'react-i18next'
-import cytoscape from 'cytoscape'
-import dagre from 'cytoscape-dagre'
+import {Position, type Node, type NodeMouseHandler, type NodeProps} from '@xyflow/react'
+import {Info} from 'lucide-react'
+import FlowCanvas from '@/components/graph/flow/FlowCanvas'
+import FlowHandles from '@/components/graph/flow/FlowHandles'
+import {arrowMarker, flowEdgeTypes} from '@/components/graph/flow/edges'
+import {layoutDagre} from '@/components/graph/flow/layout'
+import {useFlowColors} from '@/components/graph/flow/colors'
 import type {VariableEvent} from '@/types'
 import {useFlowStore} from '@/stores/flowStore'
-import {Info} from 'lucide-react'
-
-cytoscape.use(dagre)
 
 const EVENT_COLOR: Record<VariableEvent['type'], string> = {
   init: '#22c55e',
   mutate: '#f59e0b',
   read: '#3b82f6',
 }
+
+const DOT_SIZE = 22
+const LINEAGE_NODE_TYPE = 'lineageDot'
+
+type LineageDotData = {color: string; label: string; blockId: string}
+type LineageDotNode = Node<LineageDotData, typeof LINEAGE_NODE_TYPE>
+
+const LineageDot = memo(function LineageDot({data}: NodeProps<LineageDotNode>) {
+  return (
+    <div className="flow-node relative" style={{width: DOT_SIZE, height: DOT_SIZE}}>
+      <FlowHandles source={Position.Right} target={Position.Left} />
+      <div
+        className="flow-card h-full w-full rounded-full border-2 border-white/15"
+        style={{backgroundColor: data.color}}
+      />
+      <span className="absolute top-full left-1/2 -translate-x-1/2 pt-0.5 text-[9px] text-text-tertiary">
+        {data.label}
+      </span>
+    </div>
+  )
+})
+
+const nodeTypes = {[LINEAGE_NODE_TYPE]: LineageDot}
 
 function dominantType(types: Set<VariableEvent['type']>): VariableEvent['type'] {
   if (types.has('init')) return 'init'
@@ -27,99 +52,72 @@ type Props = {
 export default function VariableLineageGraph({events}: Props) {
   const {t} = useTranslation('inspector')
   const navigateToBlock = useFlowStore(s => s.navigateToBlock)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const cyRef = useRef<cytoscape.Core | null>(null)
+  const colors = useFlowColors()
 
-  const elements = useMemo(() => {
-    if (events.length === 0) return []
-    const byBlock = new Map<string, {types: Set<VariableEvent['type']>; line: number; subflowId: string}>()
-    for (const e of events) {
-      let entry = byBlock.get(e.blockId)
-      if (!entry) {
-        entry = {types: new Set(), line: e.line, subflowId: e.subflowId}
-        byBlock.set(e.blockId, entry)
-      }
-      entry.types.add(e.type)
+  const graph = useMemo(() => {
+    if (events.length === 0) return {nodes: [], edges: []}
+    const byBlock = new Map<string, {types: Set<VariableEvent['type']>; line: number}>()
+    for (const event of events) {
+      const entry = byBlock.get(event.blockId)
+      if (entry) entry.types.add(event.type)
+      else byBlock.set(event.blockId, {types: new Set([event.type]), line: event.line})
     }
+
     const nodes = [...byBlock.entries()].map(([blockId, info]) => ({
-      group: 'nodes' as const,
-      data: {
-        id: blockId,
-        blockId,
-        line: info.line,
-        subflowId: info.subflowId,
-        color: EVENT_COLOR[dominantType(info.types)],
-        label: `L${info.line}`,
-      },
+      id: blockId,
+      width: DOT_SIZE,
+      height: DOT_SIZE,
+      data: {color: EVENT_COLOR[dominantType(info.types)], label: `L${info.line}`, blockId},
     }))
-    const edges = []
+
+    const edges: Array<{id: string; source: string; target: string}> = []
     const seen = new Set<string>()
-    let edgeIdx = 0
     for (let i = 1; i < events.length; i++) {
-      const src = events[i - 1]?.blockId
-      const tgt = events[i]?.blockId
-      if (src === undefined || tgt === undefined || src === tgt) continue
-      const key = `${src}->${tgt}`
+      const source = events[i - 1]?.blockId
+      const target = events[i]?.blockId
+      if (source === undefined || target === undefined || source === target) continue
+      const key = `${source}->${target}`
       if (seen.has(key)) continue
       seen.add(key)
-      edges.push({group: 'edges' as const, data: {id: `e${edgeIdx++}`, source: src, target: tgt}})
+      edges.push({id: key, source, target})
     }
-    return [...nodes, ...edges]
+
+    return {nodes, edges}
   }, [events])
 
-  useEffect(() => {
-    if (!containerRef.current || elements.length === 0) return
+  const layout = useMemo(() => layoutDagre(graph.nodes, graph.edges, {rankdir: 'LR', nodesep: 30, ranksep: 50}), [graph])
 
-    const instance = cytoscape({
-      container: containerRef.current,
-      elements,
-      minZoom: 0.3,
-      maxZoom: 3,
-      style: [
-        {
-          selector: 'node',
-          style: {
-            'background-color': 'data(color)',
-            label: 'data(label)',
-            color: '#9ca3af',
-            'font-size': 9,
-            'text-valign': 'bottom',
-            'text-margin-y': 4,
-            width: 22,
-            height: 22,
-            'border-width': 2,
-            'border-color': '#ffffff22',
-          },
-        },
-        {
-          selector: 'edge',
-          style: {
-            'curve-style': 'bezier',
-            'target-arrow-shape': 'triangle',
-            'line-color': '#6b728055',
-            'target-arrow-color': '#6b728055',
-            width: 1.5,
-          },
-        },
-      ],
-    })
+  const nodes = useMemo<LineageDotNode[]>(
+    () =>
+      graph.nodes.map(node => ({
+        id: node.id,
+        type: LINEAGE_NODE_TYPE,
+        position: layout.positions.get(node.id) ?? {x: 0, y: 0},
+        width: DOT_SIZE,
+        height: DOT_SIZE,
+        data: node.data,
+      })),
+    [graph, layout],
+  )
 
-    instance.on('tap', 'node', evt => {
-      const blockId = evt.target.data('blockId')
+  const edges = useMemo(
+    () =>
+      graph.edges.map(edge => ({
+        ...edge,
+        type: 'floating',
+        style: {stroke: colors.edgeMuted, strokeWidth: 1.5},
+        markerEnd: arrowMarker(colors.edgeMuted, 0.8),
+      })),
+    [graph, colors],
+  )
+
+  const onNodeClick = useCallback<NodeMouseHandler>(
+    (_, node) => {
+      const blockId = (node as LineageDotNode).data.blockId
       if (blockId) navigateToBlock(blockId)
-    })
-
-    instance
-      .layout({name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 50, animate: false} as cytoscape.LayoutOptions)
-      .run()
-    instance.fit(undefined, 30)
-
-    cyRef.current = instance
-    return () => {
-      instance.destroy()
-      cyRef.current = null
-    }
-  }, [elements, navigateToBlock])
+    },
+    [navigateToBlock],
+  )
 
   if (events.length === 0) {
     return (
@@ -130,5 +128,18 @@ export default function VariableLineageGraph({events}: Props) {
     )
   }
 
-  return <div ref={containerRef} className="w-full h-44 rounded-lg border border-border-subtle bg-surface-1" />
+  return (
+    <FlowCanvas
+      className="h-44 w-full rounded-lg border border-border-subtle bg-surface-1"
+      nodes={nodes}
+      edges={edges}
+      nodeTypes={nodeTypes}
+      edgeTypes={flowEdgeTypes}
+      minZoom={0.3}
+      maxZoom={3}
+      fitPadding="30px"
+      fitSignal={nodes.map(node => node.id).join('|')}
+      onNodeClick={onNodeClick}
+    />
+  )
 }

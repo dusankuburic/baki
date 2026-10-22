@@ -41,7 +41,8 @@ export default function Input({
           id={id ?? fallbackId}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
-          className="bg-transparent text-sm w-full outline-hidden text-text-primary placeholder:text-text-disabled"
+          className="bg-transparent text-sm w-full border-none outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0 focus-visible:ring-0 shadow-none text-text-primary placeholder:text-text-disabled"
+          style={{outline: 'none', border: 'none', boxShadow: 'none', ...rest.style}}
           {...rest}
         />
         {TrailingIcon && (

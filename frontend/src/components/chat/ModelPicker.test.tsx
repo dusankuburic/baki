@@ -312,8 +312,8 @@ describe('ModelPicker list', () => {
     await openPicker(user)
     const group = within(dialog()).getByRole('group')
     expect(group).toHaveAccessibleName('Models')
-    expect(option(/^Claude Sonnet 4\.6/)).toHaveAccessibleDescription('$3 / $15 per 1M tokens')
-    expect(option(/^Claude Haiku 4\.5/)).toHaveAccessibleDescription('$1 / $5 per 1M tokens · no native tools')
+    expect(option(/^Claude Sonnet 4\.6/)).not.toHaveAccessibleDescription(/\$/)
+    expect(option(/^Claude Haiku 4\.5/)).toHaveAccessibleDescription('no native tools')
   })
 })
 

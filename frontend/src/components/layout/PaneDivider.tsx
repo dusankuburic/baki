@@ -1,4 +1,4 @@
-import {useCallback, useRef, useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import clsx from 'clsx'
 
 interface PaneDividerProps {
@@ -29,13 +29,18 @@ export default function PaneDivider({
   const [dragging, setDragging] = useState(false)
   const lastX = useRef(0)
 
-  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    draggingRef.current = true
-    setDragging(true)
-    lastX.current = e.clientX
-    e.currentTarget.setPointerCapture?.(e.pointerId)
-  }, [])
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      draggingRef.current = true
+      setDragging(true)
+      lastX.current = e.clientX
+      e.currentTarget.setPointerCapture?.(e.pointerId)
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+    },
+    [],
+  )
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -51,8 +56,20 @@ export default function PaneDivider({
     if (!draggingRef.current) return
     draggingRef.current = false
     setDragging(false)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
     onResizeEnd()
   }, [onResizeEnd])
+
+  // Cleanup body locks if unmounted mid-drag
+  useEffect(() => {
+    return () => {
+      if (draggingRef.current) {
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+    }
+  }, [])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

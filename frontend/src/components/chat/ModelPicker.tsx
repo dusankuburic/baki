@@ -493,9 +493,6 @@ export default function ModelPicker({
                           : isRegistryEntry(m)
                             ? m.description
                             : [
-                                m.inputCostPerM > 0
-                                  ? t('picker.price', {input: m.inputCostPerM, output: m.outputCostPerM})
-                                  : '',
                                 m.supportsTools === false ? t('provider.noNativeTools') : '',
                               ]
                                 .filter(Boolean)

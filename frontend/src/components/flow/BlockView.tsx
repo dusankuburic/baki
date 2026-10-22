@@ -20,6 +20,7 @@ import {flowApi} from '@/api'
 import {runBlockEdit} from '@/lib/blockEdit'
 import {useBlockOperations} from '@/lib/blockOperations'
 import {useKeyboard} from '@/hooks/useKeyboard'
+import {registerStoreReset} from '@/stores/storeRegistry'
 import type {Severity, BlockType, Block} from '@/types'
 import {getErrorMessage} from '@/lib/getErrorMessage'
 
@@ -27,6 +28,7 @@ type RemoteSelection = Map<string, PresenceUser[]>
 
 const scrollerEls = new Map<string, HTMLElement>()
 export const blockCanvasScrollers = scrollerEls
+registerStoreReset(() => scrollerEls.clear())
 
 const BLOCK_DND_MIME = 'application/x-baki-block'
 
@@ -71,7 +73,7 @@ function BlockItemWrapperComponent({
         e.dataTransfer.dropEffect = 'move'
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
         setDropPos(e.clientY < rect.top + rect.height / 2 ? 'before' : 'after')
-        const sc = scrollerEls.get(block.subflowId)
+        const sc = scrollerEls.get(block.subflowId || '__main__')
         if (sc) {
           const sr = sc.getBoundingClientRect()
           if (e.clientY < sr.top + AUTOSCROLL_EDGE_PX) sc.scrollTop -= AUTOSCROLL_STEP_PX
@@ -249,6 +251,13 @@ export default function BlockView({subflowId}: {subflowId?: string} = {}) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIdx, setSearchMatchIdx] = useState(0)
   const presenceUsers = usePresenceStore(s => s.users)
+
+  useEffect(() => {
+    const key = subflowId ?? '__main__'
+    return () => {
+      scrollerEls.delete(key)
+    }
+  }, [subflowId])
 
   const displayedFlattened = useMemo(() => {
     if (!searchActive || !searchQuery.trim()) return flattened

@@ -73,7 +73,7 @@ describe('loadFromBackend', () => {
     expect(s.appearance.density).toBe('comfortable')
     expect(s.appearance.chatTextSize).toBe('md')
     expect(s.ai.activeProvider).toBeTruthy()
-    expect(s.ai.dailyBudget).toBeGreaterThan(0)
+    expect(s.ai.dailyBudget).toBe(0)
     expect(s.layout.sidebarWidth).toBeGreaterThan(0)
     expect(s.layout.inspectorWidth).toBeGreaterThan(0)
     expect(s.layout.lastActiveInspectorTab).toBeTruthy()

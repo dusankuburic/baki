@@ -1,4 +1,4 @@
-package models
+﻿package models
 
 import "time"
 
@@ -313,8 +313,10 @@ type GraphNode struct {
 }
 
 type GraphEdge struct {
-	Source string `json:"source"`
-	Target string `json:"target"`
+	Source        string `json:"source"`
+	Target        string `json:"target"`
+	CallCount     int    `json:"callCount,omitempty"`
+	DisabledCount int    `json:"disabledCount,omitempty"`
 }
 
 type GraphData struct {
