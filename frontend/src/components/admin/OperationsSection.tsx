@@ -10,6 +10,7 @@ import {useAsync} from '@/hooks/useAsync'
 import {useAdminStore} from '@/stores/adminStore'
 import {useSystemStore} from '@/stores/systemStore'
 import {AdminSection} from './AdminSection'
+import {AILimitsCard} from './AILimitsCard'
 
 interface Props {
   visible?: boolean
@@ -108,6 +109,8 @@ export function OperationsSection({visible = true, refreshKey = 0, children}: Pr
             </Button>
           }
         />
+
+        <AILimitsCard visible={visible} refreshKey={refreshKey} />
 
         {children}
       </div>

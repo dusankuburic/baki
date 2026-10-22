@@ -40,6 +40,19 @@ func TestStreamScrubber_MatchesScrubTextForAnyChunking(t *testing.T) {
 		"héllo wörld — unicode prose with a password=sécrets ascii12345678 tail",
 		"secret:tiny", // value too short to ever match — must pass through
 		"password=",   // anchor with no value, resolved only at flush
+		// Credential query parameters followed by more parameters or a fragment: the "?name=" lead-in
+		// must stay with its value however the name or the '&' is split.
+		"see https://x.example.com/cb?access_token=AbCdEfGh12345678&state=xyz&page=2 next",
+		"https://api.example.com/v1/items?subscription-key=0123456789abcdef&page=2",
+		"a URL https://u:p@h/x?code=abc&key=def&token=ghi#frag end",
+		"see https://h/cb?token=abc12 done",
+		"see https://h/cb?pwd=ab12 done\nnext line",
+		"see https://h/cb?token=abc&x done",
+		"the storage SAS BlobEndpoint=https://a.blob.core.windows.net/;SharedAccessSignature=sv=2022&sr=c&sig=AbC123XyZ%3D;EndpointSuffix=core.windows.net ok",
+		"sign in at https://login.example.com:8443?login_hint=user@contoso.com first",
+		"Authorization: Basic authentication is used",
+		"Use the variable password: %Password% in the action",
+		`yaml password: "correct horse battery" then more`,
 	}
 	for _, sample := range samples {
 		want := ScrubText(sample)

@@ -27,6 +27,12 @@ type KnowledgeStore interface {
 	SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int, identity string) ([]KnowledgeChunk, error)
 	// ListKnowledgeChunkContents returns up to limit chunks (no embeddings) strictly after the cursor in (doc_id, id) order — one re-index page; limit <= 0 = backend page cap. notIdentity skips the chunks already embedded under that identity (legacy rows are walked); "" walks every chunk.
 	ListKnowledgeChunkContents(ctx context.Context, orgID string, after KnowledgeChunkCursor, limit int, notIdentity string) ([]KnowledgeChunk, error)
+	// ListUnindexedKnowledgeChunkContents is ListKnowledgeChunkContents over the chunks OUTSIDE the vector index alone, whatever their identity — the rows a width change left as JSON only; a store without a vector index (HasPgvector false) has nothing outside it and returns every chunk.
+	ListUnindexedKnowledgeChunkContents(ctx context.Context, orgID string, after KnowledgeChunkCursor, limit int) ([]KnowledgeChunk, error)
+	// UnindexedKnowledgeChunkWidth is the stored embedding width of ONE of the org's chunks outside the vector index (any of them: a corpus is stranded at one width); 0 when every chunk is in the index or the store has none.
+	UnindexedKnowledgeChunkWidth(ctx context.Context, orgID string) (int, error)
+	// HasPgvector reports whether the store has a vector index at all (the pgvector extension and the embedding_vec column): without one every chunk counts as outside it, which says nothing about searchability — searches run in-process at the query's width.
+	HasPgvector() bool
 	// SampleKnowledgeChunkEmbeddings returns up to n chunks WITH stored embeddings, one per document, deterministic order — RAG re-embeds their text as an embedding-model mismatch guard.
 	SampleKnowledgeChunkEmbeddings(ctx context.Context, orgID string, n int) ([]KnowledgeChunk, error)
 	// SampleKnowledgeChunkEmbeddingsUpTo returns up to n chunks at or before the cursor in (doc_id, id) order NEAREST first WITH stored embeddings — a resumed re-index model check.

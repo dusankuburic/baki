@@ -1,4 +1,5 @@
 import type {ProviderID, ToolCallRecord} from '@/types'
+import type {BlockAnchor} from '@/lib/blockAnchor'
 
 export const MAX_CONCURRENT_STREAMS = 3
 
@@ -14,6 +15,9 @@ export interface ChatThread {
   title: string
   createdAt: string
   contextBlockId: string | null
+  contextBlockAnchor?: BlockAnchor | null
+  /** Set once a re-parse lost the context block: its name, or '' when no parse could name it. */
+  contextBlockLost?: string
   selectedSourceFiles: string[]
   tokensIn: number
   tokensOut: number

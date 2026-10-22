@@ -914,22 +914,25 @@ func (s *AnalysisService) GetRulesSummaryFor(ctx context.Context, orgID string) 
 func (s *AnalysisService) SetRuleEnabled(ctx context.Context, ruleID string, enabled bool) (err error) {
 	defer logger.Guard("App.SetRuleEnabled", &err)
 
-	settings := s.settings.Get()
-
-	if settings.Analysis.Rules == nil {
-		settings.Analysis.Rules = make(map[string]models.RuleConfig)
-	}
-
-	rc := settings.Analysis.Rules[ruleID]
-	rc.Enabled = enabled
-	settings.Analysis.Rules[ruleID] = rc
-
-	return s.updateDeploymentRules(ctx, settings)
+	return s.updateDeploymentRules(ctx, func(rules map[string]models.RuleConfig) {
+		rc := rules[ruleID]
+		rc.Enabled = enabled
+		rules[ruleID] = rc
+	})
 }
 
-// updateDeploymentRules writes the deployment settings and announces it: every org's rule profile inherits them.
-func (s *AnalysisService) updateDeploymentRules(ctx context.Context, settings *models.AppSettings) error {
-	if err := s.settings.Update(ctx, *settings); err != nil {
+// updateDeploymentRules changes the deployment document's rules (only them: the rest is written back as stored,
+// never from this replica's cache, so a rule write cannot revert an admin's AI settings) and announces it: every
+// org's rule profile inherits them.
+func (s *AnalysisService) updateDeploymentRules(ctx context.Context, change func(rules map[string]models.RuleConfig)) error {
+	err := updateSettingsWith(ctx, s.settings, func(settings *models.AppSettings) error {
+		if settings.Analysis.Rules == nil {
+			settings.Analysis.Rules = make(map[string]models.RuleConfig)
+		}
+		change(settings.Analysis.Rules)
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	s.bus.Publish(ctx, events.SettingsChanged{Scope: events.DeploymentSettings})
@@ -940,17 +943,11 @@ func (s *AnalysisService) updateDeploymentRules(ctx context.Context, settings *m
 func (s *AnalysisService) UpdateRuleConfig(ctx context.Context, ruleID string, config models.RuleConfig) (err error) {
 	defer logger.Guard("App.UpdateRuleConfig", &err)
 
-	settings := s.settings.Get()
-
-	if settings.Analysis.Rules == nil {
-		settings.Analysis.Rules = make(map[string]models.RuleConfig)
-	}
-
-	// Merge semantics: clients sending only {enabled, severity} must not wipe configured thresholds (e.g. maxDepth).
-	if config.Options == nil {
-		config.Options = settings.Analysis.Rules[ruleID].Options
-	}
-	settings.Analysis.Rules[ruleID] = config
-
-	return s.updateDeploymentRules(ctx, settings)
+	return s.updateDeploymentRules(ctx, func(rules map[string]models.RuleConfig) {
+		// Merge semantics: clients sending only {enabled, severity} must not wipe configured thresholds (e.g. maxDepth).
+		if config.Options == nil {
+			config.Options = rules[ruleID].Options
+		}
+		rules[ruleID] = config
+	})
 }

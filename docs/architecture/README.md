@@ -8,6 +8,7 @@ How the backend is put together and the rules new code follows. The rules are en
 | Deploying and operating: production compose, configuration reference, key rotation, the Azure runbook | [`../deployment.md`](../deployment.md) |
 | Operating a deployment: database connections, pooling, the stop budget, more than one replica, alerts | [operations.md](operations.md) |
 | Azure AI Foundry accounts: resources, models, agents, shared organisation resources | [`../ai-foundry.md`](../ai-foundry.md) |
+| The AI assistant roadmap: what is broken, fragile or missing, tiered, with evidence and an order of work | [ai-roadmap.md](ai-roadmap.md) |
 | Schema migrations (format, compat, rollback) | [`internal/storage/database/migrations/README.md`](../../internal/storage/database/migrations/README.md) |
 | Test safety nets (goldens, ratchets, isolated databases, benchmark) | [safety-nets.md](safety-nets.md) |
 | DI wiring and the post-construction setters that remain | [di-wiring.md](di-wiring.md) |

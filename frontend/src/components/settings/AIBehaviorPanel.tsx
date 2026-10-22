@@ -10,6 +10,7 @@ import {NumberField} from '@/components/shared'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import SettingRow from './SettingRow'
 import {isTauri} from '@/platform/guards'
+import {CONTEXT_TOKEN_BUDGET_MAX} from '@/lib/constraints'
 import type {ProviderID, AIProviderConfig, ProviderSpec} from '@/types'
 import {PROVIDER_CAP_EMBEDDINGS, PROVIDER_OPTIONS, isKnownProviderId} from '@/types/providers'
 
@@ -231,7 +232,7 @@ function ProviderAdvancedSettings({
         <label className="text-xs font-medium text-text-secondary block mb-1.5">{t('behavior.contextBudget')}</label>
         <NumberField
           min={100}
-          max={128000}
+          max={CONTEXT_TOKEN_BUDGET_MAX}
           fallback={4000}
           value={config.contextTokenBudget}
           onCommit={v => onUpdate({contextTokenBudget: v})}

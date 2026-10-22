@@ -377,6 +377,7 @@ export default function AITab() {
           {activeThread && (doc || contextBlockId) && (
             <SelectionContextBar
               contextBlockId={contextBlockId}
+              lostBlock={activeThread.contextBlockLost}
               onClearBlock={clearBlockScope}
               onFocusBlock={setThreadContextBlock}
               files={sourceFiles}

@@ -15,6 +15,13 @@ export const PROFILE_BIO_MAX_LENGTH = 500
 
 export const PROFILE_JOB_TITLE_MAX_LENGTH = 100
 
+/** Embedding model id cap, a mirror of internal/service/system.go (maxEmbeddingModelChars). */
+export const EMBEDDING_MODEL_MAX_LENGTH = 200
+
+/** The per-provider context token budget the server clamps a user's setting to, a mirror of
+ * internal/service/chat_context.go (MaxContextTokenBudget); the Settings UI's field stops at it. */
+export const CONTEXT_TOKEN_BUDGET_MAX = 128000
+
 export const TOKEN_MAX_EXPIRY_DAYS = 365
 
 export const CI_CREDENTIAL_MAX_EXPIRY_DAYS = 365

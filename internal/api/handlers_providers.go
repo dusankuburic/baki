@@ -142,7 +142,8 @@ func (h *ProviderHandler) handleStartGitHubAuth(w http.ResponseWriter, r *http.R
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "OK"
 // @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Failure      500 {object} render.ErrorResponse "Internal Server Error; DEVICE_TOKEN_NOT_STORED when GitHub granted the token but the KeyStore refused it"
+// @Failure      503 {object} render.ErrorResponse "SECRET_STORAGE_UNAVAILABLE: GitHub granted the token but the secret service is unreachable"
 // @Router       /api/providers/github/poll [post]
 func (h *ProviderHandler) handlePollGitHubAuth(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -214,7 +215,8 @@ func (h *ProviderHandler) handleStartCopilotAuth(w http.ResponseWriter, r *http.
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "OK"
 // @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      500 {object} map[string]string "Internal Server Error"
+// @Failure      500 {object} render.ErrorResponse "Internal Server Error; DEVICE_TOKEN_NOT_STORED when GitHub granted the token but the KeyStore refused it"
+// @Failure      503 {object} render.ErrorResponse "SECRET_STORAGE_UNAVAILABLE: GitHub granted the token but the secret service is unreachable"
 // @Router       /api/providers/copilot/poll [post]
 func (h *ProviderHandler) handlePollCopilotAuth(w http.ResponseWriter, r *http.Request) {
 	var req struct {

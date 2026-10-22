@@ -806,6 +806,7 @@ export const chat = {
   },
   a11y: {
     clearContext: 'Clear context',
+    dismissBlockLost: 'Dismiss',
     toolActivity: 'AI tool activity',
     conversation: 'Conversation',
     scrollToBottom: 'Scroll to bottom',
@@ -1090,6 +1091,9 @@ export const chat = {
     authFailed: 'Authentication failed',
     startFailed: 'Failed to start auth',
     expired: 'The sign-in code expired — start again.',
+    secretStorageUnavailable:
+      'Signed in, but the token could not be stored: secret storage is unavailable on this device — start again once it is.',
+    tokenNotStored: 'Signed in, but the token could not be stored — start again.',
     connectedAs: 'Connected as @{{username}}',
     disconnect: 'Disconnect',
     retry: 'Retry',
@@ -1149,6 +1153,7 @@ export const chat = {
     decisionFailed: "Couldn't send your decision — try again.",
     decisionUnreachable: "Couldn't reach the server running this response, so your decision wasn't sent.",
     decisionRetry: 'Try again',
+    readOnly: "This flow is read-only, so the change can't be applied.",
     aria: 'Proposed fix: {{fixType}}',
     ariaBatch_one: 'Proposed {{count}} fix: approval needed',
     ariaBatch_other: 'Proposed {{count}} fixes: approval needed',
@@ -1273,6 +1278,9 @@ export const chat = {
   context: {
     focusSelected: 'Focus selected block',
     focusSelectedTitle: 'Scope this thread to the block selected on the canvas',
+    blockNotInFlow: 'Block not in the flow',
+    blockLost: '"{{name}}" is no longer in the flow — this chat now covers the whole flow',
+    blockLostUnnamed: 'The block this chat was about is no longer in the flow — this chat now covers the whole flow',
   },
   connection: {
     ready: 'Ready',

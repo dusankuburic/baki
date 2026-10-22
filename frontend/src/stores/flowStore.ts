@@ -112,7 +112,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   setDocument: doc => {
     const firstId = doc?.subflows[0]?.id ?? null
-    const changedDoc = doc?.id !== get().document?.id
+    const prevDoc = get().document
+    const changedDoc = doc?.id !== prevDoc?.id
     set({
       document: doc,
       ...(changedDoc ? {readOnly: false, libraryFlowId: null, libraryVersion: 0} : {}),
@@ -131,6 +132,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     })
 
     resetDerivedStateForFlow(doc)
+    // Every parse mints new block ids, so each incoming document re-anchors the threads grounded on its blocks;
+    // after another flow (or none) was open there is no previous parse to name them by, only their anchors.
+    if (doc) useChatStore.getState().remapContextBlocks(changedDoc ? null : prevDoc, doc)
   },
 
   applyRemoteDocumentUpdate: doc => {
@@ -148,6 +152,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
     if (doc) {
       useEditorStore.getState().pruneToSubflows(doc.subflows.map(s => s.id))
+      if (prev.document?.id === doc.id) useChatStore.getState().remapContextBlocks(prev.document, doc)
     }
   },
 

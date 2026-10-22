@@ -13,6 +13,7 @@ type Props = {
   error?: string
   hint?: string
   onBlur?: () => void
+  id?: string
 }
 
 function clamp(n: number, min?: number, max?: number): number {
@@ -33,6 +34,7 @@ export default function NumberField({
   error,
   hint,
   onBlur,
+  id,
 }: Props) {
   const [draft, setDraft] = useState(String(value))
 
@@ -51,6 +53,7 @@ export default function NumberField({
 
   return (
     <Input
+      id={id}
       type="number"
       min={min}
       max={max}

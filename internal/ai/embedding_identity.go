@@ -29,8 +29,9 @@ func (b *openaiBase) EmbeddingIdentity() string {
 	return b.providerLabel + "|" + *b.baseURL + "|" + b.embeddingModel + "|" + strconv.Itoa(b.embeddingDimensions())
 }
 
-// EmbeddingIdentity satisfies EmbeddingIdentifier for Gemini (one endpoint;
-// no width override).
+// EmbeddingIdentity satisfies EmbeddingIdentifier for Gemini (one endpoint). The requested width is
+// deliberately not part of it: the format is frozen (ADR 0027 §2) and a width change is detected through
+// vector_dims, not the identity string.
 func (g *GeminiProvider) EmbeddingIdentity() string {
 	return "gemini|" + g.EmbeddingModel()
 }

@@ -29,6 +29,7 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
   const createThread = useChatStore(s => s.createThread)
   const closeThread = useChatStore(s => s.closeThread)
   const updateThread = useChatStore(s => s.updateThread)
+  const setContextBlock = useChatStore(s => s.setContextBlock)
   const clearThreadMessages = useChatStore(s => s.clearThreadMessages)
   const setThreadMessages = useChatStore(s => s.setThreadMessages)
   const switchThread = useChatStore(s => s.switchThread)
@@ -69,8 +70,12 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
         const st = useChatStore.getState()
         if (!st.threads.some(th => th.id === threadId) || st.streams[threadId]) return
         clearThreadMessages(threadId)
+        // The block scope goes as a whole: a kept anchor would be stale, and a kept lost-block notice would
+        // outlive the conversation it was about.
         updateThread(threadId, {
           contextBlockId: null,
+          contextBlockAnchor: null,
+          contextBlockLost: undefined,
           selectedSourceFiles: sourceFiles.length > 0 ? sourceFiles.map(f => f.filename) : [],
           tokensIn: 0,
           tokensOut: 0,
@@ -111,9 +116,9 @@ export function useChatThreads({doc, activeThreadId, sourceFiles}: UseChatThread
 
   const setThreadContextBlock = useCallback(
     (blockId: string | null) => {
-      if (activeThreadId) updateThread(activeThreadId, {contextBlockId: blockId})
+      if (activeThreadId) setContextBlock(activeThreadId, blockId, doc)
     },
-    [activeThreadId, updateThread],
+    [activeThreadId, setContextBlock, doc],
   )
 
   const setThreadSourceFiles = useCallback(

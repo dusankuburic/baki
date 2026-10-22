@@ -539,7 +539,7 @@ func (h *ChatHandler) handleGetSuggestedPrompts(w http.ResponseWriter, r *http.R
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	prompts, err := h.chatSvc.GetSuggestedPrompts(req.HasBlock, req.HasFindings)
+	prompts, err := h.chatSvc.GetSuggestedPrompts(r.Context(), req.HasBlock, req.HasFindings)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return

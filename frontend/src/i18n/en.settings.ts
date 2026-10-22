@@ -433,6 +433,10 @@ export const enSettings = {
     reindexModelChanged:
       'This knowledge base was indexed with a different embedding model than yours. Re-indexing switches every document to your model, and members whose embedding provider uses another model will stop receiving these guidelines.',
     reindexForceLabel: 'Re-index with my model',
+    reindexWidthOffTitle: "Re-index at the provider's width?",
+    reindexWidthOff:
+      '{{reason}}. Forcing it re-embeds every document at that width anyway; they stay outside the vector index, found only through the slower in-process search, until PAD_EMBEDDING_DIM matches and the server restarts.',
+    reindexWidthOffForceLabel: 'Re-index anyway',
     reindexDone: 'Re-indexed {{chunks}} chunks across {{docs}} documents',
     reindexTruncated: 'Re-indexed {{chunks}} chunks — more remain; run Re-index again to continue',
     reindexNothing: 'Nothing to re-index',
@@ -443,6 +447,10 @@ export const enSettings = {
       'Your embedding model changed while the re-index was running. The pages already done are kept; start the re-index again to finish with your current model.',
     empty: 'No documents indexed yet.',
     dimensionMismatch: 'Not searchable — embedding dimension mismatch; re-index below.',
+    dimensionMismatchEmbedder:
+      "Not searchable — the embedding model produces {{observed}}-dimensional vectors but PAD_EMBEDDING_DIM is {{configured}}. Set PAD_EMBEDDING_DIM to the model's width (a provider that cannot truncate needs exactly it), restart, and re-index below.",
+    dimensionMismatchStored:
+      'Not searchable — the stored embeddings are {{observed}}-dimensional but PAD_EMBEDDING_DIM is {{configured}}; re-index below.',
     identityMismatch_one: '{{count}} chunk was indexed with another embedding model; re-index below.',
     identityMismatch_other: '{{count}} chunks were indexed with another embedding model; re-index below.',
     indexedTitle: 'Indexed Documents',

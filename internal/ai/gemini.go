@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+
+	"pad-core/logger"
 )
 
 // geminiCallSeq mints synthesized tool-call IDs ("call_N"): Gemini's protocol
@@ -28,6 +30,9 @@ type GeminiProvider struct {
 	// embeddingModel overrides the embed model; "" falls back to
 	// gemini-embedding-001. Satisfies embedModelSetter for ForEmbedding.
 	embeddingModel string
+	// embedDimensions is the knowledge base's vector width (PAD_EMBEDDING_DIM), sent as outputDimensionality
+	// when the model can shorten to it; 0 leaves the model's native width.
+	embedDimensions int
 }
 
 func NewGeminiProvider(apiKey string) *GeminiProvider {
@@ -39,6 +44,50 @@ func NewGeminiProvider(apiKey string) *GeminiProvider {
 
 // setEmbeddingModel satisfies embedModelSetter (promoted by the factory).
 func (g *GeminiProvider) setEmbeddingModel(model string) { g.embeddingModel = model }
+
+// setEmbeddingDimensions satisfies embedDimensionSetter: without it the factory's width never reached Gemini
+// and a corpus embedded at the native 3072 was never vector-indexed at any other PAD_EMBEDDING_DIM.
+func (g *GeminiProvider) setEmbeddingDimensions(n int) {
+	if n > 0 {
+		g.embedDimensions = n
+	}
+}
+
+// Native widths of Gemini's embedding models. outputDimensionality can only shorten a vector (Matryoshka
+// truncation); a wider ask is a 400, so the native width is kept instead.
+const (
+	geminiEmbeddingNativeWidth = 3072 // gemini-embedding-001 and the gemini-embedding-* previews
+	textEmbedding004Width      = 768  // text-embedding-004/005
+)
+
+// geminiEmbeddingDimensionsFor returns the outputDimensionality to send for model at width n, or 0 for none:
+// never above the model's native width. A model whose width is unknown gets the configured width as is —
+// every current Gemini embedding model accepts the parameter, and the operator chose both.
+func geminiEmbeddingDimensionsFor(model string, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	m := strings.ToLower(model)
+	var native int
+	switch {
+	case strings.HasPrefix(m, "gemini-embedding"):
+		native = geminiEmbeddingNativeWidth
+	case strings.HasPrefix(m, "text-embedding-00"):
+		native = textEmbedding004Width
+	default:
+		return n
+	}
+	if n > native {
+		return 0
+	}
+	return n
+}
+
+// geminiWidthWarned makes the above-native warning one line per process rather than one per batch (the
+// factory builds a fresh provider per request); a deployment has one width and one Gemini embedding model.
+var geminiWidthWarned atomic.Bool
+
+func resetGeminiWidthWarning() { geminiWidthWarned.Store(false) }
 
 // EmbeddingModel satisfies embedModelNamer so the audited wrapper can price
 // embedding usage against the model actually sent (empty ⇒ shipped default).
@@ -85,24 +134,37 @@ func (g *GeminiProvider) embedBatch(ctx context.Context, texts []string) ([][]fl
 	// Gemini's embeddings API differs from OpenAI's shape: one
 	// batchEmbedContents POST carries an array of requests, each wrapping the
 	// text in content.parts[].text; RETRIEVAL_DOCUMENT is the recommended
-	// taskType for stored/searched documents.
+	// taskType for stored/searched documents, RETRIEVAL_QUERY for the query
+	// searched with.
 	embedModel := geminiEmbedModelDefault
 	if g.embeddingModel != "" {
 		embedModel = g.embeddingModel
 	}
 	fullModel := "models/" + embedModel
+	taskType := "RETRIEVAL_DOCUMENT"
+	if IsQueryEmbedding(ctx) {
+		taskType = "RETRIEVAL_QUERY"
+	}
+	dims := geminiEmbeddingDimensionsFor(embedModel, g.embedDimensions)
+	if g.embedDimensions > 0 && dims == 0 && geminiWidthWarned.CompareAndSwap(false, true) {
+		logger.Warn("configured embedding width is above the gemini model's native width — embedding at the native width; the knowledge base will not index these vectors",
+			"model", embedModel, "width", g.embedDimensions)
+	}
 
 	type embedRequest struct {
 		Model    string        `json:"model"`
 		Content  geminiContent `json:"content"`
 		TaskType string        `json:"taskType"`
+		// OutputDimensionality shortens the vector to the knowledge base's width; omitted at the native width.
+		OutputDimensionality int `json:"outputDimensionality,omitempty"`
 	}
 	reqs := make([]embedRequest, len(texts))
 	for i, t := range texts {
 		reqs[i] = embedRequest{
-			Model:    fullModel,
-			Content:  geminiContent{Parts: []geminiPart{{Text: t}}},
-			TaskType: "RETRIEVAL_DOCUMENT",
+			Model:                fullModel,
+			Content:              geminiContent{Parts: []geminiPart{{Text: t}}},
+			TaskType:             taskType,
+			OutputDimensionality: dims,
 		}
 	}
 
@@ -246,6 +308,9 @@ type geminiErrorResp struct {
 	} `json:"error"`
 }
 
+// toGeminiContents converts neutral messages to Gemini's wire format. The tool results of one assistant turn
+// are coalesced into one user content (like toClaudeMessages): Gemini matches a turn's functionResponse parts
+// against the preceding model content's functionCall parts and rejects a split with a 400.
 func toGeminiContents(msgs []Message) []geminiContent {
 	callNames := map[string]string{}
 	for _, m := range msgs {
@@ -255,20 +320,29 @@ func toGeminiContents(msgs []Message) []geminiContent {
 	}
 
 	var out []geminiContent
-	for _, m := range msgs {
+	for i := 0; i < len(msgs); i++ {
+		m := msgs[i]
 		switch {
 		case m.Role == "tool":
-			name := callNames[m.ToolCallID]
-			resp := map[string]string{"result": m.Content}
-			out = append(out, geminiContent{
-				Role: "user",
-				Parts: []geminiPart{{
+			// Gather this and any immediately-following tool results.
+			var parts []geminiPart
+			for i < len(msgs) && msgs[i].Role == "tool" {
+				// A result whose call fell out of the history still needs a name: the call id is stable and
+				// never empty, unlike a missing map entry.
+				name := callNames[msgs[i].ToolCallID]
+				if name == "" {
+					name = msgs[i].ToolCallID
+				}
+				parts = append(parts, geminiPart{
 					FunctionResponse: &geminiFunctionResponse{
 						Name:     name,
-						Response: resp,
+						Response: map[string]string{"result": msgs[i].Content},
 					},
-				}},
-			})
+				})
+				i++
+			}
+			i-- // outer loop will increment
+			out = append(out, geminiContent{Role: "user", Parts: parts})
 
 		case m.Role == "assistant" && len(m.ToolCalls) > 0:
 			parts := make([]geminiPart, 0, 1+len(m.ToolCalls))

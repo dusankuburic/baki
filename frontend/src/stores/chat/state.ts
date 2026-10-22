@@ -1,4 +1,4 @@
-import type {ChatMessage, ProviderID, ToolCallRecord} from '@/types'
+import type {ChatMessage, FlowDocument, ProviderID, ToolCallRecord} from '@/types'
 import type {
   ChatThread,
   FixProposalCard,
@@ -68,6 +68,8 @@ export interface ChatState {
   threadForFlow: (flowId: string) => string | null
   closeThread: (threadId: string) => void
   updateThread: (threadId: string, patch: Partial<ChatThread>) => void
+  setContextBlock: (threadId: string, blockId: string | null, doc: FlowDocument | null) => void
+  remapContextBlocks: (prev: FlowDocument | null, next: FlowDocument) => void
   setThreadModel: (threadId: string, pin: {provider: string; model: string; modelLabel?: string} | null) => void
   getActiveThread: () => ChatThread | null
   getFlowThreads: (flowId: string) => ChatThread[]

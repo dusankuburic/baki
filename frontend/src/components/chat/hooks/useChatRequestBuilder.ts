@@ -54,6 +54,7 @@ export function buildChatRequest({
     userMessage: text,
     conversationId: conversationKey(thread),
     contextBlockId: thread.contextBlockId || '',
+    ...(thread.contextBlockId && thread.contextBlockAnchor ? {contextBlockAnchor: thread.contextBlockAnchor} : {}),
     selectedSourceFiles: excludeContext ? undefined : filesToUse.length > 0 ? filesToUse : undefined,
     temperature: providerConfig?.temperature ?? 0.3,
     maxTokens: providerConfig?.maxTokens ?? 4096,

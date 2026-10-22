@@ -447,6 +447,7 @@ func (s *FlowService) LoadFlowFolder(folderPath string) (doc *models.FlowDocumen
 	if err != nil {
 		return nil, err
 	}
+	doc = withDesktopIdentity(doc, folderPath)
 
 	if s.settings != nil {
 		totalSize := doc.Metadata.FileSize
@@ -968,10 +969,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 
 	if s.astCache != nil {
 		if doc, ok := s.astCache.Get(key); ok {
-			// Shallow-copy before mutating FilePath so the cached original stays pristine.
-			docCopy := *doc
-			docCopy.FilePath = path
-			doc = &docCopy
+			doc = withDesktopIdentity(doc, path) // a copy: the cached original stays pristine
 			s.notifier.EmitTo(LocalUser, "flow:loaded", FlowLoadedSummaryOf(doc))
 			logger.Info("flow loaded from cache", "file", fileName)
 			return doc, nil
@@ -997,6 +995,7 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 	if s.astCache != nil {
 		s.astCache.Set(key, doc, FlowDocumentCost(doc), 0)
 	}
+	doc = withDesktopIdentity(doc, path)
 
 	if s.settings != nil {
 		_ = s.settings.AddRecentFile(path, info.Size())
@@ -1011,6 +1010,18 @@ func (s *FlowService) loadAndParse(path string) (*models.FlowDocument, error) {
 	)
 
 	return doc, nil
+}
+
+// withDesktopIdentity returns a copy of doc carrying the identity a path-backed desktop flow keeps across
+// parses. The parser mints a fresh document id every time, and the desktop chat keys its threads and stored
+// conversation on it, so an applied fix, a save, a restart or a snapshot restore orphaned both — cloud flows
+// keep their stored id the same way (persistCloudDoc). A copy, because doc may be a shared AST-cache entry:
+// the same bytes under two paths share one, and must not share an id.
+func withDesktopIdentity(doc *models.FlowDocument, path string) *models.FlowDocument {
+	c := *doc
+	c.FilePath = path
+	c.ID = analyzer.StableFlowIDForPath(path)
+	return &c
 }
 
 func searchBlock(blocks []models.Block, id string) *models.Block {
@@ -1101,6 +1112,7 @@ func (s *FlowService) PatchFlow(ctx context.Context, doc *models.FlowDocument, p
 	}
 	afterDoc.FilePath = doc.FilePath
 	s.cacheFileParse(targetPath, patched, afterDoc)
+	afterDoc = withDesktopIdentity(afterDoc, doc.FilePath)
 	if s.settings != nil {
 		_ = s.settings.AddRecentFile(doc.FilePath, int64(len(patched)))
 	}

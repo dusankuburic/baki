@@ -9,30 +9,7 @@ import (
 	"unicode"
 )
 
-var secretRegexes = []*regexp.Regexp{
-	// Generic key/value secrets: whitespace around the delimiter and YAML-style `key: value` too.
-	regexp.MustCompile(`(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[:=]\s*["']?([A-Za-z0-9\-._~+/=]{8,})["']?`),
-	// Bearer tokens
-	regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*`),
-	// Specific well-known prefixes (Stripe, GitHub)
-	regexp.MustCompile(`(?i)\b(sk_[a-zA-Z0-9_]{20,}|pk_[a-zA-Z0-9_]{20,}|ghp_[a-zA-Z0-9]{36}|glpat_[a-zA-Z0-9\-]{20,})\b`),
-	// Connection-string secrets: Password=/PWD= (covers User=;Password= forms).
-	// The value stops at ';' or end of line — running to end-of-text made prose
-	// mentioning "password=…" swallow the entire rest of the message.
-	regexp.MustCompile(`(?i)(?:Password|PWD)\s*=\s*([^;\r\n]+)`),
-	// AWS access key IDs (AKIA = normal, ASIA = temporary/STS): canonical
-	// 16 chars, word-bounded to avoid mid-word hits.
-	regexp.MustCompile(`\b((?:AKIA|ASIA)[0-9A-Z]{16})\b`),
-	// Google API key (AIza + 35 chars): Google Cloud API and Android/Maps keys.
-	regexp.MustCompile(`\b(AIza[0-9A-Za-z_-]{35})\b`),
-	// Slack tokens: xox[abprs]- + 10+ chars (bot, user, app, refresh, legacy).
-	regexp.MustCompile(`\b(xox[abprs]-[A-Za-z0-9-]{10,})\b`),
-	// JWT: eyJ (base64url of `{"`) on both segments, so false positives need a
-	// coincidental eyJ match in two segments.
-	regexp.MustCompile(`\b(eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b`),
-	// PEM private key blocks between BEGIN/END markers, spanning lines.
-	regexp.MustCompile(`-----BEGIN (?:[A-Z ]+)PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+)PRIVATE KEY-----`),
-}
+// The secret patterns are the secretClasses table in classes.go (secretRegexes is derived there).
 
 // sensitiveActions maps PAD action RawTypes to property fields always masked — belt-and-suspenders over the passes below.
 var sensitiveActions = map[string][]string{
@@ -198,8 +175,10 @@ func looksLikeHighEntropySecret(v string) bool {
 		return false
 	}
 	// URLs are long, space-free, often high-entropy but not secrets (e.g. a
-	// WebAutomation "Url" property); embedded credentials are still caught by
-	// the regex pass.
+	// WebAutomation "Url" property). Credentials embedded in one — the userinfo
+	// password and credential query parameters (sig=, code=, X-Amz-Signature=,
+	// …) — are masked by the url-userinfo and url-credential-param classes of
+	// the regex pass that runs first.
 	if strings.Contains(v, "://") {
 		return false
 	}
@@ -251,13 +230,16 @@ func shannonEntropy(s string) float64 {
 	return entropy
 }
 
-// mayContainSecret is the prefilter for ScrubText: every secretRegexes match
-// contains an anchorLiteral case-insensitively, so text with none cannot
-// match — one folding pass plus substring scans replaces nine regex scans
-// (~35× faster on clean prose). U+017F (ſ) and U+212A fold to 's'/'k' under
-// the regexes' (?i) but not plain lower-casing, so folded explicitly; the
-// prefilter stays a strict superset of the regexes' lead-ins.
-func mayContainSecret(text string) bool {
+// presentClasses is the prefilter for ScrubText: every match of a class's
+// pattern contains one of its anchors case-insensitively, so text with none of
+// them cannot match the class, and text with no anchor at all is clean — one
+// folding pass plus substring scans in place of a regex scan per class (~35×
+// faster on clean prose), and a streamed chunk that merely mentions a keyword
+// runs the keyword classes alone instead of all nineteen. U+017F (ſ) and
+// U+212A fold to 's'/'k' under the regexes' (?i) but not plain lower-casing,
+// so folded explicitly; the prefilter stays a strict superset of the regexes'
+// lead-ins.
+func presentClasses(text string) classMask {
 	lower := strings.Map(func(r rune) rune {
 		switch r {
 		case '\u017F':
@@ -267,27 +249,59 @@ func mayContainSecret(text string) bool {
 		}
 		return unicode.ToLower(r)
 	}, text)
-	for _, a := range anchorLiterals {
-		if strings.Contains(lower, a) {
-			return true
+	var present classMask
+	for i, a := range anchorLiterals {
+		// A literal whose classes are all in already (passwd after password) is not worth the scan.
+		if present&anchorClassMasks[i] != anchorClassMasks[i] && strings.Contains(lower, a) {
+			present |= anchorClassMasks[i]
 		}
 	}
-	return false
+	return present
 }
+
+// redacted is the mask ScrubText writes in place of a secret.
+const redacted = "[REDACTED]"
 
 // ScrubText applies regex patterns to replace found secrets in raw text
 func ScrubText(text string) string {
-	if !mayContainSecret(text) {
+	present := presentClasses(text)
+	if present == 0 {
 		return text
 	}
 	result := text
-	for _, pat := range secretRegexes {
-		// MatchString first: cheaper than the replace machinery, and the common case (prose) has no match.
-		if !pat.MatchString(result) {
+	var lead *regexp.Regexp
+	leadFound := false
+	for i := range secretClasses {
+		// Masking only ever replaces text with "[REDACTED]", which holds no anchor, so a class absent from
+		// the input is absent from every intermediate result too; the same keeps a shared lead's verdict
+		// good for the classes that follow.
+		if present&(1<<i) == 0 {
 			continue
 		}
-		result = pat.ReplaceAllStringFunc(result, func(match string) string {
-			return maskMatch(pat, match)
+		c := &secretClasses[i]
+		if c.lead != nil {
+			if c.lead != lead {
+				lead, leadFound = c.lead, c.lead.MatchString(result)
+			}
+			if !leadFound {
+				continue
+			}
+		}
+		// MatchString first: cheaper than the replace machinery, and the common case (prose) has no match.
+		if !c.pattern.MatchString(result) {
+			continue
+		}
+		result = c.pattern.ReplaceAllStringFunc(result, func(match string) string {
+			value := capturedValue(c.pattern, match)
+			// A value an earlier class already masked is left alone: a wider pattern would otherwise take
+			// "[REDACTED]" plus what follows it as its value ("?key=[REDACTED]&page=2" losing "&page=2").
+			if strings.HasPrefix(value, redacted) {
+				return match
+			}
+			if c.accept != nil && !c.accept(value) {
+				return match
+			}
+			return maskMatch(c.pattern, match)
 		})
 	}
 	return result
@@ -295,18 +309,38 @@ func ScrubText(text string) string {
 
 // HasCompleteSecret reports whether b already contains a finished secret match — lets the stream scrubber decide redaction coverage early without weakening detection.
 func HasCompleteSecret(b []byte) bool {
-	for _, pat := range secretRegexes {
-		if pat.Match(b) {
-			return true
+	for i := range secretClasses {
+		c := &secretClasses[i]
+		if c.accept == nil {
+			if c.pattern.Match(b) {
+				return true
+			}
+			continue
+		}
+		// A class with accept matches only when a captured value passes it: a rejected match is not a
+		// secret, and over-reporting one would arm the stream's drain on ordinary text.
+		for _, m := range c.pattern.FindAllSubmatchIndex(b, -1) {
+			if len(m) > 3 && m[2] >= 0 && c.accept(string(b[m[2]:m[3]])) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
+// capturedValue returns the first capture group of pattern in match, or match itself when there is none.
+func capturedValue(pattern *regexp.Regexp, match string) string {
+	m := pattern.FindStringSubmatchIndex(match)
+	if len(m) > 3 && m[2] >= 0 {
+		return match[m[2]:m[3]]
+	}
+	return match
+}
+
 func maskMatch(pat *regexp.Regexp, match string) string {
 	// With a capture group, mask only the group; otherwise the whole string.
 	submatches := pat.FindStringSubmatchIndex(match)
-	if len(submatches) > 2 { // Has a capture group
+	if len(submatches) > 3 && submatches[2] >= 0 { // Has a capture group that took part in the match
 		// submatches[2]/[3] are the first capture group's start/end.
 		start := submatches[2]
 		end := submatches[3]

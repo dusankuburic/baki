@@ -126,3 +126,62 @@ func TestGeminiToolCallIDs_UniqueAcrossStreams_AttributeCorrectly(t *testing.T) 
 		}
 	}
 }
+
+// TestToGeminiContents_ParallelToolResultsCoalesced (R-tool-loop-12): a turn with two function calls is
+// answered by ONE user content carrying both function responses, in call order — Gemini rejects a request
+// whose function-response parts do not line up with the preceding model turn's function-call parts.
+func TestToGeminiContents_ParallelToolResultsCoalesced(t *testing.T) {
+	calls := []ToolCall{
+		{ID: "call_a", Name: "search_flow", Input: schema(`{"q":"x"}`)},
+		{ID: "call_b", Name: "get_block", Input: schema(`{"id":"1"}`)},
+	}
+	msgs := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", ToolCalls: calls},
+		{Role: "tool", Content: "result-a", ToolCallID: "call_a"},
+		{Role: "tool", Content: "result-b", ToolCallID: "call_b"},
+	}
+	contents := toGeminiContents(msgs)
+	if len(contents) != 3 {
+		roles := make([]string, len(contents))
+		for i, c := range contents {
+			roles[i] = c.Role
+		}
+		t.Fatalf("want 3 contents (user, model, user), got %d: %v", len(contents), roles)
+	}
+	model := contents[1]
+	if model.Role != "model" || len(model.Parts) != 2 || model.Parts[0].FunctionCall == nil || model.Parts[1].FunctionCall == nil {
+		t.Fatalf("content 1 = role %q with %d parts, want the model turn with two functionCall parts", model.Role, len(model.Parts))
+	}
+	user := contents[2]
+	if user.Role != "user" || len(user.Parts) != 2 {
+		t.Fatalf("content 2 = role %q with %d parts, want one user content with two functionResponse parts", user.Role, len(user.Parts))
+	}
+	for i, want := range []string{"search_flow", "get_block"} {
+		fr := user.Parts[i].FunctionResponse
+		if fr == nil || fr.Name != want {
+			t.Errorf("functionResponse %d = %+v, want name %q (call order)", i, fr, want)
+		}
+	}
+}
+
+// TestToGeminiContents_UnknownCallIDKeepsName (R-tool-loop-12): a tool result whose call is missing from
+// the history (trimmed context) is still sent under a non-empty name — Gemini refuses a functionResponse
+// without one.
+func TestToGeminiContents_UnknownCallIDKeepsName(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "tool", Content: "result", ToolCallID: "call_orphan"},
+	}
+	var names []string
+	for _, c := range toGeminiContents(msgs) {
+		for _, p := range c.Parts {
+			if p.FunctionResponse != nil {
+				names = append(names, p.FunctionResponse.Name)
+			}
+		}
+	}
+	if len(names) != 1 || names[0] == "" {
+		t.Fatalf("functionResponse names = %q, want exactly one non-empty name for the orphaned result", names)
+	}
+}

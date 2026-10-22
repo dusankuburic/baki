@@ -259,17 +259,17 @@ func TestBuildContext_SelectedSubflow_AppearsInContext(t *testing.T) {
 	}
 }
 
-func TestFindSiblings_NilSafe(t *testing.T) {
-	if got := findSiblings(nil, nil); got != nil {
-		t.Errorf("nil doc: expected nil, got %v", got)
+func TestSiblingsOf_NilSafe(t *testing.T) {
+	if got, at := siblingsOf(nil, nil); got != nil || at != -1 {
+		t.Errorf("nil doc: expected nil, -1, got %v, %d", got, at)
 	}
 	doc := makeMinimalDoc("X")
-	if got := findSiblings(doc, nil); got != nil {
-		t.Errorf("nil block: expected nil, got %v", got)
+	if got, at := siblingsOf(doc, nil); got != nil || at != -1 {
+		t.Errorf("nil block: expected nil, -1, got %v, %d", got, at)
 	}
 }
 
-func TestFindSiblings_TopLevel(t *testing.T) {
+func TestSiblingsOf_TopLevel(t *testing.T) {
 	sf := &models.Subflow{
 		ID:   "sf1",
 		Name: "Main",
@@ -283,19 +283,15 @@ func TestFindSiblings_TopLevel(t *testing.T) {
 	doc.SubflowsByID["sf1"] = sf
 
 	target := &sf.Blocks[1] // block "b"
-	siblings := findSiblings(doc, target)
+	siblings, at := siblingsOf(doc, target)
 
-	if len(siblings) != 2 {
-		t.Fatalf("expected 2 siblings for block b, got %d", len(siblings))
-	}
-	for _, s := range siblings {
-		if s.ID == target.ID {
-			t.Error("target block should not appear in its own sibling list")
-		}
+	// The list is the subflow's blocks in order, target included, so the window can centre on it.
+	if len(siblings) != 3 || at != 1 || siblings[at].ID != "b" {
+		t.Fatalf("expected [a b c] with b at 1, got %d block(s), index %d", len(siblings), at)
 	}
 }
 
-func TestFindSiblings_NestedBlock(t *testing.T) {
+func TestSiblingsOf_NestedBlock(t *testing.T) {
 	parent := &models.Block{
 		ID: "p",
 		Children: []models.Block{
@@ -310,15 +306,10 @@ func TestFindSiblings_NestedBlock(t *testing.T) {
 
 	target := &parent.Children[0] // c1
 	target.ParentID = "p"
-	siblings := findSiblings(doc, target)
+	siblings, at := siblingsOf(doc, target)
 
-	if len(siblings) != 2 {
-		t.Fatalf("expected 2 siblings for c1, got %d", len(siblings))
-	}
-	for _, s := range siblings {
-		if s.ID == "c1" {
-			t.Error("c1 should not appear in its own sibling list")
-		}
+	if len(siblings) != 3 || at != 0 || siblings[at].ID != "c1" {
+		t.Fatalf("expected the parent's three children with c1 at 0, got %d block(s), index %d", len(siblings), at)
 	}
 }
 

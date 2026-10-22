@@ -221,6 +221,43 @@ func (p *BackendSettingsProvider) Update(ctx context.Context, updated models.App
 	return nil
 }
 
+// UpdateWith re-reads the stored document (never the cache, which can lag another replica's write by up to the TTL),
+// applies mutate to it and writes the result back, so a write that changes one part cannot carry another part's
+// stale cached value with it. Two writers in the same instant still take turns only at the row, not at the read.
+func (p *BackendSettingsProvider) UpdateWith(ctx context.Context, mutate func(*models.AppSettings) error) error {
+	stored, err := p.backend.LoadSettings(ctx)
+	if err != nil {
+		return err
+	}
+	current := settingsToModel(stored)
+	if err := mutate(current); err != nil {
+		return err
+	}
+	return p.Update(ctx, *current)
+}
+
+// freshSettingsUpdater is a SettingsProvider whose Get can serve another replica's stale value (the cloud's);
+// updateSettingsWith prefers its re-reading write.
+type freshSettingsUpdater interface {
+	UpdateWith(ctx context.Context, mutate func(*models.AppSettings) error) error
+}
+
+// updateSettingsWith applies mutate to the deployment document and writes it back: through UpdateWith where the
+// provider has one, else on Get's value, which is the document itself where there is one process (the desktop).
+func updateSettingsWith(ctx context.Context, p SettingsProvider, mutate func(*models.AppSettings) error) error {
+	if fresh, ok := p.(freshSettingsUpdater); ok {
+		return fresh.UpdateWith(ctx, mutate)
+	}
+	current := p.Get()
+	if current == nil {
+		current = models.DefaultSettings()
+	}
+	if err := mutate(current); err != nil {
+		return err
+	}
+	return p.Update(ctx, *current)
+}
+
 // AddRecentFile, RemoveRecentFile and ClearRecentFiles are no-ops in cloud mode: recent files are server-local
 // paths, and every route that produces or consumes them already returns 403 there.
 func (p *BackendSettingsProvider) AddRecentFile(string, int64) error { return nil }

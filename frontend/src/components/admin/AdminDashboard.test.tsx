@@ -20,6 +20,10 @@ vi.mock('@/api/admin', () => ({
     listAuditEvents: (...a: unknown[]) => listAuditEvents(...a),
     listAuditActions: (...a: unknown[]) => listAuditActions(...a),
     systemHealth: (...a: unknown[]) => systemHealth(...a),
+    getDeploymentAISettings: vi
+      .fn()
+      .mockResolvedValue({dailyBudget: 0, perUserDailyBudget: 0, embeddingProvider: '', embeddingModel: ''}),
+    updateDeploymentAISettings: vi.fn().mockResolvedValue(undefined),
     setUserRole: vi.fn().mockResolvedValue(undefined),
     startMigration: vi.fn().mockResolvedValue(undefined),
     triggerScannerScan: vi.fn().mockResolvedValue({started: true}),

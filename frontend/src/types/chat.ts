@@ -1,6 +1,7 @@
 
 import type {ProviderID} from './providers'
 import type {ReasoningEffort} from './settings'
+import type {BlockAnchor} from '@/lib/blockAnchor'
 
 export interface ToolCallRecord {
   name: string
@@ -82,6 +83,7 @@ export interface ChatRequest {
   messages?: ChatMessage[]
   userMessage: string
   contextBlockId?: string
+  contextBlockAnchor?: BlockAnchor
   selectedSourceFiles?: string[]
   systemPrompt?: string
   temperature?: number
@@ -107,4 +109,6 @@ export interface ContextPreview {
   userMessage: string
   estimatedTokens: number
   contextLimit: number
+  contextBlock?: 'resolved' | 'missing'
+  contextBlockId?: string
 }

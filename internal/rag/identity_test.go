@@ -327,6 +327,78 @@ func TestReindexOrg_WidthRecoveryStampsNewIdentity(t *testing.T) {
 	}
 }
 
+// TestReindexOrg_GeminiNativeWidthRowsConvertedUnderSameIdentity (R-knowledge-4): a Gemini corpus embedded
+// at the model's native width before the configured width reached the provider keeps its frozen
+// "gemini|model" identity (ADR 0027 §2), so the width is the only difference and the identity census alone
+// reads it as the caller's own model. The width proof tells it apart: a search at the configured width sees
+// none of it and records the width mismatch, an upload at the configured width is accepted (the rows outside
+// the index are the caller's own, so no second model enters the corpus and the new document is searchable at
+// once), and an UNFORCED re-index converts the native-width rows alone under the unchanged identity — once;
+// the next one finds nothing to convert and buys nothing.
+func TestReindexOrg_GeminiNativeWidthRowsConvertedUnderSameIdentity(t *testing.T) {
+	const identity = "gemini|gemini-embedding-001"
+	store := &tu.FakeBackend{EmbeddingDim: 2}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
+	// Width 3 stands in for the native width, 2 for the configured one.
+	seedIdentityChunks(store, []float32{1, 0, 0}, identity, identity)
+	emb := &namedEmbedder{identity: identity, vec: []float32{1, 0}}
+	svc := guardService(store, emb)
+
+	dim := testutil.ToFloat64(ragDimMismatchTotal)
+	if got, err := svc.Search(context.Background(), "u1", "org-1", "retries"); err != nil || got != "" {
+		t.Fatalf("Search over native-width rows = %q, %v; want nothing at the configured width", got, err)
+	}
+	if d := testutil.ToFloat64(ragDimMismatchTotal) - dim; d != 1 {
+		t.Errorf("the native-width rows were not reported as a width mismatch (dim +%v, want 1)", d)
+	}
+	if err := svc.AddDocument(context.Background(), "u1", "org-1", "new.md", "a new guideline"); err != nil {
+		t.Fatalf("upload at the configured width into the caller's own native-width corpus: %v, want it accepted", err)
+	}
+
+	res, err := svc.ReindexOrg(context.Background(), "u1", "org-1", false, interfaces.KnowledgeChunkCursor{})
+	if err != nil || res.Chunks != 2 || res.Docs != 1 {
+		t.Fatalf("unforced re-index = %+v, %v; want the two native-width chunks converted and the new document left alone", res, err)
+	}
+	for id, c := range store.KnowledgeChunks {
+		if c.EmbeddingIdentity != identity || len(c.Embedding) != 2 {
+			t.Errorf("chunk %s = identity %q width %d, want %q at width 2", id, c.EmbeddingIdentity, len(c.Embedding), identity)
+		}
+	}
+	calls := emb.calls
+	if res, err := svc.ReindexOrg(context.Background(), "u1", "org-1", false, interfaces.KnowledgeChunkCursor{}); err != nil || res.Chunks != 0 {
+		t.Errorf("unforced re-index of the converted corpus = %+v, %v; want nothing to do", res, err)
+	}
+	if emb.calls != calls {
+		t.Errorf("an unforced re-index of the converted corpus embedded (%d calls)", emb.calls-calls)
+	}
+}
+
+// TestReindexOrg_SameIdentityWidthRecoveryResumes (R-knowledge-4): the same recovery across requests. A resumed
+// request's guard samples only the converted rows, which carry the caller's identity at the caller's width, and
+// must still walk the caller's own rows after the cursor rather than skip them as already converted.
+func TestReindexOrg_SameIdentityWidthRecoveryResumes(t *testing.T) {
+	const identity = "gemini|gemini-embedding-001"
+	lowerReindexLimits(t, 2, 2)
+	store := &tu.FakeBackend{EmbeddingDim: 2}
+	store.SeedOrgs("org-1") // the knowledge base needs its organisation
+	seedIdentityChunks(store, []float32{1, 0, 0}, identity, identity, identity, identity, identity)
+	svc := guardService(store, &namedEmbedder{identity: identity, vec: []float32{1, 0}})
+
+	results := runReindexToEnd(t, svc, false)
+	converted := 0
+	for _, r := range results {
+		converted += r.Chunks
+	}
+	if len(results) < 2 || converted != 5 {
+		t.Fatalf("%d requests converted %d chunks, want every one of 5 across at least 2 requests: %+v", len(results), converted, results)
+	}
+	for id, c := range store.KnowledgeChunks {
+		if c.EmbeddingIdentity != identity || len(c.Embedding) != 2 {
+			t.Errorf("chunk %s = identity %q width %d, want %q at width 2", id, c.EmbeddingIdentity, len(c.Embedding), identity)
+		}
+	}
+}
+
 // TestListDocuments_CarriesEmbeddingStranded: the admin list counts, per document, the chunks at another
 // identity than the caller's; a caller without an embedder sees no stranded count.
 func TestListDocuments_CarriesEmbeddingStranded(t *testing.T) {

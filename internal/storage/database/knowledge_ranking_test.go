@@ -16,7 +16,7 @@ func TestRankKnowledgeChunks_OrdersByCosineSimilarity(t *testing.T) {
 		chunk("near", 1, 0.1),  // close to query direction → high sim
 		chunk("mid", 0.7, 0.7), // 45° → mid sim
 	}
-	got, err := rankKnowledgeChunks("org", chunks, []float32{1, 0}, 3)
+	got, err := rankKnowledgeChunks(chunks, []float32{1, 0}, 3)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestRankKnowledgeChunks_RespectsLimit(t *testing.T) {
 	chunks := []interfaces.KnowledgeChunk{
 		chunk("a", 1, 0), chunk("b", 0.9, 0.1), chunk("c", 0.8, 0.2),
 	}
-	got, err := rankKnowledgeChunks("org", chunks, []float32{1, 0}, 2)
+	got, err := rankKnowledgeChunks(chunks, []float32{1, 0}, 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestRankKnowledgeChunks_AllMismatched_Errors(t *testing.T) {
 	chunks := []interfaces.KnowledgeChunk{
 		chunk("x", 1, 0, 0), chunk("y", 0, 1, 0),
 	}
-	got, err := rankKnowledgeChunks("org", chunks, []float32{1, 0}, 3)
+	got, err := rankKnowledgeChunks(chunks, []float32{1, 0}, 3)
 	if err == nil {
 		t.Fatalf("expected a dimension-mismatch error, got %d chunks and nil error", len(got))
 	}
@@ -67,7 +67,7 @@ func TestRankKnowledgeChunks_PartialMismatch_SkipsIncomparable(t *testing.T) {
 		chunk("old", 1, 0, 0), // 3-dim, incomparable → skipped
 		chunk("new", 1, 0),    // 2-dim, comparable
 	}
-	got, err := rankKnowledgeChunks("org", chunks, []float32{1, 0}, 3)
+	got, err := rankKnowledgeChunks(chunks, []float32{1, 0}, 3)
 	if err != nil {
 		t.Fatalf("partial mismatch should not error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestRankKnowledgeChunks_PartialMismatch_SkipsIncomparable(t *testing.T) {
 }
 
 func TestRankKnowledgeChunks_EmptyCorpus(t *testing.T) {
-	got, err := rankKnowledgeChunks("org", nil, []float32{1, 0}, 3)
+	got, err := rankKnowledgeChunks(nil, []float32{1, 0}, 3)
 	if err != nil {
 		t.Fatalf("empty corpus should not error: %v", err)
 	}

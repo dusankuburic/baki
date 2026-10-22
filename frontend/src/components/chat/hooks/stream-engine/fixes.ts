@@ -99,7 +99,8 @@ export function useFixEvents({
       patchFixProposal(
         acc.threadId,
         proposalId,
-        {status: cardStatus, message},
+        // The server's echo of a decision the card already shows carries no message; keep the card's reason.
+        {status: cardStatus, message: message || (card?.status === cardStatus ? card.message : undefined)},
         itemPatches.length > 0 ? itemPatches : undefined,
       )
       if (card?.source === 'fix' && (status === 'applied' || status === 'applied-unresolved')) {
@@ -115,15 +116,21 @@ export function useFixEvents({
   )
 
   const respondFixProposal = useCallback(
-    (threadId: string, approved: boolean, proposalId?: string, excludedItemIndices?: number[]) => {
-      if (approved && useFlowStore.getState().readOnly) return
+    (threadId: string, approvedClick: boolean, proposalId?: string, excludedItemIndices?: number[]) => {
       const slot = useChatStore.getState().streams[threadId]
       if (!slot) return
       const card = proposalId
         ? slot.approvals.find(c => c.proposalId === proposalId)
         : [...slot.approvals].reverse().find(c => c.status === 'pending')
       if (!card || card.status !== 'pending') return
-      patchFixProposal(threadId, card.proposalId, {status: approved ? 'applying' : 'declined'})
+      // A read-only flow can't take the change: an Approve is sent as a decline, so the card and the model learn
+      // of it now instead of waiting out the server's decision timer.
+      const readOnlyDecline = approvedClick && useFlowStore.getState().readOnly
+      const approved = approvedClick && !readOnlyDecline
+      patchFixProposal(threadId, card.proposalId, {
+        status: approved ? 'applying' : 'declined',
+        ...(readOnlyDecline ? {message: i18n.t('chat:fixCard.readOnly')} : {}),
+      })
       const args = [slot.streamId, card.proposalId, approved, excludedItemIndices] as const
       const respond =
         card.source === 'approval'

@@ -35,6 +35,9 @@ type ContextRequest struct {
 	TokenBudget        int
 	Provider           Provider
 	SystemPromptSuffix string
+	// SelectedBlockMissing: the conversation is about a block that is no longer in the flow (SelectedBlock is
+	// nil); the context says so instead of silently leaving the section out.
+	SelectedBlockMissing bool
 }
 
 func BuildContext(req ContextRequest) (systemPrompt string, contextMessage string) {
@@ -79,6 +82,10 @@ func BuildContext(req ContextRequest) (systemPrompt string, contextMessage strin
 		}
 	}
 
+	if req.SelectedBlock == nil && req.SelectedBlockMissing {
+		b.WriteString("\n## Selected Block\n\nThe block this conversation is about is no longer in the flow: a fix or an edit changed or removed it. " +
+			"Answer about the flow as a whole, and tell the user if their question needs that block.\n")
+	}
 	if req.SelectedBlock != nil {
 		b.WriteString("\n## Selected Block\n\n")
 		writeBlockDetail(&b, req.SelectedBlock)
@@ -104,26 +111,14 @@ func BuildContext(req ContextRequest) (systemPrompt string, contextMessage strin
 			}
 		}
 
-		if siblings := findSiblings(req.Flow, req.SelectedBlock); len(siblings) > 0 {
+		// The ±3 blocks around the selection, from the list it sits in, with the selection marked.
+		if siblings, at := siblingsOf(req.Flow, req.SelectedBlock); len(siblings) > 1 {
 			b.WriteString("\n## Surrounding Blocks (siblings)\n\n")
-			sibIdx := -1
-			for i, s := range siblings {
-				if s.ID == req.SelectedBlock.ID {
-					sibIdx = i
-					break
-				}
-			}
-			start := sibIdx - 3
-			if start < 0 {
-				start = 0
-			}
-			end := sibIdx + 4
-			if end > len(siblings) {
-				end = len(siblings)
-			}
+			start := max(at-3, 0)
+			end := min(at+4, len(siblings))
 			for i := start; i < end; i++ {
 				marker := ""
-				if siblings[i].ID == req.SelectedBlock.ID {
+				if i == at {
 					marker = " ← selected"
 				}
 				fmt.Fprintf(&b, "  %d. %s: %s%s\n", siblings[i].LineNumber, siblings[i].Type, siblings[i].Name, marker)
@@ -283,29 +278,31 @@ func findParentChain(doc *models.FlowDocument, target *models.Block) []*models.B
 	return chain
 }
 
-func findSiblings(doc *models.FlowDocument, target *models.Block) []models.Block {
+// siblingsOf returns the ordered list target sits in — its parent's children, or its subflow's top-level
+// blocks — and target's index in it; nil and -1 when target cannot be placed. The list includes target, so
+// the window around it can be centred on that index (a list without target left the window at the start).
+func siblingsOf(doc *models.FlowDocument, target *models.Block) ([]models.Block, int) {
 	if doc == nil || target == nil || doc.BlocksByID == nil {
-		return nil
+		return nil, -1
 	}
 
-	var allBlocks []models.Block
+	var list []models.Block
 	if target.ParentID != "" {
 		if parent, ok := doc.BlocksByID[target.ParentID]; ok {
-			allBlocks = parent.Children
+			list = parent.Children
 		}
 	} else if target.SubflowID != "" {
 		if sf, ok := doc.SubflowsByID[target.SubflowID]; ok {
-			allBlocks = sf.Blocks
+			list = sf.Blocks
 		}
 	}
 
-	var siblings []models.Block
-	for _, b := range allBlocks {
-		if b.ID != target.ID {
-			siblings = append(siblings, b)
+	for i := range list {
+		if list[i].ID == target.ID {
+			return list, i
 		}
 	}
-	return siblings
+	return nil, -1
 }
 
 func filterFindingsForBlock(findings []models.Finding, blockID string) []models.Finding {

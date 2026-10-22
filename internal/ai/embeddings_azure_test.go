@@ -74,7 +74,7 @@ func TestEmbeddingDimensionsFor(t *testing.T) {
 }
 
 // TestEmbed_NeverAboveNativeWidth: PAD_EMBEDDING_DIM=3072 (set for a
-// -large or Gemini deployment) must not break a user whose embedder is
+// text-embedding-3-large deployment) must not break a user whose embedder is
 // OpenAI's default text-embedding-3-small — it gets its native vectors.
 func TestEmbed_NeverAboveNativeWidth(t *testing.T) {
 	srv, seen := dimsEmbedServer(t)

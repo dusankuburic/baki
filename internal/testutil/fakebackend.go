@@ -68,6 +68,10 @@ type FakeBackend struct {
 	// its embedding has this width, mirroring the Postgres embedding_vec
 	// rule. 0 keeps the any-embedding rule.
 	EmbeddingDim int
+	// NoPgvector models a Postgres without the vector extension: no chunk is
+	// ever vector-indexed and HasPgvector is false. The zero value keeps the
+	// index, as every cloud image ships pgvector.
+	NoPgvector bool
 	// UpdateKnowledgeEmbeddingsFailAt, when >0, makes the Nth (1-based) call
 	// of UpdateKnowledgeChunkEmbeddings fail without writing — one re-index
 	// page's commit failing; every other call writes (each call is its own
@@ -1899,6 +1903,17 @@ func cosineSimilarity(a, b []float32) float64 {
 // at limit (limit <= 0 = all), skipping the chunks already embedded under
 // notIdentity ("" skips none).
 func (m *FakeBackend) ListKnowledgeChunkContents(_ context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int, notIdentity string) ([]interfaces.KnowledgeChunk, error) {
+	return m.listKnowledgeChunkContents(orgID, after, limit, notIdentity, false)
+}
+
+// ListUnindexedKnowledgeChunkContents is the same page over the chunks
+// outside the vector index; without pgvector (NoPgvector) every chunk, as the
+// Postgres statement has no column to test.
+func (m *FakeBackend) ListUnindexedKnowledgeChunkContents(_ context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int) ([]interfaces.KnowledgeChunk, error) {
+	return m.listKnowledgeChunkContents(orgID, after, limit, "", !m.NoPgvector)
+}
+
+func (m *FakeBackend) listKnowledgeChunkContents(orgID string, after interfaces.KnowledgeChunkCursor, limit int, notIdentity string, unindexedOnly bool) ([]interfaces.KnowledgeChunk, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []interfaces.KnowledgeChunk
@@ -1911,6 +1926,9 @@ func (m *FakeBackend) ListKnowledgeChunkContents(_ context.Context, orgID string
 			continue
 		}
 		if notIdentity != "" && c.EmbeddingIdentity == notIdentity {
+			continue
+		}
+		if unindexedOnly && m.vectorIndexed(c) {
 			continue
 		}
 		out = append(out, interfaces.KnowledgeChunk{ID: c.ID, DocID: c.DocID, OrgID: orgID, Content: c.Content})
@@ -1927,10 +1945,41 @@ func (m *FakeBackend) ListKnowledgeChunkContents(_ context.Context, orgID string
 	return out, nil
 }
 
-// vectorIndexed mirrors the Postgres embedding_vec rule: an embedded chunk
-// is in the vector index when EmbeddingDim is unset or matches its width.
+// vectorIndexed mirrors the Postgres embedding_vec rule after boot: an embedded chunk
+// is in the vector index when the store has one and EmbeddingDim is unset or
+// matches its width (the boot reconciliation puts every row at the configured
+// width into the column, so the width alone decides).
 func (m *FakeBackend) vectorIndexed(c interfaces.KnowledgeChunk) bool {
-	return len(c.Embedding) > 0 && (m.EmbeddingDim == 0 || len(c.Embedding) == m.EmbeddingDim)
+	return !m.NoPgvector && len(c.Embedding) > 0 && (m.EmbeddingDim == 0 || len(c.Embedding) == m.EmbeddingDim)
+}
+
+// HasPgvector mirrors the Postgres backend's: the fake has a vector index unless NoPgvector is set.
+func (m *FakeBackend) HasPgvector() bool { return !m.NoPgvector }
+
+// UnindexedKnowledgeChunkWidth mirrors the Postgres probe: the stored width of
+// the first (DocID, ID) embedded chunk of the org outside the vector index; 0
+// when none is or the store has no index.
+func (m *FakeBackend) UnindexedKnowledgeChunkWidth(_ context.Context, orgID string) (int, error) {
+	if m.NoPgvector {
+		return 0, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var first *interfaces.KnowledgeChunk
+	for _, c := range m.KnowledgeChunks {
+		d, ok := m.KnowledgeDocs[c.DocID]
+		if !ok || d.OrgID != orgID || len(c.Embedding) == 0 || m.vectorIndexed(c) {
+			continue
+		}
+		if first == nil || c.DocID < first.DocID || (c.DocID == first.DocID && c.ID < first.ID) {
+			c := c
+			first = &c
+		}
+	}
+	if first == nil {
+		return 0, nil
+	}
+	return len(first.Embedding), nil
 }
 
 // SampleKnowledgeChunkEmbeddings mirrors the Postgres sample: ONE chunk per

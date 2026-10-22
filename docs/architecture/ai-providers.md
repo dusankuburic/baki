@@ -22,3 +22,7 @@ On the wire, `GET /api/providers/list` entries carry optional `caps[]`, `modes[]
 - **Eviction.** A held stream rewrites its record every second; a rewrite that had to recreate a record another writer lost fails the next budget check closed once (`pad_ai_ledger_errors_total{op="lost"}`) and the record is whole again — the under-count lasts one refresh interval. Alert on any increase of `pad_redis_evicted_keys_total` and size `maxmemory` with headroom (the SSE logs are the large tenant).
 - **Mixed versions.** A replica of the release before keeps its in-process ledger and sees no other replica's streams: acceptable only at one replica — roll the fleet to this release before raising it.
 - **Metrics.** `pad_ai_ledger_errors_total{op}` (hold, refresh, read, release, lost), `pad_ai_ledger_held`, `pad_ai_ledger_expired_total`; refusals stay in `pad_ai_budget_refusals_total{reason="unavailable"}`.
+
+## What is still missing
+
+Known gaps in the provider layer — error classification, transport timeouts, the half-open probe, model catalogues, pricing for unknown models — are items in the [AI assistant roadmap](ai-roadmap.md); the provider ones are in [`ai-roadmap/provider.md`](ai-roadmap/provider.md).

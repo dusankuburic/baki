@@ -61,6 +61,22 @@ describe('useChatThreads server-side history', () => {
     expect(useChatStore.getState().threads.find(t => t.id === id)?.contextBlockId).toBeNull()
   })
 
+  it('clear drops the whole block scope: the anchor and the lost-block notice go with the id', async () => {
+    const id = seedThread(1)
+    useChatStore.getState().updateThread(id, {
+      contextBlockId: null,
+      contextBlockAnchor: {subflow: 'Main', rawType: 'HTTPClient.InvokeUrl', name: 'Fetch', ordinal: 0, count: 1},
+      contextBlockLost: 'Fetch',
+    })
+    const {result} = renderThreads(id)
+
+    await act(async () => result.current.handleClearContext())
+
+    const thread = useChatStore.getState().threads.find(t => t.id === id)!
+    expect(thread.contextBlockAnchor).toBeNull()
+    expect(thread.contextBlockLost).toBeUndefined()
+  })
+
   it('compact persists the trimmed history so the next prompt is actually cheaper', async () => {
     const id = seedThread(6)
     const {result} = renderThreads(id)

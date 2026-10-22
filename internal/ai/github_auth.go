@@ -113,6 +113,11 @@ func (g *GitHubAuth) PollToken(ctx context.Context, deviceCode string) (*GitHubA
 	if result.Error != "" {
 		return &GitHubAuthResult{Status: "error", Error: result.Error}, nil
 	}
+	// A success implies a stored token: a 200 with neither a token nor an error must stop the client, not
+	// switch it to a provider with no credential.
+	if result.AccessToken == "" {
+		return &GitHubAuthResult{Status: "error", Error: "GitHub answered without an access token"}, nil
+	}
 
 	return &GitHubAuthResult{Status: "success", Token: result.AccessToken}, nil
 }

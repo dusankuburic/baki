@@ -23,3 +23,8 @@ export function useSelectedBlock() {
   )
   return {selectedBlockId, selectedBlock}
 }
+
+export function useBlockInfo(blockId: string | null) {
+  const document = useFlowStore(s => s.document)
+  return useMemo(() => (document && blockId ? (lookupFor(document).get(blockId) ?? null) : null), [document, blockId])
+}

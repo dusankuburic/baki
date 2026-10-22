@@ -1,4 +1,4 @@
-import {getErrorMessage} from '@/lib/getErrorMessage'
+import {getErrorCode, getErrorMessage} from '@/lib/getErrorMessage'
 import {useTranslation} from 'react-i18next'
 import {Check, KeyRound, Loader2} from 'lucide-react'
 import {useState, useEffect, useRef, useCallback} from 'react'
@@ -115,7 +115,18 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
             setErrorMsg(result.error || t('deviceAuth.authFailed'))
             return
           }
-        } catch {
+        } catch (e) {
+          // GitHub granted the token but the server could not store it: the device code is spent, so polling on
+          // would only relay GitHub's error for it. Stop with the storage failure instead of completing the sign-in.
+          const code = getErrorCode(e)
+          if (code === 'SECRET_STORAGE_UNAVAILABLE' || code === 'DEVICE_TOKEN_NOT_STORED') {
+            if (attempt !== attemptRef.current) return
+            setState('error')
+            setErrorMsg(
+              t(code === 'SECRET_STORAGE_UNAVAILABLE' ? 'deviceAuth.secretStorageUnavailable' : 'deviceAuth.tokenNotStored'),
+            )
+            return
+          }
         }
         if (attempt === attemptRef.current) {
           timeoutRef.current = setTimeout(poll, interval)

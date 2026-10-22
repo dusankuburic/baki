@@ -89,6 +89,55 @@ describe('KnowledgeBasePanel', () => {
     expect(screen.getByText(/dimension mismatch; re-index/i)).toBeInTheDocument()
   })
 
+  // R-config-8: the listing names both widths and which side is off, since the two need opposite remedies —
+  // an embedder off PAD_EMBEDDING_DIM is fixed in the environment, stored chunks off it by a re-index alone.
+  it('tells an embedder off PAD_EMBEDDING_DIM from stored chunks off it', async () => {
+    seedStore('admin')
+    requestMock.mockResolvedValue([
+      {
+        id: 'd1',
+        filename: 'wide.md',
+        createdAt: new Date().toISOString(),
+        chunkCount: 5,
+        vectorIndexed: 0,
+        embeddingWidthMismatch: {configured: 1536, observed: 3072, source: 'embedder'},
+      },
+      {
+        id: 'd2',
+        filename: 'old.md',
+        createdAt: new Date().toISOString(),
+        chunkCount: 5,
+        vectorIndexed: 0,
+        embeddingWidthMismatch: {configured: 1536, observed: 768, source: 'stored'},
+      },
+    ])
+    renderPanel()
+
+    expect(await screen.findByText('wide.md')).toBeInTheDocument()
+    expect(
+      screen.getByText(/produces 3072-dimensional vectors but PAD_EMBEDDING_DIM is 1536.*restart, and re-index/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/stored embeddings are 768-dimensional but PAD_EMBEDDING_DIM is 1536; re-index below/),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/stored embeddings.*restart/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/dimension mismatch; re-index/i)).not.toBeInTheDocument()
+  })
+
+  // R-config-8: without a vector index no document is "not searchable" for being outside it — searches run
+  // in-process — so the stranded line stays out although nothing is indexed.
+  it('does not call documents unsearchable on a deployment without a vector index', async () => {
+    seedStore('admin')
+    requestMock.mockResolvedValue([
+      {id: 'd1', filename: 'guide.md', createdAt: new Date().toISOString(), chunkCount: 5, noVectorIndex: true},
+    ])
+    renderPanel()
+
+    expect(await screen.findByText('guide.md')).toBeInTheDocument()
+    expect(screen.getByText(/5 chunks/)).toBeInTheDocument()
+    expect(screen.queryByText(/not searchable/i)).not.toBeInTheDocument()
+  })
+
   it('marks documents indexed with another embedding model', async () => {
     seedStore('admin')
     requestMock.mockResolvedValue([
@@ -264,6 +313,37 @@ describe('KnowledgeBasePanel', () => {
 
     expect(await screen.findByText('another re-index is already running')).toBeInTheDocument()
     expect(screen.queryByText('Re-index failed')).toBeNull()
+  })
+
+  it("asks before forcing when the embedder is not PAD_EMBEDDING_DIM wide, with the server's reason", async () => {
+    seedStore('admin')
+    const reason =
+      "your embedding provider's vectors are not PAD_EMBEDDING_DIM wide, so a re-index cannot make them searchable: PAD_EMBEDDING_DIM is 2 and the provider's vectors are 3 wide — set PAD_EMBEDDING_DIM to 3 and restart, then re-index"
+    routeRequests({
+      reindex: body =>
+        (body as {force?: boolean}).force
+          ? Promise.resolve({chunks: 2, docs: 1})
+          : Promise.reject(new ApiError(reason, 409, 'EMBEDDING_WIDTH_OFF')),
+    })
+    renderPanel()
+    await confirmFirstReindexDialog()
+
+    await screen.findByText(/re-index at the provider's width/i)
+    const second = screen.getByRole('dialog')
+    expect(within(second).getByText(/set PAD_EMBEDDING_DIM to 3 and restart/)).toBeInTheDocument()
+    expect(within(second).getByText(/stay outside the vector index/)).toBeInTheDocument()
+    expect(screen.queryByText('Re-index failed')).toBeNull()
+    expect(screen.queryByText(/embedding provider/i, {selector: '[role="status"], [role="alert"]'})).toBeNull()
+    fireEvent.click(within(second).getByRole('button', {name: 'Re-index anyway'}))
+
+    await waitFor(() =>
+      expect(requestMock).toHaveBeenCalledWith(
+        '/api/orgs/org-1/knowledge/reindex',
+        expect.objectContaining({body: {force: true}}),
+      ),
+    )
+    const reindexCalls = requestMock.mock.calls.filter(c => String(c[0]).endsWith('/reindex'))
+    expect(reindexCalls.map(c => (c[1] as {body: unknown}).body)).toEqual([{}, {force: true}])
   })
 
   it("shows the embedding provider's own verdict on upload, and fixed copy when it is unavailable", async () => {

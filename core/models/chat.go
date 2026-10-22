@@ -81,16 +81,19 @@ type ChatMessage struct {
 }
 
 type ChatRequest struct {
-	FlowID              string        `json:"flowId"`
-	Provider            string        `json:"provider"`
-	Model               string        `json:"model,omitempty"`
-	Messages            []ChatMessage `json:"messages"`
-	UserMessage         string        `json:"userMessage"`
-	ContextBlockID      string        `json:"contextBlockId,omitempty"`
-	SelectedSourceFiles []string      `json:"selectedSourceFiles,omitempty"`
-	SystemPrompt        string        `json:"systemPrompt,omitempty"`
-	Temperature         float64       `json:"temperature,omitempty"`
-	MaxTokens           int           `json:"maxTokens,omitempty"`
+	FlowID         string        `json:"flowId"`
+	Provider       string        `json:"provider"`
+	Model          string        `json:"model,omitempty"`
+	Messages       []ChatMessage `json:"messages"`
+	UserMessage    string        `json:"userMessage"`
+	ContextBlockID string        `json:"contextBlockId,omitempty"`
+	// ContextBlockAnchor names ContextBlockID's block by content: a fix or an edit re-parses the flow and
+	// re-mints every block id, and the turn then finds the block again by its anchor.
+	ContextBlockAnchor  *BlockAnchor `json:"contextBlockAnchor,omitempty"`
+	SelectedSourceFiles []string     `json:"selectedSourceFiles,omitempty"`
+	SystemPrompt        string       `json:"systemPrompt,omitempty"`
+	Temperature         float64      `json:"temperature,omitempty"`
+	MaxTokens           int          `json:"maxTokens,omitempty"`
 	// ReasoningEffort is the per-provider reasoning depth ("", "low", "medium",
 	// "high"; anything else is refused), merged from the persisted setting.
 	// Only reasoning models use it; the wire repair path drops it when rejected.
@@ -329,6 +332,11 @@ type ContextPreview struct {
 	UserMessage     string `json:"userMessage"`
 	EstimatedTokens int    `json:"estimatedTokens"`
 	ContextLimit    int    `json:"contextLimit"`
+	// ContextBlock reports the request's context block: "resolved" (its section is in the context, found by
+	// id or by anchor), "missing" (no longer in the flow; the context says so) or "" (none asked for).
+	ContextBlock string `json:"contextBlock,omitempty"`
+	// ContextBlockID is the id the context block resolved to, when that is not the request's.
+	ContextBlockID string `json:"contextBlockId,omitempty"`
 }
 
 type ConversationFile struct {

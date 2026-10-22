@@ -30,7 +30,7 @@ const maxKnowledgeUploadBytes = 1 << 20 // 1 MiB
 const maxKnowledgeUploadBodyBytes = 4 << 20 // 4 MiB
 
 // @Summary      List knowledge base docs
-// @Description  The org's documents, newest first, each with its chunk counts: chunkCount, vectorIndexed (in the vector index at the deployment's width) and embeddingStranded (embedded under another embedding model than the caller's, so the caller's searches never return them; re-index converts them).
+// @Description  The org's documents, newest first, each with its chunk counts: chunkCount, vectorIndexed (in the vector index at the deployment's width) and embeddingStranded (embedded under another embedding model than the caller's, so the caller's searches never return them; re-index converts them). A document with chunks outside the vector index also carries embeddingWidthMismatch {configured, observed, source}: the deployment's PAD_EMBEDDING_DIM against the width of the side source names — "embedder" (what the caller's embedding model produces: set PAD_EMBEDDING_DIM to it and restart) or "stored" (what the stored chunks hold: re-index). On a deployment without a vector index (no pgvector) every document carries noVectorIndex true, vectorIndexed is always 0 and no width is reported: searches run in-process at the embedder's width.
 // @Tags         org
 // @Param        id path string true "Org ID"
 // @Produce      json
@@ -55,7 +55,33 @@ func (h *OrgHandler) handleKnowledgeList(w http.ResponseWriter, r *http.Request)
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	render.JSON(w, docs)
+	orgID := chi.URLParam(r, "id")
+	render.JSON(w, knowledgeListView(docs, h.knowledge.EmbeddingWidthMismatch(r.Context(), orgID, docs), h.knowledge.HasVectorIndex()))
+}
+
+// knowledgeDocumentView is a listed document plus, on one with chunks outside the vector index, the knowledge
+// base's embedding width against the deployment's (embeddingWidthMismatch: {configured, observed, source}) — which
+// of PAD_EMBEDDING_DIM and the model to change before re-indexing, source naming the side that is off; absent when
+// the widths agree or are unknown. On a deployment without a vector index noVectorIndex says so: no chunk is ever
+// in one there, which says nothing about searchability, so the panel leaves "not searchable" out.
+type knowledgeDocumentView struct {
+	*storageif.KnowledgeDocument
+	EmbeddingWidthMismatch *rag.EmbeddingWidthMismatch `json:"embeddingWidthMismatch,omitempty"`
+	NoVectorIndex          bool                        `json:"noVectorIndex,omitempty"`
+}
+
+// knowledgeListView attaches mismatch to every document of docs with chunks outside the vector index, and marks
+// every document when the deployment has no vector index (the listing is a bare array; the fact rides on each row).
+func knowledgeListView(docs []*storageif.KnowledgeDocument, mismatch *rag.EmbeddingWidthMismatch, vectorIndex bool) []knowledgeDocumentView {
+	out := make([]knowledgeDocumentView, len(docs))
+	for i, d := range docs {
+		out[i].KnowledgeDocument = d
+		out[i].NoVectorIndex = !vectorIndex
+		if mismatch != nil && d.ChunkCount > d.VectorIndexed {
+			out[i].EmbeddingWidthMismatch = mismatch
+		}
+	}
+	return out
 }
 
 // @Summary      Upload knowledge doc
@@ -150,6 +176,8 @@ func renderKnowledgeEmbeddingErrorDetails(w http.ResponseWriter, err error, deta
 		render.ErrorWithCodeAndDetails(w, err, http.StatusBadRequest, "EMBEDDING_NOT_CONFIGURED", details)
 	case errors.Is(err, rag.ErrEmbeddingModelChanged):
 		render.ErrorWithCodeAndDetails(w, err, http.StatusConflict, "EMBEDDING_MODEL_CHANGED", details)
+	case errors.Is(err, rag.ErrEmbeddingWidthOff):
+		render.ErrorWithCodeAndDetails(w, err, http.StatusConflict, "EMBEDDING_WIDTH_OFF", details)
 	case errors.Is(err, rag.ErrKnowledgeBusy):
 		render.ErrorWithCodeAndDetails(w, err, http.StatusConflict, "KNOWLEDGE_BUSY", details)
 	case errors.Is(err, rag.ErrDocumentTooLarge):
@@ -257,7 +285,7 @@ func decodeKnowledgeReindexRequest(body io.Reader) (knowledgeReindexRequest, err
 }
 
 // @Summary      Re-index org knowledge base
-// @Description  Re-embeds every knowledge chunk with the caller's embedding provider — the recovery path after switching embedding provider/model, which strands the existing corpus at the old dimension (searches silently return nothing). When the corpus was indexed with a different embedding model at the same width, the request is refused with 409 EMBEDDING_MODEL_CHANGED unless the body sets "force": true — re-indexing switches every document to the caller's model, and members whose embedding provider uses another model stop receiving the org's guidelines.
+// @Description  Re-embeds every knowledge chunk with the caller's embedding provider — the recovery path after switching embedding provider/model, which strands the existing corpus at the old dimension (searches silently return nothing). When the corpus was indexed with a different embedding model at the same width, the request is refused with 409 EMBEDDING_MODEL_CHANGED unless the body sets "force": true — re-indexing switches every document to the caller's model, and members whose embedding provider uses another model stop receiving the org's guidelines. An embedder whose vectors are not PAD_EMBEDDING_DIM wide is refused with 409 EMBEDDING_WIDTH_OFF unless forced: nothing it embeds can enter the vector index, so set PAD_EMBEDDING_DIM to its width and restart instead.
 // @Tags         org
 // @Accept       json
 // @Param        id path string true "Org ID"
@@ -266,7 +294,7 @@ func decodeKnowledgeReindexRequest(body io.Reader) (knowledgeReindexRequest, err
 // @Success      200 {object} rag.ReindexResult "Re-indexed this request's pages ({chunks, docs}); nextCursor (with truncated=true) means chunks remain — post again with {force, cursor: nextCursor}. Every page is committed as it completes, so a later failure keeps the earlier pages — a request that FAILS after committing pages answers its error code with details {nextCursor, chunks} to resume from. Unforced, only the chunks not yet embedded under the caller's model are converted"
 // @Success      202 {object} map[string]string "background=true: the knowledge_reembed job was started ({status: accepted, job}); its progress is the job's run state (pad_job_* metrics, the job_runs row) and the document list's embeddingStranded counts"
 // @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment, or a background run was asked for on a personal key), not allowed here (PROVIDER_NOT_ALLOWED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body / cursor"
-// @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to) or another upload/re-index of this org — or a background re-index on any replica — is in flight, or this replica is at its lease cap (KNOWLEDGE_BUSY)"
+// @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to), the caller's embedder is not PAD_EMBEDDING_DIM wide (EMBEDDING_WIDTH_OFF; set the pin to its width and restart, or resend with force), or another upload/re-index of this org — or a background re-index on any replica — is in flight, or this replica is at its lease cap (KNOWLEDGE_BUSY)"
 // @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED) or the daily AI budget is spent (BUDGET_EXCEEDED)"
 // @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE), the budget could not be checked (BUDGET_UNAVAILABLE) or the background job could not be started (KNOWLEDGE_JOB_UNAVAILABLE) or the knowledge base lock could not be taken (KNOWLEDGE_LOCK_UNAVAILABLE)"
 // @Failure      504 {object} map[string]string "The request's deadline ran out before a page was committed (KNOWLEDGE_TIMEOUT)"

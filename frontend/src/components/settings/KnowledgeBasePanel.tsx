@@ -19,6 +19,13 @@ interface KnowledgeDoc {
   chunkCount?: number
   vectorIndexed?: number
   embeddingStranded?: number
+  // Present on a document with chunks outside the vector index when the server measured why: the deployment's
+  // width (PAD_EMBEDDING_DIM) and the one on the side source names — what the embedding model produces (set
+  // PAD_EMBEDDING_DIM to it and restart) or what the stored chunks hold (re-index).
+  embeddingWidthMismatch?: {configured: number; observed: number; source: 'embedder' | 'stored'}
+  // True on a deployment without a vector index: no chunk is ever in one there, which says nothing about
+  // searchability (searches run in-process), so nothing is "not searchable" for being outside it.
+  noVectorIndex?: boolean
 }
 
 interface ReindexResult {
@@ -40,6 +47,7 @@ const KNOWLEDGE_BULK_TIMEOUT_MS = 5 * 60_000 + 30_000
 
 const VERBATIM_ERROR_CODES = new Set([
   'KNOWLEDGE_BUSY',
+  'EMBEDDING_WIDTH_OFF',
   'EMBEDDING_RATE_LIMITED',
   'EMBEDDING_PERMISSION_DENIED',
   'EMBEDDING_AUTH_FAILED',
@@ -200,13 +208,26 @@ export default function KnowledgeBasePanel() {
         try {
           res = await reindex(false)
         } catch (e) {
-          if (getErrorCode(e) !== 'EMBEDDING_MODEL_CHANGED') throw e
-          force = await confirm({
-            title: t('knowledge.reindexModelChangedTitle'),
-            message: t('knowledge.reindexModelChanged'),
-            confirmLabel: t('knowledge.reindexForceLabel'),
-            danger: true,
-          })
+          const code = getErrorCode(e)
+          if (code === 'EMBEDDING_WIDTH_OFF') {
+            // The server names both widths and the pin remedy; forcing is the admin's word to re-embed at the
+            // provider's width anyway, the step before a restart at that width.
+            force = await confirm({
+              title: t('knowledge.reindexWidthOffTitle'),
+              message: t('knowledge.reindexWidthOff', {reason: e instanceof ApiError ? e.message : String(e)}),
+              confirmLabel: t('knowledge.reindexWidthOffForceLabel'),
+              danger: true,
+            })
+          } else if (code === 'EMBEDDING_MODEL_CHANGED') {
+            force = await confirm({
+              title: t('knowledge.reindexModelChangedTitle'),
+              message: t('knowledge.reindexModelChanged'),
+              confirmLabel: t('knowledge.reindexForceLabel'),
+              danger: true,
+            })
+          } else {
+            throw e
+          }
           if (!force) return
           res = await reindex(true)
         }
@@ -407,8 +428,21 @@ export default function KnowledgeBasePanel() {
                         </>
                       )}
                     </div>
-                    {(doc.chunkCount ?? 0) > 0 && (doc.vectorIndexed ?? 0) === 0 && (
-                      <div className="text-xs text-amber-400">{t('knowledge.dimensionMismatch')}</div>
+                    {doc.embeddingWidthMismatch ? (
+                      <div className="text-xs text-amber-400">
+                        {t(
+                          doc.embeddingWidthMismatch.source === 'stored'
+                            ? 'knowledge.dimensionMismatchStored'
+                            : 'knowledge.dimensionMismatchEmbedder',
+                          doc.embeddingWidthMismatch,
+                        )}
+                      </div>
+                    ) : (
+                      !doc.noVectorIndex &&
+                      (doc.chunkCount ?? 0) > 0 &&
+                      (doc.vectorIndexed ?? 0) === 0 && (
+                        <div className="text-xs text-amber-400">{t('knowledge.dimensionMismatch')}</div>
+                      )
                     )}
                     {(doc.embeddingStranded ?? 0) > 0 && (
                       <div className="text-xs text-amber-400">

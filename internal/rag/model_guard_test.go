@@ -198,7 +198,7 @@ func TestCheckCorpusModel_WorstSameWidthPairDecides(t *testing.T) {
 		{ID: "c", DocID: "d3", Content: "three", Embedding: []float32{0, 0}},
 	})
 	svc := guardService(store, nil)
-	verdict, err := svc.checkCorpusModel(context.Background(), &fixedEmbedder{vec: []float32{1, 0}}, "org-1")
+	verdict, _, err := svc.checkCorpusModel(context.Background(), &fixedEmbedder{vec: []float32{1, 0}}, "org-1")
 	if err != nil || verdict != corpusOtherModel {
 		t.Errorf("mixed corpus: verdict = %v, %v; want corpusOtherModel (the worst pair decides)", verdict, err)
 	}
@@ -209,16 +209,16 @@ func TestCheckCorpusModel_WorstSameWidthPairDecides(t *testing.T) {
 	_ = zeros.SaveKnowledgeChunks(context.Background(), "", []interfaces.KnowledgeChunk{
 		{ID: "a", DocID: "d", Content: "one", Embedding: []float32{0, 0}},
 	})
-	verdict, err = guardService(zeros, nil).checkCorpusModel(context.Background(), &fixedEmbedder{vec: []float32{1, 0}}, "org-1")
+	verdict, _, err = guardService(zeros, nil).checkCorpusModel(context.Background(), &fixedEmbedder{vec: []float32{1, 0}}, "org-1")
 	if err != nil || verdict != corpusEmpty {
 		t.Errorf("only an all-zero stored vector (undefined similarity): verdict = %v, %v; want corpusEmpty", verdict, err)
 	}
 
-	verdict, err = guardService(store, nil).checkCorpusModel(context.Background(), &fixedEmbedder{vec: []float32{0, 0, 1}}, "org-1")
+	verdict, _, err = guardService(store, nil).checkCorpusModel(context.Background(), &fixedEmbedder{vec: []float32{0, 0, 1}}, "org-1")
 	if err != nil || verdict != corpusOtherWidth {
 		t.Errorf("no same-width pair: verdict = %v, %v; want corpusOtherWidth", verdict, err)
 	}
-	if verdict, err := guardService(&testutil.FakeBackend{}, nil).checkCorpusModel(context.Background(), &fixedEmbedder{vec: []float32{1, 0}}, "org-1"); err != nil || verdict != corpusEmpty {
+	if verdict, _, err := guardService(&testutil.FakeBackend{}, nil).checkCorpusModel(context.Background(), &fixedEmbedder{vec: []float32{1, 0}}, "org-1"); err != nil || verdict != corpusEmpty {
 		t.Errorf("empty corpus: verdict = %v, %v; want corpusEmpty", verdict, err)
 	}
 }
@@ -244,7 +244,7 @@ func TestCheckCorpusModel_MixedCorpusRefusesBothModels(t *testing.T) {
 	for _, caller := range [][]float32{{1, 0}, {0, 1}} {
 		store := newMixed()
 		svc := guardService(store, &fixedEmbedder{vec: caller})
-		if verdict, err := svc.checkCorpusModel(context.Background(), &fixedEmbedder{vec: caller}, "org-1"); err != nil || verdict != corpusOtherModel {
+		if verdict, _, err := svc.checkCorpusModel(context.Background(), &fixedEmbedder{vec: caller}, "org-1"); err != nil || verdict != corpusOtherModel {
 			t.Errorf("caller %v: verdict = %v, %v; want corpusOtherModel", caller, verdict, err)
 		}
 		if err := svc.AddDocument(context.Background(), "scope", "org-1", "c.md", "gamma"); !errors.Is(err, ErrEmbeddingModelChanged) {

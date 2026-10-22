@@ -460,6 +460,22 @@ describe('thread persistence', () => {
     expect(state.conversations.has(a)).toBe(false)
   })
 
+  it('restores the lost-block notice of a cleared thread, as a string only', () => {
+    const a = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().updateThread(a, {contextBlockId: null, contextBlockLost: 'Invoke Url'})
+    stored[KEY('flow2')] = JSON.stringify([
+      {id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', flowId: 'flow2', contextBlockLost: 7},
+    ])
+
+    useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map()})
+
+    useChatStore.getState().hydrateThreads('flow1')
+    useChatStore.getState().hydrateThreads('flow2')
+    const threads = useChatStore.getState().threads
+    expect(threads.find(t => t.id === a)?.contextBlockLost).toBe('Invoke Url')
+    expect(threads.find(t => t.flowId === 'flow2')?.contextBlockLost).toBeUndefined()
+  })
+
   it('returns the existing ids without touching storage when threads are already loaded', () => {
     const a = useChatStore.getState().createThread('flow1')
     stored[KEY('flow1')] = JSON.stringify([{id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', flowId: 'flow1'}])

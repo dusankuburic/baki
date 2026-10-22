@@ -6,6 +6,7 @@ vi.mock('@/platform/adapters', () => ({
 }))
 
 import DeviceAuthLoginButton, {type DeviceAuthProvider} from './DeviceAuthLoginButton'
+import {ApiError} from '@/api/client'
 
 function makeProvider(): DeviceAuthProvider & {
   startAuth: ReturnType<typeof vi.fn>
@@ -121,6 +122,68 @@ describe('DeviceAuthLoginButton', () => {
     })
     expect(onAuthComplete).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('button', {name: 'Disconnect'})).toBeInTheDocument()
+  })
+
+  // R-provider-1: GitHub granted the token but the server could not store it.
+  describe('a poll refused because the token could not be stored', () => {
+    const signIn = async (pollFailure: unknown) => {
+      const provider = makeProvider()
+      provider.startAuth.mockReset().mockResolvedValue({
+        device_code: 'new',
+        user_code: 'NEW-2',
+        verification_uri: 'https://x',
+        interval: 5,
+        expires_in: 900,
+      })
+      provider.pollAuth.mockReset().mockRejectedValue(pollFailure)
+      const onAuthComplete = vi.fn()
+      render(<DeviceAuthLoginButton provider={provider} onAuthComplete={onAuthComplete} />)
+      await act(async () => {})
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', {name: /sign in with github/i}))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000)
+      })
+      return {provider, onAuthComplete}
+    }
+
+    it('ends the sign-in with the storage error when secret storage is unavailable', async () => {
+      const {provider, onAuthComplete} = await signIn(
+        new ApiError('internal server error', 503, 'SECRET_STORAGE_UNAVAILABLE'),
+      )
+      expect(screen.getByText(/secret storage is unavailable/i)).toBeInTheDocument()
+      expect(onAuthComplete).not.toHaveBeenCalled()
+      expect(screen.queryByRole('button', {name: 'Disconnect'})).toBeNull()
+      expect(screen.getByRole('button', {name: 'Retry'})).toBeInTheDocument()
+      const polls = provider.pollAuth.mock.calls.length
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000)
+      })
+      expect(provider.pollAuth.mock.calls.length).toBe(polls)
+    })
+
+    it('ends the sign-in with the generic storage error for any other refusal', async () => {
+      const {provider, onAuthComplete} = await signIn(new ApiError('internal server error', 500, 'DEVICE_TOKEN_NOT_STORED'))
+      expect(screen.getByText(/token could not be stored/i)).toBeInTheDocument()
+      expect(onAuthComplete).not.toHaveBeenCalled()
+      const polls = provider.pollAuth.mock.calls.length
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000)
+      })
+      expect(provider.pollAuth.mock.calls.length).toBe(polls)
+    })
+
+    it('keeps polling through any other failed poll', async () => {
+      const {provider, onAuthComplete} = await signIn(new ApiError('internal server error', 502, 'INTERNAL_ERROR'))
+      expect(screen.getByText('NEW-2')).toBeInTheDocument()
+      expect(onAuthComplete).not.toHaveBeenCalled()
+      const polls = provider.pollAuth.mock.calls.length
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000)
+      })
+      expect(provider.pollAuth.mock.calls.length).toBeGreaterThan(polls)
+    })
   })
 })
 

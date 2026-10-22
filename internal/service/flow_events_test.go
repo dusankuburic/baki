@@ -313,7 +313,7 @@ func TestChatContextFill_StaleDocumentAndOverlappedBuildAreNotServed(t *testing.
 	chat.cachedContextCore(context.Background(), "s", ctxCacheStubProvider{}, other, nil, req)
 	scrubDocument = orig
 	cc := chat.chatCtxCache
-	key := chat.chatContextKeyAt("s", other.ID, gen, req, ctxCacheStubProvider{}.ID(), req.Model, nil, "")
+	key := chat.chatContextKeyAt("s", other.ID, gen, req, ctxCacheStubProvider{}.ID(), req.Model, nil, "", defaultContextTokenBudget)
 	if _, ok := cc.texts.Get(key); ok {
 		t.Error("an overlapped build stored its texts")
 	}

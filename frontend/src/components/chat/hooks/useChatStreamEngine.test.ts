@@ -899,6 +899,73 @@ describe('useChatStreamEngine', () => {
       expect(chatApi.respondApprovalDecision).toHaveBeenCalledTimes(1)
     })
 
+    // R-frontend-1: Approve on a read-only flow returned before doing anything: no decision, no patch, and the card
+    // sat pending until the server timed it out and told the model the user never answered.
+    it('turns Approve on a read-only flow into a decline the card shows, for fix and approval cards alike', async () => {
+      useFlowStore.setState({readOnly: true})
+      try {
+        const {result} = setupFixStream()
+        for (const [source, proposalId] of [
+          ['fix', 'p1'],
+          ['approval', 'a1'],
+        ] as const) {
+          act(() => {
+            capturedHandler!.onFixProposal!(
+              {
+                kind: 'fix-proposal',
+                source,
+                proposalId,
+                tool: source === 'fix' ? 'apply_fix' : 'rename_variable',
+                previewKind: 'fix-patch',
+                items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+              },
+              'streamA',
+            )
+          })
+          await act(async () => {
+            result.current.respondFixProposal('threadA', true, proposalId)
+          })
+          const card = useChatStore.getState().streams.threadA!.approvals.find(c => c.proposalId === proposalId)
+          expect(card?.status).toBe('declined')
+          expect(card?.message).toMatch(/read-only/i)
+        }
+        expect(chatApi.respondFixDecision).toHaveBeenCalledWith('streamA', 'p1', false, undefined)
+        expect(chatApi.respondApprovalDecision).toHaveBeenCalledWith('streamA', 'a1', false, undefined)
+        expect(chatApi.respondFixDecision).not.toHaveBeenCalledWith('streamA', 'p1', true, undefined)
+        // The server's echo of the decline carries no message: the reason stays on the card.
+        act(() => {
+          capturedHandler!.onFixDecision!('p1', 'declined', undefined, 'streamA')
+        })
+        expect(useChatStore.getState().streams.threadA!.approvals.find(c => c.proposalId === 'p1')?.message).toMatch(
+          /read-only/i,
+        )
+
+        // Decline still works as a decline.
+        act(() => {
+          capturedHandler!.onFixProposal!(
+            {
+              kind: 'fix-proposal',
+              source: 'fix',
+              proposalId: 'p2',
+              tool: 'apply_fix',
+              previewKind: 'fix-patch',
+              items: [{id: 'r', label: 'b', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: 's'}],
+            },
+            'streamA',
+          )
+        })
+        await act(async () => {
+          result.current.respondFixProposal('threadA', false, 'p2')
+        })
+        expect(chatApi.respondFixDecision).toHaveBeenCalledWith('streamA', 'p2', false, undefined)
+        expect(useChatStore.getState().streams.threadA!.approvals.find(c => c.proposalId === 'p2')?.status).toBe(
+          'declined',
+        )
+      } finally {
+        useFlowStore.setState({readOnly: false})
+      }
+    })
+
     it('shows a cancelled decision as cancelled, with the server message', async () => {
       setupFixStream()
       act(() => {

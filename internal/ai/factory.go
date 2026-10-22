@@ -411,7 +411,8 @@ type embeddingReadiness interface {
 
 // embedDimensionSetter is implemented by providers that can ask their
 // embedding endpoint for a specific vector width (the OpenAI-compatible
-// family sends `dimensions` for text-embedding-3-* models).
+// family sends `dimensions` for text-embedding-3-* models, Gemini
+// `outputDimensionality`); each clamps it to the model's native width.
 type embedDimensionSetter interface {
 	setEmbeddingDimensions(n int)
 }

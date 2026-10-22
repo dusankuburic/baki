@@ -2,6 +2,8 @@ import type {StateCreator} from 'zustand'
 import {chatApi} from '@/api'
 import {uuid} from '@/lib/uuid'
 import {storableModelLabel} from '@/lib/modelIds'
+import {anchorOf, hasBlock, resolveAnchor} from '@/lib/blockAnchor'
+import {useFlowStore} from '../flowStore'
 import type {ChatState} from './state'
 import {MAX_THREADS} from './types'
 import type {ChatThread, HistoryStatus, ThreadPinFields} from './types'
@@ -25,6 +27,8 @@ type ThreadSlice = Pick<
   | 'threadForFlow'
   | 'closeThread'
   | 'updateThread'
+  | 'setContextBlock'
+  | 'remapContextBlocks'
   | 'setThreadModel'
   | 'getActiveThread'
   | 'getFlowThreads'
@@ -102,6 +106,10 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
       activeThreadId: active,
       lastActiveByFlow: {...state.lastActiveByFlow, [flowId]: active},
     }))
+    // Block ids are minted per parse, so a restored thread's id is stale whenever the flow was parsed again since
+    // it was persisted (every desktop restart): it follows its anchor into the document already on screen.
+    const doc = useFlowStore.getState().document
+    if (doc?.id === flowId) get().remapContextBlocks(null, doc)
     return stored.map(t => t.id)
   },
 
@@ -171,6 +179,33 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
     }))
     const flowId = get().threads.find(t => t.id === threadId)?.flowId
     if (flowId) persistFlowThreads(flowId, get().threads)
+  },
+
+  setContextBlock: (threadId, blockId, doc) => {
+    get().updateThread(threadId, {
+      contextBlockId: blockId,
+      contextBlockAnchor: blockId ? anchorOf(doc, blockId) : null,
+      contextBlockLost: undefined,
+    })
+  },
+
+  // A re-parse (an applied fix, a save, a restore, a reopened file) re-mints every block id: each thread grounded
+  // on a block of the flow follows it by its content anchor, or is cleared and remembers which block went. The
+  // previous parse, when there is one, names the block for a thread persisted before anchors existed; a raw id
+  // never reaches the notice.
+  remapContextBlocks: (prev, next) => {
+    let changed = false
+    const threads = get().threads.map(t => {
+      if (t.flowId !== next.id || !t.contextBlockId || hasBlock(next, t.contextBlockId)) return t
+      changed = true
+      const anchor = t.contextBlockAnchor ?? anchorOf(prev, t.contextBlockId)
+      const id = anchor ? resolveAnchor(next, anchor) : null
+      if (id) return {...t, contextBlockId: id, contextBlockAnchor: anchorOf(next, id)}
+      return {...t, contextBlockId: null, contextBlockAnchor: null, contextBlockLost: anchor?.name ?? ''}
+    })
+    if (!changed) return
+    set({threads})
+    persistFlowThreads(next.id, threads)
   },
 
   setThreadModel: (threadId, pin) => {

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -160,6 +161,175 @@ func TestEmbed_Gemini_BatchEmbedContentsShape(t *testing.T) {
 	}
 	if first["taskType"] != "RETRIEVAL_DOCUMENT" {
 		t.Errorf("taskType = %v, want RETRIEVAL_DOCUMENT", first["taskType"])
+	}
+}
+
+// geminiEmbedRequest is one entry of a recorded batchEmbedContents body.
+type geminiEmbedRequest struct {
+	Model                string `json:"model"`
+	TaskType             string `json:"taskType"`
+	OutputDimensionality int    `json:"outputDimensionality"`
+}
+
+// geminiEmbedServer points the Gemini provider at a fake batchEmbedContents that records every request and
+// answers vectors of the requested width (2 wide when none is requested, as a model answering at its native
+// width would).
+func geminiEmbedServer(t *testing.T) (*http.Client, *[]geminiEmbedRequest) {
+	t.Helper()
+	var seen []geminiEmbedRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Requests []geminiEmbedRequest `json:"requests"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		seen = append(seen, body.Requests...)
+		embeddings := make([]map[string]any, len(body.Requests))
+		for i, req := range body.Requests {
+			width := req.OutputDimensionality
+			if width == 0 {
+				width = 2
+			}
+			embeddings[i] = map[string]any{"values": make([]float32, width)}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"embeddings": embeddings})
+	}))
+	prev := geminiBaseHost
+	geminiBaseHost = srv.URL
+	t.Cleanup(func() {
+		srv.Close()
+		geminiBaseHost = prev
+	})
+	return srv.Client(), &seen
+}
+
+// TestEmbed_Gemini_FactoryWidthReachesEveryBatch (R-knowledge-4): the knowledge base's configured width
+// is sent as outputDimensionality on every batchEmbedContents request, so the vectors come back at the
+// width Postgres indexes — not at the model's native 3072.
+func TestEmbed_Gemini_FactoryWidthReachesEveryBatch(t *testing.T) {
+	_, seen := geminiEmbedServer(t)
+	f := NewProviderFactory(func(_, _ string) (string, error) { return "k", nil }, nil, nil, nil)
+	f.SetEmbeddingDimensions(1536)
+	p, err := f.ForEmbedding(context.Background(), "", "gemini", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 101 texts: two batchEmbedContents requests.
+	texts := make([]string, 101)
+	for i := range texts {
+		texts[i] = strconv.Itoa(i)
+	}
+	vecs := runEmbed(t, p, texts)
+	if len(*seen) != 101 {
+		t.Fatalf("recorded %d requests, want 101", len(*seen))
+	}
+	for i, req := range *seen {
+		if req.OutputDimensionality != 1536 {
+			t.Fatalf("request %d outputDimensionality = %d, want 1536", i, req.OutputDimensionality)
+		}
+	}
+	for i, v := range vecs {
+		if len(v) != 1536 {
+			t.Fatalf("vector %d is %d wide, want 1536", i, len(v))
+		}
+	}
+	if got, want := EmbeddingIdentity(p), "gemini|"+geminiEmbedModelDefault; got != want {
+		t.Errorf("identity = %q, want %q (the width is not part of the frozen gemini identity, ADR 0027)", got, want)
+	}
+}
+
+// TestGeminiEmbeddingDimensionsFor (R-knowledge-4): outputDimensionality can only shorten a vector, so a
+// width above the model's native width is not requested; a model whose width is unknown gets the
+// configured width as is.
+func TestGeminiEmbeddingDimensionsFor(t *testing.T) {
+	cases := []struct {
+		model string
+		n     int
+		want  int
+	}{
+		{"gemini-embedding-001", 1536, 1536},
+		{"gemini-embedding-001", 3072, 3072},
+		{"gemini-embedding-001", 4096, 0},
+		{"gemini-embedding-exp-03-07", 768, 768},
+		{"text-embedding-004", 768, 768},
+		{"text-embedding-004", 1536, 0},
+		{"gemini-embedding-001", 0, 0},
+		{"some-future-model", 1024, 1024},
+	}
+	for _, tc := range cases {
+		if got := geminiEmbeddingDimensionsFor(tc.model, tc.n); got != tc.want {
+			t.Errorf("geminiEmbeddingDimensionsFor(%q, %d) = %d, want %d", tc.model, tc.n, got, tc.want)
+		}
+	}
+}
+
+// warnProbe counts the slog records whose message contains needle.
+type warnProbe struct {
+	needle string
+	n      int
+}
+
+func (p *warnProbe) Enabled(context.Context, slog.Level) bool { return true }
+func (p *warnProbe) Handle(_ context.Context, r slog.Record) error {
+	if strings.Contains(r.Message, p.needle) {
+		p.n++
+	}
+	return nil
+}
+func (p *warnProbe) WithAttrs([]slog.Attr) slog.Handler { return p }
+func (p *warnProbe) WithGroup(string) slog.Handler      { return p }
+
+// TestEmbed_Gemini_WidthAboveNativeFallsBackAndLogsOnce (R-knowledge-4): a configured width the model
+// cannot produce is not sent (the call embeds at the native width, which the knowledge base will then
+// report as a width mismatch) and the misconfiguration is logged once per process, not per batch.
+func TestEmbed_Gemini_WidthAboveNativeFallsBackAndLogsOnce(t *testing.T) {
+	client, seen := geminiEmbedServer(t)
+	resetGeminiWidthWarning()
+	probe := &warnProbe{needle: "native width"}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(probe))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	p := &GeminiProvider{apiKey: "k", client: client}
+	p.setEmbeddingDimensions(4096)
+	runEmbed(t, p, []string{"a"})
+	// A second provider instance at the same model and width (the factory builds one per request).
+	q := &GeminiProvider{apiKey: "k", client: client}
+	q.setEmbeddingDimensions(4096)
+	runEmbed(t, q, []string{"b"})
+
+	if len(*seen) != 2 {
+		t.Fatalf("recorded %d requests, want 2", len(*seen))
+	}
+	for i, req := range *seen {
+		if req.OutputDimensionality != 0 {
+			t.Errorf("request %d sent outputDimensionality %d above gemini-embedding-001's native 3072", i, req.OutputDimensionality)
+		}
+	}
+	if probe.n != 1 {
+		t.Errorf("the above-native width was logged %d times, want once", probe.n)
+	}
+}
+
+// TestEmbed_Gemini_TaskTypeByEmbeddingUse (R-knowledge-4): a search query is embedded as
+// RETRIEVAL_QUERY and a stored document as RETRIEVAL_DOCUMENT — Gemini's asymmetric retrieval pairing.
+func TestEmbed_Gemini_TaskTypeByEmbeddingUse(t *testing.T) {
+	client, seen := geminiEmbedServer(t)
+	p := &GeminiProvider{apiKey: "k", client: client}
+	runEmbed(t, p, []string{"a chunk"})
+	if _, err := p.Embed(WithQueryEmbedding(context.Background()), []string{"a question"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(*seen) != 2 {
+		t.Fatalf("recorded %d requests, want 2", len(*seen))
+	}
+	if got := (*seen)[0].TaskType; got != "RETRIEVAL_DOCUMENT" {
+		t.Errorf("document embed taskType = %q, want RETRIEVAL_DOCUMENT", got)
+	}
+	if got := (*seen)[1].TaskType; got != "RETRIEVAL_QUERY" {
+		t.Errorf("query embed taskType = %q, want RETRIEVAL_QUERY", got)
+	}
+	if IsQueryEmbedding(context.Background()) || !IsQueryEmbedding(WithQueryEmbedding(context.Background())) {
+		t.Error("IsQueryEmbedding does not read WithQueryEmbedding")
 	}
 }
 

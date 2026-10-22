@@ -262,6 +262,64 @@
                 }
             }
         },
+        "/api/admin/settings/ai": {
+            "get": {
+                "description": "The deployment-wide ai values: the daily budgets the budget gate enforces on every replica (0 = unlimited) and the embedding provider and model every knowledge base shares. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Get the deployment's AI settings",
+                "responses": {
+                    "200": {
+                        "description": "The enforced values",
+                        "schema": {
+                            "$ref": "#/definitions/service.DeploymentAISettings"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Replaces the deployment-wide ai values with the body's and answers with what is now enforced. The body is the whole set of four fields: one it omits is written as zero (an unlimited budget, the server-default embedding provider or model), so send every field, changed or not. The rest of the deployment document is kept as stored, and a member's own settings write never reaches these fields. An embedding provider whose model ids are deployment aliases (Azure AI Foundry) is refused: it embeds only on the operator's PAD_EMBEDDING_PROVIDER pin. Admin only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Update the deployment's AI settings",
+                "parameters": [
+                    {
+                        "description": "The values to enforce, all four",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.DeploymentAISettings"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The enforced values, as written",
+                        "schema": {
+                            "$ref": "#/definitions/service.DeploymentAISettings"
+                        }
+                    },
+                    "400": {
+                        "description": "BAD_REQUEST: a negative budget, an embedding provider that cannot embed or needs the operator's pin, or an oversized model id",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/admin/system/health": {
             "get": {
                 "description": "handleAdminSystemHealth returns a structured per-subsystem health breakdown. Admin-only (the public /readyz is the orchestrator-facing verdict). Reuses the same probes as readiness but reports each independently rather than collapsing to one pass/fail, and does NOT apply the consecutive-failure smoothing — an admin querying health wants the live picture, not a flap-dampened one. Also says which build (binaryVersion), schema migration (schemaVersion) and replica (instanceId) answered, which differ between replicas during a rolling deploy.",
@@ -7558,7 +7616,7 @@
         },
         "/api/orgs/{id}/knowledge": {
             "get": {
-                "description": "The org's documents, newest first, each with its chunk counts: chunkCount, vectorIndexed (in the vector index at the deployment's width) and embeddingStranded (embedded under another embedding model than the caller's, so the caller's searches never return them; re-index converts them).",
+                "description": "The org's documents, newest first, each with its chunk counts: chunkCount, vectorIndexed (in the vector index at the deployment's width) and embeddingStranded (embedded under another embedding model than the caller's, so the caller's searches never return them; re-index converts them). A document with chunks outside the vector index also carries embeddingWidthMismatch {configured, observed, source}: the deployment's PAD_EMBEDDING_DIM against the width of the side source names — \"embedder\" (what the caller's embedding model produces: set PAD_EMBEDDING_DIM to it and restart) or \"stored\" (what the stored chunks hold: re-index). On a deployment without a vector index (no pgvector) every document carries noVectorIndex true, vectorIndexed is always 0 and no width is reported: searches run in-process at the embedder's width.",
                 "produces": [
                     "application/json"
                 ],
@@ -7588,7 +7646,7 @@
         },
         "/api/orgs/{id}/knowledge/reindex": {
             "post": {
-                "description": "Re-embeds every knowledge chunk with the caller's embedding provider — the recovery path after switching embedding provider/model, which strands the existing corpus at the old dimension (searches silently return nothing). When the corpus was indexed with a different embedding model at the same width, the request is refused with 409 EMBEDDING_MODEL_CHANGED unless the body sets \"force\": true — re-indexing switches every document to the caller's model, and members whose embedding provider uses another model stop receiving the org's guidelines.",
+                "description": "Re-embeds every knowledge chunk with the caller's embedding provider — the recovery path after switching embedding provider/model, which strands the existing corpus at the old dimension (searches silently return nothing). When the corpus was indexed with a different embedding model at the same width, the request is refused with 409 EMBEDDING_MODEL_CHANGED unless the body sets \"force\": true — re-indexing switches every document to the caller's model, and members whose embedding provider uses another model stop receiving the org's guidelines. An embedder whose vectors are not PAD_EMBEDDING_DIM wide is refused with 409 EMBEDDING_WIDTH_OFF unless forced: nothing it embeds can enter the vector index, so set PAD_EMBEDDING_DIM to its width and restart instead.",
                 "consumes": [
                     "application/json"
                 ],
@@ -7642,7 +7700,7 @@
                         }
                     },
                     "409": {
-                        "description": "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to) or another upload/re-index of this org — or a background re-index on any replica — is in flight, or this replica is at its lease cap (KNOWLEDGE_BUSY)",
+                        "description": "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to), the caller's embedder is not PAD_EMBEDDING_DIM wide (EMBEDDING_WIDTH_OFF; set the pin to its width and restart, or resend with force), or another upload/re-index of this org — or a background re-index on any replica — is in flight, or this replica is at its lease cap (KNOWLEDGE_BUSY)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -9775,12 +9833,15 @@
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "Internal Server Error; DEVICE_TOKEN_NOT_STORED when GitHub granted the token but the KeyStore refused it",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "SECRET_STORAGE_UNAVAILABLE: GitHub granted the token but the secret service is unreachable",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -9920,12 +9981,15 @@
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "Internal Server Error; DEVICE_TOKEN_NOT_STORED when GitHub granted the token but the KeyStore refused it",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "SECRET_STORAGE_UNAVAILABLE: GitHub granted the token but the secret service is unreachable",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -11399,6 +11463,14 @@
         "pad-core_models.ContextPreview": {
             "type": "object",
             "properties": {
+                "contextBlock": {
+                    "description": "ContextBlock reports the request's context block: \"resolved\" (its section is in the context, found by\nid or by anchor), \"missing\" (no longer in the flow; the context says so) or \"\" (none asked for).",
+                    "type": "string"
+                },
+                "contextBlockId": {
+                    "description": "ContextBlockID is the id the context block resolved to, when that is not the request's.",
+                    "type": "string"
+                },
                 "contextLimit": {
                     "type": "integer"
                 },
@@ -12389,6 +12461,23 @@
                 },
                 "ok": {
                     "type": "boolean"
+                }
+            }
+        },
+        "service.DeploymentAISettings": {
+            "type": "object",
+            "properties": {
+                "dailyBudget": {
+                    "type": "number"
+                },
+                "embeddingModel": {
+                    "type": "string"
+                },
+                "embeddingProvider": {
+                    "type": "string"
+                },
+                "perUserDailyBudget": {
+                    "type": "number"
                 }
             }
         },

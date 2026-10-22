@@ -45,6 +45,9 @@ export const PROVIDER_PRICINGS = ['catalog', 'free', 'unpriced'] as const
 export type ProviderPricing = (typeof PROVIDER_PRICINGS)[number]
 
 export const PROVIDER_CAP_EMBEDDINGS = 'embeddings'
+/** Model ids are deployment aliases (Azure AI Foundry): the knowledge base embeds with such a provider only on the
+ * operator's PAD_EMBEDDING_PROVIDER pin. Mirrors internal/ai CapModelAliases. */
+export const PROVIDER_CAP_MODEL_ALIASES = 'model_aliases'
 
 export interface CredentialFieldOption {
   value: string

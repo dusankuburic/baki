@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -150,6 +151,15 @@ func (b *PostgresStorageBackend) ListKnowledgeDocumentIDsByFilename(ctx context.
 	return ids, total, rows.Err()
 }
 
+// inVectorIndex reports whether a vector of width observed belongs to the vector index, which holds one width:
+// the configured one (PAD_EMBEDDING_DIM). It is the one rule of both paths — a chunk at another width is stored
+// as JSON only (embedding_vec NULL) and a query at another width runs on the Go fallback, since cosine is
+// undefined across widths. Neither path logs the mismatch, per chunk or per search: the rag layer warns once per
+// org with both widths (KnowledgeService.noteEmbeddingWidth) and the knowledge listing reports them.
+func inVectorIndex(configured, observed int) bool {
+	return observed > 0 && observed == configured
+}
+
 // SaveKnowledgeChunks inserts chunk rows. knowledge_chunks has RLS policies; the inserts MUST run in a
 // transaction with app.current_user_id set (withTxAs) — otherwise the WITH CHECK policy short-circuits to
 // "allow", letting any authenticated caller write chunks for arbitrary org_id values. Reuse the middleware's tx when present.
@@ -168,7 +178,7 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID
 			return err
 		}
 		// embedding (JSONB) is always written (portability + pgvector backfill source); embedding_vec
-		// only when pgvector is active AND the dimension matches the configured contract — mismatched
+		// only when pgvector is active AND the width is the configured one (inVectorIndex) — mismatched
 		// chunks stay NULL so the HNSW index never sees an incomparable vector. embedding_identity is
 		// NULL for a chunk whose embedder named none. Multi-row INSERTs.
 		const rowsPerStmt = 2000
@@ -183,11 +193,8 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID
 				for i, c := range batch {
 					embJSON, _ := json.Marshal(c.Embedding)
 					var vec any
-					if len(c.Embedding) == b.embeddingDim {
+					if inVectorIndex(b.embeddingDim, len(c.Embedding)) {
 						vec = FormatVector(c.Embedding)
-					} else if len(c.Embedding) > 0 {
-						logger.Warn("knowledge chunk embedding dimension differs from configured; excluded from vector index",
-							"chunk_id", c.ID, "got_dim", len(c.Embedding), "configured_dim", b.embeddingDim)
 					}
 					if i > 0 {
 						sb.WriteByte(',')
@@ -289,13 +296,14 @@ const (
 // width but another model's vector, which cosine cannot tell from a miss; "" = any. The width filters stay
 // separate — the identity string is not parsed for the width (a provider may retry at its native width).
 func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int, identity string) ([]interfaces.KnowledgeChunk, error) {
-	// pgvector path: push the similarity ordering + LIMIT into the database; only same-dimension
-	// chunks are indexed, and <=> is cosine distance, so ORDER BY it ASC returns the most similar.
-	if b.hasPgvector && len(queryEmbedding) == b.embeddingDim {
+	// pgvector path: push the similarity ordering + LIMIT into the database; only chunks at the
+	// configured width are indexed (inVectorIndex), and <=> is cosine distance, so ORDER BY it ASC
+	// returns the most similar.
+	if b.hasPgvector && inVectorIndex(b.embeddingDim, len(queryEmbedding)) {
 		return b.searchKnowledgeVector(ctx, orgID, queryEmbedding, limit, identity)
 	}
-	// Go-side fallback: no pgvector, or the query dimension doesn't match the index — loads a
-	// deterministic capped sample and ranks in-process for portability.
+	// Go-side fallback: no pgvector, or the query width is not the index's — loads a deterministic
+	// capped sample and ranks in-process for portability.
 	return b.searchKnowledgeGo(ctx, orgID, queryEmbedding, limit, identity)
 }
 
@@ -452,14 +460,16 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 		return nil, fmt.Errorf("iterate knowledge chunks: %w", err)
 	}
 	// The capped sample is deterministic but ARBITRARY: beyond maxChunks the rest are permanently
-	// invisible — surface it so ops knows the fallback is lossy here (install pgvector / re-index).
+	// invisible — surface it, with why the fallback ran (no pgvector, or a query width that is not the
+	// index's), so ops knows it is lossy here (install pgvector, or make PAD_EMBEDDING_DIM the model's
+	// width and re-index).
 	if len(chunks) >= maxChunks {
 		logger.Warn("knowledge search fallback capped — chunks beyond the sample are unsearchable",
-			"org_id", orgID, "sampled", len(chunks))
+			"org_id", orgID, "sampled", len(chunks), "query_dim", len(queryEmbedding), "configured_dim", b.embeddingDim, "pgvector", b.hasPgvector)
 		recordRAGFallbackCapped()
 	}
 
-	return rankKnowledgeChunks(orgID, chunks, queryEmbedding, limit)
+	return rankKnowledgeChunks(chunks, queryEmbedding, limit)
 }
 
 // ListKnowledgeChunkContents returns one page of chunks (no embeddings) strictly after the (doc_id, id) cursor,
@@ -467,18 +477,39 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 // notIdentity the page skips the chunks already embedded under it (legacy rows without one are walked), so a
 // re-index converts only what is not yet at the current model and a restarted run never re-buys a page.
 func (b *PostgresStorageBackend) ListKnowledgeChunkContents(ctx context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int, notIdentity string) ([]interfaces.KnowledgeChunk, error) {
-	const maxPage = 2000
-	if limit <= 0 || limit > maxPage {
-		limit = maxPage
+	return b.listKnowledgeChunkContents(ctx, orgID, after, limit, notIdentity, false)
+}
+
+// ListUnindexedKnowledgeChunkContents is the page of the chunks outside the vector index (embedding_vec NULL):
+// the rows a PAD_EMBEDDING_DIM change left as JSON only, which carry the caller's own identity and so are not
+// what notIdentity can single out. Without pgvector there is no column to test and every chunk is returned.
+func (b *PostgresStorageBackend) ListUnindexedKnowledgeChunkContents(ctx context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int) ([]interfaces.KnowledgeChunk, error) {
+	return b.listKnowledgeChunkContents(ctx, orgID, after, limit, "", b.hasPgvector)
+}
+
+// listKnowledgeChunkContentsSQL is the re-index page statement; unindexedOnly adds the vector-column conjunct,
+// which exists only with pgvector (the callers decide).
+func listKnowledgeChunkContentsSQL(unindexedOnly bool) string {
+	unindexed := ""
+	if unindexedOnly {
+		unindexed = "\n\t\t  AND c.embedding_vec IS NULL"
 	}
-	rows, err := b.query(ctx).QueryContext(ctx, `
+	return `
 		SELECT c.id, c.doc_id, c.content
 		FROM knowledge_chunks c
 		WHERE c.org_id = $1
 		  AND (c.doc_id, c.id) > ($2::text, $3::text)
-		  AND ($5::text = '' OR c.embedding_identity IS DISTINCT FROM $5::text)
+		  AND ($5::text = '' OR c.embedding_identity IS DISTINCT FROM $5::text)` + unindexed + `
 		ORDER BY c.doc_id, c.id
-		LIMIT $4`, orgID, after.DocID, after.ID, limit, notIdentity)
+		LIMIT $4`
+}
+
+func (b *PostgresStorageBackend) listKnowledgeChunkContents(ctx context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int, notIdentity string, unindexedOnly bool) ([]interfaces.KnowledgeChunk, error) {
+	const maxPage = 2000
+	if limit <= 0 || limit > maxPage {
+		limit = maxPage
+	}
+	rows, err := b.query(ctx).QueryContext(ctx, listKnowledgeChunkContentsSQL(unindexedOnly), orgID, after.DocID, after.ID, limit, notIdentity)
 	if err != nil {
 		return nil, err
 	}
@@ -564,6 +595,32 @@ func (b *PostgresStorageBackend) SampleKnowledgeChunkEmbeddings(ctx context.Cont
 	return chunks, rows.Err()
 }
 
+// unindexedKnowledgeChunkWidthSQL is the UnindexedKnowledgeChunkWidth statement (pgvector only): the first row of
+// the org outside the vector index that has an embedding array, and that array's length. embedding_vec IS NULL
+// is the null bitmap; the CASE detoasts the JSON of the rows outside the index alone, and the LIMIT stops at the
+// first — unlike the guard's sample, which prefers indexed rows and reads one per document of the org.
+const unindexedKnowledgeChunkWidthSQL = `
+		SELECT CASE WHEN jsonb_typeof(c.embedding) = 'array' THEN jsonb_array_length(c.embedding) ELSE 0 END AS width
+		FROM knowledge_chunks c
+		WHERE c.org_id = $1
+		  AND c.embedding_vec IS NULL
+		  AND CASE WHEN jsonb_typeof(c.embedding) = 'array' THEN jsonb_array_length(c.embedding) ELSE 0 END > 0
+		LIMIT 1`
+
+// UnindexedKnowledgeChunkWidth is the stored width of one of the org's chunks outside the vector index, for the
+// knowledge listing's width report; 0 when none is (or, without pgvector, when there is no index to be outside of).
+func (b *PostgresStorageBackend) UnindexedKnowledgeChunkWidth(ctx context.Context, orgID string) (int, error) {
+	if !b.hasPgvector {
+		return 0, nil
+	}
+	var width int
+	err := b.query(ctx).QueryRowContext(ctx, unindexedKnowledgeChunkWidthSQL, orgID).Scan(&width)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return width, err
+}
+
 // SampleKnowledgeChunkEmbeddingsUpTo returns up to n of the org's chunks at or before the (doc_id, id) cursor,
 // nearest first, with stored embeddings — the chunks a resumed re-index's previous request converted (rag.reindexGuard).
 func (b *PostgresStorageBackend) SampleKnowledgeChunkEmbeddingsUpTo(ctx context.Context, orgID string, upTo interfaces.KnowledgeChunkCursor, n int) ([]interfaces.KnowledgeChunk, error) {
@@ -637,7 +694,7 @@ func buildKnowledgeEmbeddingUpdate(batch []interfaces.KnowledgeChunk, hasPgvecto
 		for i, c := range batch {
 			embJSON, _ := json.Marshal(c.Embedding)
 			var vec any
-			if len(c.Embedding) == embeddingDim {
+			if inVectorIndex(embeddingDim, len(c.Embedding)) {
 				vec = FormatVector(c.Embedding)
 			}
 			if i > 0 {
@@ -754,7 +811,7 @@ func (b *PostgresStorageBackend) StampKnowledgeChunkIdentity(ctx context.Context
 // rankKnowledgeChunks scores chunks against queryEmbedding by cosine similarity and returns the top `limit`,
 // highest first. Width-mismatched chunks are skipped rather than scored 0; if nothing is comparable, it fails
 // loudly so the caller re-indexes instead of receiving silently-irrelevant results.
-func rankKnowledgeChunks(orgID string, chunks []interfaces.KnowledgeChunk, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
+func rankKnowledgeChunks(chunks []interfaces.KnowledgeChunk, queryEmbedding []float32, limit int) ([]interfaces.KnowledgeChunk, error) {
 	// Score each chunk once, then sort — scoring inside the comparator would recompute O(n log n) times.
 	qDim := len(queryEmbedding)
 	type scored struct {
@@ -770,12 +827,9 @@ func rankKnowledgeChunks(orgID string, chunks []interfaces.KnowledgeChunk, query
 		}
 		scoredChunks = append(scoredChunks, scored{chunk: c, sim: cosineSimilarity(c.Embedding, queryEmbedding)})
 	}
+	// A chunk at another width is skipped without a log line: the rag layer warns once per org (inVectorIndex).
 	if len(scoredChunks) == 0 && mismatched > 0 {
 		return nil, fmt.Errorf("knowledge search embedding dimension mismatch: query has %d dims but all %d stored chunks differ — re-index the knowledge base after changing the embedding provider", qDim, mismatched)
-	}
-	if mismatched > 0 {
-		logger.Warn("knowledge search skipped chunks with mismatched embedding dimension",
-			"org_id", orgID, "query_dim", qDim, "skipped", mismatched, "scored", len(scoredChunks))
 	}
 	sort.Slice(scoredChunks, func(i, j int) bool {
 		return scoredChunks[i].sim > scoredChunks[j].sim

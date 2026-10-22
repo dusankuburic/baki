@@ -345,3 +345,27 @@ describe('ApprovalCard (unknown preview kind)', () => {
     expect(screen.getByText('Rename to %CustomerRecord%')).toHaveClass('max-h-40', 'overflow-auto')
   })
 })
+
+// R-frontend-1: Approve stayed enabled on a read-only flow and the click was dropped, so the card sat pending
+// until the server timed it out.
+describe('ApprovalCard on a read-only flow', () => {
+  it('disables Approve with the reason, on fix and generic cards; Dismiss still declines', () => {
+    for (const card of [pendingCard(), genericCard()]) {
+      const onRespond = vi.fn()
+      const {unmount} = render(<ApprovalCard approval={card} onRespond={onRespond} readOnly />)
+      const approve = screen.getByRole('button', {name: /^Approve/})
+      expect(approve).toBeDisabled()
+      expect(approve).toHaveAccessibleDescription(/read-only/i)
+      expect(screen.getByText(/This flow is read-only/)).toBeVisible()
+      fireEvent.click(screen.getByRole('button', {name: 'Dismiss'}))
+      expect(onRespond).toHaveBeenCalledWith(false, card.proposalId)
+      unmount()
+    }
+  })
+
+  it('shows the reason on a card declined because the flow is read-only', () => {
+    const message = "This flow is read-only, so the change can't be applied."
+    render(<ApprovalCard approval={pendingCard({status: 'declined', message})} onRespond={vi.fn()} />)
+    expect(screen.getByTestId('fix-proposal-status')).toHaveTextContent(`Declined — nothing was changed. ${message}`)
+  })
+})

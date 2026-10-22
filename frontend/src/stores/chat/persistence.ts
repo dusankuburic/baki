@@ -1,5 +1,6 @@
 import {currentUserId} from '../storeRegistry'
 import {storableModelLabel} from '@/lib/modelIds'
+import type {BlockAnchor} from '@/lib/blockAnchor'
 import {isTauri} from '@/platform/guards'
 import {MAX_THREADS} from './types'
 import type {ChatThread, InFlightTurn, ThreadPinFields} from './types'
@@ -36,6 +37,8 @@ type StoredThread = Pick<
   | 'title'
   | 'createdAt'
   | 'contextBlockId'
+  | 'contextBlockAnchor'
+  | 'contextBlockLost'
   | 'selectedSourceFiles'
   | 'tokensIn'
   | 'tokensOut'
@@ -69,6 +72,15 @@ function readThreadPin(t: Record<string, unknown>): ThreadPinFields {
   return pin
 }
 
+function readAnchor(raw: unknown): BlockAnchor | null {
+  if (!raw || typeof raw !== 'object') return null
+  const {subflow, rawType, name, ordinal, count} = raw as Record<string, unknown>
+  if (typeof subflow !== 'string' || typeof rawType !== 'string' || typeof name !== 'string') return null
+  if (typeof ordinal !== 'number' || typeof count !== 'number') return null
+  if (!Number.isInteger(ordinal) || !Number.isInteger(count)) return null
+  return {subflow, rawType, name, ordinal, count}
+}
+
 function readInFlight(raw: unknown): InFlightTurn | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const r = raw as Record<string, unknown>
@@ -96,6 +108,8 @@ export function persistFlowThreads(flowId: string, threads: ChatThread[]): void 
       title: t.title,
       createdAt: t.createdAt,
       contextBlockId: t.contextBlockId,
+      contextBlockAnchor: t.contextBlockAnchor ?? undefined,
+      contextBlockLost: t.contextBlockLost,
       selectedSourceFiles: t.selectedSourceFiles,
       tokensIn: t.tokensIn,
       tokensOut: t.tokensOut,
@@ -138,6 +152,7 @@ export function readStoredThreads(flowId: string): ChatThread[] {
       title: typeof t.title === 'string' ? t.title : '',
       createdAt: typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString(),
       contextBlockId: typeof t.contextBlockId === 'string' ? t.contextBlockId : null,
+      contextBlockAnchor: readAnchor(t.contextBlockAnchor),
       selectedSourceFiles: Array.isArray(t.selectedSourceFiles)
         ? t.selectedSourceFiles.filter((f): f is string => typeof f === 'string')
         : [],
@@ -149,6 +164,7 @@ export function readStoredThreads(flowId: string): ChatThread[] {
       ...readThreadPin(t),
     }
     out.push(thread)
+    if (typeof t.contextBlockLost === 'string') thread.contextBlockLost = t.contextBlockLost
     const inFlight = readInFlight(t.inFlight)
     if (inFlight) thread.inFlight = inFlight
     if (out.length >= MAX_THREADS) break

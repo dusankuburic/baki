@@ -615,9 +615,18 @@ func TestRunToolLoop_ExecutesToolThenFinal(t *testing.T) {
 	if stub.Calls() != 2 {
 		t.Fatalf("expected 2 Stream calls, got %d", stub.Calls())
 	}
-	// tool (starting) → tool_result (finished, transparency trail) → final.
-	if got := strings.Join(*evs, ","); got != "tool,tool_result,chunk,done" {
-		t.Errorf("expected tool,tool_result,chunk,done events, got %q", got)
+	// tool (starting) → tool_result (finished, transparency trail) → final. The text may arrive as more than one
+	// chunk: the stream scrubber holds a trailing fragment that could begin a secret's prefix (the "r" of
+	// "answer" could start "rk_") until the next chunk or the flush, so consecutive chunks are collapsed.
+	var kinds []string
+	for _, e := range *evs {
+		if e == "chunk" && len(kinds) > 0 && kinds[len(kinds)-1] == "chunk" {
+			continue
+		}
+		kinds = append(kinds, e)
+	}
+	if got := strings.Join(kinds, ","); got != "tool,tool_result,chunk,done" {
+		t.Errorf("expected tool,tool_result,chunk,done events, got %q", strings.Join(*evs, ","))
 	}
 	if !ctl.done || ctl.buffer.String() != "Final answer" {
 		t.Errorf("ctl not finalized: done=%v buffer=%q", ctl.done, ctl.buffer.String())
@@ -698,12 +707,13 @@ func TestRunToolLoop_IterationCap(t *testing.T) {
 
 	svc.runToolLoop(context.Background(), stub, ai.Request{}, "user-1", &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
 
-	if stub.Calls() != maxToolIterations {
-		t.Errorf("expected %d Stream calls at cap, got %d", maxToolIterations, stub.Calls())
+	// The steps, then one final-answer turn; a model that calls tools there too ends the turn.
+	if stub.Calls() != maxToolIterations+1 {
+		t.Errorf("expected %d Stream calls at cap, got %d", maxToolIterations+1, stub.Calls())
 	}
 	last := (*evs)[len(*evs)-1]
-	if last != "error" {
-		t.Errorf("expected final error event at iteration cap, got %q", last)
+	if last != "error" || ctl.errCode != ChatErrToolLoopLimit {
+		t.Errorf("expected a final TOOL_LOOP_LIMIT error event at the step limit, got %q (%s)", last, ctl.errCode)
 	}
 }
 

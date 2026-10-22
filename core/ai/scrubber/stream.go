@@ -1,7 +1,6 @@
 package scrubber
 
 import (
-	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -15,24 +14,11 @@ const streamMaxHold = 4096
 // redaction swallows.
 const streamMatchedHold = 256
 
-// anchorRegex finds every position a secretRegexes pattern could begin; a tail with no anchor cannot start a future match.
-var anchorRegex = regexp.MustCompile(`(?i)password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|Bearer|sk_|pk_|ghp_|glpat_|AKIA|ASIA|AIza|xox|eyJ|-----BEGIN`)
+// anchorLiterals, viablePrefixRegexes and terminalStates are derived from the secretClasses table in
+// classes.go.
 
-// anchorLiterals expands anchorRegex's alternation into plain strings for chunk-boundary anchoring. The
-// prefix patterns (AKIA/ASIA, AIza, xox, eyJ, -----BEGIN) MUST be here: anchorsByFirst is built from THIS
-// list alone and a fully-arrived literal not in it is emitted verbatim — their absence leaked five of
-// nine secret classes while streaming.
-var anchorLiterals = []string{
-	"password", "passwd", "pwd", "secret", "token",
-	"apikey", "api_key", "api-key",
-	"accesskey", "access_key", "access-key",
-	"privatekey", "private_key", "private-key",
-	"bearer", "sk_", "pk_", "ghp_", "glpat_",
-	"akia", "asia", "aiza", "xox", "eyj",
-	"-----begin",
-}
-
-// maxAnchorLen and anchorsByFirst are derived from anchorLiterals so the partial-anchor check only compares literals sharing the suffix's first byte.
+// maxAnchorLen and anchorsByFirst are derived from anchorLiterals so the anchor scan and the partial-anchor
+// check only compare literals sharing a position's first byte.
 var (
 	maxAnchorLen   int
 	anchorsByFirst [256][]string
@@ -45,36 +31,10 @@ func init() {
 		}
 		c := a[0]
 		anchorsByFirst[c] = append(anchorsByFirst[c], a)
-		anchorsByFirst[c-'a'+'A'] = append(anchorsByFirst[c-'a'+'A'], a)
+		if c >= 'a' && c <= 'z' {
+			anchorsByFirst[c-'a'+'A'] = append(anchorsByFirst[c-'a'+'A'], a)
+		}
 	}
-}
-
-// viablePrefixRegexes decide whether a held tail is still a prefix of a possible secretRegexes match:
-// each mirrors one pattern with everything after the lead-in optional, anchored to buffer end — the
-// moment a character the real pattern couldn't consume arrives, the anchor is dead and released.
-var viablePrefixRegexes = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)^(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*(?:[:=]\s*["']?[A-Za-z0-9\-._~+/=]*["']?)?$`),
-	regexp.MustCompile(`(?i)^Bearer(?:\s+[A-Za-z0-9\-._~+/]*=*)?$`),
-	regexp.MustCompile(`(?i)^(?:sk_[a-zA-Z0-9_]*|pk_[a-zA-Z0-9_]*|ghp_[a-zA-Z0-9]*|glpat_[a-zA-Z0-9\-]*)$`),
-	regexp.MustCompile(`(?i)^(?:Password|PWD)\s*(?:=[^;\r\n]*)?$`),
-	// AWS access key IDs (AKIA/ASIA + up to 16 uppercase alphanumerics).
-	regexp.MustCompile(`^(?:AKIA|ASIA)[0-9A-Z]*$`),
-	// Google API key (AIza + up to 35 base64url chars).
-	regexp.MustCompile(`^AIza[0-9A-Za-z_-]*$`),
-	// Slack token (xox[abprs]- + up to N chars). Every component after "xox"
-	// must be optional: the anchor fires the moment "xox" arrives, and dead
-	// anchors are never revisited — a required type letter once released tokens in pieces.
-	regexp.MustCompile(`^xox(?:[abprs](?:-[A-Za-z0-9-]*)?)?$`),
-	// JWT. Viability must hold for EVERY prefix of a match, including ones
-	// ending mid-separator; spelling out the segment structure permanently
-	// killed anchors and streamed tokens out in fragments. Deliberately wider
-	// than the secret pattern — over-holding is bounded by the cap.
-	regexp.MustCompile(`^eyJ[A-Za-z0-9_.-]*$`),
-	// PEM private key block: held from BEGIN until END, spans lines ([\s\S]).
-	// Deliberately permissive after "-----BEGIN" — progressive-prefix
-	// spelling once rejected its own anchor; the hold cap bounds prose delay
-	// and capOverflow scrubs the buffer rather than releasing a split match.
-	regexp.MustCompile(`^-----BEGIN[\s\S]*$`),
 }
 
 // byteClass is a 256-entry membership table — the per-byte fast path for a held value's trailing run.
@@ -97,27 +57,8 @@ var (
 	bearerValueClass  = makeClass(func(b byte) bool { return isAlnum(b) || strings.IndexByte(`-._~+/`, b) >= 0 })
 	skpkClass         = makeClass(func(b byte) bool { return isAlnum(b) || b == '_' })
 	ghpClass          = makeClass(func(b byte) bool { return isAlnum(b) })
-	glpatClass        = makeClass(func(b byte) bool { return isAlnum(b) || b == '-' })
 	pwdValueClass     = makeClass(func(b byte) bool { return b != ';' && b != '\r' && b != '\n' })
 )
-
-// terminalStates map a viable-held tail onto the byte class of its trailing
-// character run: extending the hold becomes an O(chunk) byte scan instead of
-// re-running the viability regexes. A byte outside the class falls back to
-// the full rescan, which re-derives the state.
-var terminalStates = []struct {
-	re    *regexp.Regexp
-	class *byteClass
-}{
-	// Generic key/value with the value still open (no closing quote yet).
-	{regexp.MustCompile(`(?i)^(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[:=]\s*["']?[A-Za-z0-9\-._~+/=]*$`), genericValueClass},
-	// Bearer value; '=' padding is rare and handled by the rescan fallback.
-	{regexp.MustCompile(`(?i)^Bearer\s+[A-Za-z0-9\-._~+/]*$`), bearerValueClass},
-	{regexp.MustCompile(`(?i)^(?:sk_|pk_)[a-zA-Z0-9_]*$`), skpkClass},
-	{regexp.MustCompile(`(?i)^ghp_[a-zA-Z0-9]*$`), ghpClass},
-	{regexp.MustCompile(`(?i)^glpat_[a-zA-Z0-9\-]*$`), glpatClass},
-	{regexp.MustCompile(`(?i)^(?:Password|PWD)\s*=[^;\r\n]*$`), pwdValueClass},
-}
 
 type holdKind uint8
 
@@ -135,7 +76,7 @@ type StreamScrubber struct {
 	kind    holdKind
 	// terminal is the byte class of the held tail's trailing run (see terminalStates); nil forces a rescan.
 	// draining is armed when the cap emitted a COMPLETE secret still arriving: every later byte of that
-	// secret's value-run class is swallowed — without it the rest streamed out clear (JWTs, PEM bodies).
+	// secret's value-run class is swallowed — without it the rest streamed out clear (JWTs, session tokens).
 	draining *byteClass
 	terminal *byteClass
 }
@@ -209,13 +150,25 @@ func (s *StreamScrubber) release() string {
 	boundary := n
 	s.kind, s.terminal = holdNone, nil
 
+	// A buffer ending mid-literal ("?access_tok") has no anchor for the loop
+	// below — the longest suffix that is a proper prefix of an anchor literal
+	// is held instead. It also wins over a complete anchor INSIDE that suffix
+	// (token): holding from the keyword alone released the "?" lead-in, and
+	// the URL class never saw its parameter.
+	partial := partialAnchorStart(s.pending)
+
+	// The same for a viable anchor INSIDE a dead anchor's literal (pwd in
+	// "?pwd=", when the URL anchor died at a space but pwd runs to end of
+	// line): the hold starts at the dead anchor, so its complete match is
+	// not split across the boundary.
+	deadStart, deadEnd := -1, 0
+
 	off := 0
 	for off < n {
-		loc := anchorRegex.FindIndex(s.pending[off:])
-		if loc == nil {
+		a, end := findAnchor(s.pending, off)
+		if a < 0 {
 			break
 		}
-		a := off + loc[0]
 		tail := s.pending[a:]
 		viable := false
 		for _, vp := range viablePrefixRegexes {
@@ -225,27 +178,37 @@ func (s *StreamScrubber) release() string {
 			}
 		}
 		if viable {
-			boundary = a
-			s.kind = holdViable
-			for _, ts := range terminalStates {
-				if ts.re.Match(tail) {
-					s.terminal = ts.class
-					break
+			switch {
+			case partial < a:
+				boundary = partial
+				s.kind = holdPartial
+			case a < deadEnd:
+				boundary = deadStart
+				s.kind = holdViable
+			default:
+				boundary = a
+				s.kind = holdViable
+				for _, ts := range terminalStates {
+					if ts.re.Match(tail) {
+						s.terminal = ts.class
+						break
+					}
 				}
 			}
 			break
 		}
 		// Dead anchors stay dead (viability is end-anchored); never revisit.
+		if a >= deadEnd {
+			deadStart, deadEnd = a, end
+		} else if end > deadEnd {
+			deadEnd = end
+		}
 		off = a + 1
 	}
 
-	// A buffer ending mid-keyword has no anchor for the loop above — hold the
-	// longest suffix that is a proper prefix of an anchor literal.
-	if boundary == n {
-		if p := partialAnchorStart(s.pending); p < n {
-			boundary = p
-			s.kind = holdPartial
-		}
+	if boundary == n && partial < n {
+		boundary = partial
+		s.kind = holdPartial
 	}
 
 	// Hold cap: an over-budget potential match stops stalling the stream.
@@ -328,7 +291,8 @@ func (s *StreamScrubber) capOverflow() string {
 	out := ScrubText(string(s.pending[:boundary]))
 	// If the cap fired on a COMPLETE secret whose value run was still open, swallow the rest via its byte
 	// class — armed ONLY for space-free classes: a connection-string value runs to end of line and accepts
-	// spaces, so draining it would swallow the paragraph; the real leakers (JWTs, PEM base64) are space-free.
+	// spaces, so draining it would swallow the paragraph; the real leakers (JWTs, URL tokens, Basic values)
+	// are space-free. A class without a terminal (quoted values, PEM) is not drained.
 	if s.terminal != nil && !s.terminal[' '] && HasCompleteSecret(s.pending[:boundary]) {
 		s.draining = s.terminal
 	}
@@ -336,6 +300,23 @@ func (s *StreamScrubber) capOverflow() string {
 	s.pending = s.pending[:m]
 	s.kind, s.terminal = holdNone, nil
 	return out
+}
+
+// findAnchor returns the bounds of the first anchor literal at or after off in
+// pending (ASCII case-insensitive), or -1. It is a byte scan over
+// anchorsByFirst rather than one (?i) alternation of every literal: the
+// table-derived alternation compiles past regexp's backtracker budget, and the
+// NFA it then runs on made every release() several times slower. No literal is
+// a prefix of another, so the first one matching at a position is the only one.
+func findAnchor(pending []byte, off int) (start, end int) {
+	for i := off; i < len(pending); i++ {
+		for _, a := range anchorsByFirst[pending[i]] {
+			if len(a) <= len(pending)-i && equalFoldASCII(pending[i:i+len(a)], a) {
+				return i, i + len(a)
+			}
+		}
+	}
+	return -1, -1
 }
 
 // partialAnchorStart returns the start of the longest pending-suffix that is

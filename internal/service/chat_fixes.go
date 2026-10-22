@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"pad-analyzer/internal/ai"
@@ -52,6 +53,38 @@ type chatFixApplier struct {
 	// working copy mid-stream (A1) — the re-parse mints new block IDs, and follow-up tools on the stale snapshot
 	// would mis-answer.
 	onDocReplaced func(fresh *models.FlowDocument)
+
+	// grounded is the conversation's context block, by its id in groundedDoc (the latest version of the flow
+	// the stream has seen): each apply re-parses the flow, and its result tells the model the block's new id.
+	groundMu    sync.Mutex
+	grounded    string
+	groundedDoc *models.FlowDocument
+}
+
+// groundOn records the conversation's context block, an id in doc, to follow across the stream's applies.
+func (a *chatFixApplier) groundOn(doc *models.FlowDocument, blockID string) {
+	a.groundMu.Lock()
+	a.grounded, a.groundedDoc = blockID, doc
+	a.groundMu.Unlock()
+}
+
+// followGrounded moves the grounded block to its id in fresh, the re-parsed flow, by its content anchor, and
+// returns the sentence telling the model where it went; "" with no grounded block or no re-parse.
+func (a *chatFixApplier) followGrounded(fresh *models.FlowDocument) string {
+	a.groundMu.Lock()
+	defer a.groundMu.Unlock()
+	if a.grounded == "" || fresh == nil {
+		return ""
+	}
+	anchor := a.groundedDoc.AnchorOf(a.grounded)
+	a.grounded, a.groundedDoc = "", fresh
+	if anchor != nil {
+		a.grounded = fresh.ResolveAnchor(*anchor)
+	}
+	if a.grounded == "" {
+		return " The block in the context's Selected Block section is no longer in the flow."
+	}
+	return " The block in the context's Selected Block section is now block id " + a.grounded + "."
 }
 
 // newFixApplier builds the per-stream applier; nil when the service can't apply fixes (no flow service wired),
@@ -111,7 +144,7 @@ func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixPr
 		a.onDocReplaced(updated)
 	}
 	a.emitFixDecision(prop.ProposalID, outcome.Status, outcome.Detail)
-	return outcome.ModelSummary(), nil
+	return outcome.ModelSummary() + a.followGrounded(updated), nil
 }
 
 func (a *chatFixApplier) emitFixDecision(proposalID, status, message string) {
@@ -239,7 +272,7 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 		a.onDocReplaced(updated)
 	}
 	a.emitBatchDecision(batchID, outcome)
-	return outcome.ModelSummary(), nil
+	return outcome.ModelSummary() + a.followGrounded(updated), nil
 }
 
 func (a *chatFixApplier) emitBatchDecision(batchID string, outcome batchOutcome) {

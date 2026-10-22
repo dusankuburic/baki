@@ -8,13 +8,15 @@ import (
 
 // FakeTurn scripts one streamed assistant turn for FakeProvider: optional text
 // (or multi-part text via Parts, e.g. to split a secret across chunks) streamed
-// first, then a terminal Done chunk carrying any tool calls and token counts.
+// first, then a terminal Done chunk carrying any tool calls, token counts and
+// the finish reason (empty: a normal stop).
 type FakeTurn struct {
-	Text      string
-	Parts     []string // multiple text chunks in one turn; overrides Text when set
-	ToolCalls []ai.ToolCall
-	TokensIn  int
-	TokensOut int
+	Text         string
+	Parts        []string // multiple text chunks in one turn; overrides Text when set
+	ToolCalls    []ai.ToolCall
+	TokensIn     int
+	TokensOut    int
+	FinishReason string
 }
 
 // FakeProvider is a shared, scriptable ai.Provider for tests. Each Stream call
@@ -29,10 +31,14 @@ type FakeProvider struct {
 	Ctx      int
 	Tools    bool
 	calls    int
+	requests []ai.Request
 }
 
 // Calls reports how many times Stream has been invoked.
 func (p *FakeProvider) Calls() int { return p.calls }
+
+// Requests returns every request Stream received, in order (the messages slice is copied: callers reuse it).
+func (p *FakeProvider) Requests() []ai.Request { return p.requests }
 
 func (p *FakeProvider) ID() string                                     { return "fake" }
 func (p *FakeProvider) Name() string                                   { return "Fake" }
@@ -56,7 +62,10 @@ func (p *FakeProvider) Chat(context.Context, ai.Request) (*ai.Response, error) {
 	return &ai.Response{}, nil
 }
 
-func (p *FakeProvider) Stream(_ context.Context, _ ai.Request, onChunk func(ai.Chunk)) error {
+func (p *FakeProvider) Stream(_ context.Context, req ai.Request, onChunk func(ai.Chunk)) error {
+	recorded := req
+	recorded.Messages = append([]ai.Message(nil), req.Messages...)
+	p.requests = append(p.requests, recorded)
 	if p.Err != nil {
 		return p.Err
 	}
@@ -79,6 +88,6 @@ func (p *FakeProvider) Stream(_ context.Context, _ ai.Request, onChunk func(ai.C
 	case turn.Text != "":
 		onChunk(ai.Chunk{Text: turn.Text})
 	}
-	onChunk(ai.Chunk{Done: true, ToolCalls: turn.ToolCalls, TokensIn: turn.TokensIn, TokensOut: turn.TokensOut})
+	onChunk(ai.Chunk{Done: true, ToolCalls: turn.ToolCalls, TokensIn: turn.TokensIn, TokensOut: turn.TokensOut, FinishReason: turn.FinishReason})
 	return nil
 }

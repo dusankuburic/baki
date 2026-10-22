@@ -34,6 +34,10 @@ var (
 	// ErrEmbeddingModelChanged: the caller's model is not the one the corpus was indexed with
 	// (checkCorpusModel). Upload refuses; re-index refuses unless forced (HTTP 409).
 	ErrEmbeddingModelChanged = errors.New("your embedding model differs from the one this knowledge base was indexed with")
+	// ErrEmbeddingWidthOff: the caller's embedder produces vectors of another width than PAD_EMBEDDING_DIM, so not
+	// one chunk it embeds can enter the vector index — an unforced re-index would re-buy the corpus and leave it
+	// where it is (reindexGuard; HTTP 409). The remedy is the pin and a restart, not the corpus.
+	ErrEmbeddingWidthOff = errors.New("your embedding provider's vectors are not PAD_EMBEDDING_DIM wide, so a re-index cannot make them searchable")
 	// ErrEmbeddingFailed: the embedding provider's request failed while indexing; wraps the
 	// provider's cause (ai.EmbeddingFailureCause) so the HTTP layer can classify it, not mask a 500.
 	ErrEmbeddingFailed = errors.New("embedding provider request failed")
@@ -123,6 +127,12 @@ type KnowledgeService struct {
 	reembed        *lifecycle.Singleton
 	reembedMu      sync.Mutex
 	reembedPending *reembedRequest
+	// widthMismatches records, per org, the embedding width this replica's embedder produced LAST when it is not
+	// the deployment's (noteEmbeddingWidth): orgID → EmbeddingWidthMismatch, the knowledge listing's memo, gone
+	// once the embedder is back at the configured width. widthWarned is the once-per-org warning gate: the
+	// widths last logged for the org, kept for the process whatever the embedder produced since.
+	widthMismatches sync.Map
+	widthWarned     sync.Map
 }
 
 // AzureEmbedderSource resolves the knowledge base's Azure AI Foundry embedder from the model registry:
@@ -363,46 +373,59 @@ const (
 
 // checkCorpusModel is the embedding-model mismatch guard. Every chunk records the identity of the embedder
 // that produced its vector (ADR 0027), so the guard is a column compare first: a corpus whose every row carries
-// the caller's identity is accepted without a provider call, and rows stamped with another identity are another
-// model whatever a sample would say. Equal width does not mean equal model (text-embedding-3-small and an Azure
-// ada-002 deployment are both 1536 wide), so the rows without an identity — legacy rows from before the column,
-// and every row for a provider that names none — still take the sample proof: up to corpusSampleSize indexed
-// chunks (one per document) are re-embedded and compared with their stored vectors; the WORST same-width pair
-// decides, so a mixed corpus (partial re-index, race) refuses everyone until a forced re-index repairs it; no
-// same-width pair is corpusOtherWidth (corpusStranded). A proof over legacy rows stamps them with the caller's
-// identity: the lenient match ends for the org, and the next upload is a column compare.
-func (s *KnowledgeService) checkCorpusModel(ctx context.Context, provider ai.Provider, orgID string) (corpusVerdict, error) {
+// the caller's identity and sits in the vector index is accepted without a provider call, and rows stamped with
+// another identity are another model whatever a sample would say. The identity names the model, not the width
+// (the format is frozen, ADR 0027 §2; Gemini's carries none), so the caller's own rows outside the index take
+// the width check alone: corpusOtherWidth when the caller's width differs from every sampled row's — a
+// PAD_EMBEDDING_DIM change, the stranded recovery under one identity — and corpusSameModel otherwise, also when
+// some rows sit outside the index (a recovery left half done; the sample prefers the indexed ones). A store
+// without a vector index reports every row outside an index it does not have, which says nothing about the
+// width, so there the census alone accepts the caller's own rows. Equal width does not mean equal model
+// (text-embedding-3-small and an Azure ada-002 deployment are both 1536 wide), so the rows without an identity —
+// legacy rows from before the column, and every row for a provider that names none — still take the sample
+// proof: up to corpusSampleSize indexed chunks (one per document) are re-embedded and compared with their stored
+// vectors; the WORST same-width pair decides, so a mixed corpus (partial re-index, race) refuses everyone until a
+// forced re-index repairs it; no same-width pair is corpusOtherWidth (corpusStranded). A proof over legacy rows
+// stamps them with the caller's identity: the lenient match ends for the org, and the next upload is a column compare.
+// embedderWidth is the width of the vectors the proof bought, 0 when the census decided without embedding.
+func (s *KnowledgeService) checkCorpusModel(ctx context.Context, provider ai.Provider, orgID string) (verdict corpusVerdict, embedderWidth int, err error) {
 	identity := ai.EmbeddingIdentity(provider)
 	var counts interfaces.KnowledgeChunkCounts
 	if identity != "" {
-		var err error
 		if counts, err = s.store.CountKnowledgeChunksByIdentity(ctx, orgID, identity); err != nil {
-			return corpusEmpty, fmt.Errorf("count indexed chunks: %w", err)
+			return corpusEmpty, 0, fmt.Errorf("count indexed chunks: %w", err)
 		}
 		switch {
 		case counts.Total == 0:
-			return corpusEmpty, nil
-		case counts.Stranded == 0 && counts.Legacy() == 0:
-			return corpusSameModel, nil
+			return corpusEmpty, 0, nil
+		case counts.Stranded == 0 && counts.Legacy() == 0 && (!s.store.HasPgvector() || counts.VectorIndexed == counts.Total):
+			return corpusSameModel, 0, nil
 		}
 	}
 	samples, err := s.store.SampleKnowledgeChunkEmbeddings(ctx, orgID, corpusSampleSize)
 	if err != nil {
-		return corpusEmpty, fmt.Errorf("sample indexed chunks: %w", err)
+		return corpusEmpty, 0, fmt.Errorf("sample indexed chunks: %w", err)
 	}
-	verdict, err := compareSamples(ctx, provider, orgID, samples)
+	verdict, embedderWidth, err = s.compareSamples(ctx, provider, orgID, samples)
 	if err != nil || identity == "" {
-		return verdict, err
+		return verdict, embedderWidth, err
+	}
+	if counts.Stranded == 0 && counts.Legacy() == 0 {
+		// Every row is the caller's own, so the proof was asked about the width alone.
+		if verdict == corpusOtherWidth {
+			return corpusOtherWidth, embedderWidth, nil
+		}
+		return corpusSameModel, embedderWidth, nil
 	}
 	if counts.Stranded > 0 {
 		// The sample only says whether the other identity is another WIDTH (the stranded-corpus recovery);
 		// at the same width it is another model, also when the sample happened to pick the matching rows.
 		if verdict == corpusOtherWidth {
-			return corpusOtherWidth, nil
+			return corpusOtherWidth, embedderWidth, nil
 		}
 		logger.Warn("knowledge base: chunks were indexed under another embedding identity than the caller's",
 			"org_id", orgID, "stranded_chunks", counts.Stranded, "total_chunks", counts.Total)
-		return corpusOtherModel, nil
+		return corpusOtherModel, embedderWidth, nil
 	}
 	if verdict == corpusSameModel {
 		userID := ""
@@ -415,12 +438,13 @@ func (s *KnowledgeService) checkCorpusModel(ctx context.Context, provider ai.Pro
 			logger.Info("knowledge base: legacy chunks stamped with the proven embedding identity", "org_id", orgID, "chunks", n)
 		}
 	}
-	return verdict, nil
+	return verdict, embedderWidth, nil
 }
 
 // compareSamples re-embeds the sampled chunks' text with provider and classifies against their
-// stored vectors (worst same-width pair decides; no same-width pair = corpusOtherWidth).
-func compareSamples(ctx context.Context, provider ai.Provider, orgID string, samples []interfaces.KnowledgeChunk) (corpusVerdict, error) {
+// stored vectors (worst same-width pair decides; no same-width pair = corpusOtherWidth). The fresh vectors are
+// what the org's embedder produces, so their width is noted like an upload's (noteEmbeddingWidth) and returned.
+func (s *KnowledgeService) compareSamples(ctx context.Context, provider ai.Provider, orgID string, samples []interfaces.KnowledgeChunk) (corpusVerdict, int, error) {
 	texts := make([]string, 0, len(samples))
 	stored := make([][]float32, 0, len(samples))
 	for _, c := range samples {
@@ -431,15 +455,17 @@ func compareSamples(ctx context.Context, provider ai.Provider, orgID string, sam
 		stored = append(stored, c.Embedding)
 	}
 	if len(texts) == 0 {
-		return corpusEmpty, nil
+		return corpusEmpty, 0, nil
 	}
 	fresh, err := provider.Embed(ctx, texts)
 	if err != nil {
-		return corpusEmpty, fmt.Errorf("%w: %w", ErrEmbeddingFailed, ai.EmbeddingFailureCause(err))
+		return corpusEmpty, 0, fmt.Errorf("%w: %w", ErrEmbeddingFailed, ai.EmbeddingFailureCause(err))
 	}
 	if len(fresh) != len(texts) {
-		return corpusEmpty, fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(fresh), len(texts))
+		return corpusEmpty, 0, fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(fresh), len(texts))
 	}
+	s.noteEmbeddingWidth(orgID, provider, fresh)
+	width := len(fresh[0])
 	worst, sameWidth, compared := 2.0, false, false
 	for i := range texts {
 		if len(fresh[i]) != len(stored[i]) {
@@ -455,15 +481,15 @@ func compareSamples(ctx context.Context, provider ai.Provider, orgID string, sam
 	}
 	switch {
 	case !sameWidth:
-		return corpusOtherWidth, nil
+		return corpusOtherWidth, width, nil
 	case !compared:
-		return corpusEmpty, nil // only undefined (all-zero) vectors at this width
+		return corpusEmpty, width, nil // only undefined (all-zero) vectors at this width
 	case worst < sameModelMinCosine:
 		logger.Warn("knowledge base: caller's embedding model differs from the indexed corpus",
-			"org_id", orgID, "worst_similarity", worst, "width", len(fresh[0]))
-		return corpusOtherModel, nil
+			"org_id", orgID, "worst_similarity", worst, "width", width)
+		return corpusOtherModel, width, nil
 	}
-	return corpusSameModel, nil
+	return corpusSameModel, width, nil
 }
 
 // corpusStranded: nothing in the org's corpus is in the vector index at the deployment's width — the
@@ -472,6 +498,22 @@ func compareSamples(ctx context.Context, provider ai.Provider, orgID string, sam
 func (s *KnowledgeService) corpusStranded(ctx context.Context, orgID string) bool {
 	_, indexed, err := s.store.CountKnowledgeChunks(ctx, orgID)
 	return err != nil || indexed == 0
+}
+
+// ownRowsStranded: every chunk of the org carries the caller's identity and some are outside the vector index —
+// rows the caller's own embedder produced at another width (the identity names none, ADR 0027 §2), or rows
+// stored as JSON only before the index could take them — which a re-index must walk although they carry its
+// identity, and an upload need not fear: no second model enters the corpus. A store without a vector index
+// reports every row outside an index it does not have, so there nothing is stranded.
+func (s *KnowledgeService) ownRowsStranded(ctx context.Context, orgID, identity string) (bool, error) {
+	if identity == "" || !s.store.HasPgvector() {
+		return false, nil
+	}
+	counts, err := s.store.CountKnowledgeChunksByIdentity(ctx, orgID, identity)
+	if err != nil {
+		return false, fmt.Errorf("count indexed chunks: %w", err)
+	}
+	return counts.Total > 0 && counts.Stranded == 0 && counts.Legacy() == 0 && counts.VectorIndexed < counts.Total, nil
 }
 
 // cosineSimilarity of two equal-length vectors; ok=false when either is all zeros (undefined).
@@ -487,6 +529,124 @@ func cosineSimilarity(a, b []float32) (float64, bool) {
 		return 0, false
 	}
 	return dot / (math.Sqrt(na) * math.Sqrt(nb)), true
+}
+
+// EmbeddingWidthMismatch is an org's embedding width against the deployment's (PAD_EMBEDDING_DIM) when they
+// differ. Such chunks are stored as JSON only, outside the vector index, and such searches run on the capped Go
+// fallback, so the knowledge listing reports both widths and which side is off (Source), since the two need
+// opposite remedies: an embedder off the configured width (a provider that cannot truncate — Gemini at its native
+// width, a model that refuses `dimensions`) needs PAD_EMBEDDING_DIM equal to its width and a restart, after which
+// the rows already stored at that width join the index at boot; stored chunks off the configured width need a
+// re-index alone, and moving PAD_EMBEDDING_DIM to their width instead would leave the embedder off.
+type EmbeddingWidthMismatch struct {
+	Configured int `json:"configured"`
+	Observed   int `json:"observed"`
+	// Source names the side whose width Observed is: WidthSourceEmbedder (what the org's embedder produced) or
+	// WidthSourceStored (what the stored chunks outside the vector index hold).
+	Source string `json:"source"`
+}
+
+// The two sides of EmbeddingWidthMismatch.Source.
+const (
+	WidthSourceEmbedder = "embedder"
+	WidthSourceStored   = "stored"
+)
+
+// embeddingWidthMismatch compares an observed vector width of side source with the configured one: a mismatch only
+// when both are known — a service without a factory does not know the deployment's width, and an empty vector has none.
+func embeddingWidthMismatch(configured, observed int, source string) (EmbeddingWidthMismatch, bool) {
+	if configured <= 0 || observed <= 0 || configured == observed {
+		return EmbeddingWidthMismatch{}, false
+	}
+	return EmbeddingWidthMismatch{Configured: configured, Observed: observed, Source: source}, true
+}
+
+// HasVectorIndex reports whether the knowledge base has a vector index (pgvector) at all. Without one every chunk is
+// outside it, so the per-document indexed counts say nothing about searchability: searches run in-process at the
+// query's width, and no width report applies.
+func (s *KnowledgeService) HasVectorIndex() bool {
+	return s.store != nil && s.store.HasPgvector()
+}
+
+// configuredWidth is the deployment's embedding width (PAD_EMBEDDING_DIM, the factory's); 0 when unknown.
+func (s *KnowledgeService) configuredWidth() int {
+	if s.factory == nil {
+		return 0
+	}
+	return s.factory.EmbeddingDimensions()
+}
+
+// noteEmbeddingWidth is the width check of the write and search paths: the first vector of what the org's
+// embedder produced — an upload's or a re-index page's chunks, a search's query — against the deployment's width.
+// A mismatch is remembered for the listing (EmbeddingWidthMismatch) and warned about (warnEmbeddingWidth); a
+// vector back at the configured width forgets it, since the embedder is no longer the problem — the listing then
+// measures the stored chunks again, and a corpus still to re-index reports their width on its own. Without a
+// vector index there is nothing to be outside of and the in-process search finds the chunks at the embedder's
+// width, so no width is noted.
+func (s *KnowledgeService) noteEmbeddingWidth(orgID string, provider ai.Provider, vectors [][]float32) {
+	if len(vectors) == 0 || !s.HasVectorIndex() {
+		return
+	}
+	m, mismatch := embeddingWidthMismatch(s.configuredWidth(), len(vectors[0]), WidthSourceEmbedder)
+	if !mismatch {
+		s.widthMismatches.Delete(orgID)
+		return
+	}
+	s.widthMismatches.Store(orgID, m)
+	s.warnEmbeddingWidth(orgID, provider, m)
+}
+
+// warnEmbeddingWidth logs a width mismatch ONCE per org with both widths — not per chunk, per search, per re-index
+// page or per listing, and not again when the stored side reports the width the embedder's side already did. The
+// gate lives as long as the process, like the width it was measured against, so only a change of the observed
+// width is logged again: a return to the configured width in between does not reopen it, or a stranded corpus
+// searched at the right width would warn again with every listing that measures it.
+func (s *KnowledgeService) warnEmbeddingWidth(orgID string, provider ai.Provider, m EmbeddingWidthMismatch) {
+	widths := [2]int{m.Configured, m.Observed}
+	if prev, loaded := s.widthWarned.Swap(orgID, widths); loaded && prev == widths {
+		return
+	}
+	attrs := []any{"org_id", orgID, "configured_dim", m.Configured, "observed_dim", m.Observed}
+	if provider != nil {
+		attrs = append(attrs, "provider", provider.ID(), "embedder", ai.EmbeddingIdentity(provider))
+	}
+	logger.Warn("knowledge base: the embedding width is not PAD_EMBEDDING_DIM — pgvector cannot index chunks at this width, so searches at it run on the capped in-process fallback; a provider that cannot truncate needs PAD_EMBEDDING_DIM equal to its native width, then re-index", attrs...)
+}
+
+// EmbeddingWidthMismatch reports the org's embedding width against the deployment's when they differ, for the
+// knowledge listing: what the org's embedder produced last in this process when that is off (noteEmbeddingWidth,
+// the embedder side), else — when docs show chunks outside the vector index, the state a width switch leaves
+// behind — what one stored chunk outside the index measures (the stored side): a corpus stranded before this
+// process started, or by an embedder since back at the configured width. The probe reads the rows outside the
+// index, not the guard's sample, which prefers the indexed documents and would miss a corpus mostly in it; it is
+// not memoised, since the docs' counts are the database's, so a re-index on any replica ends the report at once.
+// nil when the widths agree, nothing says otherwise, or the store has no vector index to be outside of.
+func (s *KnowledgeService) EmbeddingWidthMismatch(ctx context.Context, orgID string, docs []*interfaces.KnowledgeDocument) *EmbeddingWidthMismatch {
+	configured := s.configuredWidth()
+	if configured <= 0 || !s.HasVectorIndex() {
+		return nil
+	}
+	if v, ok := s.widthMismatches.Load(orgID); ok {
+		m := v.(EmbeddingWidthMismatch)
+		return &m
+	}
+	unindexed := false
+	for _, d := range docs {
+		unindexed = unindexed || d.ChunkCount > d.VectorIndexed
+	}
+	if !unindexed {
+		return nil
+	}
+	width, err := s.store.UnindexedKnowledgeChunkWidth(ctx, orgID)
+	if err != nil {
+		logger.Warn("knowledge: could not measure the stored chunks' embedding width", "org_id", orgID, "error", err)
+		return nil
+	}
+	if m, ok := embeddingWidthMismatch(configured, width, WidthSourceStored); ok {
+		s.warnEmbeddingWidth(orgID, nil, m)
+		return &m
+	}
+	return nil
 }
 
 // AddDocument chunks content, embeds in the caller's scope, then persists document + chunks.
@@ -541,13 +701,24 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	// for members on the other model. Checked before embedding so a refused upload costs one small request;
 	// no force option — switch models by re-indexing with force first. Replacing every document skips the guard.
 	if len(superseded) < total {
-		verdict, err := s.checkCorpusModel(ctx, provider, orgID)
+		verdict, _, err := s.checkCorpusModel(ctx, provider, orgID)
 		if err != nil {
 			return err
 		}
-		// An upload at another width is never a recovery: it always produces a mixed corpus.
-		if verdict == corpusOtherModel || verdict == corpusOtherWidth {
+		switch verdict {
+		case corpusOtherModel:
 			return ErrEmbeddingModelChanged
+		case corpusOtherWidth:
+			// Another width is a recovery only when the rows at it are the caller's own, outside the index
+			// (a PAD_EMBEDDING_DIM change under one identity): no second model enters the corpus and the
+			// re-index converts them. Anyone else's rows at another width would make a mixed corpus.
+			own, err := s.ownRowsStranded(ctx, orgID, ai.EmbeddingIdentity(provider))
+			if err != nil {
+				return err
+			}
+			if !own {
+				return ErrEmbeddingModelChanged
+			}
 		}
 	}
 
@@ -558,6 +729,7 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	if len(embeddings) != len(chunks) {
 		return fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(embeddings), len(chunks))
 	}
+	s.noteEmbeddingWidth(orgID, provider, embeddings)
 
 	// Extract the caller's userID once: every storage call below is RLS-scoped to them ("" in local mode).
 	userID := ""
@@ -696,6 +868,7 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 	if err != nil || !ok {
 		return "", err
 	}
+	s.noteEmbeddingWidth(orgID, provider, [][]float32{vec})
 
 	// Top-k retrieval: 5 chunks — more context improves grounding cheaply; the pgvector query
 	// applies a distance threshold to exclude irrelevant chunks. Only chunks this embedder produced
@@ -721,7 +894,7 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 // switch returns empty silently: chunks the caller's identity cannot see (a model switch at the same width)
 // and a corpus with nothing in the vector index at the configured width (a width switch) are each logged and
 // metered on their own counter; a corpus that simply has nothing above the relevance floor is a miss, not a
-// signal (R4).
+// signal (R4), and so is every empty result where there is no vector index to be outside of.
 func (s *KnowledgeService) explainEmptySearch(ctx context.Context, orgID, identity string, queryDim int) {
 	counts, err := s.store.CountKnowledgeChunksByIdentity(ctx, orgID, identity)
 	if err != nil || counts.Total == 0 {
@@ -732,8 +905,8 @@ func (s *KnowledgeService) explainEmptySearch(ctx context.Context, orgID, identi
 		logger.Warn("knowledge search returned nothing: chunks were indexed under another embedding model than the caller's — re-index",
 			"org_id", orgID, "stranded_chunks", counts.Stranded, "total_chunks", counts.Total)
 		recordRAGStrandedSearch()
-	case counts.VectorIndexed == 0:
-		logger.Warn("knowledge search returned nothing but the org has chunks — embedding dimension mismatch? re-index",
+	case s.HasVectorIndex() && counts.VectorIndexed == 0:
+		logger.Warn("knowledge search returned nothing but the org has chunks — embedding dimension mismatch? re-index when the stored chunks are off the deployment's embedding width; when the embedder is, set the deployment's width to the embedder's and restart",
 			"org_id", orgID, "total_chunks", counts.Total, "query_dim", queryDim)
 		recordRAGDimMismatch()
 	}
@@ -758,11 +931,16 @@ type ReindexResult struct {
 // BOTH the partial result and the error. Unless forced, a corpus indexed with a different model at the same width
 // is refused (ErrEmbeddingModelChanged), and so is one at another width while it is still in the vector index; a
 // width change against a corpus with NOTHING in the vector index is the stranded-corpus recovery and proceeds
-// unforced. Only the first request of a run is judged; see reindexGuard. Unforced, the walk skips the chunks
+// unforced, unless the embedder itself is not PAD_EMBEDDING_DIM wide (ErrEmbeddingWidthOff): nothing it embeds can
+// enter the index, so the walk would change nothing. Only the first request of a run is judged; see reindexGuard.
+// Unforced, the walk skips the chunks
 // already embedded under the caller's identity (ADR 0027): a repeated or restarted run never re-buys a converted
-// page, and a corpus the proof just stamped has nothing left to convert; forced, every chunk is rewritten — the
-// admin's word that the vectors must change even where the identity would not (an Azure deployment re-pointed
-// behind the same name). Every converted chunk is stamped with the identity it was embedded under.
+// page, and a corpus the proof just stamped has nothing left to convert — unless those chunks ARE the ones to
+// convert, the caller's own identity stranded outside the vector index by a PAD_EMBEDDING_DIM change (the
+// identity names no width), when the walk takes the chunks outside the index alone and leaves the ones in it;
+// forced, every chunk is rewritten — the admin's word that the vectors must change even where the identity would
+// not (an Azure deployment re-pointed behind the same name). Every converted chunk is stamped with the identity
+// it was embedded under.
 func (s *KnowledgeService) ReindexOrg(ctx context.Context, scope, orgID string, force bool, after interfaces.KnowledgeChunkCursor) (ReindexResult, error) {
 	return s.reindexOrg(ctx, scope, orgID, force, after, false)
 }
@@ -794,7 +972,8 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 	}
 	defer unlock()
 	defer s.bus.Publish(callerCtx, events.KnowledgeDocChanged{OrgID: orgID, Kind: events.KnowledgeDocReindexed})
-	if err := s.reindexGuard(ctx, provider, orgID, force, after); err != nil {
+	own, err := s.reindexGuard(ctx, provider, orgID, force, after)
+	if err != nil {
 		return ReindexResult{}, lostOr(ctx, err)
 	}
 
@@ -803,9 +982,18 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 		userID = claims.UserID
 	}
 	identity := ai.EmbeddingIdentity(provider)
+	// What the walk takes: forced, every chunk; unforced, the chunks not yet under the caller's identity — or,
+	// when the caller's own rows are the ones outside the vector index (own), those rows alone, so a recovery
+	// left half done or restarted never re-buys the rows already in it.
 	skip := identity
 	if force {
-		skip = ""
+		skip, own = "", false
+	}
+	nextPage := func(cursor interfaces.KnowledgeChunkCursor, limit int) ([]interfaces.KnowledgeChunk, error) {
+		if own {
+			return s.store.ListUnindexedKnowledgeChunkContents(ctx, orgID, cursor, limit)
+		}
+		return s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, limit, skip)
 	}
 	var (
 		res    ReindexResult
@@ -837,7 +1025,7 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 	budgetSpent := false
 	for res.Chunks < maxReindexChunks {
 		want := min(reindexPageSize, maxReindexChunks-res.Chunks)
-		page, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, want, skip)
+		page, err := nextPage(cursor, want)
 		if err != nil {
 			return stopped(fmt.Errorf("load chunk contents: %w", err))
 		}
@@ -855,6 +1043,7 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 		if len(embeddings) != len(page) {
 			return stopped(fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(embeddings), len(page)))
 		}
+		s.noteEmbeddingWidth(orgID, provider, embeddings)
 		for i := range page {
 			page[i].Embedding = embeddings[i]
 			page[i].EmbeddingIdentity = identity
@@ -884,7 +1073,7 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 	if budgetSpent || res.Chunks >= maxReindexChunks {
 		// At the ceiling or the budget: resumable only when something is actually left. A probe
 		// that fails hands out the cursor anyway — the next request finds out.
-		if rest, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, 1, skip); err != nil || len(rest) > 0 {
+		if rest, err := nextPage(cursor, 1); err != nil || len(rest) > 0 {
 			next := cursor
 			res.NextCursor, res.Truncated = &next, true
 		}
@@ -902,35 +1091,60 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 // request must not re-run it: the corpus is deliberately mixed (converted up to the cursor, the old
 // model after it) and the worst-pair rule would refuse every continuation, so it instead asks whether
 // the caller's model produced the previously converted chunks (compareSamples): same model continues;
-// another model or width refuses with ErrEmbeddingModelChanged whatever force says.
-func (s *KnowledgeService) reindexGuard(ctx context.Context, provider ai.Provider, orgID string, force bool, after interfaces.KnowledgeChunkCursor) error {
+// another model or width refuses with ErrEmbeddingModelChanged whatever force says. A request that passes also
+// learns whether the chunks to convert are the caller's OWN — its identity outside the vector index
+// (ownRowsStranded) — so the walk takes those instead of skipping them as already converted.
+func (s *KnowledgeService) reindexGuard(ctx context.Context, provider ai.Provider, orgID string, force bool, after interfaces.KnowledgeChunkCursor) (own bool, err error) {
+	identity := ai.EmbeddingIdentity(provider)
 	if !after.IsZero() {
 		samples, err := s.store.SampleKnowledgeChunkEmbeddingsUpTo(ctx, orgID, after, corpusSampleSize)
 		if err != nil {
-			return fmt.Errorf("sample re-indexed chunks: %w", err)
+			return false, fmt.Errorf("sample re-indexed chunks: %w", err)
 		}
-		verdict, err := compareSamples(ctx, provider, orgID, samples)
+		verdict, _, err := s.compareSamples(ctx, provider, orgID, samples)
 		if err != nil {
-			return err
+			return false, err
 		}
 		switch verdict {
 		case corpusSameModel:
-			return nil
+			return s.ownRowsStranded(ctx, orgID, identity)
 		case corpusOtherModel, corpusOtherWidth:
-			return ErrEmbeddingModelChanged
+			return false, ErrEmbeddingModelChanged
 		}
 	}
 	if force {
-		return nil
+		return false, nil
 	}
-	verdict, err := s.checkCorpusModel(ctx, provider, orgID)
+	verdict, embedderWidth, err := s.checkCorpusModel(ctx, provider, orgID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if verdict == corpusOtherModel || (verdict == corpusOtherWidth && !s.corpusStranded(ctx, orgID)) {
-		return ErrEmbeddingModelChanged
+	// An embedder off PAD_EMBEDDING_DIM puts nothing into the vector index, so the walk would re-buy the rows it
+	// is about to take and leave them where they are: refused with the remedy (the pin, then a restart) whenever
+	// the proof measured the embedder. The census decides without one only when every row is the caller's own and
+	// in the index, where the unforced walk converts nothing anyway. Force is the admin's word that the vectors
+	// must change regardless, the step before a restart at the embedder's width.
+	if m, off := embeddingWidthMismatch(s.configuredWidth(), embedderWidth, WidthSourceEmbedder); off && s.HasVectorIndex() {
+		return false, fmt.Errorf("%w: PAD_EMBEDDING_DIM is %d and the provider's vectors are %d wide — set PAD_EMBEDDING_DIM to %d and restart, then re-index", ErrEmbeddingWidthOff, m.Configured, m.Observed, m.Observed)
 	}
-	return nil
+	switch verdict {
+	case corpusOtherModel:
+		return false, ErrEmbeddingModelChanged
+	case corpusOtherWidth:
+		// The caller's own rows at another width are a recovery whatever the index holds (one left half done
+		// and restarted from the beginning included); anyone else's are one only while nothing is in it.
+		if own, err := s.ownRowsStranded(ctx, orgID, identity); err != nil || own {
+			return own, err
+		}
+		if !s.corpusStranded(ctx, orgID) {
+			return false, ErrEmbeddingModelChanged
+		}
+		return false, nil
+	}
+	// Accepted by the census or the proof: the caller's own rows outside the index, if any, are still the ones
+	// to convert — rows at another width the sample did not pick, or rows at the configured width stored as
+	// JSON only, which the identity filter would skip as already converted.
+	return s.ownRowsStranded(ctx, orgID, identity)
 }
 
 // assembleGuidelines renders retrieved chunks as the guidelines block appended to chat context: a grounding

@@ -278,7 +278,7 @@ func manyFindingsReport(blockID string, n int) *models.AnalysisReport {
 }
 
 // TestListFindings_PaginationAndKeys pins the enumerate-everything contract:
-// pages of 40 with an "…and N more — offset=" trailer, finding keys on every
+// pages of up to 40 whose header carries "N more: call again with offset=", finding keys on every
 // line (so finding:<key> deep links work from tool output), and a clean
 // out-of-range answer instead of an empty page.
 func TestListFindings_PaginationAndKeys(t *testing.T) {
@@ -289,8 +289,8 @@ func TestListFindings_PaginationAndKeys(t *testing.T) {
 	if !strings.Contains(page1, "showing 1-40 of 95") {
 		t.Errorf("page 1 header wrong: %q", strings.SplitN(page1, "\n", 2)[0])
 	}
-	if !strings.Contains(page1, "…and 55 more — call again with offset=40") {
-		t.Errorf("page 1 trailer wrong: %q", page1[len(page1)-120:])
+	if first, _, _ := strings.Cut(page1, "\n"); !strings.Contains(first, "55 more: call again with offset=40") {
+		t.Errorf("page 1 header does not carry the continuation: %q", first)
 	}
 	if !strings.Contains(page1, "key=fp-00") || !strings.Contains(page1, "key=fp-39") {
 		t.Errorf("finding keys missing from page 1")
@@ -301,10 +301,62 @@ func TestListFindings_PaginationAndKeys(t *testing.T) {
 		t.Errorf("page 2 wrong: %q", strings.SplitN(page2, "\n", 2)[0])
 	}
 	page3 := ExecuteTool("list_findings", []byte(`{"offset":80}`), tctx)
-	if !strings.Contains(page3, "showing 81-95 of 95") || strings.Contains(page3, "…and") {
+	if !strings.Contains(page3, "showing 81-95 of 95") || strings.Contains(page3, "call again with offset") {
 		t.Errorf("last page wrong: %q", page3)
 	}
 	if got := ExecuteTool("list_findings", []byte(`{"offset":200}`), tctx); !strings.Contains(got, "beyond the 95 matching") {
 		t.Errorf("out-of-range offset: %q", got)
+	}
+}
+
+// TestFixTargetIdentities_PeersOfOneTypeAreDistinct: the parser names a generic action from its type, so a
+// subflow's HTTP actions are all "Invoke Url" and an identity of rule, subflow, type and name made one decline
+// cover every one of them. The identity is the block's anchor, its place among those peers, which also survives
+// the re-parse after a peer is wrapped in a handler and the rest move down.
+func TestFixTargetIdentities_PeersOfOneTypeAreDistinct(t *testing.T) {
+	http := func(id string, line int) models.Block {
+		return models.Block{ID: id, Name: "Invoke Url", Type: models.BlockTypeAction, RawType: "HTTPClient.InvokeUrl", LineNumber: line}
+	}
+	mk := func(blocks ...models.Block) *models.FlowDocument {
+		d := &models.FlowDocument{ID: "flow-1", Subflows: []models.Subflow{{ID: "sf-main", Name: "Main", Blocks: blocks}}}
+		d.RebuildIndexes()
+		return d
+	}
+	unhandled := func(ids ...string) fixFakeAnalysis {
+		var r models.AnalysisReport
+		for _, id := range ids {
+			r.Findings = append(r.Findings, models.Finding{RuleID: "unhandled-error", BlockID: id, AutoFix: "wrap-error-handler"})
+		}
+		return fixFakeAnalysis{&r}
+	}
+	identity := func(tctx ToolContext, blockID string) string {
+		t.Helper()
+		ids := FixTargetIdentities(tctx, "apply_fix", json.RawMessage(`{"blockId":"`+blockID+`","ruleId":"unhandled-error"}`))
+		if len(ids) != 1 {
+			t.Fatalf("identities for %s = %q, want one", blockID, ids)
+		}
+		return ids[0]
+	}
+
+	before := mk(http("b1", 3), http("b2", 6), http("b3", 9))
+	tctx := ToolContext{Ctx: context.Background(), Doc: before, Analysis: unhandled("b1", "b2", "b3")}
+	first, second, third := identity(tctx, "b1"), identity(tctx, "b2"), identity(tctx, "b3")
+	if first == second || second == third {
+		t.Fatalf("same-type actions of one subflow share a decline identity: %q %q %q", first, second, third)
+	}
+
+	// b1 wrapped in a handler and the flow re-parsed: b2 is x2, two lines lower, still the second of three.
+	wrapped := models.Block{ID: "h1", Name: "On Block Error", Type: models.BlockTypeErrorHandler, RawType: "OnBlockError", LineNumber: 3, Children: []models.Block{http("x1", 4)}}
+	after := mk(wrapped, http("x2", 8), http("x3", 11))
+	tctx = ToolContext{Ctx: context.Background(), Doc: after, Analysis: unhandled("x2", "x3")}
+	if got := identity(tctx, "x2"); got != second {
+		t.Errorf("the identity did not survive the re-parse: %q, was %q", got, second)
+	}
+	if got := identity(tctx, "x3"); got != third {
+		t.Errorf("the third action's identity changed across the re-parse: %q, was %q", got, third)
+	}
+	batch := FixTargetIdentities(tctx, "apply_fixes", json.RawMessage(`{"targets":[{"blockId":"x2","ruleId":"unhandled-error"},{"blockId":"x3","ruleId":"unhandled-error"}]}`))
+	if len(batch) != 2 || batch[0] != second || batch[1] != third {
+		t.Errorf("batch identities = %q, want those of the two targets", batch)
 	}
 }

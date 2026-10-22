@@ -82,7 +82,7 @@ func normalizeChatParams(temperature float64, maxTokens, ctxLimit, maxOutput int
 var (
 	chatContexts = cache.Declare("chat.context",
 		cache.Keys(cache.KindTenant, cache.KindResource, cache.KindVersion,
-			cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam),
+			cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam),
 		cache.ReplicaLocal("a turn is served by the replica its stream runs on; another rebuilds the context on a miss"))
 	scrubbedDocs = cache.Declare("chat.scrubbed-docs",
 		cache.Keys(cache.KindTenant, cache.KindResource, cache.KindVersion),
@@ -112,7 +112,7 @@ func (s *ChatService) InvalidateChatContext(flowID string) {
 
 // chatContextKeyAt keys a turn's context texts for a generation the caller already read; the zero Key (uncached)
 // for a flow without an id.
-func (s *ChatService) chatContextKeyAt(scope, flowID string, gen uint64, req models.ChatRequest, providerID, model string, report *models.AnalysisReport, sourceFP string) cache.Key {
+func (s *ChatService) chatContextKeyAt(scope, flowID string, gen uint64, req models.ChatRequest, providerID, model string, report *models.AnalysisReport, sourceFP string, tokenBudget int) cache.Key {
 	if flowID == "" {
 		return cache.Key{}
 	}
@@ -121,11 +121,12 @@ func (s *ChatService) chatContextKeyAt(scope, flowID string, gen uint64, req mod
 		reportFP = fmt.Sprintf("%d-%d", report.GeneratedAt.UnixNano(), len(report.Findings))
 	}
 	// sourceFP keys a source selection AND any on-disk change to it; ExcludeContext MUST be in the key.
-	// req.SystemPrompt holds the MERGED suffix (settings + request), so editing the setting cannot serve a stale context.
+	// req.SystemPrompt holds the MERGED suffix (settings + request), so editing the setting cannot serve a stale
+	// context; the caller's token budget bounds the text, so it is in the key for the same reason.
 	k, _ := chatContexts.Key(callerTenant(scope), cache.Resource(flowID), cache.Version(strconv.FormatUint(gen, 10)),
 		cache.Param("block", req.ContextBlockID), cache.Param("prompt", req.SystemPrompt), cache.Param("provider", providerID),
 		cache.Param("model", model), cache.Param("report", reportFP), cache.Param("sources", sourceFP),
-		cache.Param("exclude", strconv.FormatBool(req.ExcludeContext)))
+		cache.Param("exclude", strconv.FormatBool(req.ExcludeContext)), cache.Param("budget", strconv.Itoa(tokenBudget)))
 	return k
 }
 
@@ -300,50 +301,99 @@ func (s *ChatService) registryCredentialOrg(ctx context.Context, orgID, scope st
 
 // cachedContextCore returns the memoised scrub+BuildContext result; bypassed with no document or no cache.
 func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
-	// Resolve the caller's custom instructions once, here where the caller is known.
+	// Resolve the caller's custom instructions and context budget once, here where the caller is known.
 	req.SystemPrompt = s.systemPromptSuffix(ctx, req)
+	tokenBudget := s.contextTokenBudget(ctx, provider.ID())
 	if s.chatCtxCache == nil || doc == nil {
-		return s.computeContextCore(provider, doc, report, req)
+		return s.computeContextCoreWith(provider, doc, scrubbedOrNil(doc), report, req, tokenBudget)
 	}
 	// One generation read for both keys, before the build: the entry and the clone it points into must agree,
 	// and an invalidation during the build refuses the fill.
 	gen := s.chatCtxGen.Load(doc.ID)
 	src := weak.Make(doc)
 	key := s.chatContextKeyAt(scope, doc.ID, gen, req, provider.ID(), req.Model, report,
-		sourceFilesFingerprint(filepath.Dir(doc.FilePath), req.SelectedSourceFiles))
+		sourceFilesFingerprint(filepath.Dir(doc.FilePath), req.SelectedSourceFiles), tokenBudget)
 	// The texts are memoised; the clone comes from the doc cache, never the entry.
 	if e, ok := s.chatCtxCache.texts.Get(key); ok && e.src == src {
 		return chatContextValue{scrubbedDoc: s.scrubbedDocFor(ctx, scope, doc, gen), sysPrompt: e.sysPrompt, contextText: e.contextText}
 	}
 	sd := s.scrubbedDocFor(ctx, scope, doc, gen)
-	cv := s.computeContextCoreWith(provider, doc, sd, report, req)
+	cv := s.computeContextCoreWith(provider, doc, sd, report, req, tokenBudget)
 	if s.chatCtxGen.FillOK(ctx, doc.ID, gen) {
 		s.chatCtxCache.texts.Set(key, chatContextEntry{src: src, sysPrompt: cv.sysPrompt, contextText: cv.contextText}, 1, 0)
 	}
 	return cv
 }
 
-// computeContextCore is the uncached scrub+BuildContext path — expensive per-block work identical across turns.
-func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
-	var scrubbedDoc *models.FlowDocument
-	if doc != nil {
-		scrubbedDoc = scrubOrSelf(doc)
-	}
-	return s.computeContextCoreWith(provider, doc, scrubbedDoc, report, req)
-}
+// What resolveContextBlock found of the request's context block (ContextPreview.ContextBlock).
+const (
+	contextBlockResolved = "resolved"
+	contextBlockMissing  = "missing"
+)
 
-// computeContextCoreWith is computeContextCore for a clone already scrubbed (shared via the doc cache).
-func (s *ChatService) computeContextCoreWith(provider ai.Provider, doc, scrubbedDoc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
-	// Per-provider context token budget from settings, falling back to 4000 (matches DefaultSettings).
-	tokenBudget := 4000
-	if s.settings != nil {
-		if appSettings := s.settings.Get(); appSettings != nil {
-			if pc, ok := appSettings.AI.Providers[provider.ID()]; ok && pc.ContextTokenBudget > 0 {
-				tokenBudget = pc.ContextTokenBudget
-			}
+// resolveContextBlock finds the request's context block in doc by id, else by its anchor: an applied fix or an
+// edit re-parses the flow and re-mints every block id. ContextBlockID becomes the id found, so the context, its
+// cache key and the fix applier all use the live one. The status is "" when the turn asks for no block context
+// (or the document has no index to look in), contextBlockMissing when the block is no longer in the flow.
+func resolveContextBlock(doc *models.FlowDocument, req models.ChatRequest) (models.ChatRequest, string) {
+	if req.ExcludeContext || req.ContextBlockID == "" || doc == nil || doc.BlocksByID == nil {
+		return req, ""
+	}
+	if doc.BlocksByID[req.ContextBlockID] != nil {
+		return req, contextBlockResolved
+	}
+	if req.ContextBlockAnchor != nil {
+		if id := doc.ResolveAnchor(*req.ContextBlockAnchor); id != "" {
+			req.ContextBlockID = id
+			return req, contextBlockResolved
 		}
 	}
+	return req, contextBlockMissing
+}
 
+// contextBlockMissingNotice is the stream's row for a context block that is no longer in the flow.
+func contextBlockMissingNotice() map[string]interface{} {
+	return map[string]interface{}{"name": "context_block_missing", "label": "The block this chat was about is no longer in the flow — answering about the whole flow"}
+}
+
+// defaultContextTokenBudget is the per-provider context budget when the caller's settings set none (matches
+// DefaultSettings).
+const defaultContextTokenBudget = 4000
+
+// MaxContextTokenBudget caps the per-provider context budget a caller's settings can set, the same maximum the
+// Settings UI's field stops at (CONTEXT_TOKEN_BUDGET_MAX in frontend/src/lib/constraints.ts): the settings write
+// validates only the profile section, so without it an API client could have every turn build a context of any
+// size.
+const MaxContextTokenBudget = 128000
+
+// contextTokenBudget is the caller's context token budget for providerID: their own document in cloud (a user's
+// setting is theirs, not the deployment's), s.settings on the desktop; at most MaxContextTokenBudget.
+func (s *ChatService) contextTokenBudget(ctx context.Context, providerID string) int {
+	if prefs := s.callerPreferences(ctx); prefs != nil {
+		if pc, ok := prefs.AI.Providers[providerID]; ok && pc.ContextTokenBudget > 0 {
+			return min(pc.ContextTokenBudget, MaxContextTokenBudget)
+		}
+	}
+	return defaultContextTokenBudget
+}
+
+// computeContextCore is the uncached scrub+BuildContext path — expensive per-block work identical across turns.
+// Without a caller (no ctx) the budget is the deployment's default one.
+func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
+	return s.computeContextCoreWith(provider, doc, scrubbedOrNil(doc), report, req, s.contextTokenBudget(context.Background(), provider.ID()))
+}
+
+// scrubbedOrNil is scrubOrSelf for a document that may be absent.
+func scrubbedOrNil(doc *models.FlowDocument) *models.FlowDocument {
+	if doc == nil {
+		return nil
+	}
+	return scrubOrSelf(doc)
+}
+
+// computeContextCoreWith is computeContextCore for a clone already scrubbed (shared via the doc cache) and a
+// budget already resolved (it is in the cache key).
+func (s *ChatService) computeContextCoreWith(provider ai.Provider, doc, scrubbedDoc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest, tokenBudget int) chatContextValue {
 	ctxReq := ai.ContextRequest{
 		Flow:               scrubbedDoc,
 		TokenBudget:        tokenBudget,
@@ -357,6 +407,8 @@ func (s *ChatService) computeContextCoreWith(provider ai.Provider, doc, scrubbed
 	if !req.ExcludeContext && req.ContextBlockID != "" && scrubbedDoc != nil && scrubbedDoc.BlocksByID != nil {
 		ctxReq.SelectedBlock = scrubbedDoc.BlocksByID[req.ContextBlockID]
 		ctxReq.SelectedSubflow = scrubbedDoc.BlockSubflow[req.ContextBlockID]
+		// Not even by its anchor (resolveContextBlock ran first): the model is told, not left without the section.
+		ctxReq.SelectedBlockMissing = ctxReq.SelectedBlock == nil
 	}
 	// Selected source files (desktop only). AST-scrubbed — the regex pass misses PAD password syntax — and byte-bounded.
 	if !req.ExcludeContext && len(req.SelectedSourceFiles) > 0 && s.flowCache != nil && doc != nil && doc.FilePath != "" {
@@ -629,6 +681,8 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 	}
 	model := newTurnModel(req, azure)
 
+	asked := req.ContextBlockID
+	req, blockStatus := resolveContextBlock(doc, req)
 	_, sysPrompt, contextText, guidelines := s.buildScrubbedContext(ctx, scope, provider, doc, report, req)
 	scrubbedUserMsg := scrubber.ScrubText(req.UserMessage)
 	if guidelines != "" {
@@ -638,13 +692,18 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 
 	total := provider.EstimateTokens(sysPrompt + contextText + scrubbedUserMsg)
 
-	return &models.ContextPreview{
+	res = &models.ContextPreview{
 		SystemPrompt:    sysPrompt,
 		ContextText:     contextText,
 		UserMessage:     scrubbedUserMsg,
 		EstimatedTokens: total,
 		ContextLimit:    ai.ContextLimitFor(ctx, provider, model.resolved),
-	}, nil
+		ContextBlock:    blockStatus,
+	}
+	if req.ContextBlockID != asked {
+		res.ContextBlockID = req.ContextBlockID
+	}
+	return res, nil
 }
 
 // systemPromptSuffix merges the caller's custom-instructions setting with the per-request override (server-side, tamper-proof).

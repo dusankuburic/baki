@@ -9,6 +9,7 @@ interface Props {
   contextBlockId: string | null
   blockName?: string
   blockType?: string
+  lostBlock?: string
   onClearBlock: () => void
   selectedBlockId: string | null
   onFocusBlock: (blockId: string) => void
@@ -21,6 +22,7 @@ export default function ChatContextBar({
   contextBlockId,
   blockName,
   blockType,
+  lostBlock,
   onClearBlock,
   selectedBlockId,
   onFocusBlock,
@@ -55,7 +57,8 @@ export default function ChatContextBar({
     ]
   }, [files, selected, selectedFiles, allSelected, onFilesChange, t])
 
-  const showScope = !!contextBlockId || !!selectedBlockId
+  // lostBlock is '' when the block went but nothing could name it; the notice still shows.
+  const showScope = !!contextBlockId || lostBlock !== undefined || !!selectedBlockId
   const showFiles = files.length > 0
   if (!showScope && !showFiles) return null
 
@@ -65,12 +68,29 @@ export default function ChatContextBar({
         <span className="flex items-center gap-1 max-w-full px-1.5 py-0.5 rounded-md bg-brand-500/10 border border-brand-500/20 text-2xs text-text-secondary">
           <Crosshair size={10} className="shrink-0 text-brand-400" />
           <span className="truncate" title={blockType ? `${blockName} (${blockType})` : blockName}>
-            {blockName || contextBlockId}
+            {blockName || t('context.blockNotInFlow')}
           </span>
           <button
             className="shrink-0 p-0.5 -mr-0.5 rounded hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors"
             onClick={onClearBlock}
             aria-label={t('a11y.clearContext')}
+          >
+            <X size={10} />
+          </button>
+        </span>
+      ) : lostBlock !== undefined ? (
+        <span
+          role="status"
+          className="flex items-center gap-1 max-w-full px-1.5 py-0.5 rounded-md border border-border-subtle text-2xs text-text-tertiary"
+        >
+          <Crosshair size={10} className="shrink-0" />
+          <span className="truncate">
+            {lostBlock ? t('context.blockLost', {name: lostBlock}) : t('context.blockLostUnnamed')}
+          </span>
+          <button
+            className="shrink-0 p-0.5 -mr-0.5 rounded hover:bg-surface-3 text-text-tertiary hover:text-text-secondary transition-colors"
+            onClick={onClearBlock}
+            aria-label={t('a11y.dismissBlockLost')}
           >
             <X size={10} />
           </button>

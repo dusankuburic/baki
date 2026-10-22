@@ -14,6 +14,7 @@ import (
 	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/egress"
 	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/apperr"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -73,8 +74,12 @@ const liveModelsGrace = 500 * time.Millisecond
 type ProviderService struct {
 	auth        *ai.GitHubAuth
 	copilotAuth *ai.CopilotAuth
-	factory     *ai.ProviderFactory
-	secrets     KeyStore
+	// githubExchange and copilotExchange are the token exchanges the device-flow polls make: auth's and
+	// copilotAuth's, unless WithDeviceTokenExchange stood in for GitHub.
+	githubExchange  DeviceTokenExchange
+	copilotExchange DeviceTokenExchange
+	factory         *ai.ProviderFactory
+	secrets         KeyStore
 	// orgKeys holds organisations' shared credentials; nil on the desktop and in local mode.
 	orgKeys OrgKeyStore
 	// azure is the Azure AI Foundry model registry; nil (tests) keeps the single-document behaviour.
@@ -112,6 +117,16 @@ func WithProfile(p capability.Profile) ProviderOption {
 	return func(s *ProviderService) { s.profile = p }
 }
 
+// DeviceTokenExchange is the upstream half of a device-flow poll: ai.GitHubAuth's and ai.CopilotAuth's PollToken.
+type DeviceTokenExchange interface {
+	PollToken(ctx context.Context, deviceCode string) (*ai.GitHubAuthResult, error)
+}
+
+// WithDeviceTokenExchange replaces the GitHub Models and Copilot token exchanges; a test stands in for GitHub with it.
+func WithDeviceTokenExchange(github, copilot DeviceTokenExchange) ProviderOption {
+	return func(s *ProviderService) { s.githubExchange, s.copilotExchange = github, copilot }
+}
+
 // WithProviderEvents lets the service announce the listing drops that no CredentialChanged announces (a key saved
 // through the GitHub or Copilot sign-in, the local and Azure configurations, an organisation's Azure credentials
 // disabled as a side effect of an admin's demotion) to the other replicas on bus. nil announces nothing.
@@ -124,13 +139,15 @@ func WithProviderEvents(bus *eventbus.Bus) ProviderOption {
 // single-document routes act on as resource "default" (nil keeps the single document).
 func NewProviderService(auth *ai.GitHubAuth, copilotAuth *ai.CopilotAuth, factory *ai.ProviderFactory, secrets KeyStore, orgKeys OrgKeyStore, azure *AzureModelService, opts ...ProviderOption) *ProviderService {
 	s := &ProviderService{
-		auth:        auth,
-		copilotAuth: copilotAuth,
-		factory:     factory,
-		secrets:     secrets,
-		orgKeys:     orgKeys,
-		azure:       azure,
-		modelCache:  make(map[cache.Key]modelCacheEntry),
+		auth:            auth,
+		copilotAuth:     copilotAuth,
+		githubExchange:  auth,
+		copilotExchange: copilotAuth,
+		factory:         factory,
+		secrets:         secrets,
+		orgKeys:         orgKeys,
+		azure:           azure,
+		modelCache:      make(map[cache.Key]modelCacheEntry),
 
 		invalidatedKeys:  make(map[cache.Key]invalidation),
 		invalidatedScope: make(map[string]invalidation),
@@ -151,6 +168,23 @@ const ProviderCodeUnknown = "PROVIDER_UNKNOWN"
 
 // ErrProviderUnknown is ai.ErrUnknownProvider as the services return it; match with errors.Is.
 var ErrProviderUnknown = ai.ErrUnknownProvider
+
+// Codes of a device-flow poll whose GitHub exchange succeeded but whose token the KeyStore refused. The device
+// code is spent, so the poll answers one of these rather than success, and the client shows the refusal instead of
+// switching to a provider with no credential; a retry starts a new flow. SECRET_STORAGE_UNAVAILABLE (503) is the
+// Azure routes' code for an unreachable secret service; DEVICE_TOKEN_NOT_STORED (500) is any other refusal.
+const (
+	ProviderCodeSecretStorageUnavailable = AzureCodeSecretStorageUnavailable
+	ProviderCodeDeviceTokenNotStored     = "DEVICE_TOKEN_NOT_STORED"
+)
+
+// deviceTokenNotStored is the poll's answer to a refused KeyStore save, with saveErr as its cause.
+func deviceTokenNotStored(saveErr error) error {
+	if errors.Is(saveErr, storage.ErrSecretStorageUnavailable) {
+		return apperr.Unavailable(ProviderCodeSecretStorageUnavailable, "signed in, but the token could not be stored: secret storage is unavailable").Wrap(saveErr)
+	}
+	return apperr.Internal(ProviderCodeDeviceTokenNotStored, "signed in, but the token could not be stored").Wrap(saveErr)
+}
 
 // azureListing is the Azure AI Foundry model registry as the azure-foundry spec's ai.ListingHook: the provider
 // is configured when the caller (or their organisation) holds a resource, and the picker lists the registry's
@@ -1066,18 +1100,17 @@ func (s *ProviderService) StartGitHubAuth(ctx context.Context) (resp *ai.DeviceA
 func (s *ProviderService) PollGitHubAuth(ctx context.Context, scope string, deviceCode string) (result *ai.GitHubAuthResult, err error) {
 	defer logger.Guard("App.PollGitHubAuth", &err)
 
-	result, err = s.auth.PollToken(ctx, deviceCode)
+	result, err = s.githubExchange.PollToken(ctx, deviceCode)
 	if err != nil {
 		return nil, err
 	}
 
 	if result.Status == "success" && result.Token != "" {
 		if saveErr := s.secrets.Save(scope, primaryKey(ai.GitHubModelsProviderID), result.Token); saveErr != nil {
-			logger.Error("failed to save github token", "error", saveErr)
-		} else {
-			// A replacement token may carry other entitlements: drop the previous token's cached listing (mirrors Revoke).
-			s.invalidateModelsEverywhere(scope, ai.GitHubModelsProviderID)
+			return nil, deviceTokenNotStored(saveErr)
 		}
+		// A replacement token may carry other entitlements: drop the previous token's cached listing (mirrors Revoke).
+		s.invalidateModelsEverywhere(scope, ai.GitHubModelsProviderID)
 		result.Token = ""
 	}
 
@@ -1115,18 +1148,17 @@ func (s *ProviderService) StartCopilotAuth(ctx context.Context) (resp *ai.Device
 func (s *ProviderService) PollCopilotAuth(ctx context.Context, scope string, deviceCode string) (result *ai.GitHubAuthResult, err error) {
 	defer logger.Guard("App.PollCopilotAuth", &err)
 
-	result, err = s.copilotAuth.PollToken(ctx, deviceCode)
+	result, err = s.copilotExchange.PollToken(ctx, deviceCode)
 	if err != nil {
 		return nil, err
 	}
 
 	if result.Status == "success" && result.Token != "" {
 		if saveErr := s.secrets.Save(scope, oauthTokenKey(ai.CopilotProviderID), result.Token); saveErr != nil {
-			logger.Error("failed to save copilot oauth token", "error", saveErr)
-		} else {
-			// A replacement token may carry other entitlements: drop the previous token's cached listing (mirrors Revoke).
-			s.invalidateModelsEverywhere(scope, ai.CopilotProviderID)
+			return nil, deviceTokenNotStored(saveErr)
 		}
+		// A replacement token may carry other entitlements: drop the previous token's cached listing (mirrors Revoke).
+		s.invalidateModelsEverywhere(scope, ai.CopilotProviderID)
 		result.Token = ""
 		// Pre-warm the Copilot session-token cache so the first chat turn doesn't pay the exchange RTT.
 		s.preWarmCopilot(scope)

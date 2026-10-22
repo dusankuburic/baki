@@ -26,6 +26,16 @@ POST /api/v1/admin/scanner/scan | kind=endpoint pattern=/api/admin/scanner/scan 
 POST /api/./admin/scanner/scan | kind=endpoint pattern=/api/admin/scanner/scan auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/scanner/scan
 POST /api/admin/scanner/scan/ | kind=endpoint pattern=/api/admin/scanner/scan auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/scanner/scan
 OPTIONS /api/admin/scanner/scan | kind=method-not-allowed pattern=/api/admin/scanner/scan auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/admin/scanner/scan allow=POST
+GET /api/admin/settings/ai | kind=endpoint pattern=/api/admin/settings/ai auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/settings/ai
+GET /api/v1/admin/settings/ai | kind=endpoint pattern=/api/admin/settings/ai auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/settings/ai
+GET /api/./admin/settings/ai | kind=endpoint pattern=/api/admin/settings/ai auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/settings/ai
+GET /api/admin/settings/ai/ | kind=endpoint pattern=/api/admin/settings/ai auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/settings/ai
+HEAD /api/admin/settings/ai | kind=method-not-allowed pattern=/api/admin/settings/ai auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/admin/settings/ai allow=GET,PUT
+OPTIONS /api/admin/settings/ai | kind=method-not-allowed pattern=/api/admin/settings/ai auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/admin/settings/ai allow=GET,PUT
+PUT /api/admin/settings/ai | kind=endpoint pattern=/api/admin/settings/ai auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/settings/ai
+PUT /api/v1/admin/settings/ai | kind=endpoint pattern=/api/admin/settings/ai auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/settings/ai
+PUT /api/./admin/settings/ai | kind=endpoint pattern=/api/admin/settings/ai auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/settings/ai
+PUT /api/admin/settings/ai/ | kind=endpoint pattern=/api/admin/settings/ai auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/settings/ai
 GET /api/admin/system/health | kind=endpoint pattern=/api/admin/system/health auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/system/health
 GET /api/v1/admin/system/health | kind=endpoint pattern=/api/admin/system/health auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/system/health
 GET /api/./admin/system/health | kind=endpoint pattern=/api/admin/system/health auth=jwt scopes=admin ratelimit=general tx=tx deadline=default label=/api/admin/system/health

@@ -1,5 +1,5 @@
 import {useTranslation} from 'react-i18next'
-import {useEffect, useRef, useState} from 'react'
+import {useEffect, useId, useRef, useState} from 'react'
 import type {ComponentType} from 'react'
 import {FIX_DECISION_WINDOW_S} from '@/lib/constants'
 import type {ApprovalCard as ApprovalCardState} from '@/stores/chatStore'
@@ -10,6 +10,8 @@ import GenericPreview from './previews/GenericPreview'
 interface ApprovalCardProps {
   approval: ApprovalCardState
   onRespond: (approved: boolean, proposalId?: string, excludedItemIndices?: number[]) => void
+  // The flow can't take the change: Approve is disabled and says why (the engine declines a stray approve).
+  readOnly?: boolean
 }
 
 const DECISION_WINDOW_S = FIX_DECISION_WINDOW_S
@@ -27,7 +29,7 @@ function previewKindOf(approval: ApprovalCardState): string {
   return approval.previewKind || DEFAULT_PREVIEW_KIND
 }
 
-export default function ApprovalCard({approval, onRespond}: ApprovalCardProps) {
+export default function ApprovalCard({approval, onRespond, readOnly = false}: ApprovalCardProps) {
   const {t} = useTranslation('chat')
   const kind = previewKindOf(approval)
   const Preview = Object.prototype.hasOwnProperty.call(PREVIEWS, kind) ? PREVIEWS[kind]! : GenericPreview
@@ -36,6 +38,7 @@ export default function ApprovalCard({approval, onRespond}: ApprovalCardProps) {
   const statusText = t(`${copy}.status.${approval.status}`, {defaultValue: ''})
   const batch = approval.items.length > 1
   const cardRef = useRef<HTMLDivElement>(null)
+  const readOnlyId = useId()
   const [startedAt] = useState(() => approval.receivedAt ?? Date.now())
   const [remaining, setRemaining] = useState(() => secondsLeft(startedAt))
   const [excluded, setExcluded] = useState<Set<number>>(new Set())
@@ -84,7 +87,9 @@ export default function ApprovalCard({approval, onRespond}: ApprovalCardProps) {
       : t('fixCard.announce')
     : t('approvalCard.announce', {tool: approval.tool})
   const approveLabel = batch ? t(`${copy}.approveBatch`, {count: includedCount}) : t(`${copy}.approve`)
-  const showMessage = !!approval.message && (approval.status === 'error' || approval.status === 'cancelled')
+  const showMessage =
+    !!approval.message &&
+    (approval.status === 'error' || approval.status === 'cancelled' || approval.status === 'declined')
 
   return (
     <div
@@ -113,30 +118,38 @@ export default function ApprovalCard({approval, onRespond}: ApprovalCardProps) {
       />
 
       {pending ? (
-        <div className="mt-2 flex items-center gap-2">
-          <button
-            type="button"
-            className="rounded bg-brand-600 px-3 py-1 text-2xs font-medium text-brand-foreground transition-colors hover:bg-brand-700 disabled:opacity-50"
-            onClick={() => onRespond(true, approval.proposalId, batch ? [...excluded] : undefined)}
-            disabled={batch && includedCount === 0}
-          >
-            {approveLabel}
-          </button>
-          <button
-            type="button"
-            className="rounded border border-border-default bg-surface-3 px-3 py-1 text-2xs font-medium text-text-secondary transition-colors hover:bg-surface-4 hover:text-text-primary disabled:opacity-50"
-            onClick={() => onRespond(false, approval.proposalId)}
-          >
-            {t(`${copy}.dismiss`)}
-          </button>
-          <span
-            className={remaining <= 10 ? 'text-2xs text-semantic-warning' : 'text-2xs text-text-tertiary/70'}
-            aria-live="off"
-            title={t('fixCard.expiryTitle')}
-          >
-            {remaining > 0 ? t('fixCard.secondsToDecide', {count: remaining}) : t('fixCard.expiring')}
-          </span>
-        </div>
+        <>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded bg-brand-600 px-3 py-1 text-2xs font-medium text-brand-foreground transition-colors hover:bg-brand-700 disabled:opacity-50"
+              onClick={() => onRespond(true, approval.proposalId, batch ? [...excluded] : undefined)}
+              disabled={readOnly || (batch && includedCount === 0)}
+              aria-describedby={readOnly ? readOnlyId : undefined}
+            >
+              {approveLabel}
+            </button>
+            <button
+              type="button"
+              className="rounded border border-border-default bg-surface-3 px-3 py-1 text-2xs font-medium text-text-secondary transition-colors hover:bg-surface-4 hover:text-text-primary disabled:opacity-50"
+              onClick={() => onRespond(false, approval.proposalId)}
+            >
+              {t(`${copy}.dismiss`)}
+            </button>
+            <span
+              className={remaining <= 10 ? 'text-2xs text-semantic-warning' : 'text-2xs text-text-tertiary/70'}
+              aria-live="off"
+              title={t('fixCard.expiryTitle')}
+            >
+              {remaining > 0 ? t('fixCard.secondsToDecide', {count: remaining}) : t('fixCard.expiring')}
+            </span>
+          </div>
+          {readOnly && (
+            <p id={readOnlyId} className="mt-1 text-2xs text-text-tertiary">
+              {t('fixCard.readOnly')}
+            </p>
+          )}
+        </>
       ) : (
         statusText && (
           <p

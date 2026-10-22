@@ -113,6 +113,8 @@ var stateRegistry = []stateEntry{
 	// --- internal/rag
 	{"internal/rag/service.go", "KnowledgeService", stateComposite, "the knowledge base: see the field entries", ""},
 	{"internal/rag/service.go", "KnowledgeService.orgLocks", stateShared, "the in-process TryLock is the cheap busy answer; the exclusion across replicas is a lock.Leaser lease per org over the upload and the re-index (knowledge_lock.go)", "TestKnowledgeLock_LeaseIsOnTheOrgsKey"},
+	{"internal/rag/service.go", "KnowledgeService.widthMismatches", stateReplicaLocal, "the listing's memo of the width this replica's embedder produced last when it is not the configured one; the listing re-measures from the stored chunks when the memo is empty, so another replica's re-index ends the report", ""},
+	{"internal/rag/service.go", "KnowledgeService.widthWarned", stateReplicaLocal, "this replica's once-per-org gate on the embedding-width warning: each replica logs the mismatch once", ""},
 
 	// --- internal/scanner
 	{"internal/scanner/scanner.go", "Scanner", stateComposite, "the governance sweep: see the field entries", ""},

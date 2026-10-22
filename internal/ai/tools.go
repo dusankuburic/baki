@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -295,7 +296,7 @@ func buildToolRegistry() map[string]ToolSpec {
 		Label: "Listing findings",
 		Def: ToolDefinition{
 			Name:        "list_findings",
-			Description: "List analysis findings, optionally filtered by category (e.g. Security, Reliability, Performance) and/or subflow ID. Each line carries the ruleId, the finding key (usable as a finding:<key> link for the user), and the fix type when auto-fixable — use those with propose_fix/apply_fix. A line marked stage=preview comes from a preview rule: reported, but it never fails a CI gate or policy and is left out of the health score. Results are paginated: pass offset to page through everything. Requires analysis to be available.",
+			Description: "List analysis findings, optionally filtered by category (e.g. Security, Reliability, Performance) and/or subflow ID. Each line carries the ruleId, the finding key (usable as a finding:<key> link for the user), and the fix type when auto-fixable — use those with propose_fix/apply_fix. A line marked stage=preview comes from a preview rule: reported, but it never fails a CI gate or policy and is left out of the health score. Results are paginated: when more remain, the FIRST line says how many and which offset to pass for the next page. Requires analysis to be available.",
 			InputSchema: schema(`{"type":"object","properties":{"category":{"type":"string"},"subflowId":{"type":"string"},"offset":{"type":"integer","description":"Skip the first N matching findings (pagination)"}}}`),
 		},
 		Exec: toolListFindings,
@@ -498,6 +499,11 @@ func toolListFindings(tctx ToolContext, input json.RawMessage) (string, error) {
 		return "analysis not available", nil
 	}
 	report, err := tctx.Analysis.AnalyzeFlow(tctx.Ctx, tctx.analysisDoc())
+	if err != nil && tctx.Ctx != nil && tctx.Ctx.Err() != nil {
+		// The tool's deadline (or the turn) ended the analysis: ExecuteTool reports it as a timeout. Answering
+		// with the sentinel below made it look like a flow with no analysis.
+		return "", tctx.Ctx.Err()
+	}
 	if err != nil || report == nil {
 		return "analysis not available", nil
 	}
@@ -516,10 +522,14 @@ func toolListFindings(tctx ToolContext, input json.RawMessage) (string, error) {
 			continue
 		}
 		// Titles can embed evidence from the REAL doc's properties — ScrubText before the string leaves the
-		// server. The finding key lets the model emit finding:<key> deep links.
-		line := fmt.Sprintf("[%s/%s] %s: %s — block=%s subflow=%s",
+		// server. The finding key lets the model emit finding:<key> deep links. A subflow filter makes the
+		// subflow the same on every line, so its 36-character id is left out.
+		line := fmt.Sprintf("[%s/%s] %s: %s — block=%s",
 			f.Severity, firstNonEmpty(f.Category, "uncategorized"), f.RuleID,
-			scrubber.ScrubText(f.Title), f.BlockID, f.SubflowID)
+			scrubber.ScrubText(f.Title), f.BlockID)
+		if in.SubflowID == "" {
+			line += " subflow=" + f.SubflowID
+		}
 		if f.Fingerprint != "" {
 			line += fmt.Sprintf(" key=%s", f.Fingerprint)
 		}
@@ -534,25 +544,37 @@ func toolListFindings(tctx ToolContext, input json.RawMessage) (string, error) {
 	if len(matching) == 0 {
 		return "No findings match the filter.", nil
 	}
-	end := in.Offset + maxFindingsPerPage
-	if end > len(matching) {
-		end = len(matching)
-	}
 	if in.Offset >= len(matching) {
 		return fmt.Sprintf("offset %d is beyond the %d matching finding(s).", in.Offset, len(matching)), nil
 	}
-	page := matching[in.Offset:end]
-	out := fmt.Sprintf("%d finding(s) (showing %d-%d of %d):\n%s",
-		len(page), in.Offset+1, end, len(matching), strings.Join(page, "\n"))
-	if end < len(matching) {
-		out += fmt.Sprintf("\n…and %d more — call again with offset=%d.", len(matching)-end, end)
+	// The page ends at whichever comes first: maxFindingsPerPage lines or listFindingsPageBytes. A page sized by
+	// count alone ran to 8-10 KB on real ids and titles, and ExecuteTool's cap cut its tail — findings and the
+	// continuation hint with them. At least one line always goes out, so the offset advances.
+	end, size := in.Offset, 0
+	for end < len(matching) && end-in.Offset < maxFindingsPerPage {
+		next := size + len(matching[end]) + 1
+		if end > in.Offset && next > listFindingsPageBytes {
+			break
+		}
+		size = next
+		end++
 	}
-	return out, nil
+	page := matching[in.Offset:end]
+	// The continuation goes in the first line, where no truncation can reach it.
+	header := fmt.Sprintf("%d finding(s) (showing %d-%d of %d)", len(page), in.Offset+1, end, len(matching))
+	if end < len(matching) {
+		header += fmt.Sprintf(" — %d more: call again with offset=%d", len(matching)-end, end)
+	}
+	return header + ":\n" + strings.Join(page, "\n"), nil
 }
 
 // maxFindingsPerPage bounds one list_findings page. 40 keeps a page readable
 // (and cheap) while the offset parameter lets the model enumerate everything.
 const maxFindingsPerPage = 40
+
+// listFindingsPageBytes bounds a page's lines so the page, header included, stays under maxToolResultBytes and
+// is never truncated.
+const listFindingsPageBytes = maxToolResultBytes - 400
 
 func toolGetVariableLineage(tctx ToolContext, input json.RawMessage) (string, error) {
 	var in struct {
@@ -587,6 +609,58 @@ type fixTargetInput struct {
 	RuleID  string `json:"ruleId"`
 }
 
+// FixTargetIdentities names the findings an apply_fix/apply_fixes call targets by what they are, not where
+// they are: the rule and the block's anchor (subflow, action type, name, and its place among the blocks of
+// that type and name) — no block ID and no line number, since an applied fix re-parses the flow, minting new
+// IDs and shifting every line below it (a finding's fingerprint includes the line). The tool loop keys user
+// declines by it, so a declined fix stays declined after another fix lands. The parser names a generic action
+// from its type, so a subflow's HTTP actions are all "Invoke Url": the anchor's ordinal keeps their declines
+// apart, and a fix that removes one of them changes the count, which costs one re-ask at most. Targets the
+// current analysis cannot resolve are left out; nil for any other tool.
+func FixTargetIdentities(tctx ToolContext, name string, input json.RawMessage) []string {
+	var targets []fixTargetInput
+	switch name {
+	case "apply_fix":
+		var in fixTargetInput
+		if json.Unmarshal(input, &in) != nil {
+			return nil
+		}
+		targets = []fixTargetInput{in}
+	case "apply_fixes":
+		var in struct {
+			Targets []fixTargetInput `json:"targets"`
+		}
+		if json.Unmarshal(input, &in) != nil {
+			return nil
+		}
+		targets = in.Targets
+	default:
+		return nil
+	}
+	if tctx.Analysis == nil || tctx.Doc == nil {
+		return nil
+	}
+	doc := tctx.analysisDoc()
+	report, err := tctx.Analysis.AnalyzeFlow(tctx.Ctx, doc)
+	if err != nil || report == nil {
+		return nil
+	}
+	var out []string
+	for _, t := range targets {
+		for i := range report.Findings {
+			f := &report.Findings[i]
+			if f.BlockID != t.BlockID || f.RuleID != t.RuleID {
+				continue
+			}
+			if a := doc.AnchorOf(f.BlockID); a != nil {
+				out = append(out, strings.Join([]string{f.RuleID, a.Subflow, a.RawType, a.Name, strconv.Itoa(a.Ordinal), strconv.Itoa(a.Count)}, "\x00"))
+			}
+			break
+		}
+	}
+	return out
+}
+
 // resolveFixTarget finds the finding (and its block) for a blockId+ruleId pair, returning a model-readable
 // explanation when the reference doesn't resolve or isn't auto-fixable. The finding comes from REAL-doc
 // analysis (value-dependent rules see the true properties); the block comes from the scrubbed Doc so the
@@ -599,6 +673,10 @@ func resolveFixTarget(tctx ToolContext, in fixTargetInput) (*models.Finding, *mo
 		return nil, nil, "analysis not available — ask the user to run an analysis first"
 	}
 	report, err := tctx.Analysis.AnalyzeFlow(tctx.Ctx, tctx.analysisDoc())
+	if err != nil && tctx.Ctx != nil && tctx.Ctx.Err() != nil {
+		// An "error:" answer is retryable (the loop memory does not pin it); the sentinel below is not.
+		return nil, nil, "error: the analysis did not finish in time — try the call again"
+	}
 	if err != nil || report == nil {
 		return nil, nil, "analysis not available"
 	}

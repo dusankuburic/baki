@@ -4,6 +4,7 @@ import LiveToolTrail from '../LiveToolTrail'
 import StreamingBubble from '../StreamingBubble'
 import type {ChatStreamEngine} from '../hooks/useChatStreamEngine'
 import type {ApprovalCard as ApprovalCardState} from '@/stores/chatStore'
+import {useFlowStore} from '@/stores/flowStore'
 
 export function useStreamFooter(deps: {
   showThinking: boolean
@@ -13,6 +14,7 @@ export function useStreamFooter(deps: {
   respondFixProposal: ChatStreamEngine['respondFixProposal']
 }) {
   const {showThinking, isCurrentThreadStreaming, approvals, activeThreadId, respondFixProposal} = deps
+  const readOnly = useFlowStore(s => s.readOnly)
   return useMemo(
     () => (
       <>
@@ -30,6 +32,7 @@ export function useStreamFooter(deps: {
             <ApprovalCard
               key={card.proposalId}
               approval={card}
+              readOnly={readOnly}
               onRespond={(approved, proposalId, excludedItemIndices) =>
                 respondFixProposal(activeThreadId, approved, proposalId, excludedItemIndices)
               }
@@ -37,6 +40,6 @@ export function useStreamFooter(deps: {
           ))}
       </>
     ),
-    [showThinking, isCurrentThreadStreaming, approvals, activeThreadId, respondFixProposal],
+    [showThinking, isCurrentThreadStreaming, approvals, activeThreadId, respondFixProposal, readOnly],
   )
 }

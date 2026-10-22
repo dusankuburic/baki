@@ -882,7 +882,13 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			}
 		}
 
-		aiReq, scrubbedDoc, ok, err := s.buildStreamRequest(ctx, ts, scope, doc, report, req)
+		// The context block found again by its anchor after a re-parse, or a row saying it is gone. A copy: req's
+		// ContextBlockID stays the conversation's (legacy) history key and what its messages record.
+		ctxReq, blockStatus := resolveContextBlock(doc, req)
+		if blockStatus == contextBlockMissing {
+			emit("tool", contextBlockMissingNotice())
+		}
+		aiReq, scrubbedDoc, ok, err := s.buildStreamRequest(ctx, ts, scope, doc, report, ctxReq)
 		if err != nil {
 			msg := "conversation is too long for this model's context window — start a new conversation or remove some history"
 			fail(ChatErrContextLimit, msg, false) // a context limit is not the org's to fix
@@ -911,6 +917,9 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 					tctx.Doc = fresh
 				}
 			}); ap != nil {
+				if fa, ok := ap.(*chatFixApplier); ok && blockStatus == contextBlockResolved {
+					fa.groundOn(doc, ctxReq.ContextBlockID)
+				}
 				tctx.Fixes = ap
 			}
 			// The session's gate: what this actor may run decides what the model is offered, and ExecuteTool
@@ -1185,12 +1194,21 @@ func (s *ChatService) runToolLoop(
 	mem := newLoopToolMemory()
 	// pin is the current turn's index in msgs; truncation never drops it and reports where it moved.
 	pin := len(msgs) - 1
-	for i := 0; i < maxToolIterations; i++ {
+	refunds := 0
+	// i == maxToolIterations is the one extra turn after the last step: told tools are over, the model turns
+	// what the steps gathered into an answer instead of the turn failing with everything it paid for.
+	for i := 0; i <= maxToolIterations; i++ {
+		final := i == maxToolIterations
+		// The note goes on this pass's copy of the request: a tools-unsupported retry re-enters the same pass.
+		stepBase := base
+		if final {
+			stepBase.SystemPrompt = withStepLimitNote(base.SystemPrompt)
+		}
 		recordChatToolIteration()
 		if !st.recheckBudget() {
 			return
 		}
-		turn, newPin, ok := st.trimmedTurn(base, msgs, pin)
+		turn, newPin, ok := st.trimmedTurn(stepBase, msgs, pin)
 		if !ok {
 			return
 		}
@@ -1304,6 +1322,12 @@ func (s *ChatService) runToolLoop(
 				st.failUsage(ChatErrOutputLimit, outputLimitMsg, false, st.totalIn, st.totalOut, st.lastServed)
 				return
 			}
+			if final && strings.TrimSpace(turnText.String()) == "" {
+				// Told not to call tools, a model that meant only to call one may say nothing: a done with
+				// nothing after the tool trail would read as an answer.
+				st.failUsage(ChatErrToolLoopLimit, stepLimitNoAnswerMessage, false, st.totalIn, st.totalOut, st.lastServed)
+				return
+			}
 			if !st.ensureStarted() {
 				return
 			}
@@ -1314,6 +1338,20 @@ func (s *ChatService) runToolLoop(
 		if truncatedToolTurn(turnCalls, turnFinish) {
 			// Cut mid-call at the output limit: running a call with incomplete arguments acts on something unfinished.
 			st.failUsage(ChatErrOutputLimit, outputLimitMsg, false, st.totalIn, st.totalOut, st.lastServed)
+			return
+		}
+		if final {
+			// Still calling tools after the step limit: nothing more runs. Text written alongside the calls is
+			// the answer the note asked for (it already streamed), so it stands and the trail says what was skipped.
+			if strings.TrimSpace(turnText.String()) == "" {
+				st.failUsage(ChatErrToolLoopLimit, stepLimitMessage, false, st.totalIn, st.totalOut, st.lastServed)
+				return
+			}
+			if !st.ensureStarted() {
+				return
+			}
+			emit("tool", stepLimitSkippedNotice(len(turnCalls)))
+			st.emitDone()
 			return
 		}
 
@@ -1333,12 +1371,50 @@ func (s *ChatService) runToolLoop(
 			assistant.ProviderItemsFrom = provider.ID()
 		}
 		msgs = append(msgs, assistant)
+		docBefore := currentDoc(tctx)
 		for _, r := range s.execTurnTools(emit, ctl, st.ensureStarted, mem, tctx, turnCalls) {
 			msgs = append(msgs, ai.Message{Role: "tool", Content: r.result, ToolCallID: r.id})
 		}
+		if currentDoc(tctx) != docBefore && refunds < maxAppliedStepRefunds {
+			// An approved fix landed (the document was replaced): that step was the user's decision, and the
+			// model has to list again before referencing any block, so neither may use up the answer's steps.
+			refunds++
+			i--
+		}
 	}
 
-	st.fail(ChatErrToolLoopLimit, fmt.Sprintf("tool loop exceeded %d iterations without a final answer", maxToolIterations), false)
+	st.failUsage(ChatErrToolLoopLimit, stepLimitMessage, false, st.totalIn, st.totalOut, st.lastServed)
+}
+
+// maxAppliedStepRefunds bounds how many steps approved fixes give back in one turn; spend stays bounded by the
+// budget re-check each step, and every apply waited on a human.
+const maxAppliedStepRefunds = 10
+
+// stepLimitNote is added to the system prompt of the turn that follows the last tool step.
+const stepLimitNote = "The tool step limit for this turn is reached: do not call any more tools. Answer the user now from the results you already have, and say plainly what is left undone."
+
+// stepLimitMessage ends a turn whose model kept calling tools, and wrote nothing else, after stepLimitNote;
+// stepLimitNoAnswerMessage one whose model obeyed it but answered nothing.
+var (
+	stepLimitMessage         = fmt.Sprintf("the step limit ended the turn: the model was still calling tools after %d tool steps", maxToolIterations)
+	stepLimitNoAnswerMessage = fmt.Sprintf("the step limit ended the turn: the model gave no answer after %d tool steps", maxToolIterations)
+)
+
+func withStepLimitNote(system string) string {
+	if system == "" {
+		return stepLimitNote
+	}
+	return system + "\n\n" + stepLimitNote
+}
+
+// stepLimitSkippedNotice is the trail row for the tool calls a final turn made alongside its answer: the answer
+// stands, the calls do not run.
+func stepLimitSkippedNotice(calls int) map[string]interface{} {
+	label := fmt.Sprintf("The tool step limit is reached — %d more tool calls skipped", calls)
+	if calls == 1 {
+		label = "The tool step limit is reached — one more tool call skipped"
+	}
+	return map[string]interface{}{"name": "step_limit_reached", "label": label}
 }
 
 // withoutProviderItems returns msgs with replay records removed (a fresh slice when any carried one, else msgs itself).
@@ -1396,12 +1472,18 @@ func (s *ChatService) runPromptToolLoop(
 	out := newScrubbedEmitter(ctl, emit)
 	mem := newLoopToolMemory()
 	pin := len(msgs) - 1 // the current turn (see runToolLoop)
-	for i := 0; i < maxToolIterations; i++ {
+	refunds := 0
+	for i := 0; i <= maxToolIterations; i++ { // the last pass is the final answer (see runToolLoop)
+		final := i == maxToolIterations
+		stepBase := base
+		if final {
+			stepBase.SystemPrompt = withStepLimitNote(base.SystemPrompt)
+		}
 		recordChatToolIteration()
 		if !st.recheckBudget() {
 			return
 		}
-		turn, newPin, ok := st.trimmedTurn(base, msgs, pin)
+		turn, newPin, ok := st.trimmedTurn(stepBase, msgs, pin)
 		if !ok {
 			return
 		}
@@ -1467,6 +1549,11 @@ func (s *ChatService) runPromptToolLoop(
 				st.failUsage(ChatErrOutputLimit, outputLimitMsg, false, st.totalIn, st.totalOut, st.lastServed)
 				return
 			}
+			if final && strings.TrimSpace(cleanText) == "" {
+				// An empty final answer after the note (see runToolLoop).
+				st.failUsage(ChatErrToolLoopLimit, stepLimitNoAnswerMessage, false, st.totalIn, st.totalOut, st.lastServed)
+				return
+			}
 			if !st.ensureStarted() {
 				return
 			}
@@ -1474,6 +1561,22 @@ func (s *ChatService) runPromptToolLoop(
 				out.text(cleanText)
 				out.flush()
 			}
+			st.emitDone()
+			return
+		}
+		if final {
+			// Still emitting tool calls after the step limit: nothing more runs. The text around the markers is
+			// the answer the note asked for (see runToolLoop); unlike there, it has not streamed yet.
+			if strings.TrimSpace(cleanText) == "" {
+				st.failUsage(ChatErrToolLoopLimit, stepLimitMessage, false, st.totalIn, st.totalOut, st.lastServed)
+				return
+			}
+			if !st.ensureStarted() {
+				return
+			}
+			out.text(cleanText)
+			out.flush()
+			emit("tool", stepLimitSkippedNotice(len(calls)))
 			st.emitDone()
 			return
 		}
@@ -1487,6 +1590,7 @@ func (s *ChatService) runPromptToolLoop(
 		msgs = append(msgs, ai.Message{Role: "assistant", Content: full})
 		// Results go back as a USER message with <tool_result> markers: a bare role:"tool" is schema-invalid here.
 		var results strings.Builder
+		docBefore := currentDoc(tctx)
 		for _, tc := range calls {
 			if !st.ensureStarted() {
 				return
@@ -1501,9 +1605,13 @@ func (s *ChatService) runPromptToolLoop(
 			fmt.Fprintf(&results, "<tool_result name=%q>\n%s\n</tool_result>\n", tc.Name, result)
 		}
 		msgs = append(msgs, ai.Message{Role: "user", Content: results.String()})
+		if currentDoc(tctx) != docBefore && refunds < maxAppliedStepRefunds {
+			refunds++ // an approved fix landed: see runToolLoop
+			i--
+		}
 	}
 
-	st.fail(ChatErrToolLoopLimit, fmt.Sprintf("tool loop exceeded %d iterations without a final answer", maxToolIterations), false)
+	st.failUsage(ChatErrToolLoopLimit, stepLimitMessage, false, st.totalIn, st.totalOut, st.lastServed)
 }
 
 // toolSummary derives the one-line summary of a tool_result; it inherits the scrubbed document's scrubbing.
@@ -1637,25 +1745,31 @@ func emitToolResult(emit func(string, map[string]interface{}), name, result stri
 	})
 }
 
-func (s *ChatService) GetSuggestedPrompts(hasBlock, hasFindings bool) (prompts []string, err error) {
+// GetSuggestedPrompts returns the caller's own prompt lists (their document in cloud, the deployment's on the
+// desktop); a list they have not set falls back to the default one, never to nothing.
+func (s *ChatService) GetSuggestedPrompts(ctx context.Context, hasBlock, hasFindings bool) (prompts []string, err error) {
 	defer logger.Guard("App.GetSuggestedPrompts", &err)
 
-	settings := s.settings.Get()
+	settings := s.callerPreferences(ctx)
 	if settings == nil {
 		return nil, fmt.Errorf("settings not found")
 	}
 
-	p := settings.AI.Prompts
-
-	if hasBlock && hasFindings {
-		prompts = append(prompts, p.BlockWithFindings...)
-	} else if hasFindings {
-		prompts = append(prompts, p.Finding...)
-	} else if hasBlock {
-		prompts = append(prompts, p.Block...)
-	} else {
-		prompts = append(prompts, p.Flow...)
+	pick := func(p models.AIPromptsConfig) []string {
+		switch {
+		case hasBlock && hasFindings:
+			return p.BlockWithFindings
+		case hasFindings:
+			return p.Finding
+		case hasBlock:
+			return p.Block
+		default:
+			return p.Flow
+		}
 	}
-
-	return prompts, nil
+	prompts = pick(settings.AI.Prompts)
+	if len(prompts) == 0 {
+		prompts = pick(models.DefaultSettings().AI.Prompts)
+	}
+	return append([]string(nil), prompts...), nil
 }

@@ -7,6 +7,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
+	"pad-core/models"
 )
 
 // fixDeclinedMarker is the stable prefix of the model-facing result for a user-declined
@@ -20,25 +21,52 @@ const fixDeclinedMarker = "the user DECLINED"
 // result with a "change tactic" note. Fix tools additionally remember user DECLINES and
 // refuse to re-request the same approval (the prompt-level "do not call apply_fix again"
 // note was the only enforcement before).
+//
+// The cache is valid for one document. An approved fix re-parses the flow and swaps the
+// tool context's document (onDocReplaced): from then on every cached read describes a flow
+// that no longer exists — the old listing names block IDs the re-parse retired — so the
+// cache is dropped. Declines are not: they are kept by finding identity, which survives the
+// re-parse, as well as by raw arguments.
 type loopToolMemory struct {
 	mu       sync.Mutex
-	results  map[string]string // signature -> first result
-	declined map[string]bool   // fix-tool signature -> user declined
+	doc      *models.FlowDocument // the document the cached results were computed against
+	results  map[string]string    // signature -> first result
+	declined map[string]bool      // fix-tool signature, or a finding identity (ai.FixTargetIdentities) -> user declined
 }
 
 func newLoopToolMemory() *loopToolMemory {
 	return &loopToolMemory{results: map[string]string{}, declined: map[string]bool{}}
 }
 
-// exec runs one tool call through the repetition guard. Signature is the tool name +
-// raw input JSON: identical args means the model gained nothing since the last identical
-// call (docs are content-addressed per turn; only applies mutate the doc, and those
-// re-resolve to "no finding" naturally once the re-parse changes IDs).
+// cacheable reports whether a result may answer an identical call later: a failure ("error:…") or the
+// no-analysis sentinel may not be the answer next time, and pinning it made a retry pointless.
+func cacheable(result string) bool {
+	return !strings.HasPrefix(result, "error:") && !strings.HasPrefix(result, "analysis not available")
+}
+
+// currentDoc is the document the tool context reads, the real one when the scrubbed copy has one.
+func currentDoc(tctx *ai.ToolContext) *models.FlowDocument {
+	if tctx.RealDoc != nil {
+		return tctx.RealDoc
+	}
+	return tctx.Doc
+}
+
+// exec runs one tool call through the repetition guard. Signature is the tool name + raw input JSON:
+// identical args on the same document means the model gained nothing since the last identical call.
 func (m *loopToolMemory) exec(name string, input json.RawMessage, tctx *ai.ToolContext) string {
 	sig := name + "\x00" + string(input)
+	var identities []string
+	if ai.ToolRequiresApproval(name) {
+		identities = ai.FixTargetIdentities(*tctx, name, input)
+	}
 
 	m.mu.Lock()
-	if ai.ToolRequiresApproval(name) && m.declined[sig] {
+	if doc := currentDoc(tctx); doc != m.doc {
+		m.doc = doc
+		clear(m.results)
+	}
+	if ai.ToolRequiresApproval(name) && (m.declined[sig] || m.allDeclined(identities)) {
 		m.mu.Unlock()
 		const out = "error: the user already DECLINED this exact fix — nothing was changed. Do not propose it again unless they explicitly ask; explain the change or move on."
 		recordChatToolResult(metricToolLabel(name), false)
@@ -63,12 +91,31 @@ func (m *loopToolMemory) exec(name string, input json.RawMessage, tctx *ai.ToolC
 	recordChatToolResult(metricToolLabel(name), !strings.HasPrefix(result, "error:"))
 
 	m.mu.Lock()
-	m.results[sig] = result
+	if cacheable(result) {
+		m.results[sig] = result
+	}
 	if ai.ToolRequiresApproval(name) && strings.Contains(result, fixDeclinedMarker) {
 		m.declined[sig] = true
+		for _, id := range identities {
+			m.declined[id] = true
+		}
 	}
 	m.mu.Unlock()
 	return result
+}
+
+// allDeclined reports whether every finding a fix call targets was declined before; m.mu held. A batch that
+// adds a finding the user has not seen asks again.
+func (m *loopToolMemory) allDeclined(identities []string) bool {
+	if len(identities) == 0 {
+		return false
+	}
+	for _, id := range identities {
+		if !m.declined[id] {
+			return false
+		}
+	}
+	return true
 }
 
 // knownToolNames is the closed label set for pad_chat_tool_results_total{tool}: the

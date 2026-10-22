@@ -112,8 +112,22 @@ function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   return request<T>(path, {method: 'GET', noDedup: true, signal})
 }
 
+// The deployment-wide ai values the server enforces for everyone (GET/PUT /api/admin/settings/ai).
+export interface DeploymentAISettings {
+  dailyBudget: number
+  perUserDailyBudget: number
+  embeddingProvider: string
+  embeddingModel: string
+}
+
 export const adminApi = {
   startMigration: (): Promise<{status: string}> => request('/api/admin/migration/start'),
+
+  getDeploymentAISettings: (signal?: AbortSignal): Promise<DeploymentAISettings> =>
+    get('/api/admin/settings/ai', signal),
+
+  updateDeploymentAISettings: (body: DeploymentAISettings): Promise<DeploymentAISettings> =>
+    request('/api/admin/settings/ai', {body, method: 'PUT'}),
 
   getMigrationStatus: (signal?: AbortSignal): Promise<MigrationStatus> => get('/api/admin/migration/status', signal),
 

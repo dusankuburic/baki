@@ -7,6 +7,10 @@ import {useSystemStore} from '@/stores/systemStore'
 import {API_KEY_FIELD, deviceFlowSpec, providerSpec} from '@/testing/fixtures/providerCatalog'
 import type {ProviderSpec} from '@/types'
 
+vi.mock('@/platform/adapters', () => ({
+  createAdapter: () => ({openURL: vi.fn().mockResolvedValue(undefined)}),
+}))
+
 vi.mock('@/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api')>()
   return {
@@ -321,6 +325,47 @@ describe('CredentialForm: other kinds', () => {
     expect(screen.getByRole('button', {name: 'Test'})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Remove'})).toBeInTheDocument()
     expect(document.querySelectorAll('input')).toHaveLength(0)
+  })
+})
+
+describe('CredentialForm: oauth_device', () => {
+  // R-provider-1: a poll answering that the token could not be stored must not complete the sign-in.
+  it('a poll refused because the token could not be stored leaves the provider unconfigured', async () => {
+    vi.useFakeTimers()
+    try {
+      api.startDeviceAuth.mockResolvedValue({
+        device_code: 'dev-1',
+        user_code: 'ABCD-1',
+        verification_uri: 'https://github.com/login/device',
+        interval: 5,
+        expires_in: 900,
+      })
+      api.pollDeviceAuth.mockRejectedValue(new ApiError('internal server error', 503, 'SECRET_STORAGE_UNAVAILABLE'))
+      const onConfigured = vi.fn()
+      const onSignedIn = vi.fn()
+      render(
+        <CredentialForm
+          spec={spec(deviceFlowSpec('copilot', {name: 'Copilot'}))}
+          onConfigured={onConfigured}
+          onSignedIn={onSignedIn}
+        />,
+      )
+      await act(async () => {})
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', {name: 'Sign in with GitHub'}))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000)
+      })
+      expect(api.pollDeviceAuth).toHaveBeenCalledWith('/api/providers/copilot/poll', 'dev-1')
+      expect(screen.getByText(/secret storage is unavailable/i)).toBeInTheDocument()
+      expect(onConfigured).not.toHaveBeenCalled()
+      expect(onSignedIn).not.toHaveBeenCalled()
+      expect(screen.queryByText(/Connected as/)).toBeNull()
+      expect(screen.getByRole('button', {name: 'Retry'})).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
