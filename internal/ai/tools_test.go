@@ -182,6 +182,50 @@ func TestTruncateResult_AsciiUnchanged(t *testing.T) {
 	}
 }
 
+// TestExecuteTool_NameLiteralsMasked: get_block, search_flow and get_subflow_blocks print Block.Name, which
+// holds the whole source line of an IF header and of a comment. Once ScrubDocument masks the header's
+// literal (compared with a credential variable) and the comment's opaque token, none of them carries either,
+// while the variable reference the model reasons about survives.
+func TestExecuteTool_NameLiteralsMasked(t *testing.T) {
+	const ifSecret = "Pr0d!Pass-x91f"
+	const commentToken = "Zq8vN2pL5xR9tW3kY7mB4cF6hJ1dG0sA2eU5iO8p"
+	doc := &models.FlowDocument{
+		ID: "flow-1", Name: "Test Flow",
+		Subflows: []models.Subflow{{
+			ID: "sf-main", Name: "Main",
+			// As the parser builds them: the IF's Variables hold the referenced names, the literal only the Name.
+			Blocks: []models.Block{
+				{ID: "c1", Name: "Ops handover, vault reference " + commentToken, Type: models.BlockTypeComment, RawType: "COMMENT", LineNumber: 2},
+				{ID: "if1", Name: "IF %DbPassword% = $'''" + ifSecret + "'''", Type: models.BlockTypeCondition, RawType: "IF", LineNumber: 6, Variables: []string{"DbPassword"}},
+			},
+		}},
+	}
+	doc.RebuildIndexes()
+	scrubbed, err := scrubber.ScrubDocument(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tctx := ToolContext{Ctx: context.Background(), Doc: scrubbed}
+	for _, call := range []struct{ tool, input string }{
+		{"get_block", `{"blockId":"if1"}`},
+		{"get_block", `{"blockId":"c1"}`},
+		{"search_flow", `{"query":"dbpassword"}`},
+		{"search_flow", `{"query":"vault"}`},
+		{"get_subflow_blocks", `{"subflowId":"sf-main"}`},
+	} {
+		out := ExecuteTool(call.tool, json.RawMessage(call.input), tctx)
+		if strings.Contains(out, ifSecret) || strings.Contains(out, commentToken) {
+			t.Errorf("%s %s carries a Name literal: %s", call.tool, call.input, out)
+		}
+		if !strings.Contains(out, "[REDACTED]") {
+			t.Errorf("%s %s shows no mask: %s", call.tool, call.input, out)
+		}
+	}
+	if out := ExecuteTool("get_block", json.RawMessage(`{"blockId":"if1"}`), tctx); !strings.Contains(out, "IF %DbPassword% = $'''[REDACTED]'''") {
+		t.Errorf("the IF header lost its shape: %s", out)
+	}
+}
+
 func TestToolDefinitions_StableAndComplete(t *testing.T) {
 	defs := ToolDefinitions()
 	if len(defs) != 8 {

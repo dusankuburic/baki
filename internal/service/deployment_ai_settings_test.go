@@ -117,9 +117,9 @@ func TestCachedContextCore_UsesTheCallersContextBudget(t *testing.T) {
 	}
 
 	withBudget(8000)
-	large := svc.cachedContextCore(ctx, "u1", ctxCacheStubProvider{}, doc, nil, models.ChatRequest{}).contextText
+	large := svc.contextCoreForTest(ctx, "u1", ctxCacheStubProvider{}, doc, nil, models.ChatRequest{}).contextText
 	withBudget(2000)
-	small := svc.cachedContextCore(ctx, "u1", ctxCacheStubProvider{}, doc, nil, models.ChatRequest{}).contextText
+	small := svc.contextCoreForTest(ctx, "u1", ctxCacheStubProvider{}, doc, nil, models.ChatRequest{}).contextText
 	if len(large) < 3*len(small) || !strings.Contains(large, "Subflow_with") {
 		t.Errorf("context of %d bytes at the user's 8000-token budget vs %d at 2000: the user's budget is not used (or a stale entry was served)",
 			len(large), len(small))

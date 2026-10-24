@@ -594,7 +594,10 @@ func (s *ChatService) persistInitialUserTurn(ctx context.Context, doc *models.Fl
 
 // buildStreamRequest assembles the ai.Request (scrubbed context, RAG to deadline, clamped params); RAG-wait ctx.Done() → ok=false.
 func (s *ChatService) buildStreamRequest(ctx context.Context, ts turnSetup, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (aiReq ai.Request, scrubbedDoc *models.FlowDocument, ok bool, err error) {
-	core := s.cachedContextCore(ctx, scope, ts.provider, doc, report, req)
+	core, err := s.cachedContextCore(ctx, scope, ts.provider, doc, report, req)
+	if err != nil {
+		return ai.Request{}, nil, false, err
+	}
 
 	// RAG timeout → "". Guidelines go in the final user message, never the system prompt — Azure/OpenAI cache prefixes.
 	guidelines := ""
@@ -890,6 +893,12 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		}
 		aiReq, scrubbedDoc, ok, err := s.buildStreamRequest(ctx, ts, scope, doc, report, ctxReq)
 		if err != nil {
+			if errors.Is(err, errContextScrub) {
+				// Fail closed: nothing was sent, and the document itself never stands in for its clone.
+				logger.Error("chat: the flow's redacting clone could not be made; the turn was not sent", "error", err, "flow_id", doc.ID)
+				fail(ChatErrContextUnavailable, errContextScrub.Error()+" — nothing was sent; try again", false)
+				return
+			}
 			msg := "conversation is too long for this model's context window — start a new conversation or remove some history"
 			fail(ChatErrContextLimit, msg, false) // a context limit is not the org's to fix
 			return
@@ -908,15 +917,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				RealDoc:  doc,
 				Analysis: readOnlyAnalysis{s.analysisCache},
 			}
-			if ap := s.newFixApplier(doc, streamID, emit, ctl.touch, func(fresh *models.FlowDocument) {
-				tctx.RealDoc = fresh
-				if sd, sErr := scrubber.ScrubDocument(fresh); sErr == nil {
-					tctx.Doc = sd
-				} else {
-					logger.Error("Failed to scrub post-fix document; tools see the real doc", "error", sErr)
-					tctx.Doc = fresh
-				}
-			}); ap != nil {
+			if ap := s.newFixApplier(doc, streamID, emit, ctl.touch, toolDocSwap(&tctx)); ap != nil {
 				if fa, ok := ap.(*chatFixApplier); ok && blockStatus == contextBlockResolved {
 					fa.groundOn(doc, ctxReq.ContextBlockID)
 				}

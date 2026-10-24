@@ -44,9 +44,9 @@ func TestCachedContextCore_SharesOneScrubbedCloneAcrossBlocks(t *testing.T) {
 	prompt := base
 	prompt.SystemPrompt = "answer tersely"
 
-	first := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, base)
-	onBlock := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, block)
-	withPrompt := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, prompt)
+	first := svc.contextCoreForTest(context.Background(), "scope-1", provider, doc, nil, base)
+	onBlock := svc.contextCoreForTest(context.Background(), "scope-1", provider, doc, nil, block)
+	withPrompt := svc.contextCoreForTest(context.Background(), "scope-1", provider, doc, nil, prompt)
 	if first.scrubbedDoc == nil || onBlock.scrubbedDoc != first.scrubbedDoc || withPrompt.scrubbedDoc != first.scrubbedDoc {
 		t.Fatal("turns on the same flow and generation must share one scrubbed clone")
 	}
@@ -58,14 +58,14 @@ func TestCachedContextCore_SharesOneScrubbedCloneAcrossBlocks(t *testing.T) {
 	}
 
 	// Another scope: its own clone (no cross-scope reuse).
-	other := svc.cachedContextCore(context.Background(), "scope-2", provider, doc, nil, base)
+	other := svc.contextCoreForTest(context.Background(), "scope-2", provider, doc, nil, base)
 	if other.scrubbedDoc == first.scrubbedDoc || scrubs.Load() != 2 {
 		t.Fatal("a different scope must not reuse another scope's clone")
 	}
 
 	// An in-place edit (generation bump): a fresh clone for the next turn.
 	svc.InvalidateChatContext(doc.ID)
-	fresh := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, block)
+	fresh := svc.contextCoreForTest(context.Background(), "scope-1", provider, doc, nil, block)
 	if fresh.scrubbedDoc == first.scrubbedDoc || scrubs.Load() != 3 {
 		t.Fatal("an invalidated flow must be scrubbed again")
 	}
@@ -88,19 +88,19 @@ func TestCachedContextCore_ScrubbedDocCacheIsBounded(t *testing.T) {
 	for i := range docs {
 		docs[i] = toolLoopDoc()
 		docs[i].ID = fmt.Sprintf("flow-%d", i)
-		svc.cachedContextCore(context.Background(), "s", provider, docs[i], nil, req)
+		svc.contextCoreForTest(context.Background(), "s", provider, docs[i], nil, req)
 	}
 	if n := scrubs.Load(); int(n) != len(docs) {
 		t.Fatalf("scrubbed %d flows, want %d", n, len(docs))
 	}
 	onBlock := req
 	onBlock.ContextBlockID = "b1"
-	svc.cachedContextCore(context.Background(), "s", provider, docs[0], nil, onBlock)
+	svc.contextCoreForTest(context.Background(), "s", provider, docs[0], nil, onBlock)
 	if n := scrubs.Load(); int(n) != len(docs)+1 {
 		t.Fatalf("the evicted flow's clone was reused (%d scrubs), want a fresh scrub", n)
 	}
 	// The most recent flow is still held: no scrub for its next block.
-	svc.cachedContextCore(context.Background(), "s", provider, docs[len(docs)-1], nil, onBlock)
+	svc.contextCoreForTest(context.Background(), "s", provider, docs[len(docs)-1], nil, onBlock)
 	if n := scrubs.Load(); int(n) != len(docs)+1 {
 		t.Fatalf("a held clone was scrubbed again (%d scrubs)", n)
 	}
@@ -121,8 +121,8 @@ func TestCachedContextCore_HugeCloneIsNotPinned(t *testing.T) {
 	doc.RebuildIndexes()
 	req := models.ChatRequest{Model: "m1", UserMessage: "q"}
 
-	first := svc.cachedContextCore(context.Background(), "s", provider, doc, nil, req)
-	again := svc.cachedContextCore(context.Background(), "s", provider, doc, nil, req)
+	first := svc.contextCoreForTest(context.Background(), "s", provider, doc, nil, req)
+	again := svc.contextCoreForTest(context.Background(), "s", provider, doc, nil, req)
 	if first.scrubbedDoc == nil || len(first.scrubbedDoc.BlocksByID) != len(blocks) {
 		t.Fatal("the turn must still get a complete scrubbed clone")
 	}
@@ -159,10 +159,10 @@ func TestCachedContextCore_TextEntriesDoNotPinClones(t *testing.T) {
 		if g > 0 {
 			svc.InvalidateChatContext(doc.ID)
 		}
-		cv := svc.cachedContextCore(context.Background(), "s", provider, doc, nil, req)
+		cv := svc.contextCoreForTest(context.Background(), "s", provider, doc, nil, req)
 		// A second turn on the same generation: a text hit that must return
 		// the SAME clone while the doc cache holds it.
-		if again := svc.cachedContextCore(context.Background(), "s", provider, doc, nil, req); again.scrubbedDoc != cv.scrubbedDoc {
+		if again := svc.contextCoreForTest(context.Background(), "s", provider, doc, nil, req); again.scrubbedDoc != cv.scrubbedDoc {
 			t.Fatalf("generation %d: a text hit returned a different clone while the doc cache holds one", g)
 		}
 		clones = append(clones, weak.Make(cv.scrubbedDoc))
@@ -186,7 +186,7 @@ func TestCachedContextCore_TextEntriesDoNotPinClones(t *testing.T) {
 	}
 	// The evicted generations' turns still work: the clone is rebuilt.
 	svc.InvalidateChatContext(doc.ID)
-	if cv := svc.cachedContextCore(context.Background(), "s", provider, doc, nil, req); cv.scrubbedDoc == nil || cv.scrubbedDoc == doc {
+	if cv := svc.contextCoreForTest(context.Background(), "s", provider, doc, nil, req); cv.scrubbedDoc == nil || cv.scrubbedDoc == doc {
 		t.Fatal("a turn after eviction must get a fresh scrubbed clone")
 	}
 }
@@ -226,7 +226,7 @@ func TestComputeContextCore_BoundsSourceFilesBeforeScrubbing(t *testing.T) {
 
 	svc := &ChatService{chatCtxCache: newChatContextCache(), flowCache: &FlowService{}}
 	req := models.ChatRequest{Model: "m1", UserMessage: "q", SelectedSourceFiles: []string{"Main.txt"}}
-	cv := svc.cachedContextCore(context.Background(), "scope", ctxCacheStubProvider2{}, doc, nil, req)
+	cv := svc.contextCoreForTest(context.Background(), "scope", ctxCacheStubProvider2{}, doc, nil, req)
 	if n := seen.Load(); n == 0 || n >= 128<<10 {
 		t.Errorf("the scrub was handed %d bytes of a %d-byte file, want under 128 KB", n, len(src))
 	}
@@ -247,7 +247,7 @@ func TestComputeContextCore_BoundsSourceFilesBeforeScrubbing(t *testing.T) {
 	}
 	secretDoc := &models.FlowDocument{ID: "f2", FilePath: filepath.Join(secretDir, "flow.txt"), Name: "f2"}
 	secretDoc.RebuildIndexes()
-	cv = svc.cachedContextCore(context.Background(), "scope", ctxCacheStubProvider2{}, secretDoc, nil, req)
+	cv = svc.contextCoreForTest(context.Background(), "scope", ctxCacheStubProvider2{}, secretDoc, nil, req)
 	if strings.Contains(cv.contextText, literal) {
 		t.Error("a secret in the kept head reached the context unmasked")
 	}

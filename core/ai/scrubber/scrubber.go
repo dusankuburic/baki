@@ -66,6 +66,26 @@ func isSensitiveFieldName(k string) bool {
 	return ok
 }
 
+// credentialNameParts are the analyzer's sensitiveVarName set (rule_hardcoded_credential.go) as substrings
+// of a normalized name, plus the two exact field names it lacks: a VARIABLE called DbPassword, VaultToken or
+// ClientSecret holds a credential, where the exact set for property keys says no. Keys keep the exact set,
+// since a key is the action's own word (TokenCount, PasswordField) and a variable is the author's.
+var credentialNameParts = []string{
+	"password", "passwd", "pwd", "passphrase", "apikey", "token", "secret", "credential",
+	"authkey", "bearer", "accesskey", "privatekey", "connectionstring",
+}
+
+// isCredentialLikeName reports whether a variable name says it holds a credential.
+func isCredentialLikeName(name string) bool {
+	n := normalizeFieldName(name)
+	for _, p := range credentialNameParts {
+		if strings.Contains(n, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // ScrubDocument returns a deep copy of the FlowDocument with secrets masked.
 // It clones only what scrubBlock mutates (Properties maps and Children trees)
 // — the json round-trip serialized the entire flow twice on the AI hot path.
@@ -85,7 +105,7 @@ func ScrubDocument(doc *models.FlowDocument) (*models.FlowDocument, error) {
 	for i := range copyDoc.Subflows {
 		sf := &copyDoc.Subflows[i]
 		for j := range sf.Blocks {
-			scrubBlock(&sf.Blocks[j])
+			scrubBlock(&sf.Blocks[j], false)
 		}
 	}
 
@@ -119,7 +139,15 @@ func cloneBlocks(src []models.Block) []models.Block {
 	return out
 }
 
-func scrubBlock(b *models.Block) {
+// scrubBlock masks b in place. switchHoldsCredential says whether b is a CASE of a SWITCH on a credential
+// variable, the one header whose literal is judged by another block's variable.
+func scrubBlock(b *models.Block, switchHoldsCredential bool) {
+	// 0. The Name pass (name.go): header literals and comment words, which no property pass sees, then the
+	//    regex pass, since a comment holds `password=…` the way prose does.
+	if b.Name != "" {
+		b.Name = ScrubText(maskSpans(b.Name, nameSecretSpans(b, switchHoldsCredential)))
+	}
+
 	// 1. AST-aware masking on specific action properties (RawType is the PAD action name).
 	if fieldsToMask, ok := sensitiveActions[b.RawType]; ok {
 		for _, field := range fieldsToMask {
@@ -142,8 +170,9 @@ func scrubBlock(b *models.Block) {
 	}
 
 	// 2b. SET <name> TO <literal> injects synthetic _var/_value keys the key
-	//     pass cannot see: mask the literal when the target names a credential.
-	if name, ok := b.Properties["_var"]; ok && isSensitiveFieldName(name) {
+	//     pass cannot see: mask the literal when the target names a credential
+	//     (a variable name, so DbPassword counts, as it does in a header).
+	if name, ok := b.Properties["_var"]; ok && isCredentialLikeName(name) {
 		if v := b.Properties["_value"]; len(v) > 0 {
 			b.Properties["_value"] = "[REDACTED]"
 		}
@@ -162,8 +191,9 @@ func scrubBlock(b *models.Block) {
 		b.Properties[k] = scrubbed
 	}
 
+	childOfCredentialSwitch := b.Type == models.BlockTypeSwitch && switchHoldsCredentialVar(b)
 	for i := range b.Children {
-		scrubBlock(&b.Children[i])
+		scrubBlock(&b.Children[i], childOfCredentialSwitch)
 	}
 }
 

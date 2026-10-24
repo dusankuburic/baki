@@ -52,7 +52,7 @@ type chatFixApplier struct {
 	// onDocReplaced, when set, is invoked with the fresh post-fix document so the owning tool loop can swap its
 	// working copy mid-stream (A1) — the re-parse mints new block IDs, and follow-up tools on the stale snapshot
 	// would mis-answer.
-	onDocReplaced func(fresh *models.FlowDocument)
+	onDocReplaced func(fresh *models.FlowDocument) error
 
 	// grounded is the conversation's context block, by its id in groundedDoc (the latest version of the flow
 	// the stream has seen): each apply re-parses the flow, and its result tells the model the block's new id.
@@ -89,7 +89,7 @@ func (a *chatFixApplier) followGrounded(fresh *models.FlowDocument) string {
 
 // newFixApplier builds the per-stream applier; nil when the service can't apply fixes (no flow service wired),
 // leaving tctx.Fixes nil and apply_fix to report "not available".
-func (s *ChatService) newFixApplier(doc *models.FlowDocument, streamID string, emit func(string, map[string]interface{}), touch func(), onDocReplaced func(*models.FlowDocument)) ai.ToolFixApplier {
+func (s *ChatService) newFixApplier(doc *models.FlowDocument, streamID string, emit func(string, map[string]interface{}), touch func(), onDocReplaced func(*models.FlowDocument) error) ai.ToolFixApplier {
 	if s.flowCache == nil || emit == nil {
 		return nil
 	}
@@ -140,11 +140,41 @@ func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixPr
 	}
 	// A1: hand the fresh post-fix document to the owning loop BEFORE the decision event, so the model's next
 	// tool call runs against the fixed flow (new block IDs included).
-	if updated != nil && a.onDocReplaced != nil {
-		a.onDocReplaced(updated)
-	}
+	note := a.handOver(updated)
 	a.emitFixDecision(prop.ProposalID, outcome.Status, outcome.Detail)
-	return outcome.ModelSummary() + a.followGrounded(updated), nil
+	return outcome.ModelSummary() + a.followGrounded(updated) + note, nil
+}
+
+// staleToolsNote tells the model that the fix is in the flow but the tools still read the previous clone
+// (toolDocSwap could not make the fresh one's), so its next reads are of the flow as it was.
+const staleToolsNote = "\nNote: the fix is applied to the flow, but its updated copy could not be prepared for you, so the read tools still show the flow as it was before this fix. Tell the user to start a new turn to continue."
+
+// handOver gives the owning loop the fresh document; the note it returns is for the model when the loop could not
+// take it.
+func (a *chatFixApplier) handOver(updated *models.FlowDocument) string {
+	if updated == nil || a.onDocReplaced == nil {
+		return ""
+	}
+	if err := a.onDocReplaced(updated); err != nil {
+		return staleToolsNote
+	}
+	return ""
+}
+
+// toolDocSwap is the owning loop's half of an applied fix: the fresh document replaces the real one the applier
+// works on, and its redacting clone replaces what the tools read. A clone that cannot be made leaves the tools on
+// the previous clone — never the document itself — and the error reaches the model through the applier's note.
+func toolDocSwap(tctx *ai.ToolContext) func(*models.FlowDocument) error {
+	return func(fresh *models.FlowDocument) error {
+		tctx.RealDoc = fresh
+		sd, err := scrubDocument(fresh)
+		if err != nil {
+			logger.Error("chat: the post-fix flow's redacting clone could not be made; tools keep the previous clone", "error", err)
+			return err
+		}
+		tctx.Doc = sd
+		return nil
+	}
 }
 
 func (a *chatFixApplier) emitFixDecision(proposalID, status, message string) {
@@ -268,11 +298,9 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 		a.emitFixDecision(batchID, "error", err.Error())
 		return "", err
 	}
-	if updated != nil && a.onDocReplaced != nil {
-		a.onDocReplaced(updated)
-	}
+	note := a.handOver(updated)
 	a.emitBatchDecision(batchID, outcome)
-	return outcome.ModelSummary() + a.followGrounded(updated), nil
+	return outcome.ModelSummary() + a.followGrounded(updated) + note, nil
 }
 
 func (a *chatFixApplier) emitBatchDecision(batchID string, outcome batchOutcome) {

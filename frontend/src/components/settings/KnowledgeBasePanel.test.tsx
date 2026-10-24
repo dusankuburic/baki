@@ -164,6 +164,14 @@ describe('KnowledgeBasePanel', () => {
     expect(await screen.findByText(/up to 1MB/i)).toBeInTheDocument()
   })
 
+  it('tells admins that uploads are masked for secret patterns before embedding and storage', async () => {
+    seedStore('admin')
+    renderPanel()
+    expect(
+      await screen.findByText(/masked for secret patterns before they are embedded or stored/i),
+    ).toBeInTheDocument()
+  })
+
   it('re-indexes after confirmation and reports the outcome', async () => {
     seedStore('admin')
     requestMock.mockResolvedValue([

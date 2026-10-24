@@ -84,13 +84,13 @@ func TestComputeContextCore_SourceFilesWired(t *testing.T) {
 		UserMessage:         "q",
 		SelectedSourceFiles: []string{"extra.txt"},
 	}
-	cv := svc.cachedContextCore(context.Background(), "scope", provider, doc, nil, req)
+	cv := svc.contextCoreForTest(context.Background(), "scope", provider, doc, nil, req)
 	if !strings.Contains(cv.contextText, "UNIQUE_SOURCE_MARKER_42") {
 		t.Errorf("expected source content in contextText, got: %q", cv.contextText)
 	}
 
 	// A second identical call is a cache hit (same selection) — no re-read, same pointer.
-	cv2 := svc.cachedContextCore(context.Background(), "scope", provider, doc, nil, req)
+	cv2 := svc.contextCoreForTest(context.Background(), "scope", provider, doc, nil, req)
 	if cv.contextText != cv2.contextText {
 		t.Error("expected cache hit for the same selection")
 	}
@@ -98,14 +98,14 @@ func TestComputeContextCore_SourceFilesWired(t *testing.T) {
 	// ExcludeContext skips the source files (free-form question path).
 	reqExc := req
 	reqExc.ExcludeContext = true
-	cvExc := svc.computeContextCore(provider, doc, nil, reqExc)
+	cvExc := svc.computeContextCoreForTest(provider, doc, nil, reqExc)
 	if strings.Contains(cvExc.contextText, "UNIQUE_SOURCE_MARKER_42") {
 		t.Error("ExcludeContext should skip source-file injection")
 	}
 
 	// A different selection misses the cache (different fingerprint in the key).
 	reqOther := models.ChatRequest{Model: "m1", UserMessage: "q", SelectedSourceFiles: []string{"other.txt"}}
-	cvOther := svc.cachedContextCore(context.Background(), "scope", provider, doc, nil, reqOther)
+	cvOther := svc.contextCoreForTest(context.Background(), "scope", provider, doc, nil, reqOther)
 	if strings.Contains(cvOther.contextText, "UNIQUE_SOURCE_MARKER_42") {
 		t.Error("a different selection must not reuse another selection's cached sources")
 	}
@@ -137,7 +137,7 @@ func TestComputeContextCore_ExcludeContextGating(t *testing.T) {
 	// Free-form turn first (ExcludeContext=true): no block detail, no sources.
 	exc := base
 	exc.ExcludeContext = true
-	cvExc := svc.cachedContextCore(context.Background(), "scope", provider, doc, nil, exc)
+	cvExc := svc.contextCoreForTest(context.Background(), "scope", provider, doc, nil, exc)
 	if strings.Contains(cvExc.contextText, "SOURCE_MARKER") {
 		t.Error("ExcludeContext=true must not inject source files")
 	}
@@ -149,7 +149,7 @@ func TestComputeContextCore_ExcludeContextGating(t *testing.T) {
 	// MUST be a cache miss (BUG-2) → sources + block detail present.
 	inc := base
 	inc.ExcludeContext = false
-	cvInc := svc.cachedContextCore(context.Background(), "scope", provider, doc, nil, inc)
+	cvInc := svc.contextCoreForTest(context.Background(), "scope", provider, doc, nil, inc)
 	if !strings.Contains(cvInc.contextText, "SOURCE_MARKER") {
 		t.Error("ExcludeContext=false must inject source files (BUG-2: cache must not serve the ExcludeContext=true entry)")
 	}

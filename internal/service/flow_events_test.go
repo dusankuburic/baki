@@ -84,7 +84,7 @@ func TestFlowCaches_LibraryAndFlowMutationsInvalidateTheSameCaches(t *testing.T)
 			t.Fatalf("resolve: %v", err)
 		}
 		dashboard.BuildHome(ctx, "u1")
-		chat.cachedContextCore(ctx, "u1", ctxCacheStubProvider{}, doc, nil, req)
+		chat.contextCoreForTest(ctx, "u1", ctxCacheStubProvider{}, doc, nil, req)
 		flows.searchIndexFor(doc)
 		return doc
 	}
@@ -99,7 +99,7 @@ func TestFlowCaches_LibraryAndFlowMutationsInvalidateTheSameCaches(t *testing.T)
 		if store.builds.Load() != builds+1 {
 			t.Errorf("%s: the owner's dashboard was served from the cache", what)
 		}
-		chat.cachedContextCore(ctx, "u1", ctxCacheStubProvider{}, doc, nil, req)
+		chat.contextCoreForTest(ctx, "u1", ctxCacheStubProvider{}, doc, nil, req)
 		if scrubs.Load() != scrubbed+1 {
 			t.Errorf("%s: the chat context was served from the cache", what)
 		}
@@ -109,7 +109,7 @@ func TestFlowCaches_LibraryAndFlowMutationsInvalidateTheSameCaches(t *testing.T)
 		t.Helper()
 		builds, scrubbed := store.builds.Load(), scrubs.Load()
 		dashboard.BuildHome(ctx, "u1")
-		chat.cachedContextCore(ctx, "u1", ctxCacheStubProvider{}, doc, nil, req)
+		chat.contextCoreForTest(ctx, "u1", ctxCacheStubProvider{}, doc, nil, req)
 		if _, ok := flows.idxCache.Get(searchIndexKey(t, id)); !ok || store.builds.Load() != builds || scrubs.Load() != scrubbed {
 			t.Fatal("fixture: the caches did not hold the fill")
 		}
@@ -260,7 +260,7 @@ func TestFlowCaches_ARequestThatPublishedDoesNotFill(t *testing.T) {
 		if _, err := dashboard.BuildAnalytics(txCtx, "u1", AnalyticsCaller{}, q); err != nil {
 			t.Fatal(err)
 		}
-		chat.cachedContextCore(txCtx, "u1", ctxCacheStubProvider{}, doc, nil, req)
+		chat.contextCoreForTest(txCtx, "u1", ctxCacheStubProvider{}, doc, nil, req)
 	}
 	if store.builds.Load() != 2 || scope.count() != 2 || scrubs.Load() != 2 {
 		t.Fatalf("builds home=%d analytics=%d chat=%d inside the publishing transaction, want 2 each (no fill)",
@@ -273,7 +273,7 @@ func TestFlowCaches_ARequestThatPublishedDoesNotFill(t *testing.T) {
 		if _, err := dashboard.BuildAnalytics(txCtx, "u1", AnalyticsCaller{}, q); err != nil {
 			t.Fatal(err)
 		}
-		chat.cachedContextCore(txCtx, "u1", ctxCacheStubProvider{}, doc, nil, req)
+		chat.contextCoreForTest(txCtx, "u1", ctxCacheStubProvider{}, doc, nil, req)
 	}
 	if store.builds.Load() != 3 || scope.count() != 3 || scrubs.Load() != 3 {
 		t.Fatalf("builds home=%d analytics=%d chat=%d after the commit, want 3 each (one fill, then hits)",
@@ -292,11 +292,11 @@ func TestChatContextFill_StaleDocumentAndOverlappedBuildAreNotServed(t *testing.
 
 	// The turn resolved `before`; the edit commits and invalidates; then the turn builds and caches.
 	chat.InvalidateChatContext(before.ID)
-	stale := chat.cachedContextCore(context.Background(), "s", ctxCacheStubProvider{}, before, nil, req)
+	stale := chat.contextCoreForTest(context.Background(), "s", ctxCacheStubProvider{}, before, nil, req)
 	edited := toolLoopDoc()
 	edited.Subflows[0].Blocks[0].Name = "Edited"
 	edited.RebuildIndexes()
-	fresh := chat.cachedContextCore(context.Background(), "s", ctxCacheStubProvider{}, edited, nil, req)
+	fresh := chat.contextCoreForTest(context.Background(), "s", ctxCacheStubProvider{}, edited, nil, req)
 	if fresh.scrubbedDoc == stale.scrubbedDoc || scrubs.Load() != 2 {
 		t.Fatal("the turn holding the edited flow was served the context built from the pre-edit document")
 	}
@@ -310,7 +310,7 @@ func TestChatContextFill_StaleDocumentAndOverlappedBuildAreNotServed(t *testing.
 	other := toolLoopDoc()
 	other.ID = "f-overlapped"
 	gen := chat.chatCtxGen.Load(other.ID)
-	chat.cachedContextCore(context.Background(), "s", ctxCacheStubProvider{}, other, nil, req)
+	chat.contextCoreForTest(context.Background(), "s", ctxCacheStubProvider{}, other, nil, req)
 	scrubDocument = orig
 	cc := chat.chatCtxCache
 	key := chat.chatContextKeyAt("s", other.ID, gen, req, ctxCacheStubProvider{}.ID(), req.Model, nil, "", defaultContextTokenBudget)

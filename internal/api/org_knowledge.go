@@ -21,6 +21,7 @@ import (
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/ai/scrubber"
 )
 
 // maxKnowledgeUploadBytes caps the decoded content (the UI advertises 1MB), enforced server-side so a client cannot reach the paid embeddings API.
@@ -124,7 +125,8 @@ func (h *OrgHandler) handleKnowledgeUpload(w http.ResponseWriter, r *http.Reques
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKnowledgeUpload, chi.URLParam(r, "id"), map[string]string{"filename": req.Filename}))
+	// The name as stored: AddDocument masks it for secret patterns, and the audit row must not keep what it dropped.
+	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionKnowledgeUpload, chi.URLParam(r, "id"), map[string]string{"filename": scrubber.ScrubFreeText(req.Filename)}))
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 

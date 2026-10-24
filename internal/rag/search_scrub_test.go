@@ -63,4 +63,14 @@ func TestSearch_ScrubsQueryBeforeEmbedding(t *testing.T) {
 	if got := emb.inputs[0]; strings.Contains(got, secret) || len([]rune(got)) > maxQueryRunes {
 		t.Errorf("long query: secret leaked or cap exceeded (%d runes)", len([]rune(got)))
 	}
+
+	// Pasted PAD code (R-security-c14): the literal syntax the regex pass alone lets through is masked the way
+	// the chat request's is, before the question leaves for the embedding provider.
+	emb.inputs = nil
+	if _, err := svc.Search(context.Background(), "scope", "org-1", "the flow runs SET Password TO $'''Winter#2024-rq''' and then fails"); err != nil {
+		t.Fatalf("Search (PAD line): %v", err)
+	}
+	if got := emb.inputs[0]; strings.Contains(got, "Winter#2024-rq") || !strings.Contains(got, "SET Password TO $'''[REDACTED]'''") {
+		t.Errorf("PAD line query = %q, want the literal masked", got)
+	}
 }

@@ -127,7 +127,7 @@ func TestStreamChatMessage_MissingContextBlockEmitsANotice(t *testing.T) {
 		{"missing", nil, true, "no longer in the flow"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &testutil.FakeProvider{Turns: []testutil.FakeTurn{{Text: "answer", TokensIn: 3, TokensOut: 2}}}
+			p := &testutil.FakeProvider{RequireScrubbed: t, Turns: []testutil.FakeTurn{{Text: "answer", TokensIn: 3, TokensOut: 2}}}
 			svc := newCtxBlockChatService(t, "ctxblock-stream-"+tc.name, p)
 			id, err := svc.StreamChatMessage(context.Background(), "u1", after, nil, models.ChatRequest{
 				Provider: "ctxblock-stream-" + tc.name, Model: "fake-model", UserMessage: "what does this block do?",

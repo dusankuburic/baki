@@ -33,7 +33,7 @@ func TestComputeContextCore_ScrubsSelectedSourceFiles(t *testing.T) {
 	}
 	doc.RebuildIndexes()
 
-	cv := svc.computeContextCore(ctxCacheStubProvider{}, doc, nil, models.ChatRequest{
+	cv := svc.computeContextCoreForTest(ctxCacheStubProvider{}, doc, nil, models.ChatRequest{
 		SelectedSourceFiles: []string{"sub.txt"},
 	})
 
@@ -52,7 +52,7 @@ func TestComputeContextCore_SourceFilesExcludedWithoutFlowPath(t *testing.T) {
 	svc := &ChatService{flowCache: &FlowService{}}
 	doc := &models.FlowDocument{ID: "f1"}
 
-	cv := svc.computeContextCore(ctxCacheStubProvider{}, doc, nil, models.ChatRequest{
+	cv := svc.computeContextCoreForTest(ctxCacheStubProvider{}, doc, nil, models.ChatRequest{
 		SelectedSourceFiles: []string{"sub.txt"},
 	})
 
@@ -84,7 +84,7 @@ func TestComputeContextCore_ScrubsURLCredentialsInFindings(t *testing.T) {
 		Metadata:    map[string]any{"url": url},
 	}}}
 
-	cv := svc.computeContextCore(ctxCacheStubProvider{}, doc, report, models.ChatRequest{ContextBlockID: "b1"})
+	cv := svc.computeContextCoreForTest(ctxCacheStubProvider{}, doc, report, models.ChatRequest{ContextBlockID: "b1"})
 
 	if !strings.Contains(cv.contextText, "Known Issues with This Block") {
 		t.Fatalf("the finding was not rendered at all — the test is not exercising the channel:\n%s", cv.contextText)

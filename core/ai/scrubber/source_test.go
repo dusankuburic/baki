@@ -99,6 +99,114 @@ func TestScrubSourceText_RealSample(t *testing.T) {
 	}
 }
 
+// parityOpaqueA and parityOpaqueB pass the entropy check and match no regex class.
+const (
+	parityOpaqueA = "Mx4bVq7nRt2kZw9yLp3dJc8sHf5gBa1eQu6iOy0r"
+	parityOpaqueB = "Zq8vN2pL5xR9tW3kY7mB4cF6hJ1dG0sA2eU5iO8p"
+	parityOpaqueC = "kq7zx4vb2nm8kl5pr3tw9yj6hd1gf0sa2eu5io8c"
+)
+
+// paritySrc holds one literal per rule of the document scrubber — action field, credential key, SET target,
+// header literal, comment word, entropy fallback on a SET value and on an unlisted property — next to the
+// literals that no rule may touch. Every literal is unique in the text, so a replacement can be attributed.
+const paritySrc = "#Region \"Main\"\n" +
+	"    # Runbook token " + parityOpaqueB + " rotates quarterly\n" +
+	"    SET Username TO $'''svc-reporting'''\n" +
+	"    SET Password TO $'''super-secret-pw'''\n" +
+	"    SET ServiceKey TO $'''" + parityOpaqueA + "'''\n" +
+	"    WebAutomation.FillTextByText Text: $'''login-field''' FillWith: $'''hunter2-fill'''\n" +
+	"    Email.ConnectToSMTP Server: $'''smtp.example.com''' Password: $'''smtp-secret-pw''' Port: 587\n" +
+	"    Custom.Vault Note: $'''" + parityOpaqueC + "'''\n" +
+	"    IF %DbPassword% = $'''Pr0d!Pass''' THEN\n" +
+	"        Display.ShowMessageDialog Title: $'''Greeting''' Message: $'''Welcome aboard'''\n" +
+	"    END\n" +
+	"    IF %Status% = $'''Active''' THEN\n" +
+	"        WAIT 1\n" +
+	"    END\n" +
+	"    SWITCH %Password%\n" +
+	"        CASE = $'''CaseSecret1'''\n" +
+	"            WAIT 1\n" +
+	"    END\n" +
+	"    WebAutomation.NavigateTo Url: $'''https://example.com/login''' BrowserInstance: %Browser%\n" +
+	"#EndRegion\n"
+
+// parityLiterals are the literal contents of paritySrc, each with the verdict both scrubbers must share.
+var parityLiterals = map[string]bool{
+	parityOpaqueB:               true, // comment word, entropy
+	"svc-reporting":             false,
+	"super-secret-pw":           true, // SET of a credential
+	parityOpaqueA:               true, // SET value, entropy fallback on a plain variable
+	"login-field":               false,
+	"hunter2-fill":              true, // sensitiveActions field
+	"smtp.example.com":          false,
+	"smtp-secret-pw":            true, // credential key
+	parityOpaqueC:               true, // unlisted property, entropy fallback
+	"Pr0d!Pass":                 true, // IF header on a credential variable
+	"Greeting":                  false,
+	"Welcome aboard":            false,
+	"Active":                    false,
+	"CaseSecret1":               true, // CASE under a credential SWITCH
+	"https://example.com/login": false,
+}
+
+// docHolds reports whether any Name or property value of the document contains s.
+func docHolds(doc *models.FlowDocument, s string) bool {
+	var walk func(blocks []models.Block) bool
+	walk = func(blocks []models.Block) bool {
+		for i := range blocks {
+			if strings.Contains(blocks[i].Name, s) {
+				return true
+			}
+			for _, v := range blocks[i].Properties {
+				if strings.Contains(v, s) {
+					return true
+				}
+			}
+			if walk(blocks[i].Children) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, sf := range doc.Subflows {
+		if walk(sf.Blocks) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestScrubParity_DocumentAndSourceText runs one fixture through ScrubDocument and ScrubSourceText: every
+// literal masked by one is masked by the other, and both agree with the verdict the fixture expects — the
+// high-entropy value assigned to a variable without a credential name included.
+func TestScrubParity_DocumentAndSourceText(t *testing.T) {
+	doc, err := parser.ParseText(paritySrc, "parity", int64(len(paritySrc)))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	for lit := range parityLiterals {
+		if !docHolds(doc, lit) || !strings.Contains(paritySrc, lit) {
+			t.Fatalf("fixture literal %q is not in the parsed document or the source", lit)
+		}
+	}
+	scrubbedDoc, err := ScrubDocument(doc)
+	if err != nil {
+		t.Fatalf("scrub: %v", err)
+	}
+	scrubbedSrc := ScrubSourceText(paritySrc)
+
+	for lit, want := range parityLiterals {
+		byDoc := !docHolds(scrubbedDoc, lit)
+		bySrc := !strings.Contains(scrubbedSrc, lit)
+		if byDoc != bySrc {
+			t.Errorf("%q: ScrubDocument masked=%v, ScrubSourceText masked=%v", lit, byDoc, bySrc)
+		}
+		if byDoc != want {
+			t.Errorf("%q: masked=%v, want %v", lit, byDoc, want)
+		}
+	}
+}
+
 // TestCollectSensitiveValues_DedupesAndSkips guards the collector's own
 // guards: duplicates collapse, short values and var refs are skipped.
 func TestCollectSensitiveValues_DedupesAndSkips(t *testing.T) {

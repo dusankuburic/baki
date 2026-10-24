@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/text/unicode/norm"
 
+	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/storage/atomicfile"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -110,8 +111,19 @@ func (s *ChatService) SaveConversation(ctx context.Context, flowID, provider str
 	return err
 }
 
-// normalizeConversation is what a history is trimmed to before it is stored.
-func normalizeConversation(messages []models.ChatMessage) []models.ChatMessage {
+// normalizeConversation is what a history is trimmed to before it is stored: blank assistant messages dropped,
+// every content stored as its scrubbed copy, the list evicted to the caps. Every write path runs it.
+//
+// The store holds the copy the provider sees: a pasted connection string, Bearer token or key is masked before it
+// reaches the row or the file, so a reload, a viewer holding the thread's key and the data-subject export get the
+// masked text. The scrub is the history memo's (historyScrubs, keyed by scope and content), the one the turn's
+// request build uses: a write runs the secret regexes over the whole list, twice a turn and under the thread's
+// mutex before the first token, and unmemoised that is ~0.4 s per write on an anchor-bearing history near the cap,
+// for the life of the thread. With the memo a stored copy is scrubbed once per process, and the question's write
+// warms the entry the request build reads. ScrubFreeText is idempotent on its own output, which keeps the writers'
+// no-change detection (the mutation's changed flag, the answer dedupe in persistAssistantTurn) exact across
+// re-stores.
+func normalizeConversation(scope string, messages []models.ChatMessage) []models.ChatMessage {
 	// Drop a blank assistant message: an empty 'stop' answer used to brick the
 	// thread on Claude (Messages API rejects {"role":"assistant","content":""}).
 	filtered := make([]models.ChatMessage, 0, len(messages))
@@ -120,9 +132,22 @@ func normalizeConversation(messages []models.ChatMessage) []models.ChatMessage {
 			len(m.ToolCalls) == 0 && len(m.FixProposals) == 0 && m.FixProposal == nil {
 			continue
 		}
+		// On the copy: the caller's list (a request's messages) is left as it came.
+		m.Content = historyScrubs.scrubText(scope, m.Content)
 		filtered = append(filtered, m)
 	}
 	return evictConvMessages(filtered)
+}
+
+// callerScope is the scope the store's writes scrub under: the caller as the handlers' KeyScope names it (the
+// request's claims, or none when accounts are off), so a write's memo entries are the ones the turn's request build
+// (buildScopedMessages) reads under the same scope. From the context because the writes at stream start and stream
+// end are reached without the scope; the worker's context keeps the request's claims.
+func callerScope(ctx context.Context) string {
+	if claims := auth.ClaimsFromContext(ctx); claims != nil {
+		return claims.UserID
+	}
+	return ""
 }
 
 // saveConversation is SaveConversation reporting whether the list was stored
@@ -136,7 +161,7 @@ func (s *ChatService) saveConversation(ctx context.Context, flowID, provider str
 	if !s.conversationHistoryEnabled(ctx) {
 		return false, nil
 	}
-	trimmed := normalizeConversation(messages)
+	trimmed := normalizeConversation(callerScope(ctx), messages)
 
 	if s.useBackendConversations() {
 		if err := s.backend.SaveConversation(ctx, flowID, provider, toStorageMessages(trimmed)); err != nil {
@@ -237,6 +262,9 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	mu.Lock()
 	defer mu.Unlock()
 	answerID := clientMessageID(req.AssistantMessageID)
+	// The answer as the store holds it, for the content match below: the client's save of the same answer holds
+	// the write's scrubbed copy, and the buffer is only as masked as the stream scrubber left it.
+	stored := historyScrubs.scrubText(callerScope(writeCtx), answer)
 	// Usage, served model and billed rates as the client saved them on done,
 	// so a reload keeps the tag and prices the turn at what it cost.
 	msg := models.ChatMessage{
@@ -262,7 +290,7 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 		if slices.ContainsFunc(history, func(m models.ChatMessage) bool { return m.ID == answerID }) {
 			return history, false, nil
 		}
-		if n := len(history); n > 0 && history[n-1].Role == "assistant" && history[n-1].Content == answer {
+		if n := len(history); n > 0 && history[n-1].Role == "assistant" && history[n-1].Content == stored {
 			return history, false, nil
 		}
 		// Right after its own question when stored under the client's id (a queued

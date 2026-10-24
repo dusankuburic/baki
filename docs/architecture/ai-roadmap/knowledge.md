@@ -76,38 +76,6 @@ Correct the route comment at `internal/api/org_knowledge.go:360-362` with the fi
 - Cancelling the client mid-upload leaves a pending document whose committed pages are kept and resumable. No embedding is paid twice (count `Embed` inputs).
 - A pending document's chunks are never returned by `SearchKnowledge`.
 
-### R-knowledge-7
-
-**Knowledge documents are embedded and stored unscrubbed; the secret scrub runs only when chunks are rendered into a turn** · tier 1
-
-**Problem.** `AddDocument` chunks the uploaded text, sends every chunk verbatim to the embedding provider, then stores the raw chunk text. `ReindexOrg` re-sends the stored raw text. The only `ScrubText` in the rag package is on the search query. A runbook or guideline that contains a connection string, API key or password is therefore exposed in two ways:
-- It leaves the deployment in clear text to the embedding vendor, on upload and on every re-index.
-- It sits unmasked in `knowledge_chunks` for anyone with database access.
-
-Retrieved guidelines are scrubbed before any member or model sees them, but only at render time. The scrubber already exists and is cheap relative to the embed call.
-
-**Evidence.**
-- `internal/rag/service.go:513` — `chunks := chunkText(content, ...)`, then `embedBatched(ctx, provider, chunks)` at :554 with no `ScrubText`. The raw chunk is stored as `Content` (582).
-- `internal/rag/service.go:851` — the re-index page loop re-embeds the stored raw text.
-- `internal/rag/service.go:687` — the only scrub in the package: `query = scrubber.ScrubText(query)`.
-- `internal/service/chat.go:617` — the stream path scrubs guidelines before they enter the request.
-- `internal/service/chat_context.go:223` — `buildScrubbedContext` scrubs guidelines on the synchronous path, and the context preview uses it (632-636).
-- `internal/rag/service.go:1070` — `stripOverlapPrefix` (1070-1095) de-duplicates neighbouring chunks by exact match on the 150-rune overlap (`chunkOverlapRunes`, 1051-1055).
-
-**Change.**
-- In `AddDocument`, scrub the document text and the filename with `scrubber.ScrubText` before chunking, so neighbouring chunks share an identical overlap and `stripOverlapPrefix`'s exact-match de-duplication keeps working. If chunks were scrubbed independently, a secret that straddles the 150-rune overlap could be masked differently in neighbouring chunks.
-- In the re-index page loop, re-embed from scrubbed text and store it, and account for the same overlap effect on legacy raw chunks.
-- Count masked chunks in a metric.
-- Keep the render-time scrub as defence in depth.
-- Document in ADR 0027 and in the KB panel copy that uploaded documents are masked for secret patterns.
-
-**Touches.** `internal/rag/service.go`, `internal/rag/reindex*.go`, `internal/rag/reembed_job.go`, `internal/rag/service_test.go`, `docs/adr/0027-embedding-identity-on-chunks.md`, `frontend/src/i18n/en.settings.ts`
-
-**Done when.**
-- A rag test uploads a document containing `Password=hunter2x...` and asserts that the embed request body and the stored chunk carry the mask, not the value.
-- A re-index test shows that a legacy raw chunk is re-embedded from its scrubbed text.
-- `pad_rag_scrubbed_chunks_total` (or similar) is in the metrics golden.
-
 ### R-knowledge-6
 
 **The knowledge base is consulted once pre-turn (800 ms, 1 200 tokens, keyed on the user message) and the tool loop cannot ask it** · tier 2

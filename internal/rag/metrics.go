@@ -24,7 +24,28 @@ var ragStrandedSearchTotal = prometheus.NewCounter(
 	},
 )
 
-func init() { metrics.MustRegister(ragDimMismatchTotal, ragStrandedSearchTotal) }
+// ragScrubbedChunksTotal counts the knowledge chunks in which the scrubber masked a secret pattern before the text
+// went to the embedding provider, by source: upload (the document is scrubbed before chunking, ADR 0027 §10) and
+// reindex (a stored chunk whose text changed under the scrub — raw text from before uploads were masked, which the
+// re-index leaves in the store; a count here says the org has documents to re-upload).
+var ragScrubbedChunksTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "pad_rag_scrubbed_chunks_total",
+		Help: "Knowledge chunks in which a secret pattern was masked before embedding, by source (upload: the document scrubbed before chunking; reindex: a stored chunk whose text changed under the scrub — raw text from before uploads were masked, still raw in the store until the document is re-uploaded).",
+	},
+	[]string{"source"},
+)
+
+func init() {
+	metrics.MustRegister(ragDimMismatchTotal, ragStrandedSearchTotal, ragScrubbedChunksTotal)
+}
+
+// recordRAGScrubbedChunks adds n masked chunks to pad_rag_scrubbed_chunks_total for source (upload, reindex).
+func recordRAGScrubbedChunks(source string, n int) {
+	if n > 0 {
+		ragScrubbedChunksTotal.WithLabelValues(source).Add(float64(n))
+	}
+}
 
 // recordRAGStrandedSearch bumps pad_rag_stranded_search_total.
 func recordRAGStrandedSearch() {

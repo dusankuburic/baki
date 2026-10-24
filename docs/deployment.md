@@ -46,6 +46,10 @@ Run the transaction while the previous release is idle, or rerun it a minute lat
 - **Docker Compose:** The new container exits non-zero and enters a crash loop under `restart: unless-stopped`. Set `PAD_VERSION` back to the previous tag and run `docker compose up -d`, or execute the resolution SQL above; the next container restart will apply the migration.
 - **Azure Container Apps:** In Single revision mode, the previous revision continues serving 100% of traffic while the new revision crash-loops. The deploy workflow fails at the Deploy step after the provisioning timeout (~10 min). The failed revision continues restarting and will automatically apply the migration and take traffic once the data is resolved; to stop that, deactivate the failed revision (`az containerapp revision deactivate`) or redeploy the serving image.
 
+## Knowledge base: uploads are masked for secrets
+
+From this release a knowledge-base upload masks secret patterns (passwords, keys, tokens, connection strings) in the document text and its filename with the chat scrubber before the text is chunked, embedded or stored; `pad_rag_scrubbed_chunks_total{source="upload"}` counts the masked chunks. Documents indexed by an earlier release keep their raw chunk text in `knowledge_chunks`: a re-index re-embeds them from the masked text, so no stored secret reaches the embedding provider again, and counts the masked chunks under `source="reindex"`, but it does not rewrite the stored text — to purge a secret from the database, delete the document and upload it again. Retrieved guidelines are scrubbed once more when rendered into a chat turn, whatever the stored text holds.
+
 ## Production web deploy
 
 ```bash

@@ -2,8 +2,11 @@ package testutil
 
 import (
 	"context"
+	"fmt"
+	"testing"
 
 	"pad-analyzer/internal/ai"
+	"pad-core/ai/scrubber"
 )
 
 // FakeTurn scripts one streamed assistant turn for FakeProvider: optional text
@@ -30,8 +33,13 @@ type FakeProvider struct {
 	Err      error
 	Ctx      int
 	Tools    bool
-	calls    int
-	requests []ai.Request
+	// RequireScrubbed, when set, fails the test for every string of an outgoing request that is not already
+	// its own scrubber.ScrubText (UnscrubbedStrings): the chat scrubs each string where it is built and the
+	// provider boundary does not scrub again, so a string the scrubber would still change here is one no
+	// call site scrubbed. Reported from Stream's goroutine, so the test must wait for its stream to finish.
+	RequireScrubbed testing.TB
+	calls           int
+	requests        []ai.Request
 }
 
 // Calls reports how many times Stream has been invoked.
@@ -66,6 +74,11 @@ func (p *FakeProvider) Stream(_ context.Context, req ai.Request, onChunk func(ai
 	recorded := req
 	recorded.Messages = append([]ai.Message(nil), req.Messages...)
 	p.requests = append(p.requests, recorded)
+	if p.RequireScrubbed != nil {
+		for _, s := range UnscrubbedStrings(req) {
+			p.RequireScrubbed.Errorf("request %d carries a string the scrubber would still change: %s", len(p.requests), s)
+		}
+	}
 	if p.Err != nil {
 		return p.Err
 	}
@@ -90,4 +103,49 @@ func (p *FakeProvider) Stream(_ context.Context, req ai.Request, onChunk func(ai
 	}
 	onChunk(ai.Chunk{Done: true, ToolCalls: turn.ToolCalls, TokensIn: turn.TokensIn, TokensOut: turn.TokensOut, FinishReason: turn.FinishReason})
 	return nil
+}
+
+// RequestString is one string of an outgoing request and the path it sits at.
+type RequestString struct {
+	Path string
+	Text string
+}
+
+// RequestStrings lists every string of req a provider would send: the system prompt, each message's content
+// and tool-call arguments, and the tool definitions.
+func RequestStrings(req ai.Request) []RequestString {
+	out := []RequestString{{Path: "systemPrompt", Text: req.SystemPrompt}}
+	for i, m := range req.Messages {
+		out = append(out, RequestString{Path: fmt.Sprintf("messages[%d].content (%s)", i, m.Role), Text: m.Content})
+		for j, tc := range m.ToolCalls {
+			out = append(out, RequestString{Path: fmt.Sprintf("messages[%d].toolCalls[%d].input (%s)", i, j, tc.Name), Text: string(tc.Input)})
+		}
+	}
+	for i, td := range req.Tools {
+		out = append(out,
+			RequestString{Path: fmt.Sprintf("tools[%d].description (%s)", i, td.Name), Text: td.Description},
+			RequestString{Path: fmt.Sprintf("tools[%d].inputSchema (%s)", i, td.Name), Text: string(td.InputSchema)})
+	}
+	return out
+}
+
+// UnscrubbedStrings reports the strings of req that scrubber.ScrubText would still change — strings no call
+// site scrubbed — each as its path and the text around the first change.
+func UnscrubbedStrings(req ai.Request) []string {
+	var out []string
+	for _, s := range RequestStrings(req) {
+		if scrubbed := scrubber.ScrubText(s.Text); scrubbed != s.Text {
+			out = append(out, s.Path+": "+unscrubbedExcerpt(s.Text, scrubbed))
+		}
+	}
+	return out
+}
+
+// unscrubbedExcerpt is the text around the first byte at which scrubbed departs from text.
+func unscrubbedExcerpt(text, scrubbed string) string {
+	i := 0
+	for i < len(text) && i < len(scrubbed) && text[i] == scrubbed[i] {
+		i++
+	}
+	return fmt.Sprintf("%q", text[max(i-40, 0):min(i+80, len(text))])
 }

@@ -903,15 +903,15 @@ func TestCachedContextCore_CachesAcrossTurns(t *testing.T) {
 	provider := ctxCacheStubProvider{}
 	req := models.ChatRequest{Model: "m1", UserMessage: "turn 1"}
 
-	cv1 := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, req)
-	cv2 := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, req)
+	cv1 := svc.contextCoreForTest(context.Background(), "scope-1", provider, doc, nil, req)
+	cv2 := svc.contextCoreForTest(context.Background(), "scope-1", provider, doc, nil, req)
 	if cv1.scrubbedDoc != cv2.scrubbedDoc {
 		t.Fatal("expected the cached scrubbed doc to be reused (same pointer) on the second identical call")
 	}
 
 	// Invalidation bumps the per-flow generation → next call is a miss.
 	svc.InvalidateChatContext(doc.ID)
-	cv3 := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, req)
+	cv3 := svc.contextCoreForTest(context.Background(), "scope-1", provider, doc, nil, req)
 	if cv3.scrubbedDoc == cv1.scrubbedDoc {
 		t.Fatal("expected a fresh scrubbed doc after InvalidateChatContext")
 	}
@@ -919,13 +919,13 @@ func TestCachedContextCore_CachesAcrossTurns(t *testing.T) {
 	// A different cache key (contextBlockID) must not reuse cv1's clone.
 	reqBlock := req
 	reqBlock.ContextBlockID = "b1"
-	cv4 := svc.cachedContextCore(context.Background(), "scope-1", provider, doc, nil, reqBlock)
+	cv4 := svc.contextCoreForTest(context.Background(), "scope-1", provider, doc, nil, reqBlock)
 	if cv4.scrubbedDoc == cv1.scrubbedDoc {
 		t.Fatal("expected a fresh scrubbed doc for a different cache key (contextBlockID)")
 	}
 
 	// Different scope must isolate (no cross-scope reuse).
-	cv5 := svc.cachedContextCore(context.Background(), "scope-2", provider, doc, nil, req)
+	cv5 := svc.contextCoreForTest(context.Background(), "scope-2", provider, doc, nil, req)
 	if cv5.scrubbedDoc == cv1.scrubbedDoc {
 		t.Fatal("expected per-scope isolation: a different scope must not reuse another scope's clone")
 	}
@@ -942,7 +942,7 @@ func TestChatCtxGen_NeverResetsAcrossManyFlows(t *testing.T) {
 	provider := ctxCacheStubProvider{}
 	req := models.ChatRequest{Model: "m1", UserMessage: "q"}
 
-	before := svc.cachedContextCore(context.Background(), "s", provider, doc, nil, req)
+	before := svc.contextCoreForTest(context.Background(), "s", provider, doc, nil, req)
 	svc.InvalidateChatContext(doc.ID)
 	gen := svc.chatCtxGen.Load(doc.ID)
 	for i := range 1024 {
@@ -951,7 +951,7 @@ func TestChatCtxGen_NeverResetsAcrossManyFlows(t *testing.T) {
 	if now := svc.chatCtxGen.Load(doc.ID); now == 0 || now < gen {
 		t.Fatalf("flow-0's generation went from %d to %d", gen, now)
 	}
-	after := svc.cachedContextCore(context.Background(), "s", provider, doc, nil, req)
+	after := svc.contextCoreForTest(context.Background(), "s", provider, doc, nil, req)
 	if after.scrubbedDoc == before.scrubbedDoc || scrubs.Load() != 2 {
 		t.Fatal("the pre-invalidation context was served again")
 	}

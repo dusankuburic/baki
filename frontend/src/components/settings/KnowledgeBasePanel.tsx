@@ -342,6 +342,7 @@ export default function KnowledgeBasePanel() {
             </Button>
           </div>
           <p className="text-2xs text-text-tertiary mt-2">{t('knowledge.uploadHint')}</p>
+          <p className="text-2xs text-text-tertiary mt-1">{t('knowledge.uploadScrubHint')}</p>
           {uploadError && (
             <p role="alert" className="text-xs text-red-400 mt-2">
               {uploadError}

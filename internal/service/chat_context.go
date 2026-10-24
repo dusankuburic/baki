@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -151,8 +152,12 @@ func sourceFilesFingerprint(dir string, files []string) string {
 // contextScrub is the scrub applied to a cached context's system prompt and context text (tests count it).
 var contextScrub = scrubber.ScrubText
 
-// scrubDocument is the redacting deep clone of the flow (tests count it).
+// scrubDocument is the redacting deep clone of the flow (tests count it, and make it fail).
 var scrubDocument = scrubber.ScrubDocument
+
+// errContextScrub: the flow's redacting clone could not be made. The turn or the preview fails rather than carry
+// the document itself — nothing the model sees may bypass the scrubber (ADR 0034).
+var errContextScrub = errors.New("the flow could not be prepared for the assistant")
 
 // scrubSourceText is the AST scrub of a selected source file (tests measure what it is handed).
 var scrubSourceText = scrubber.ScrubSourceText
@@ -191,37 +196,33 @@ func scrubbedDocKey(scope, flowID string, gen uint64) cache.Key {
 
 // scrubbedDocFor returns the flow's scrubbed clone for gen, cached when within maxCachedScrubbedBlocks and the
 // flow was not invalidated since gen was read.
-func (s *ChatService) scrubbedDocFor(ctx context.Context, scope string, doc *models.FlowDocument, gen uint64) *models.FlowDocument {
+func (s *ChatService) scrubbedDocFor(ctx context.Context, scope string, doc *models.FlowDocument, gen uint64) (*models.FlowDocument, error) {
 	cc := s.chatCtxCache
 	key := scrubbedDocKey(scope, doc.ID, gen)
 	src := weak.Make(doc)
 	if cc != nil {
 		if e, ok := cc.docs.Get(key); ok && e.src == src {
-			return e.doc
+			return e.doc, nil
 		}
 	}
-	sd := scrubOrSelf(doc)
+	sd, err := scrubDocument(doc)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errContextScrub, err)
+	}
 	if cc != nil && len(sd.BlocksByID) <= maxCachedScrubbedBlocks && s.chatCtxGen.FillOK(ctx, doc.ID, gen) {
 		cc.docs.Set(key, scrubbedDocEntry{src: src, doc: sd}, 1, 0)
 	}
-	return sd
-}
-
-// scrubOrSelf folds scrubDocument's failure into the unscrubbed document (per-string ScrubText still redacts output).
-func scrubOrSelf(doc *models.FlowDocument) *models.FlowDocument {
-	sd, err := scrubDocument(doc)
-	if err != nil {
-		logger.Error("Failed to scrub document", "error", err)
-		return doc
-	}
-	return sd
+	return sd, nil
 }
 
 // buildScrubbedContext is the SYNCHRONOUS path (shared with PreviewContext); guidelines belong to the user message, never the byte-stable system prompt.
-func (s *ChatService) buildScrubbedContext(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (scrubbedDoc *models.FlowDocument, sysPrompt, contextText, guidelines string) {
-	cv := s.cachedContextCore(ctx, scope, provider, doc, report, req)
+func (s *ChatService) buildScrubbedContext(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (scrubbedDoc *models.FlowDocument, sysPrompt, contextText, guidelines string, err error) {
+	cv, err := s.cachedContextCore(ctx, scope, provider, doc, report, req)
+	if err != nil {
+		return nil, "", "", "", err
+	}
 	guidelines = s.ragGuidelines(ctx, scope, doc, req.UserMessage)
-	return cv.scrubbedDoc, cv.sysPrompt, cv.contextText, scrubber.ScrubText(guidelines)
+	return cv.scrubbedDoc, cv.sysPrompt, cv.contextText, scrubber.ScrubText(guidelines), nil
 }
 
 // ragGuidelines returns the turn's KB guidelines or "": this RLS-exempt path gates org knowledge on MEMBERSHIP, fail closed.
@@ -299,13 +300,19 @@ func (s *ChatService) registryCredentialOrg(ctx context.Context, orgID, scope st
 	return "", nil
 }
 
-// cachedContextCore returns the memoised scrub+BuildContext result; bypassed with no document or no cache.
-func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
+// cachedContextCore returns the memoised scrub+BuildContext result; bypassed with no document or no cache. A
+// document whose redacting clone cannot be made is an error (errContextScrub), never a context built on the
+// document itself.
+func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (chatContextValue, error) {
 	// Resolve the caller's custom instructions and context budget once, here where the caller is known.
 	req.SystemPrompt = s.systemPromptSuffix(ctx, req)
 	tokenBudget := s.contextTokenBudget(ctx, provider.ID())
 	if s.chatCtxCache == nil || doc == nil {
-		return s.computeContextCoreWith(provider, doc, scrubbedOrNil(doc), report, req, tokenBudget)
+		sd, err := scrubbedOrNil(doc)
+		if err != nil {
+			return chatContextValue{}, err
+		}
+		return s.computeContextCoreWith(provider, doc, sd, report, req, tokenBudget), nil
 	}
 	// One generation read for both keys, before the build: the entry and the clone it points into must agree,
 	// and an invalidation during the build refuses the fill.
@@ -315,14 +322,21 @@ func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provi
 		sourceFilesFingerprint(filepath.Dir(doc.FilePath), req.SelectedSourceFiles), tokenBudget)
 	// The texts are memoised; the clone comes from the doc cache, never the entry.
 	if e, ok := s.chatCtxCache.texts.Get(key); ok && e.src == src {
-		return chatContextValue{scrubbedDoc: s.scrubbedDocFor(ctx, scope, doc, gen), sysPrompt: e.sysPrompt, contextText: e.contextText}
+		sd, err := s.scrubbedDocFor(ctx, scope, doc, gen)
+		if err != nil {
+			return chatContextValue{}, err
+		}
+		return chatContextValue{scrubbedDoc: sd, sysPrompt: e.sysPrompt, contextText: e.contextText}, nil
 	}
-	sd := s.scrubbedDocFor(ctx, scope, doc, gen)
+	sd, err := s.scrubbedDocFor(ctx, scope, doc, gen)
+	if err != nil {
+		return chatContextValue{}, err
+	}
 	cv := s.computeContextCoreWith(provider, doc, sd, report, req, tokenBudget)
 	if s.chatCtxGen.FillOK(ctx, doc.ID, gen) {
 		s.chatCtxCache.texts.Set(key, chatContextEntry{src: src, sysPrompt: cv.sysPrompt, contextText: cv.contextText}, 1, 0)
 	}
-	return cv
+	return cv, nil
 }
 
 // What resolveContextBlock found of the request's context block (ContextPreview.ContextBlock).
@@ -379,16 +393,25 @@ func (s *ChatService) contextTokenBudget(ctx context.Context, providerID string)
 
 // computeContextCore is the uncached scrub+BuildContext path — expensive per-block work identical across turns.
 // Without a caller (no ctx) the budget is the deployment's default one.
-func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
-	return s.computeContextCoreWith(provider, doc, scrubbedOrNil(doc), report, req, s.contextTokenBudget(context.Background(), provider.ID()))
+func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (chatContextValue, error) {
+	sd, err := scrubbedOrNil(doc)
+	if err != nil {
+		return chatContextValue{}, err
+	}
+	return s.computeContextCoreWith(provider, doc, sd, report, req, s.contextTokenBudget(context.Background(), provider.ID())), nil
 }
 
-// scrubbedOrNil is scrubOrSelf for a document that may be absent.
-func scrubbedOrNil(doc *models.FlowDocument) *models.FlowDocument {
+// scrubbedOrNil is the redacting clone of a document that may be absent; a clone that cannot be made is
+// errContextScrub, never the document itself.
+func scrubbedOrNil(doc *models.FlowDocument) (*models.FlowDocument, error) {
 	if doc == nil {
-		return nil
+		return nil, nil
 	}
-	return scrubOrSelf(doc)
+	sd, err := scrubDocument(doc)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errContextScrub, err)
+	}
+	return sd, nil
 }
 
 // computeContextCoreWith is computeContextCore for a clone already scrubbed (shared via the doc cache) and a
@@ -683,8 +706,12 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 
 	asked := req.ContextBlockID
 	req, blockStatus := resolveContextBlock(doc, req)
-	_, sysPrompt, contextText, guidelines := s.buildScrubbedContext(ctx, scope, provider, doc, report, req)
-	scrubbedUserMsg := scrubber.ScrubText(req.UserMessage)
+	_, sysPrompt, contextText, guidelines, err := s.buildScrubbedContext(ctx, scope, provider, doc, report, req)
+	if err != nil {
+		return nil, err
+	}
+	// The free-text scrub, as the request build's (historyScrubs): the preview shows what is sent.
+	scrubbedUserMsg := scrubber.ScrubFreeText(req.UserMessage)
 	if guidelines != "" {
 		// Shown where they are sent: in the user turn, not the system prompt.
 		scrubbedUserMsg = guidelines + "\n\n" + scrubbedUserMsg

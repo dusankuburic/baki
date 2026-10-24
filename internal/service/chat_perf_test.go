@@ -270,7 +270,7 @@ var scrubVectors = []string{
 
 // The memo is exactly ScrubText: cold and warm, for texts with and without
 // secrets, short and long, under eviction pressure.
-func TestScrubMemo_MatchesScrubText(t *testing.T) {
+func TestScrubMemo_MatchesScrubFreeText(t *testing.T) {
 	long := strings.Repeat("plain prose about the flow and its loops. ", 20)
 	inputs := []string{
 		"",
@@ -292,8 +292,8 @@ func TestScrubMemo_MatchesScrubText(t *testing.T) {
 	memo := newScrubMemo(4, 4096) // tiny: entries are evicted between rounds
 	for round := 0; round < 3; round++ {
 		for i, in := range inputs {
-			if got, want := memo.scrubText("", in), scrubber.ScrubText(in); got != want {
-				t.Fatalf("round %d input %d: memo = %q, ScrubText = %q", round, i, got, want)
+			if got, want := memo.scrubText("", in), scrubber.ScrubFreeText(in); got != want {
+				t.Fatalf("round %d input %d: memo = %q, ScrubFreeText = %q", round, i, got, want)
 			}
 		}
 	}

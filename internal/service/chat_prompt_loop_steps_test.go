@@ -42,7 +42,7 @@ func runPromptLoop(t *testing.T, stub ai.Provider, tctx *ai.ToolContext, prompt 
 
 func TestRunPromptToolLoop_StepLimitAsksForAFinalAnswer(t *testing.T) {
 	turns := append(markerTurns(maxToolIterations), testutil.FakeTurn{Text: "Here is what I found.", TokensIn: 1, TokensOut: 1})
-	stub := &testutil.FakeProvider{Tools: false, Turns: turns}
+	stub := &testutil.FakeProvider{Tools: false, RequireScrubbed: t, Turns: turns}
 
 	ctl, _, _ := runPromptLoop(t, stub, &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, "look around")
 
@@ -69,7 +69,7 @@ func TestRunPromptToolLoop_StepLimitAsksForAFinalAnswer(t *testing.T) {
 }
 
 func TestRunPromptToolLoop_StepLimitToolCallsAreNotRun(t *testing.T) {
-	stub := &testutil.FakeProvider{Tools: false, Turns: markerTurns(maxToolIterations + 1)}
+	stub := &testutil.FakeProvider{Tools: false, RequireScrubbed: t, Turns: markerTurns(maxToolIterations + 1)}
 
 	ctl, ev, _ := runPromptLoop(t, stub, &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, "look around")
 
@@ -111,8 +111,9 @@ func TestRunPromptToolLoop_AppliedFixesDoNotUseUpSteps(t *testing.T) {
 	ev := &countingEvents{}
 
 	tctx := &ai.ToolContext{Ctx: context.Background(), Doc: doc0, RealDoc: doc0, Analysis: readOnlyAnalysis{svc.analysisCache}}
-	tctx.Fixes = svc.newFixApplier(doc0, "stream-1", ev.emit, nil, func(fresh *models.FlowDocument) {
+	tctx.Fixes = svc.newFixApplier(doc0, "stream-1", ev.emit, nil, func(fresh *models.FlowDocument) error {
 		tctx.RealDoc, tctx.Doc = fresh, fresh
+		return nil
 	})
 
 	stop := make(chan struct{})
@@ -122,7 +123,7 @@ func TestRunPromptToolLoop_AppliedFixesDoNotUseUpSteps(t *testing.T) {
 	call := func(name, input string) testutil.FakeTurn {
 		return testutil.FakeTurn{Text: markerCall(name, input), TokensIn: 1, TokensOut: 1}
 	}
-	stub := &testutil.FakeProvider{Tools: false, Turns: []testutil.FakeTurn{
+	stub := &testutil.FakeProvider{Tools: false, RequireScrubbed: t, Turns: []testutil.FakeTurn{
 		call("list_findings", `{}`),
 		call("apply_fix", `{"blockId":"b1","ruleId":"unhandled-error"}`),
 		call("list_findings", `{}`),
@@ -162,7 +163,7 @@ func TestRunPromptToolLoop_AppliedFixesDoNotUseUpSteps(t *testing.T) {
 }
 
 func TestRunPromptToolLoop_StepLimitWithNoAnswerFails(t *testing.T) {
-	stub := &testutil.FakeProvider{Tools: false, Turns: append(markerTurns(maxToolIterations), testutil.FakeTurn{TokensIn: 1, TokensOut: 1})}
+	stub := &testutil.FakeProvider{Tools: false, RequireScrubbed: t, Turns: append(markerTurns(maxToolIterations), testutil.FakeTurn{TokensIn: 1, TokensOut: 1})}
 
 	ctl, _, _ := runPromptLoop(t, stub, &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, "look around")
 
@@ -178,7 +179,7 @@ func TestRunPromptToolLoop_StepLimitWithNoAnswerFails(t *testing.T) {
 // so the same turn lost its answer here and kept it (then failed) in the native loop.
 func TestRunPromptToolLoop_StepLimitKeepsTheAnswerBesideSkippedCalls(t *testing.T) {
 	both := testutil.FakeTurn{Text: "Here is what I found.\n" + markerCall("search_flow", `{"query":"q7"}`), TokensIn: 1, TokensOut: 1}
-	stub := &testutil.FakeProvider{Tools: false, Turns: append(markerTurns(maxToolIterations), both)}
+	stub := &testutil.FakeProvider{Tools: false, RequireScrubbed: t, Turns: append(markerTurns(maxToolIterations), both)}
 
 	ctl, ev, _ := runPromptLoop(t, stub, &ai.ToolContext{Ctx: context.Background(), Doc: toolLoopDoc()}, "look around")
 

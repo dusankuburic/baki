@@ -423,6 +423,8 @@ export const enSettings = {
       'Not indexed: your embedding model differs from the one this knowledge base was indexed with, so members on that model could never find this document. Use the same embedding provider as the rest of your organization, or re-index the knowledge base with your model first.',
     uploadTitle: 'Upload SOP',
     uploadHint: 'Currently supports .txt and .md files up to 1MB.',
+    uploadScrubHint:
+      'Uploads are masked for secret patterns before they are embedded or stored: passwords, keys, tokens and connection strings are replaced with [REDACTED].',
     reindexTitle:
       'Re-embed every document with your embedding provider. Use it to recover after the embedding provider or model changed — members whose provider uses a different model stop receiving these guidelines.',
     reindexConfirmTitle: 'Re-index knowledge base?',

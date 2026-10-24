@@ -451,7 +451,10 @@ func (s *KnowledgeService) compareSamples(ctx context.Context, provider ai.Provi
 		if strings.TrimSpace(c.Content) == "" || len(c.Embedding) == 0 {
 			continue
 		}
-		texts = append(texts, c.Content)
+		// Stored text leaves the deployment masked, here as on a re-index page. A chunk stored before uploads were
+		// masked is compared from text that differs from what its vector was embedded from; the same-model
+		// threshold absorbs a mask in a 1000-rune chunk.
+		texts = append(texts, scrubText(c.Content))
 		stored = append(stored, c.Embedding)
 	}
 	if len(texts) == 0 {
@@ -670,7 +673,15 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 		return fmt.Errorf("knowledge service has no storage backend (cloud mode required)")
 	}
 
-	chunks := chunkText(content, knowledgeChunkRunes)
+	// Secrets are masked in the document BEFORE it is chunked, never chunk by chunk: the mask is then in the text
+	// every chunk is cut from, so neighbouring chunks carry an identical overlap and stripOverlapPrefix's exact
+	// match keeps de-duplicating it — scrubbed on its own, a chunk whose carried tail begins inside a secret keeps
+	// a key-less fragment of the value while its neighbour masks it. The provider and the store see the masked
+	// text only; the render-time scrub of retrieved guidelines stays as defence in depth. The filename is masked
+	// too: it is stored, listed and rendered beside the chunk (ADR 0027 §10).
+	scrubbed := scrubText(content)
+	filename = scrubText(filename)
+	chunks := chunkText(scrubbed, knowledgeChunkRunes)
 	if len(chunks) > maxKnowledgeChunks {
 		return fmt.Errorf("%w: %d passages exceed the limit of %d", ErrDocumentTooLarge, len(chunks), maxKnowledgeChunks)
 	}
@@ -765,6 +776,9 @@ func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filena
 	if err := s.store.SaveKnowledgeDocumentWithChunks(ctx, userID, doc, knowledgeChunks); err != nil {
 		return err
 	}
+	if scrubbed != content {
+		recordRAGScrubbedChunks("upload", maskedChunks(chunks))
+	}
 
 	// The new version is durable; retire the ones it supersedes. A failure here leaves a duplicate,
 	// not a gap — the safe direction.
@@ -856,7 +870,7 @@ func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query strin
 	// Scrub the query before it leaves the process: ragGuidelines hands this path the RAW message, so
 	// the embeddings request was the one place a pasted credential reached a provider verbatim; scrubbed
 	// before truncation so a cut cannot hide half a secret from the patterns.
-	query = scrubber.ScrubText(query)
+	query = scrubText(query)
 
 	// Truncate before embedding: an oversized message would become a multi-million-token,
 	// billed-per-token request above every provider's per-request cap.
@@ -1021,6 +1035,21 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 			"org_id", orgID, "chunks", res.Chunks, "error", err)
 		return res, nil
 	}
+	// A chunk is scrubbed beside its neighbours in the document (reindexTexts), which the walk does not promise to
+	// hand over with it: ids are uuids, so a document's chunks straddle a page cut in either order, a resumed
+	// request starts inside one, and an unforced walk skips the neighbours already converted. A page that holds
+	// fewer of a document's chunks than the census counts reads the document whole; the counts are taken once,
+	// under the org's lease, so a page's documents cannot change under them.
+	counts, err := s.knowledgeChunkCounts(ctx, orgID)
+	if err != nil {
+		return ReindexResult{}, lostOr(ctx, fmt.Errorf("count document chunks: %w", err))
+	}
+	whole := func(doc []interfaces.KnowledgeChunk) ([]interfaces.KnowledgeChunk, error) {
+		if n := counts[doc[0].DocID]; len(doc) < n {
+			return s.wholeDocument(ctx, orgID, doc[0].DocID, n)
+		}
+		return doc, nil
+	}
 	start := time.Now()
 	budgetSpent := false
 	for res.Chunks < maxReindexChunks {
@@ -1032,9 +1061,15 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 		if len(page) == 0 {
 			break
 		}
-		texts := make([]string, len(page))
-		for i := range page {
-			texts[i] = page[i].Content
+		// A chunk stored raw before uploads were masked is scrubbed here (ADR 0027 §10), read beside the other chunks
+		// of its document so a secret the chunk boundary cut in two — the key in one chunk, the value carried into
+		// the next one's head — is masked in both and the pair keeps the exact overlap stripOverlapPrefix
+		// de-duplicates. The provider gets the masked text and the update below is handed it too, but the store's
+		// update writes the vector and identity only, so the stored text stays as it was until the document is
+		// re-uploaded; the count says how many such chunks the org still holds.
+		texts, masked, err := reindexTexts(page, whole)
+		if err != nil {
+			return stopped(fmt.Errorf("load document chunks: %w", err))
 		}
 		embeddings, err := embedBatched(ctx, provider, texts)
 		if err != nil {
@@ -1045,6 +1080,7 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 		}
 		s.noteEmbeddingWidth(orgID, provider, embeddings)
 		for i := range page {
+			page[i].Content = texts[i]
 			page[i].Embedding = embeddings[i]
 			page[i].EmbeddingIdentity = identity
 			page[i].OrgID = orgID
@@ -1053,6 +1089,7 @@ func (s *KnowledgeService) reindexOrg(ctx context.Context, scope, orgID string, 
 		if err := s.store.UpdateKnowledgeChunkEmbeddings(ctx, userID, page); err != nil {
 			return stopped(fmt.Errorf("update embeddings: %w", err))
 		}
+		recordRAGScrubbedChunks("reindex", masked)
 		for i := range page {
 			docs[page[i].DocID] = true
 		}
@@ -1276,6 +1313,28 @@ const (
 	minOverlapRunes = 60
 )
 
+// redactedMark is what the scrubber writes in place of a secret.
+const redactedMark = "[REDACTED]"
+
+// scrubText masks the secrets in knowledge text: a document, its filename, a stored chunk on a re-index page, the
+// guard's samples and the search query. ScrubFreeText rather than the regex pass alone because PAD runbooks are the
+// product's domain: a guideline that pastes a flow action keeps its credential in a PAD literal (SET Password TO
+// $”'…”'), which no regex class matches.
+func scrubText(s string) string { return scrubber.ScrubFreeText(s) }
+
+// maskedChunks counts the chunks of a document that changed under the scrub which carry a mask: an upload is
+// scrubbed whole before chunking, so which chunks held a secret is read off the mask (a chunk that carried the
+// literal from its source counts too; the caller asks only when the document changed).
+func maskedChunks(chunks []string) int {
+	n := 0
+	for _, c := range chunks {
+		if strings.Contains(c, redactedMark) {
+			n++
+		}
+	}
+	return n
+}
+
 // stripOverlapPrefix removes the chunking overlap from a retrieved chunk when a neighbouring chunk from
 // the SAME document is also in the result set: chunk N+1 begins with the exact tail of chunk N, so
 // retrieving both duplicates that passage. Exact-string match, same-DocID scoping, longest first; a chunk
@@ -1306,6 +1365,194 @@ func stripOverlapPrefix(content, docID string, all []interfaces.KnowledgeChunk) 
 		}
 	}
 	return content
+}
+
+// reindexTexts is the text each chunk of a re-index page is embedded from: the stored text masked for secrets, every
+// chunk read beside the other chunks of its document (scrubDocumentChunks). whole hands back every chunk of the
+// document the page holds doc of — doc itself when that is all of them. masked counts the chunks whose text changed.
+func reindexTexts(page []interfaces.KnowledgeChunk, whole func([]interfaces.KnowledgeChunk) ([]interfaces.KnowledgeChunk, error)) (texts []string, masked int, err error) {
+	texts = make([]string, len(page))
+	for start := 0; start < len(page); {
+		end := start + 1
+		for end < len(page) && page[end].DocID == page[start].DocID {
+			end++
+		}
+		doc := page[start:end]
+		all, err := whole(doc)
+		if err != nil {
+			return nil, 0, err
+		}
+		scrubDocumentChunks(doc, all, texts[start:end])
+		start = end
+	}
+	for i := range page {
+		if texts[i] != page[i].Content {
+			masked++
+		}
+	}
+	return texts, masked, nil
+}
+
+// knowledgeChunkCounts is the org's chunk census by document: how many chunks each document has, from the
+// document list (ChunkCount).
+func (s *KnowledgeService) knowledgeChunkCounts(ctx context.Context, orgID string) (map[string]int, error) {
+	docs, err := s.store.ListKnowledgeDocuments(ctx, orgID, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int, len(docs))
+	for _, d := range docs {
+		counts[d.ID] = d.ChunkCount
+	}
+	return counts, nil
+}
+
+// wholeDocument is every chunk of document docID — n of them when the census was taken — raw, in id order, whatever
+// their identity: what a re-index page reads for a document it holds part of (reindexTexts). The walk's own page
+// statement serves, from the document's first id; a document deleted meanwhile reads short.
+func (s *KnowledgeService) wholeDocument(ctx context.Context, orgID, docID string, n int) ([]interfaces.KnowledgeChunk, error) {
+	var all []interfaces.KnowledgeChunk
+	cursor := interfaces.KnowledgeChunkCursor{DocID: docID}
+	for len(all) < n {
+		page, err := s.store.ListKnowledgeChunkContents(ctx, orgID, cursor, n-len(all), "")
+		if err != nil {
+			return nil, err
+		}
+		k := 0
+		for k < len(page) && page[k].DocID == docID {
+			k++
+		}
+		all = append(all, page[:k]...)
+		if k == 0 || k < len(page) {
+			break
+		}
+		cursor.ID = page[k-1].ID
+	}
+	return all, nil
+}
+
+// scrubDocumentChunks fills texts with the masked text of each chunk of doc, all being the chunks of one document
+// (all ⊇ doc). chunkText carries a chunk's last chunkOverlapRunes runes into the next chunk's head, so a chunk that
+// begins with another's exact tail had its boundary cut through whatever that tail holds, and a scrub of either
+// chunk alone misses a secret cut in two: the chunk's head is a value without its key, the predecessor's end a
+// stub of the value the patterns need not match (a PAD literal with no closer is no literal at all). Each chunk
+// is therefore read beside both neighbours: with its successor behind it, so a secret cut at its far end is matched
+// whole and the stub goes (scrubBeforeSuccessor); and, when its predecessor's scrub so changes the tail the chunk
+// carries, with the predecessor in front of it, taking the masked predecessor's exact tail as its head so the pair
+// still shares the overlap stripOverlapPrefix de-duplicates (scrubWithPredecessor). The overlap is looked up
+// exactly: every stored document was cut by chunkerVersion 1, whose carry is exactly chunkOverlapRunes long.
+func scrubDocumentChunks(doc, all []interfaces.KnowledgeChunk, texts []string) {
+	// byTail and byHead: the document's chunks by the tail they carried into a successor and the head they
+	// carry from a predecessor.
+	byTail := make(map[string][]int, len(all))
+	byHead := make(map[string][]int, len(all))
+	for j := range all {
+		if tail, ok := tailOverlap(all[j].Content); ok {
+			byTail[tail] = append(byTail[tail], j)
+		}
+		if head, ok := headOverlap(all[j].Content); ok {
+			byHead[head] = append(byHead[head], j)
+		}
+	}
+	// neighbour is the first chunk among candidates other than content itself (a duplicate chunk is its own
+	// candidate), or -1.
+	neighbour := func(candidates []int, content string) int {
+		for _, j := range candidates {
+			if all[j].Content != content {
+				return j
+			}
+		}
+		return -1
+	}
+	// lone[j] is all[j].Content scrubbed on its own, derived once a chunk is found to be a predecessor (never ""
+	// for one: it is longer than the carry).
+	lone := make([]string, len(all))
+	for i := range doc {
+		content := doc[i].Content
+		texts[i] = scrubText(content)
+		if head, ok := headOverlap(content); ok {
+			if j := neighbour(byTail[head], content); j >= 0 {
+				rest := content[len(head):]
+				if lone[j] == "" {
+					lone[j] = scrubText(all[j].Content)
+				}
+				// The predecessor as it is embedded: its own scrub, less a stub of a secret cut at its far end.
+				predMasked := scrubBeforeSuccessor(lone[j], rest)
+				if !strings.HasSuffix(predMasked, head) {
+					texts[i] = scrubWithPredecessor(all[j].Content, predMasked, rest)
+				}
+			}
+		}
+		if tail, ok := tailOverlap(content); ok {
+			if k := neighbour(byHead[tail], content); k >= 0 {
+				texts[i] = scrubBeforeSuccessor(texts[i], all[k].Content[len(tail):])
+			}
+		}
+	}
+}
+
+// scrubBeforeSuccessor masks a secret cut at the far end of a chunk — its start in the chunk, the rest carried
+// into the successor — in text, the chunk's masked text so far; rest is the successor after the carried head. text
+// is scrubbed with rest behind it, so the secret is matched whole, and the successor's share is taken off the end
+// again: from the first character after the secret the scrub is the same as the successor's own, so that share is
+// the longest common suffix of the two. A chunk ending in no cut secret comes back as it was.
+func scrubBeforeSuccessor(text, rest string) string {
+	joined := scrubText(text + rest)
+	return joined[:len(joined)-commonSuffix(joined, scrubText(rest))]
+}
+
+// scrubWithPredecessor masks a chunk that begins with the exact tail of pred, its predecessor, whose scrub
+// (predMasked) changed that tail; rest is the chunk after the carried tail. The two are scrubbed as the stretch of
+// the document they came from, pred followed by rest, so the key in pred and the value carried into the chunk are
+// matched whole however far into rest the value runs; the chunk then takes the masked predecessor's last
+// chunkOverlapRunes runes as its head and the rest of the masked stretch after it — as chunkText would cut the
+// masked document — so the pair shares an exact overlap for stripOverlapPrefix. When the stretch's scrub does not
+// begin with the predecessor's (a pattern that reads differently with more text behind it), the cut cannot be
+// placed: the chunk is then scrubbed as the masked predecessor's tail followed by rest.
+func scrubWithPredecessor(pred, predMasked, rest string) string {
+	stretch := scrubText(pred + rest)
+	tail, _ := tailOverlap(predMasked)
+	if strings.HasPrefix(stretch, predMasked) {
+		return stretch[len(predMasked)-len(tail):]
+	}
+	return scrubText(tail + rest)
+}
+
+// commonSuffix is the length in bytes of the longest common suffix of a and b that begins on a rune boundary.
+func commonSuffix(a, b string) int {
+	n := 0
+	for n < len(a) && n < len(b) && a[len(a)-1-n] == b[len(b)-1-n] {
+		n++
+	}
+	for n > 0 && !utf8.RuneStart(a[len(a)-n]) {
+		n--
+	}
+	return n
+}
+
+// headOverlap is a chunk's first chunkOverlapRunes runes — the tail chunkText carried into it from its predecessor,
+// when it has one — and false for a chunk no longer than that, into which nothing was carried (a carry is followed
+// by new text).
+func headOverlap(content string) (string, bool) {
+	i, n := 0, 0
+	for i < len(content) && n < chunkOverlapRunes {
+		_, sz := utf8.DecodeRuneInString(content[i:])
+		i += sz
+		n++
+	}
+	return content[:i], n == chunkOverlapRunes && i < len(content)
+}
+
+// tailOverlap is a chunk's last chunkOverlapRunes runes — what chunkText carried from it into its successor — and
+// false for a chunk no longer than that, from which chunkText carried nothing. A shorter string is returned whole.
+func tailOverlap(content string) (string, bool) {
+	i, n := len(content), 0
+	for i > 0 && n < chunkOverlapRunes {
+		_, sz := utf8.DecodeLastRuneInString(content[:i])
+		i -= sz
+		n++
+	}
+	return content[i:], n == chunkOverlapRunes && i > 0
 }
 
 // chunkText splits text into chunks of at most size runes (not bytes, so multi-byte scripts don't blow

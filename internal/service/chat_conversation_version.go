@@ -147,7 +147,7 @@ func (s *ChatService) mutateConversationAt(ctx context.Context, flowID, key stri
 		if !s.conversationHistoryEnabled(ctx) {
 			return mutation{}, nil
 		}
-		written, err := s.backend.SaveConversationIf(ctx, flowID, key, version, toStorageMessages(normalizeConversation(out)))
+		written, err := s.backend.SaveConversationIf(ctx, flowID, key, version, toStorageMessages(normalizeConversation(callerScope(ctx), out)))
 		if err == nil {
 			return mutation{Changed: true, Loaded: version, Version: written, Versioned: true}, nil
 		}
@@ -209,7 +209,7 @@ func (s *ChatService) SaveClientConversation(ctx context.Context, flowID, provid
 	if !s.conversationHistoryEnabled(ctx) {
 		return ConversationSaved{Version: *base, Versioned: true}, nil
 	}
-	version, err := s.backend.SaveConversationIf(ctx, flowID, provider, *base, toStorageMessages(normalizeConversation(messages)))
+	version, err := s.backend.SaveConversationIf(ctx, flowID, provider, *base, toStorageMessages(normalizeConversation(callerScope(ctx), messages)))
 	if errors.Is(err, storageif.ErrConversationConflict) {
 		chatConversationConflictsTotal.WithLabelValues("client_save").Inc()
 		return ConversationSaved{}, conversationConflict(err, version)
@@ -297,8 +297,9 @@ func newUserTurn(req models.ChatRequest, history []models.ChatMessage) models.Ch
 		userID = uuid.NewString()
 	}
 	return models.ChatMessage{
-		ID:             userID,
-		Role:           "user",
+		ID:   userID,
+		Role: "user",
+		// As typed; the write stores its scrubbed copy (normalizeConversation, through the history memo).
 		Content:        req.UserMessage,
 		Timestamp:      time.Now(),
 		ContextBlockID: req.ContextBlockID,

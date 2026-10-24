@@ -81,7 +81,7 @@ func searchTurns(n int) []testutil.FakeTurn {
 // one final answer with tools ruled out, and a model that gives one finishes normally.
 func TestRunToolLoop_StepLimitAsksForAFinalAnswer(t *testing.T) {
 	turns := append(searchTurns(maxToolIterations), testutil.FakeTurn{Text: "Here is what I found.", TokensIn: 1, TokensOut: 1})
-	stub := &testutil.FakeProvider{Tools: true, Turns: turns}
+	stub := &testutil.FakeProvider{Tools: true, RequireScrubbed: t, Turns: turns}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := startedCtl()
 	ev := &countingEvents{}
@@ -110,7 +110,7 @@ func TestRunToolLoop_StepLimitAsksForAFinalAnswer(t *testing.T) {
 // TestRunToolLoop_StepLimitToolCallsAreNotRun: a model that still calls tools on the final turn gets nothing
 // executed, and the turn ends with TOOL_LOOP_LIMIT saying the step limit ended it.
 func TestRunToolLoop_StepLimitToolCallsAreNotRun(t *testing.T) {
-	stub := &testutil.FakeProvider{Tools: true, Turns: searchTurns(maxToolIterations + 1)}
+	stub := &testutil.FakeProvider{Tools: true, RequireScrubbed: t, Turns: searchTurns(maxToolIterations + 1)}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := startedCtl()
 	ev := &countingEvents{}
@@ -194,8 +194,9 @@ func TestRunToolLoop_AppliedFixesDoNotUseUpSteps(t *testing.T) {
 	ev := &countingEvents{}
 
 	tctx := &ai.ToolContext{Ctx: context.Background(), Doc: doc0, RealDoc: doc0, Analysis: readOnlyAnalysis{svc.analysisCache}}
-	tctx.Fixes = svc.newFixApplier(doc0, "stream-1", ev.emit, nil, func(fresh *models.FlowDocument) {
+	tctx.Fixes = svc.newFixApplier(doc0, "stream-1", ev.emit, nil, func(fresh *models.FlowDocument) error {
 		tctx.RealDoc, tctx.Doc = fresh, fresh
+		return nil
 	})
 
 	stop := make(chan struct{})
@@ -205,7 +206,7 @@ func TestRunToolLoop_AppliedFixesDoNotUseUpSteps(t *testing.T) {
 	call := func(id, name, input string) testutil.FakeTurn {
 		return testutil.FakeTurn{ToolCalls: []ai.ToolCall{{ID: id, Name: name, Input: []byte(input)}}, TokensIn: 1, TokensOut: 1}
 	}
-	stub := &testutil.FakeProvider{Tools: true, Turns: []testutil.FakeTurn{
+	stub := &testutil.FakeProvider{Tools: true, RequireScrubbed: t, Turns: []testutil.FakeTurn{
 		call("l1", "list_findings", `{}`),
 		call("a1", "apply_fix", `{"blockId":"b1","ruleId":"unhandled-error"}`),
 		call("l2", "list_findings", `{}`),
@@ -261,7 +262,7 @@ func (p *toolsRefusedAt) Stream(ctx context.Context, req ai.Request, onChunk fun
 // request on every final pass, so the retry carried it twice.
 func TestRunToolLoop_StepLimitNoteIsAddedOnceAfterAToolsRetry(t *testing.T) {
 	turns := append(searchTurns(maxToolIterations), testutil.FakeTurn{Text: "Here is what I found.", TokensIn: 1, TokensOut: 1})
-	stub := &toolsRefusedAt{FakeProvider: testutil.FakeProvider{Tools: true, Turns: turns}, call: maxToolIterations + 1}
+	stub := &toolsRefusedAt{FakeProvider: testutil.FakeProvider{Tools: true, RequireScrubbed: t, Turns: turns}, call: maxToolIterations + 1}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := startedCtl()
 	ev := &countingEvents{}
@@ -285,7 +286,7 @@ func TestRunToolLoop_StepLimitNoteIsAddedOnceAfterAToolsRetry(t *testing.T) {
 // TestRunToolLoop_StepLimitFailureCarriesUsage: the step-limit failure comes after seven billed provider
 // turns; its error reports them like the other billed failures, instead of a bare error with no usage.
 func TestRunToolLoop_StepLimitFailureCarriesUsage(t *testing.T) {
-	stub := &testutil.FakeProvider{Tools: true, Turns: searchTurns(maxToolIterations + 1)}
+	stub := &testutil.FakeProvider{Tools: true, RequireScrubbed: t, Turns: searchTurns(maxToolIterations + 1)}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := startedCtl()
 	ev := &countingEvents{}
@@ -309,7 +310,7 @@ func TestRunToolLoop_StepLimitFailureCarriesUsage(t *testing.T) {
 // of a tool call is the output-limit failure it is on every other turn, not a model ignoring the note.
 func TestRunToolLoop_OutputLimitOnTheFinalTurnIsNotTheStepLimit(t *testing.T) {
 	cut := testutil.FakeTurn{ToolCalls: []ai.ToolCall{{ID: "t7", Name: "search_flow", Input: []byte(`{"query":"q7"}`)}}, FinishReason: "max_tokens", TokensIn: 1, TokensOut: 1}
-	stub := &testutil.FakeProvider{Tools: true, Turns: append(searchTurns(maxToolIterations), cut)}
+	stub := &testutil.FakeProvider{Tools: true, RequireScrubbed: t, Turns: append(searchTurns(maxToolIterations), cut)}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := startedCtl()
 	ev := &countingEvents{}
@@ -325,7 +326,7 @@ func TestRunToolLoop_OutputLimitOnTheFinalTurnIsNotTheStepLimit(t *testing.T) {
 // TestRunToolLoop_StepLimitWithNoAnswerFails: a model that obeys the note but says nothing (it meant only to
 // call a tool) used to end the turn with done and an empty answer after the tool trail.
 func TestRunToolLoop_StepLimitWithNoAnswerFails(t *testing.T) {
-	stub := &testutil.FakeProvider{Tools: true, Turns: append(searchTurns(maxToolIterations), testutil.FakeTurn{TokensIn: 1, TokensOut: 1})}
+	stub := &testutil.FakeProvider{Tools: true, RequireScrubbed: t, Turns: append(searchTurns(maxToolIterations), testutil.FakeTurn{TokensIn: 1, TokensOut: 1})}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := startedCtl()
 	ev := &countingEvents{}
@@ -346,7 +347,7 @@ func TestRunToolLoop_StepLimitWithNoAnswerFails(t *testing.T) {
 // saying so; failing the turn after the text threw the answer away.
 func TestRunToolLoop_StepLimitKeepsTheAnswerBesideSkippedCalls(t *testing.T) {
 	both := testutil.FakeTurn{Text: "Here is what I found.", ToolCalls: []ai.ToolCall{{ID: "t7", Name: "search_flow", Input: []byte(`{"query":"q7"}`)}}, TokensIn: 1, TokensOut: 1}
-	stub := &testutil.FakeProvider{Tools: true, Turns: append(searchTurns(maxToolIterations), both)}
+	stub := &testutil.FakeProvider{Tools: true, RequireScrubbed: t, Turns: append(searchTurns(maxToolIterations), both)}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := startedCtl()
 	ev := &countingEvents{}

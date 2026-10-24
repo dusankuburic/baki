@@ -21,11 +21,13 @@ const (
 	ChatErrProviderBalance       = "PROVIDER_BALANCE"
 	ChatErrProviderNotConfigured = "PROVIDER_NOT_CONFIGURED"
 	ChatErrContextLimit          = "CONTEXT_LIMIT"
-	ChatErrStopped               = "STREAM_STOPPED"
-	ChatErrTimeout               = "STREAM_TIMEOUT"
-	ChatErrInterrupted           = "STREAM_INTERRUPTED"
-	ChatErrToolLoopLimit         = "TOOL_LOOP_LIMIT"
-	ChatErrContentFiltered       = "PROVIDER_CONTENT_FILTERED"
+	// ChatErrContextUnavailable: the flow's redacting clone could not be made, so nothing was sent (errContextScrub).
+	ChatErrContextUnavailable = "CONTEXT_UNAVAILABLE"
+	ChatErrStopped            = "STREAM_STOPPED"
+	ChatErrTimeout            = "STREAM_TIMEOUT"
+	ChatErrInterrupted        = "STREAM_INTERRUPTED"
+	ChatErrToolLoopLimit      = "TOOL_LOOP_LIMIT"
+	ChatErrContentFiltered    = "PROVIDER_CONTENT_FILTERED"
 	// ChatErrProviderPermission: credentials accepted, but the identity lacks the role for the model or agent.
 	ChatErrProviderPermission = "PROVIDER_PERMISSION"
 	// ChatErrOutputLimit: the model spent its whole completion budget (Max tokens) without writing any answer —

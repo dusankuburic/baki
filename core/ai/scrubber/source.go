@@ -9,14 +9,15 @@ import (
 
 // ScrubSourceText scrubs raw PAD source text (as read from disk for the
 // selected-source-files chat context) with the same AST-level rules as
-// ScrubDocument: the text is parsed, every block property the document
-// scrubber would mask (action-specific sensitive fields, credential-named
-// keys, SET-TO targets) has its literal value replaced with [REDACTED], and
-// the generic regex pass runs afterwards. This closes the gap where PAD's
-// `SET Password TO $”'secret”'` / `Text: $”'secret”'` syntax reached the
-// model verbatim because it matches no key=value regex. A parse failure falls
-// back to the regex-only ScrubText pass — degraded, but never worse than the
-// previous behaviour.
+// ScrubDocument: the text is parsed, every value the document scrubber would
+// mask (action-specific sensitive fields, credential-named keys, SET-TO
+// targets, header literals and comment words of the Name pass, and any value
+// the entropy fallback catches) is replaced with [REDACTED] wherever it
+// occurs, and the generic regex pass runs afterwards. This closes the gap
+// where PAD's `SET Password TO $”'secret”'` / `Text: $”'secret”'` syntax
+// reached the model verbatim because it matches no key=value regex. A parse
+// failure falls back to the regex-only ScrubText pass — degraded, but never
+// worse than the previous behaviour.
 func ScrubSourceText(text string) string {
 	if strings.TrimSpace(text) == "" {
 		return text
@@ -50,10 +51,14 @@ func collectSensitiveValues(doc *models.FlowDocument) []string {
 		seen[v] = struct{}{}
 		vals = append(vals, v)
 	}
-	var walk func(blocks []models.Block)
-	walk = func(blocks []models.Block) {
+	var walk func(blocks []models.Block, switchHoldsCredential bool)
+	walk = func(blocks []models.Block, switchHoldsCredential bool) {
 		for i := range blocks {
 			b := &blocks[i]
+			// The Name pass: header literals and comment words (name.go).
+			for _, sp := range nameSecretSpans(b, switchHoldsCredential) {
+				add(b.Name[sp.start:sp.end])
+			}
 			// Action-specific fields (e.g. PopulateTextField.Text).
 			if fields, ok := sensitiveActions[b.RawType]; ok {
 				for _, f := range fields {
@@ -62,24 +67,26 @@ func collectSensitiveValues(doc *models.FlowDocument) []string {
 					}
 				}
 			}
-			// Credential-named keys on any action.
+			// Credential-named keys on any action, and the entropy fallback
+			// the document path applies to every property: an opaque token
+			// under a key nobody listed (SET ServiceKey TO …, Note: …).
 			for k, v := range b.Properties {
-				if isSensitiveFieldName(k) && len(v) > 0 {
+				if len(v) > 0 && (isSensitiveFieldName(k) || looksLikeHighEntropySecret(v)) {
 					add(v)
 				}
 			}
 			// SET <sensitive-name> TO <literal> injects _var/_value; mask the
 			// literal when the target variable names a credential.
-			if name, ok := b.Properties["_var"]; ok && isSensitiveFieldName(name) {
+			if name, ok := b.Properties["_var"]; ok && isCredentialLikeName(name) {
 				if v := b.Properties["_value"]; len(v) > 0 {
 					add(v)
 				}
 			}
-			walk(b.Children)
+			walk(b.Children, b.Type == models.BlockTypeSwitch && switchHoldsCredentialVar(b))
 		}
 	}
 	for _, sf := range doc.Subflows {
-		walk(sf.Blocks)
+		walk(sf.Blocks, false)
 	}
 	return vals
 }

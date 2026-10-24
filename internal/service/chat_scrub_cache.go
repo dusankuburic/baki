@@ -41,14 +41,15 @@ func textDigest(text string) cache.Part {
 	return cache.Content(string(sum[:]))
 }
 
-// scrubMemo memoises scrubber.ScrubText for the chat history: the secret regexes run at
+// scrubMemo memoises scrubber.ScrubFreeText for the chat history: the secret regexes run at
 // ~3 MB/s, so re-scrubbing the stored conversation every turn cost ~350 ms at the 1 MiB
 // history cap. Results are keyed by the caller's scope and the content's SHA-256
 // (historyScrubSpec) — never the text itself — bounded by entries and by the bytes of
 // redacted texts held, LRU evicted; short texts are scrubbed directly (the hash costs
 // about as much as the prefiltered scrub).
 type scrubMemo struct {
-	// scrub is scrubber.ScrubText (tests count it).
+	// scrub is scrubber.ScrubFreeText (tests count it): a message may carry pasted PAD code, whose literal
+	// syntax the regex pass alone lets through.
 	scrub      func(string) string
 	mu         sync.Mutex
 	ll         *list.List // front = most recently used; values are *scrubMemoEntry
@@ -73,7 +74,7 @@ const (
 )
 
 func newScrubMemo(maxEntries, maxBytes int) *scrubMemo {
-	c := &scrubMemo{scrub: scrubber.ScrubText, ll: list.New(), m: make(map[[sha256.Size]byte]*list.Element), maxBytes: maxBytes, maxEntries: maxEntries}
+	c := &scrubMemo{scrub: scrubber.ScrubFreeText, ll: list.New(), m: make(map[[sha256.Size]byte]*list.Element), maxBytes: maxBytes, maxEntries: maxEntries}
 	cache.Track(historyScrubSpec, c)
 	return c
 }
@@ -81,7 +82,7 @@ func newScrubMemo(maxEntries, maxBytes int) *scrubMemo {
 // historyScrubs is the process-wide memo buildScopedMessages scrubs through.
 var historyScrubs = newScrubMemo(16384, 32<<20)
 
-// scrubText is scrubber.ScrubText(text), memoised per scope for texts of
+// scrubText is scrubber.ScrubFreeText(text), memoised per scope for texts of
 // scrubMemoMinBytes and up.
 func (c *scrubMemo) scrubText(scope, text string) string {
 	if len(text) < scrubMemoMinBytes {
