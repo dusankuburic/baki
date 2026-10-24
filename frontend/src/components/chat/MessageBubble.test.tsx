@@ -79,9 +79,11 @@ describe('MessageBubble — chat→app navigation', () => {
     expect(setFocusedFinding).toHaveBeenCalledWith('hardcoded-credential:blk-1')
   })
 
-  it('renders a normal external link as an anchor (no block scheme)', () => {
+  it('renders a normal external link (no block scheme) as an anchor once the user asks to see it', () => {
     render(<MessageBubble message={msg({content: 'docs at [here](https://example.com).'})} />)
-    const link = screen.getByRole('link', {name: 'here'})
+    expect(screen.queryByRole('link')).toBeNull()
+    fireEvent.click(screen.getByRole('button', {name: /here/}))
+    const link = screen.getByRole('link', {name: /example\.com/})
     expect(link).toHaveAttribute('href', 'https://example.com')
     expect(link).toHaveAttribute('target', '_blank')
   })
@@ -338,5 +340,41 @@ describe('MessageBubble — persisted approvals', () => {
     expect(generic[1]).toHaveTextContent('delete_block')
     expect(generic[1]).toHaveTextContent('Block 1')
     expect(generic[1]).toHaveTextContent('Cancelled — nothing was changed.')
+  })
+})
+
+// The omitted-history chip (R-streaming-7): a turn that lost earlier history says so, with the Compact action.
+describe('MessageBubble — omitted history chip', () => {
+  it('shows how many earlier turns were omitted, with a Compact action', () => {
+    const onCompact = vi.fn()
+    render(<MessageBubble message={msg({content: 'answer', truncated: 4})} onCompact={onCompact} />)
+    expect(screen.getByText(/Earlier turns omitted \(4\)/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Compact'}))
+    expect(onCompact).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the chip without the action when compacting is not offered', () => {
+    render(<MessageBubble message={msg({content: 'answer', truncated: 2})} />)
+    expect(screen.getByText(/Earlier turns omitted \(2\)/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Compact'})).toBeNull()
+  })
+
+  it('renders no chip for a message that lost nothing', () => {
+    render(<MessageBubble message={msg({content: 'answer'})} />)
+    expect(screen.queryByText(/Earlier turns omitted/)).toBeNull()
+  })
+})
+
+// External links (R-security-2): a URL the model emits is flow- or document-derived text as far as the user can
+// tell, so it never renders as a navigable link until the user asks for it; block: and finding: links still work.
+describe('MessageBubble — external links', () => {
+  it('does not render a navigable link until the user confirms it', () => {
+    render(<MessageBubble message={msg({content: 'See [the docs](https://example.com/page) for more.'})} />)
+    expect(screen.queryByRole('link')).toBeNull()
+    fireEvent.click(screen.getByRole('button', {name: /the docs/}))
+    const link = screen.getByRole('link', {name: /example\.com\/page/})
+    expect(link).toHaveAttribute('href', 'https://example.com/page')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
   })
 })

@@ -40,7 +40,7 @@ import (
 // Two replicas of the app on one database and one Redis, assembled from the real components with the providers the
 // fx graph uses (docs/architecture/operations.md, "Running more than one replica"): each replica has its own event
 // bus with the production subscribers and the cache invalidation fan-out, its own event manager with the SSE fan-out,
-// its own flow, chat, settings and AI budget services on its own Redis client. The scenarios run across the two as
+// its own flow, chat and settings services on its own Redis client. The scenarios run across the two as
 // the mechanisms' own tests cannot: one flow of work touches the database and Redis and a second replica together,
 // and Redis is killed and restored in the middle of it. The mechanisms' unit tests (internal/redisx, internal/api,
 // internal/service, internal/invalidation) cover each part alone; this proves they work side by side on one
@@ -56,8 +56,7 @@ const twoReplicaUser = "u-two-replicas"
 const xrSrc = "#Region \"Main\"\n    HTTPClient.InvokeUrl Url: $'''https://x/%s''' Method: HTTPClient.Method.GET\n#EndRegion\n"
 
 // xrProviders registers the stub models the scenarios stream with, once per test binary (ai.RegisterProvider is
-// process-global). xr-blocking streams nothing until its stream is stopped and bills a high price so its reservation
-// shows in the budget; xr-unpriced is the same at no price. A model that asks for a fix and then answers is registered
+// process-global). xr-blocking streams nothing until its stream is stopped. A model that asks for a fix and then answers is registered
 // per stream (startStreamWith): the fix names a block of the flow under test.
 var xrProviders sync.Once
 
@@ -68,20 +67,9 @@ func (p *xrBlocking) Stream(ctx context.Context, _ ai.Request, _ func(ai.Chunk))
 	return ctx.Err()
 }
 
-func (p *xrBlocking) PricePerMillionTokens() ai.Pricing { return ai.Pricing{OutputCostPerM: 10000} }
-
-// xrUnpriced streams nothing until its stream is stopped and costs nothing, so the budget never ends its streams.
-type xrUnpriced struct{ *testutil.FakeProvider }
-
-func (p *xrUnpriced) Stream(ctx context.Context, _ ai.Request, _ func(ai.Chunk)) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
-
 func registerXRProviders() {
 	xrProviders.Do(func() {
 		ai.RegisterProvider("xr-blocking", func(string) ai.Provider { return &xrBlocking{FakeProvider: &testutil.FakeProvider{}} })
-		ai.RegisterProvider("xr-unpriced", func(string) ai.Provider { return &xrUnpriced{FakeProvider: &testutil.FakeProvider{}} })
 	})
 }
 
@@ -98,7 +86,6 @@ type xrReplica struct {
 	flows    *service.FlowService
 	events   *api.EventManager
 	srv      *httptest.Server
-	budget   *service.AIBudget
 	chat     *service.ChatService
 	factory  *ai.ProviderFactory
 	analysis *service.AnalysisService
@@ -124,7 +111,8 @@ func newXRReplica(t *testing.T, rep *redisreplica.Replica, backend storageif.Sto
 	t.Cleanup(r.srv.Close)
 
 	analyzer := ProvideAnalyzer()
-	r.flows = ProvideFlowService(cfg, r.events, r.settings, r.docs, backend, nil, ProvideASTCache(), r.bus, analyzer, rep.Client)
+	// The flow service decides flow permissions as in production; the chat gate asks it whether the caller may edit.
+	r.flows = ProvideFlowService(cfg, r.events, r.settings, r.docs, backend, service.NewAuthzService(backend, nil), ProvideASTCache(), r.bus, analyzer, rep.Client)
 	analysis, err := service.NewAnalysisService(r.events, r.settings, nil, service.AnalysisOptions{Analyzer: analyzer, Bus: r.bus, Shared: replicatedClient(rep.Client, cfg)})
 	if err != nil {
 		t.Fatal(err)
@@ -141,10 +129,9 @@ func newXRReplica(t *testing.T, rep *redisreplica.Replica, backend storageif.Sto
 	})
 	t.Cleanup(r.scan.Stop)
 	r.dash = service.NewDashboardService(backend, analysis, r.flows, nil)
-	r.budget = provideAIBudget(r.settings, backend, rep.Client, nil, cfg)
 	r.factory = ai.NewProviderFactory(func(_, _ string) (string, error) { return "k", nil }, nil, nil, nil)
 	r.chat = service.NewChatService(r.events, t.TempDir(), r.flows, analysis, r.settings, r.factory, backend, config.ModeCloud, service.ChatOptions{
-		Budget: r.budget, Resume: rep.Client, Instance: rep.ID,
+		Resume: rep.Client, Instance: rep.ID,
 		MultiReplica: multiReplicaClient(rep.Client, cfg) != nil, Health: rep.Health,
 	})
 	r.chat.StartCommands()
@@ -153,7 +140,7 @@ func newXRReplica(t *testing.T, rep *redisreplica.Replica, backend storageif.Sto
 	// The model listings and the knowledge base's corpus counts are replicated caches too: a resync reaches their
 	// appliers, so they exist (nothing here lists models or reads a corpus).
 	providers := service.NewProviderService(nil, nil, r.factory, nil, nil, nil, service.WithProviderEvents(r.bus))
-	knowledge := ProvideKnowledgeService(backend, r.factory, r.settings, cfg, nil, r.budget, r.bus, nil)
+	knowledge := ProvideKnowledgeService(backend, r.factory, r.settings, cfg, nil, r.bus, nil)
 	SubscribeFlowCaches(r.bus, r.flows, r.dash, r.chat)
 	SubscribeSettingsAndCredentialCaches(r.bus, r.settings, r.profiles, providers, knowledge)
 	stop := invalidation.Install(rep.Client, rep.Health, r.bus, rep.ID,
@@ -268,7 +255,6 @@ func TestTwoReplicas_EndToEnd(t *testing.T) {
 				{"a user's event streams, chat streams and stream ids count on both replicas", scenarioCapsSpanTheReplicas},
 				{"a deployment setting changed on A reaches B before its cache expires", scenarioSettingsReachThePeer},
 				{"a stop and an approval decision on B reach the stream running on A", scenarioStreamCommands},
-				{"the AI budget counts the other replica's running stream", scenarioSharedBudget},
 				{"a flow swept or analyzed on A is not analyzed or recorded again on B, which exports and diffs A's runs", scenarioAnalysesAcrossReplicas},
 				{"Redis killed and restored mid-run: degraded, then healed", scenarioRedisOutage},
 			} {
@@ -524,20 +510,20 @@ func scenarioUndoOnTheOtherReplica(t *testing.T, s *xrStack) {
 	}
 }
 
-// An admin lowers the deployment's daily AI budget on A: B enforces it as soon as the message lands.
+// An admin changes the deployment's embedding model on A: B reads it as soon as the message lands.
 func scenarioSettingsReachThePeer(t *testing.T, s *xrStack) {
 	ctx := context.Background()
-	if got := s.b.settings.Get().AI.DailyBudget; got == 10 {
-		t.Fatalf("premise: B already reads the budget the scenario sets, %v", got)
+	if got := s.b.settings.Get().AI.EmbeddingModel; got == "xr-embed-1" {
+		t.Fatalf("premise: B already reads the model the scenario sets, %q", got)
 	}
 	next := *s.a.settings.Get()
-	next.AI.DailyBudget = 10
+	next.AI.EmbeddingModel = "xr-embed-1"
 	// The write is announced after it commits, as the settings service does (the memory store has no transaction).
 	if err := s.a.settings.Update(ctx, next); err != nil {
 		t.Fatal(err)
 	}
 	s.a.bus.Publish(ctx, events.SettingsChanged{Scope: events.DeploymentSettings})
-	redisreplica.Eventually(t, 3*time.Second, "B to read the new daily budget", func() bool { return s.b.settings.Get().AI.DailyBudget == 10 })
+	redisreplica.Eventually(t, 3*time.Second, "B to read the new embedding model", func() bool { return s.b.settings.Get().AI.EmbeddingModel == "xr-embed-1" })
 }
 
 // The stream runs on A; the stop and the approval decision arrive at B.
@@ -622,16 +608,16 @@ func scenarioCapsSpanTheReplicas(t *testing.T, s *xrStack) {
 
 	var ids []string
 	for i := 0; i < 3; i++ {
-		ids = append(ids, startStreamWith(t, s.a, user, s.doc, "xr-unpriced", ""))
+		ids = append(ids, startStreamWith(t, s.a, user, s.doc, "xr-blocking", ""))
 	}
 	_, err := s.b.chat.StreamChatMessage(context.Background(), user, s.doc, nil, models.ChatRequest{
-		Provider: "xr-unpriced", Model: "fake-model", UserMessage: "go", ClientStreamID: uuid.NewString(),
+		Provider: "xr-blocking", Model: "fake-model", UserMessage: "go", ClientStreamID: uuid.NewString(),
 	})
 	if !errors.Is(err, service.ErrTooManyChatStreams) {
 		t.Errorf("a 4th chat stream on B = %v, want ErrTooManyChatStreams", err)
 	}
 	_, err = s.b.chat.StreamChatMessage(context.Background(), "u-other", s.doc, nil, models.ChatRequest{
-		Provider: "xr-unpriced", Model: "fake-model", UserMessage: "go", ClientStreamID: ids[0],
+		Provider: "xr-blocking", Model: "fake-model", UserMessage: "go", ClientStreamID: ids[0],
 	})
 	if err == nil || !strings.Contains(err.Error(), "clientStreamId already in use") {
 		t.Errorf("a stream on B under an id running on A = %v, want the id refused", err)
@@ -642,7 +628,7 @@ func scenarioCapsSpanTheReplicas(t *testing.T, s *xrStack) {
 	redisreplica.Eventually(t, 5*time.Second, "a chat stream slot free on B after A's streams ended", func() bool {
 		id := uuid.NewString()
 		_, err := s.b.chat.StreamChatMessage(context.Background(), user, s.doc, nil, models.ChatRequest{
-			Provider: "xr-unpriced", Model: "fake-model", UserMessage: "go", ClientStreamID: id,
+			Provider: "xr-blocking", Model: "fake-model", UserMessage: "go", ClientStreamID: id,
 		})
 		if err == nil {
 			s.b.chat.CancelStream(id)
@@ -668,33 +654,15 @@ func startStreamWith(t *testing.T, r *xrReplica, user string, doc *models.FlowDo
 		})
 	}
 	id := uuid.NewString()
-	if _, err := r.chat.StreamChatMessage(context.Background(), user, doc, nil, models.ChatRequest{
+	// A cloud stream always carries its caller: the gate offers apply_fix only to one who may edit the flow (ADR 0038).
+	ctx := auth.WithActor(context.Background(), &auth.Actor{Kind: auth.ActorUser, UserID: user, Role: auth.RoleMember})
+	if _, err := r.chat.StreamChatMessage(ctx, user, doc, nil, models.ChatRequest{
 		Provider: provider, Model: "fake-model", UserMessage: "go", ClientStreamID: id, UseTools: blockID != "",
 	}); err != nil {
 		t.Fatalf("StreamChatMessage on %s: %v", r.id, err)
 	}
 	t.Cleanup(func() { r.chat.CancelStream(id) })
 	return id
-}
-
-// A stream running on A reserves its next response in the shared ledger; the other replica's budget check for the
-// same user counts it, and it stops counting when the stream ends.
-func scenarioSharedBudget(t *testing.T, s *xrStack) {
-	ctx := context.Background()
-	if err := s.b.budget.CheckBudget(ctx, twoReplicaUser, ""); err != nil {
-		t.Fatalf("premise: nothing is running, B's check = %v", err)
-	}
-	id := startStream(t, s.a, s.doc, "xr-blocking")
-	redisreplica.Eventually(t, 3*time.Second, "B's budget check to see A's reservation", func() bool {
-		return errors.Is(s.b.budget.CheckBudget(ctx, twoReplicaUser, ""), service.ErrAIBudgetExceeded)
-	})
-	if err := s.b.budget.CheckBudget(ctx, "another-user", ""); err != nil {
-		t.Errorf("another user's check = %v: the reservation is the first user's", err)
-	}
-	s.a.chat.CancelStream(id)
-	redisreplica.Eventually(t, 3*time.Second, "the reservation to be released", func() bool {
-		return s.b.budget.CheckBudget(ctx, twoReplicaUser, "") == nil
-	})
 }
 
 // The governance sweep and an interactive analysis on A; B's sweep after A's analyzes nothing, the same run analyzed on
@@ -787,20 +755,16 @@ func scenarioRedisOutage(t *testing.T, s *xrStack) {
 	if !errors.Is(err, service.ErrReplicaUnreachable) {
 		t.Errorf("a stop for another replica's stream with Redis down = %v, want ErrReplicaUnreachable", err)
 	}
-	// The budget fails closed: a configured daily budget cannot be verified.
-	if err := s.b.budget.CheckBudget(ctx, user, ""); !errors.Is(err, service.ErrAIBudgetUnavailable) {
-		t.Errorf("a budget check with Redis down = %v, want ErrAIBudgetUnavailable", err)
-	}
 	// A cache invalidation is not delivered: B keeps its old value until the channel is back.
-	lowered := *s.a.settings.Get()
-	lowered.AI.DailyBudget = 3
-	if err := s.a.settings.Update(ctx, lowered); err != nil {
+	changed := *s.a.settings.Get()
+	changed.AI.EmbeddingModel = "xr-embed-2"
+	if err := s.a.settings.Update(ctx, changed); err != nil {
 		t.Fatal(err)
 	}
 	s.a.bus.Publish(ctx, events.SettingsChanged{Scope: events.DeploymentSettings})
 	time.Sleep(150 * time.Millisecond)
-	if got := s.b.settings.Get().AI.DailyBudget; got != 10 {
-		t.Errorf("B reads a budget of %v with the channel down, want its cached 10", got)
+	if got := s.b.settings.Get().AI.EmbeddingModel; got != "xr-embed-1" {
+		t.Errorf("B reads embedding model %q with the channel down, want its cached xr-embed-1", got)
 	}
 
 	// Back: both replicas heal, the resync brings B's caches up to date, commands cross again.
@@ -813,10 +777,9 @@ func scenarioRedisOutage(t *testing.T, s *xrStack) {
 		}
 		return ok
 	})
-	redisreplica.Eventually(t, 10*time.Second, "B to read the budget A set during the outage", func() bool { return s.b.settings.Get().AI.DailyBudget == 3 })
-	// The stream that was running through the outage was probably ended by the budget re-check that failed closed (a
-	// daily budget is set), and its ledger entry, which could not be released, counts against its user until the
-	// 30 s lease passes. Another user's stream runs on the healthy ledger, and a stop through B reaches it again.
+	redisreplica.Eventually(t, 10*time.Second, "B to read the model A set during the outage", func() bool { return s.b.settings.Get().AI.EmbeddingModel == "xr-embed-2" })
+	// The stream that was running through the outage holds a cross-replica cap slot that could not be released, which
+	// counts against its user until its lease passes. Another user's stream runs, and a stop through B reaches it again.
 	other := "u-after-the-outage"
 	again := startStreamWith(t, s.a, other, s.doc, "xr-blocking", "")
 	redisreplica.Eventually(t, 5*time.Second, "the new stream's snapshot readable from B", func() bool {

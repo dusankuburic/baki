@@ -1,6 +1,6 @@
 # 26. Tool specs with scopes, a two-point gate, and one approvals component
 
-Date: 2026-10-10. Status: accepted, implemented (Phase 4b, tools wave 1).
+Date: 2026-10-10. Status: accepted, implemented (Phase 4b, tools wave 1). Amended by ADR 0038: the gate takes the caller's flow permission and returns a refusal reason, and the approval tools have no tool deadline.
 
 ## Context
 
@@ -17,4 +17,4 @@ The chat tool registry said nothing about which tools mutate the flow, need the 
 
 ## Consequences
 
-A chat-only token's model is offered six tools; `apply_fix` called anyway answers "not available in this session" without a card. A card pending when the server or the response stops resolves as `cancelled` (old clients clamp to `error`); nothing is written. A new approval-gated tool is a `ToolSpec` plus a `requestApproval` call — no new event, endpoint or card. Rollback: no schema; `tool`/`previewKind` are optional fields the previous release ignores and drops on the next write. Open: pending approvals are process memory — a decision on another replica or after a restart answers 404 (Phase 5b); the prompt loop embeds tool results unescaped in `<tool_result>` markers.
+A chat-only token's model is offered six tools; `apply_fix` called anyway answers "not available in this session" without a card. A card pending when the server or the response stops resolves as `cancelled` (old clients clamp to `error`); nothing is written. A new approval-gated tool is a `ToolSpec` plus a `requestApproval` call — no new event, endpoint or card. Rollback: no schema; `tool`/`previewKind` are optional fields the previous release ignores and drops on the next write. Open: pending approvals are process memory — a decision on another replica or after a restart answers 404 (Phase 5b). Closed: the prompt loop's tool results are escaped inside their `<tool_result>` frames (ADR 0036).

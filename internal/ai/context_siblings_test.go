@@ -37,7 +37,7 @@ func TestBuildContext_SurroundingBlocksAreTheNeighbours(t *testing.T) {
 	selected := doc.BlocksByID["b10"]
 
 	_, ctx := BuildContext(ContextRequest{Flow: doc, SelectedBlock: selected, SelectedSubflow: doc.SubflowsByID["sf1"],
-		TokenBudget: 8000, Provider: stubProvider{}})
+		TokenBudget: 8000})
 	section := surroundingSection(ctx)
 	if section == "" {
 		t.Fatalf("no Surrounding Blocks section:\n%s", ctx)
@@ -69,7 +69,7 @@ func TestBuildContext_SurroundingBlocksOfANestedBlock(t *testing.T) {
 	doc.RebuildIndexes()
 
 	_, ctx := BuildContext(ContextRequest{Flow: doc, SelectedBlock: doc.BlocksByID["c6"], SelectedSubflow: doc.SubflowsByID["sf1"],
-		TokenBudget: 8000, Provider: stubProvider{}})
+		TokenBudget: 8000})
 	section := surroundingSection(ctx)
 	for i := 3; i <= 8; i++ {
 		if !strings.Contains(section, fmt.Sprintf("Inner %d", i)) {
@@ -91,7 +91,7 @@ func TestBuildContext_NoSurroundingBlocksForAnOnlyChild(t *testing.T) {
 	}}}}
 	doc.RebuildIndexes()
 	_, ctx := BuildContext(ContextRequest{Flow: doc, SelectedBlock: doc.BlocksByID["only"], SelectedSubflow: doc.SubflowsByID["sf1"],
-		TokenBudget: 8000, Provider: stubProvider{}})
+		TokenBudget: 8000})
 	if s := surroundingSection(ctx); s != "" {
 		t.Errorf("an only child got a Surrounding Blocks section:\n%s", s)
 	}

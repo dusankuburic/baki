@@ -7,6 +7,7 @@ import {logger} from '@/lib/logger'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import type {ChatEvent, FixDecisionEventItem, FixProposalPayload} from '@/lib/chatEvent'
+import {NOTICE_HISTORY_TRUNCATED} from '@/lib/chatEvent'
 import type {ToolCallRecord} from '@/types'
 import type {ApprovalCard} from '@/stores/chatStore'
 import {useChatStore} from '@/stores/chatStore'
@@ -20,6 +21,7 @@ interface FixDeps {
   patchFixProposal: ChatStoreState['patchFixProposal']
   replaceStreamTools: ChatStoreState['replaceStreamTools']
   replaceStreamFixes: ChatStoreState['replaceStreamFixes']
+  setStreamMeta: ChatStoreState['setStreamMeta']
 }
 
 export function useFixEvents({
@@ -29,6 +31,7 @@ export function useFixEvents({
   patchFixProposal,
   replaceStreamTools,
   replaceStreamFixes,
+  setStreamMeta,
 }: FixDeps) {
   const refreshAfterFix = useCallback(
     (threadId: string) => {
@@ -170,8 +173,11 @@ export function useFixEvents({
       const calls: ToolCallRecord[] = []
       const cards: ApprovalCard[] = []
       const byId = new Map<string, ApprovalCard>()
+      let truncated = 0
       for (const ev of events) {
-        if (ev.kind === 'tool-result') {
+        if (ev.kind === 'notice') {
+          if (ev.notice === NOTICE_HISTORY_TRUNCATED && ev.keptFrom != null) truncated = Math.max(truncated, ev.keptFrom)
+        } else if (ev.kind === 'tool-result') {
           calls.push({name: ev.name, label: ev.label, ok: ev.ok, durationMs: ev.durationMs, summary: ev.summary})
         } else if (ev.kind === 'fix-proposal') {
           const card = pendingCard(ev)
@@ -191,8 +197,9 @@ export function useFixEvents({
       }
       replaceStreamTools(acc.threadId, calls)
       replaceStreamFixes(acc.threadId, cards)
+      if (truncated > 0) setStreamMeta(acc.threadId, {truncated})
     },
-    [streamAccRef, replaceStreamTools, replaceStreamFixes],
+    [streamAccRef, replaceStreamTools, replaceStreamFixes, setStreamMeta],
   )
 
   return {refreshAfterFix, onFixProposal, onFixDecision, respondFixProposal, onResumeState}

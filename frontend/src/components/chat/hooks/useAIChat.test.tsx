@@ -352,8 +352,6 @@ describe('useAIChat history restore (H1)', () => {
       tokensOut: 7,
       tokensIn: 5,
       servedModel: 'gpt-4o',
-      inputCostPerM: 2.5,
-      outputCostPerM: 10,
     })
     await renderSeeded()
 
@@ -366,7 +364,7 @@ describe('useAIChat history restore (H1)', () => {
       .getMessages('t-old')
       .find(m => m.role === 'assistant')!
     expect(committed.servedModel).toBe('gpt-4o')
-    expect(committed.inputCostPerM).toBe(2.5)
+    expect('inputCostPerM' in committed).toBe(false)
     expect(committed.tokensIn).toBe(5)
     expect(committed.tokensOut).toBe(7)
     const thread = useChatStore.getState().threads.find(t => t.id === 't-old')!
@@ -482,6 +480,10 @@ describe('useAIChat context preview (consent step)', () => {
     userMessage: 'q',
     estimatedTokens: 10,
     contextLimit: 1000,
+    breakdown: {system: 4, context: 3, history: 0, tools: 0, user: 3},
+    historyMessages: 0,
+    toolsOffered: false,
+    contextBudget: 4000,
   }
 
   it('does not send when the preview cannot be loaded', async () => {
@@ -631,30 +633,6 @@ describe("closing the flow's last thread", () => {
     await waitFor(() => expect(result.current.activeThread?.flowId).toBe('flow1'))
     expect(result.current.activeThreadId).not.toBe(t1)
     expect(useChatStore.getState().threads.some(t => t.id === t1)).toBe(false)
-  })
-})
-
-describe('useAIChat error codes', () => {
-  it('shows the budget notice for an SSE error coded AI_BUDGET_EXCEEDED', async () => {
-    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
-    const {result} = await renderChat()
-    const threadId = result.current.activeThreadId!
-
-    await act(async () => {
-      result.current.handleSend('hi', [])
-    })
-    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
-    await waitFor(() => expect(capturedCb).not.toBeNull())
-    act(() => {
-      capturedCb!(errorEvent(sid, 'daily AI budget exceeded ($1.02 / $1.00, of which $0.00 …)', 'AI_BUDGET_EXCEEDED'))
-    })
-
-    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(2))
-    const bubble = useChatStore.getState().getMessages(threadId)[1]!
-    expect(bubble.finishReason).toBe('error')
-    expect(bubble.content).toContain('Daily AI budget reached')
-    expect(bubble.content).toContain('$1.02 / $1.00')
-    expect(bubble.content).not.toContain('Error:')
   })
 })
 
@@ -910,6 +888,10 @@ describe('useAIChat per-thread model memory', () => {
       userMessage: 'q',
       estimatedTokens: 10,
       contextLimit: 1000,
+      breakdown: {system: 4, context: 3, history: 0, tools: 0, user: 3},
+      historyMessages: 0,
+      toolsOffered: false,
+      contextBudget: 4000,
     })
     vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
     const view = await renderWithTurn(DOCS)

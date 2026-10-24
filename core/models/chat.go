@@ -63,13 +63,9 @@ type ChatMessage struct {
 	// empty for catalogue models.
 	ModelLabel string `json:"modelLabel,omitempty"`
 	// ServedModel is the model that actually answered when Model is a resolvable
-	// alias, and Input/OutputCostPerM the USD per 1M rates billed — all from the
-	// stream's done event, so a reloaded conversation prices the turn at what it
-	// cost. Zero/empty = not reported.
-	ServedModel    string  `json:"servedModel,omitempty"`
-	InputCostPerM  float64 `json:"inputCostPerM,omitempty"`
-	OutputCostPerM float64 `json:"outputCostPerM,omitempty"`
-	FinishReason   string  `json:"finishReason,omitempty"`
+	// alias, from the stream's done event. Empty = not reported.
+	ServedModel  string `json:"servedModel,omitempty"`
+	FinishReason string `json:"finishReason,omitempty"`
 	// ToolCalls records the tool invocations behind this assistant message.
 	ToolCalls []ToolCallRecord `json:"toolCalls,omitempty"`
 	// FixProposal snapshots the single apply_fix approval record — LEGACY,
@@ -78,6 +74,9 @@ type ChatMessage struct {
 	// FixProposals snapshots every apply_fix/apply_fixes approval record: a
 	// stream can carry several sequential proposals, a batch several fixes.
 	FixProposals []FixProposalSnapshot `json:"fixProposals,omitempty"`
+	// Truncated is how many earlier history messages the turn left out to fit the model's context window
+	// (the stream's history_truncated notices summed), so a reloaded conversation still shows the chip.
+	Truncated int `json:"truncated,omitempty"`
 }
 
 type ChatRequest struct {
@@ -165,17 +164,14 @@ type SourceFileInfo struct {
 }
 
 type ChatResponse struct {
-	Message       ChatMessage `json:"message"`
-	StreamID      string      `json:"streamId,omitempty"`
-	EstimatedCost float64     `json:"estimatedCost"`
+	Message  ChatMessage `json:"message"`
+	StreamID string      `json:"streamId,omitempty"`
 }
 
 type ModelDetail struct {
-	ID             string  `json:"id"`
-	DisplayName    string  `json:"displayName"`
-	ContextLimit   int     `json:"contextLimit"`
-	InputCostPerM  float64 `json:"inputCostPerM"`
-	OutputCostPerM float64 `json:"outputCostPerM"`
+	ID           string `json:"id"`
+	DisplayName  string `json:"displayName"`
+	ContextLimit int    `json:"contextLimit"`
 	// SupportsTools reports whether the provider family behind this model
 	// supports the agentic tool loop. Provider-level granularity: mixed
 	// families (GitHub Models) report true — the runtime degrades per model
@@ -228,14 +224,12 @@ type ProviderInfo struct {
 	// project and the prompt was not dismissed.
 	SuggestDiscovery bool `json:"suggestDiscovery,omitempty"`
 	// The provider spec on the wire (ADR 0025), all optional so an older server's listing still parses: what the
-	// provider can do, the deployment profiles it is offered in, how its credential is entered, where its prices
-	// come from, the generic panel's accent and glyph, and whether the caller can manage the credential through
-	// the catalogue's routes.
+	// provider can do, the deployment profiles it is offered in, how its credential is entered, the generic panel's
+	// accent and glyph, and whether the caller can manage the credential through the catalogue's routes.
 	Caps         []string           `json:"caps,omitempty"`
 	Modes        []string           `json:"modes,omitempty"`
 	Credential   *CredentialSchema  `json:"credential,omitempty"`
 	Endpoints    *ProviderEndpoints `json:"endpoints,omitempty"`
-	Pricing      string             `json:"pricing,omitempty"`
 	Color        string             `json:"color,omitempty"`
 	Icon         string             `json:"icon,omitempty"`
 	Configurable bool               `json:"configurable,omitempty"`
@@ -293,7 +287,6 @@ type ProviderCatalogEntry struct {
 	Configured bool   `json:"configured"`
 	Color      string `json:"color,omitempty"`
 	Icon       string `json:"icon,omitempty"`
-	Pricing    string `json:"pricing"`
 	// Configurable: the credential can be managed through Endpoints (false for a document provider the client
 	// has no panel for: "configured on the server").
 	Configurable bool `json:"configurable,omitempty"`
@@ -326,17 +319,41 @@ type GitHubUser struct {
 	Name  string `json:"name,omitempty"`
 }
 
+// ContextPreview is what a turn would send, built by the turn's own request assembly: the system prompt (the
+// marker-mode tool instructions included), the flow context, the user turn (the guidelines included), the
+// prompt's token estimate as the window check counts it — system prompt, tool schemas, every history message,
+// the turn — and its parts.
 type ContextPreview struct {
 	SystemPrompt    string `json:"systemPrompt"`
 	ContextText     string `json:"contextText"`
 	UserMessage     string `json:"userMessage"`
 	EstimatedTokens int    `json:"estimatedTokens"`
 	ContextLimit    int    `json:"contextLimit"`
+	// Breakdown is the estimate by part; HistoryMessages the history messages forwarded; HistoryDropped how
+	// many of them the window check would leave out.
+	Breakdown       ContextPreviewBreakdown `json:"breakdown"`
+	HistoryMessages int                     `json:"historyMessages"`
+	HistoryDropped  int                     `json:"historyDropped,omitempty"`
+	// ToolsOffered says the turn offers tools; Tools names them (natively, or in the marker-mode instructions).
+	ToolsOffered bool     `json:"toolsOffered"`
+	Tools        []string `json:"tools,omitempty"`
+	// ContextBudget is the token budget the flow context was built to: the caller's per-provider setting, else
+	// the one derived from the model's window.
+	ContextBudget int `json:"contextBudget"`
 	// ContextBlock reports the request's context block: "resolved" (its section is in the context, found by
 	// id or by anchor), "missing" (no longer in the flow; the context says so) or "" (none asked for).
 	ContextBlock string `json:"contextBlock,omitempty"`
 	// ContextBlockID is the id the context block resolved to, when that is not the request's.
 	ContextBlockID string `json:"contextBlockId,omitempty"`
+}
+
+// ContextPreviewBreakdown is a ContextPreview's token estimate by part.
+type ContextPreviewBreakdown struct {
+	System  int `json:"system"`
+	Context int `json:"context"`
+	History int `json:"history"`
+	Tools   int `json:"tools"`
+	User    int `json:"user"`
 }
 
 type ConversationFile struct {

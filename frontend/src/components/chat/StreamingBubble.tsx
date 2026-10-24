@@ -16,6 +16,7 @@ const StreamingBubble = memo(() => {
           role: 'assistant',
           content: slot.text,
           timestamp,
+          ...(slot.truncated ? {truncated: slot.truncated} : {}),
         }}
         isStreaming
       />

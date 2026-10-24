@@ -3,27 +3,11 @@ package service
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/testutil"
 )
-
-// promptLoopProvider records each request in full (messages + system prompt)
-// and scripts marker-format turns, as GitHub Copilot produces them.
-type promptLoopProvider struct {
-	testutil.FakeProvider
-	mu   sync.Mutex
-	reqs []ai.Request
-}
-
-func (p *promptLoopProvider) Stream(ctx context.Context, req ai.Request, onChunk func(ai.Chunk)) error {
-	p.mu.Lock()
-	p.reqs = append(p.reqs, req)
-	p.mu.Unlock()
-	return p.FakeProvider.Stream(ctx, req, onChunk)
-}
 
 // TestRunPromptToolLoop_FeedbackFormatIsSchemaValid pins A3 + the truncation pin for the
 // prompt-based tool loop (Copilot): (1) tool results feed back as a USER message carrying
@@ -34,10 +18,10 @@ func (p *promptLoopProvider) Stream(ctx context.Context, req ai.Request, onChunk
 // message — the injected variant took the truncation pin (Messages[:1]), so under context
 // overflow the junction repair dropped the USER'S QUESTION while pinning tool boilerplate.
 func TestRunPromptToolLoop_FeedbackFormatIsSchemaValid(t *testing.T) {
-	prov := &promptLoopProvider{FakeProvider: testutil.FakeProvider{Tools: false, Turns: []testutil.FakeTurn{
+	prov := &testutil.FakeProvider{Tools: false, Turns: []testutil.FakeTurn{
 		{Text: "Let me check.\n<tool_call>\n{\"name\": \"search_flow\", \"input\": {\"query\": \"xav\"}}\n</tool_call>", TokensIn: 10, TokensOut: 5},
 		{Text: "Found it — the Xavier block calls the API.", TokensIn: 8, TokensOut: 3},
-	}}}
+	}}
 	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := &streamCtl{}
 	emit, evs := collectEvents()
@@ -63,14 +47,13 @@ func TestRunPromptToolLoop_FeedbackFormatIsSchemaValid(t *testing.T) {
 		t.Errorf("expected chunk,tool,tool_result,chunk,done events, got %q", got)
 	}
 
-	prov.mu.Lock()
-	defer prov.mu.Unlock()
-	if len(prov.reqs) != 2 {
-		t.Fatalf("want 2 model turns, got %d", len(prov.reqs))
+	reqs := prov.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("want 2 model turns, got %d", len(reqs))
 	}
 
 	// (2) The protocol rides the SystemPrompt; NO synthetic system message.
-	second := prov.reqs[1]
+	second := reqs[1]
 	if !strings.Contains(second.SystemPrompt, "<tool_call>") {
 		t.Errorf("tool protocol missing from the system prompt of turn 2: %q", second.SystemPrompt)
 	}

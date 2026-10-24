@@ -21,7 +21,9 @@ The goldens and ratchets that make a behaviour change deliberate: it shows up as
 | `internal/lifecycle/testdata/jobs.golden` | every job, its advisory-lock key and schedule | `-update-jobs` |
 | `internal/metrics/testdata/metrics.golden` | every metric family with its owner | `-update-metrics` |
 | `internal/ai/testdata/providers.golden` | the provider spec registry | `-update-provider-specs` |
-| `internal/ai/testdata/tools.golden` | the chat tool specs | `-update-tools` |
+| `internal/ai/testdata/tools.golden` | the chat tool specs: flags, then each tool's description and canonical input schema | `-update-tools` |
+| `internal/ai/testdata/prompts.golden` | the system prompt for each tool access (fixes, read-only, none) and the marker-mode tool instructions, full and chat-only | `-update-prompts` |
+| `internal/service/testdata/request_snapshots/*.golden` | the assembled chat request — parameters, offered tools, system prompt, message roles and sizes, the turn in full — for three corpus flows × tool gate (chat-only token, chat+write token, no applier) × tool mode (native, marker), plus the plain stream and a small-budget variant that pins the cut; block and subflow ids renamed to document order before the build (ADR 0035) | `-update-request-snapshots` |
 
 `TestRoutePolicy_DeclaredMatchesLegacy` fails when a routed request decides anything differently from the legacy tables. The API suite runs under the declared policy with `BAKI_TEST_ROUTE_POLICY=declarative go test ./internal/api/...`; at boot `finishRoutes` resolves a sample path of every route and refuses to start unless each resolves to its own policy.
 

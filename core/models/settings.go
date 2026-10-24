@@ -94,13 +94,8 @@ type AISettings struct {
 	// needs no re-index (mismatched dims are excluded at insert).
 	EmbeddingModel          string                      `json:"embeddingModel,omitempty"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
-	ShowCostEstimates       bool                        `json:"showCostEstimates"`
 	SaveConversationHistory bool                        `json:"saveConversationHistory"`
 	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
-	DailyBudget             float64                     `json:"dailyBudget"`
-	// PerUserDailyBudget caps an individual user's AI spend within an org, so
-	// one user cannot exhaust the org's DailyBudget alone; 0 = org budget only.
-	PerUserDailyBudget float64 `json:"perUserDailyBudget,omitempty"`
 	// AllowedProviders, in an ORGANISATION's settings, lists the provider ids its flows and corpus may be
 	// sent to (ADR 0028); empty = every provider the deployment offers. Unread in the deployment's and a
 	// user's settings.
@@ -245,9 +240,7 @@ func DefaultSettings() *AppSettings {
 					ContextTokenBudget: 4000,
 				},
 			},
-			ShowCostEstimates:       true,
 			SaveConversationHistory: true,
-			DailyBudget:             5.0, // Default $5/day
 			Prompts: AIPromptsConfig{
 				Block: []string{
 					"Explain this block",

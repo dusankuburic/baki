@@ -62,10 +62,6 @@ function homePayload() {
       avgHealth: i < 3 ? 0 : 60 + Math.round(Math.sin(i / 4) * 12),
       flowCount: i < 3 ? 0 : 4,
     })),
-    costByProvider: [
-      {provider: 'anthropic', cost: 2.4, tokensIn: 30000, tokensOut: 9000},
-      {provider: 'openai', cost: 1.02, tokensIn: 12000, tokensOut: 4000},
-    ],
     ruleFrequency: RULES.map((rule, i) => ({
       rule,
       count: 20 - i * 2,

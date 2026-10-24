@@ -34,8 +34,6 @@ func TestAuditedProvider_ChatBillsUsageCarriedOnError(t *testing.T) {
 	if m.PromptTokens != 120 || m.CompletionTokens != 30 || m.OrgID != "org-1" {
 		t.Errorf("recorded %+v, want the usage carried on the error (120/30, org-1)", m)
 	}
-	gpt4o, _ := catalogEntryFor(azureFoundryProviderID, "gpt-4o")
-	assertCost(t, "filtered chat", m.EstimatedCost, costOf(120, 30, gpt4o.Pricing))
 }
 
 func TestAuditedProvider_ChatErrorWithoutUsageRecordsNothing(t *testing.T) {

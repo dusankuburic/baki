@@ -321,7 +321,6 @@ export const enDashboard = {
       analysesRun: 'Analysis runs',
       flowsAnalyzed: 'Flows analyzed',
       resolved: 'Resolved',
-      aiSpend: 'AI spend',
       inScope_one: '{{count}} flow in scope',
       inScope_other: '{{count}} flows in scope',
       unanalyzed_one: '{{count}} never analyzed',

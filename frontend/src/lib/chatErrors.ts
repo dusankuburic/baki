@@ -1,9 +1,8 @@
 
-export type ChatFailureKind = 'capacity' | 'budget' | 'modelNotAvailable' | 'serverRestarting' | 'generic'
+export type ChatFailureKind = 'capacity' | 'modelNotAvailable' | 'serverRestarting' | 'generic'
 
 export const CHAT_ERROR_CODES = {
   capacity: 'CHAT_CAPACITY_REACHED',
-  budgetExceeded: 'AI_BUDGET_EXCEEDED',
   modelNotAvailable: 'MODEL_NOT_AVAILABLE',
   serverRestarting: 'SERVER_RESTARTING',
   interrupted: 'STREAM_INTERRUPTED',
@@ -13,18 +12,11 @@ export const CHAT_ERROR_CODES = {
 
 export function classifyChatFailure(message: string, code?: string | null): ChatFailureKind {
   if (code === CHAT_ERROR_CODES.capacity) return 'capacity'
-  if (code === CHAT_ERROR_CODES.budgetExceeded) return 'budget'
   if (code === CHAT_ERROR_CODES.modelNotAvailable) return 'modelNotAvailable'
   if (code === CHAT_ERROR_CODES.serverRestarting) return 'serverRestarting'
   if (code) return 'generic'
   if (message.includes('too many chat responses')) return 'capacity'
-  if (/budget exceeded/i.test(message)) return 'budget'
   return 'generic'
-}
-
-export function budgetDetail(message: string): string {
-  const amounts = message.match(/\$[0-9.]+\s*\/\s*\$[0-9.]+/)
-  return amounts ? ` (${amounts[0]})` : ''
 }
 
 /** The server running the stream could not be reached by the one that got the request (503): nothing was stopped or decided, so the request may be sent again. */

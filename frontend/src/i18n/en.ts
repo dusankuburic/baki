@@ -816,8 +816,6 @@ export const chat = {
     streamingSoFar: '{{formatted}} tokens so far',
     streamingAria: 'Generating answer — {{count}} output tokens so far',
     total: '{{formatted}} tokens',
-    costAtLeast: '≥ {{cost}}',
-    costAtLeastTitle: 'At least this much: some replies came from a model whose price is unknown.',
   },
   files: {
     heading: 'Select a file',
@@ -945,6 +943,10 @@ export const chat = {
     yourMessage: 'Your Message',
     cancel: 'Cancel',
     send: 'Send',
+    breakdown: 'System {{system}} · Context {{flowContext}} · History {{history}} · Tools {{tools}} · Message {{message}}',
+    budget: 'Context budget: {{budget}} tokens',
+    historyDropped: '{{dropped}} of {{total}} earlier messages will be omitted to fit the context window.',
+    tools: 'Tools offered: {{tools}}',
   },
   help: {
     title: 'Chat commands & shortcuts',
@@ -1140,6 +1142,9 @@ export const chat = {
     regenerate: 'Regenerate',
     servedBy: 'Answered by {{model}}',
     removedModel: 'removed model',
+    omitted: 'Earlier turns omitted ({{count}})',
+    compact: 'Compact',
+    externalLink: 'External link — click to show where it goes: {{url}}',
   },
   fixCard: {
     includeFix: 'Include fix for {{name}}',
@@ -1231,11 +1236,6 @@ export const chat = {
     noStream: '*Error: No response stream was created. Please check your connection and try again.*',
     sendFailed: 'Failed to send message',
     openOrgSettings: 'Open organisation settings',
-    budgetTitle: "You've reached today's AI budget{{detail}}",
-    budgetBody:
-      'AI requests are capped per day per organization. The budget resets at midnight UTC; contact an admin to raise it.',
-    budgetBubble:
-      '🛑 **Daily AI budget reached{{detail}}.** It resets at midnight UTC. Contact an admin to adjust the limit.',
     generic: '*Error: {{message}}*',
     providerBubble: '**{{title}}** — {{message}}',
     providerAuthTitle: 'The provider rejected the credentials',

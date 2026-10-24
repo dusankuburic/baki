@@ -238,8 +238,9 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	answer := ctl.buffer.String()
 	done, errMsg := ctl.done, ctl.errMsg
 	tokensIn, tokensOut := ctl.tokensIn, ctl.tokensOut
-	served, inRate, outRate := ctl.servedModel, ctl.inputCostPerM, ctl.outputCostPerM
+	served := ctl.servedModel
 	events := ctl.snapshotEvents()
+	truncated := ctl.droppedHistory
 	ctl.mu.Unlock()
 	if !done || errMsg != "" {
 		return answerWrite{}
@@ -268,21 +269,20 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	// Usage, served model and billed rates as the client saved them on done,
 	// so a reload keeps the tag and prices the turn at what it cost.
 	msg := models.ChatMessage{
-		ID:             answerID,
-		Role:           "assistant",
-		Content:        answer,
-		Timestamp:      time.Now(),
-		Provider:       req.Provider,
-		Model:          model,
-		ModelLabel:     modelLabel,
-		TokensIn:       tokensIn,
-		TokensOut:      tokensOut,
-		ServedModel:    served,
-		InputCostPerM:  inRate,
-		OutputCostPerM: outRate,
-		FinishReason:   "stop",
-		ToolCalls:      toolCalls,
-		FixProposals:   fixes,
+		ID:           answerID,
+		Role:         "assistant",
+		Content:      answer,
+		Timestamp:    time.Now(),
+		Provider:     req.Provider,
+		Model:        model,
+		ModelLabel:   modelLabel,
+		TokensIn:     tokensIn,
+		TokensOut:    tokensOut,
+		ServedModel:  served,
+		FinishReason: "stop",
+		ToolCalls:    toolCalls,
+		FixProposals: fixes,
+		Truncated:    truncated,
 	}
 	res, err := s.mutateConversationAt(writeCtx, doc.ID, convKey, func(history []models.ChatMessage) ([]models.ChatMessage, bool, error) {
 		// Already stored: a retry, or the client got there first; an id match

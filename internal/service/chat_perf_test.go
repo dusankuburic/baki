@@ -327,7 +327,7 @@ func TestBuildStreamRequest_ContextScrubbedOncePerCacheEntry(t *testing.T) {
 	ts := turnSetup{provider: provider, model: newTurnModel(req, nil)}
 
 	for turn := 0; turn < 3; turn++ {
-		aiReq, _, ok, err := svc.buildStreamRequest(context.Background(), ts, "u1", doc, nil, req)
+		aiReq, _, _, ok, err := svc.buildStreamRequest(context.Background(), ts, "u1", doc, nil, req, nil, false)
 		if err != nil || !ok || aiReq.SystemPrompt == "" {
 			t.Fatalf("turn %d: %v %v %q", turn, ok, err, aiReq.SystemPrompt)
 		}

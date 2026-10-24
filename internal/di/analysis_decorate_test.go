@@ -38,7 +38,7 @@ func TestProvideAnalysisService_SharesItsRunsOnlyWithSeveralReplicas(t *testing.
 		c := redisreplica.New(t, 1)
 		cfg := config.Default()
 		cfg.Storage.MaxReplicas = tc.replicas
-		svc, err := ProvideAnalysisService(service.NilNotifier{}, budgetSettings{}, nil, cfg, nil, nil, nil, nil, c.Replicas[0].Client)
+		svc, err := ProvideAnalysisService(service.NilNotifier{}, staticSettings{}, nil, cfg, nil, nil, nil, nil, c.Replicas[0].Client)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -51,3 +51,12 @@ func TestProvideAnalysisService_SharesItsRunsOnlyWithSeveralReplicas(t *testing.
 		}
 	}
 }
+
+// staticSettings is a SettingsProvider answering the defaults and ignoring writes.
+type staticSettings struct{}
+
+func (staticSettings) Get() *models.AppSettings                         { return models.DefaultSettings() }
+func (staticSettings) Update(context.Context, models.AppSettings) error { return nil }
+func (staticSettings) AddRecentFile(string, int64) error                { return nil }
+func (staticSettings) RemoveRecentFile(string) error                    { return nil }
+func (staticSettings) ClearRecentFiles() error                          { return nil }

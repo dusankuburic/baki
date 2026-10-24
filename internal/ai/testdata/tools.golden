@@ -1,9 +1,41 @@
 # name | label | timeout | approval | scope | previewKind
-apply_fix | Requesting fix approval | 2m0s | true | write | fix-patch
-apply_fixes | Requesting batch fix approval | 2m0s | true | write | fix-patch
+apply_fix | Requesting fix approval | applier | true | write | fix-patch
+apply_fixes | Requesting batch fix approval | applier | true | write | fix-patch
 get_block | Reading block | default | false | - | -
 get_subflow_blocks | Listing subflow blocks | default | false | - | -
 get_variable_lineage | Tracing variable | default | false | - | -
 list_findings | Listing findings | default | false | - | -
 propose_fix | Previewing fix | default | false | - | -
 search_flow | Searching flow | default | false | - | -
+
+## apply_fix
+Apply a finding's auto-fix to the flow. ALWAYS requires explicit user approval: the user sees the patch preview and an approve/decline prompt, and nothing is written unless they approve. Call this only when the user asked to fix the issue; prefer propose_fix first when they just want to see the change.
+schema: {"properties":{"blockId":{"description":"Block ID of the finding","type":"string"},"ruleId":{"description":"Rule ID of the finding","type":"string"}},"required":["blockId","ruleId"],"type":"object"}
+
+## apply_fixes
+Apply auto-fixes for MULTIPLE findings behind ONE approval prompt (use this instead of repeated apply_fix when the user wants several fixes, e.g. "fix everything"). All targets are previewed together and the user approves or declines the whole batch. Same approval rule as apply_fix: nothing is written without explicit approval.
+schema: {"properties":{"targets":{"description":"Findings to fix, each as {blockId, ruleId} from list_findings","items":{"properties":{"blockId":{"type":"string"},"ruleId":{"type":"string"}},"required":["blockId","ruleId"],"type":"object"},"maxItems":10,"minItems":1,"type":"array"}},"required":["targets"],"type":"object"}
+
+## get_block
+Get full detail for a single block by its ID: type, action, properties, variables, line number, and child count.
+schema: {"properties":{"blockId":{"type":"string"}},"required":["blockId"],"type":"object"}
+
+## get_subflow_blocks
+List the top-level blocks of a subflow (by subflow ID) as an outline: block ID, type, name, line.
+schema: {"properties":{"subflowId":{"type":"string"}},"required":["subflowId"],"type":"object"}
+
+## get_variable_lineage
+Trace a variable's lifecycle across the flow: where it is initialized, mutated, and read (with block IDs and lines).
+schema: {"properties":{"name":{"type":"string"}},"required":["name"],"type":"object"}
+
+## list_findings
+List analysis findings, optionally filtered by category (e.g. Security, Reliability, Performance) and/or subflow ID. Each line carries the ruleId, the finding key (usable as a finding:<key> link for the user), and the fix type when auto-fixable — use those with propose_fix/apply_fix. A line marked stage=preview comes from a preview rule: reported, but it never fails a CI gate or policy and is left out of the health score. Results are paginated: when more remain, the FIRST line says how many and which offset to pass for the next page. Requires analysis to be available.
+schema: {"properties":{"category":{"type":"string"},"offset":{"description":"Skip the first N matching findings (pagination)","type":"integer"},"subflowId":{"type":"string"}},"type":"object"}
+
+## propose_fix
+Preview the auto-fix patch for a finding WITHOUT changing anything: what would be inserted/wrapped/removed/replaced and on which lines. Input is the finding's blockId + ruleId from list_findings. Show the preview to the user; use apply_fix only when they want it applied.
+schema: {"properties":{"blockId":{"description":"Block ID of the finding","type":"string"},"ruleId":{"description":"Rule ID of the finding","type":"string"}},"required":["blockId","ruleId"],"type":"object"}
+
+## search_flow
+Search the flow for blocks whose name, action type, variables, or property values contain the query. Returns matching blocks with their IDs and subflow.
+schema: {"properties":{"limit":{"description":"Max results (default 15)","type":"integer"},"query":{"description":"Case-insensitive substring to search for","type":"string"}},"required":["query"],"type":"object"}

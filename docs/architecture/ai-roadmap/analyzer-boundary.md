@@ -2,67 +2,6 @@
 
 Items of category `analyzer-boundary` from the [AI assistant roadmap](../ai-roadmap.md), ordered by tier. Evidence is `file:line` as of the roadmap's byline; re-read the cited lines before starting an item.
 
-### R-analyzer-boundary-3
-
-**Context preview is not what is sent: findings omitted, history and tool schemas not counted, different cache entry** · tier 1
-
-**Problem.** The "Preview context" modal is meant to show what the model receives and whether it fits the context window. It differs from the send in three ways:
-- **Findings.** The handler calls `PreviewContext` with a nil report, whereas `StreamChatMessage` substitutes the cached analysis report when the report is nil. The preview therefore never shows the `## Analysis Summary` section, which `BuildContext` writes first into the real context.
-- **Token estimate.** The preview counts only systemPrompt + contextText + userMessage. The send's ceiling and fixed component count every history message and every tool schema. On a long thread with tools, the modal under-reports and its over-limit and near-limit warnings are wrong.
-- **Cache entry.** When a cached report exists, its fingerprint is part of the `chat.context` cache key, so the preview warms a different cache entry than the send that follows it.
-
-**Evidence.**
-- `internal/api/handlers_chat.go:513` — `PreviewContext(..., doc, nil, req)`: the report is nil
-- `internal/service/chat.go:681` — `StreamChatMessage` substitutes `analysisCache.CurrentReport(doc)` when the report is nil (681-684)
-- `internal/ai/context.go:60` — findings are written first into the real context (58-63)
-- `internal/service/chat_context.go:639` — the estimate is `sysPrompt + contextText + scrubbedUserMsg` only
-- `internal/service/chat_context.go:430` — the send's ceiling counts tool schemas and all messages (430-443); the fixed component includes tools (504-508)
-- `internal/service/chat_context.go:119` — `reportFP` is part of the cache key (119-128), so with a cached report the preview and the send use different entries
-
-**Change.** Make `PreviewContext` build the same `ai.Request` the stream would:
-- Resolve the cached report exactly as `StreamChatMessage` does.
-- When `req.Messages` is empty, rebuild the stored conversation on the server as the send does (`chat.go:861-867`); the client's request messages are not enough.
-- Run `buildScopedMessages` with that history, which adds the "Context:\n" framing (`chat_context.go:399-401`), and `ToolDefinitionsFor(gate)`. The prompt loop's tool instructions are appended to the system prompt (`chat.go:1386-1394`); include them too.
-- Return a breakdown (system, context, history, tools, user), whether tools are offered, and the effective context budget.
-
-Let the handler pass the cached report so the preview and the send share a cache entry.
-
-**Touches.** `internal/api/handlers_chat.go`, `internal/service/chat_context.go`, `core/models/chat.go`, `frontend/src/components/chat/ContextPreviewModal.tsx`, `frontend/src/components/chat/hooks/useAIChat.ts`, `internal/service/chat_preview_policy_test.go`
-
-**Done when.**
-- Service test: with a cached report, `PreviewContext.ContextText` contains `## Analysis Summary`
-- Service test: `EstimatedTokens` is at least the tokens of system + context + every forwarded history message + tool schemas
-- The preview and the following stream hit the same `chat.context` cache key (cache hit counter)
-
-**ADR.** `chat_context.go:80` cites ADR 0017 for the context caches; that ADR does not cover parity between preview and send.
-
-### R-analyzer-boundary-4
-
-**Variable lineage is exact-match on the bare name, and the selected block's Variable History section is dead code** · tier 1
-
-**Problem.** `get_variable_lineage` passes `name` through unchanged. `BuildVariableLineage` compares it with `==` against the parser's bare identifiers, which are extracted from `%…%` with the percent signs stripped. Property values and Source Files spell references as `%Name%`. When the model calls the tool with that spelling, or with a different case, it gets "No lineage found" with no hint and no candidates. The model also sees bare names in some places ("Variables referenced", the `get_block` "variables:" line), so the `%Name%` risk comes mainly from property values and source text.
-
-Separately, `ContextRequest.VariableEvents` and the `## Variable History` section exist in `BuildContext`, but nothing ever fills that field. The only production caller, `computeContextCoreWith`, builds the `ContextRequest` without it, and a search of the whole repository finds no other writer. The lineage the tool computes is therefore never offered in the first turn, even when the user selected the block whose variables are in question.
-
-**Evidence.**
-- `internal/ai/tools.go:570` — `GetVariableLineage(tctx.Doc, in.Name)` with the raw input; "No lineage found" at 572 with no hint
-- `core/analyzer/engine.go:723` — `output == varName` exact compare; line 740 has `v == varName` for reads
-- `core/parser/grammar.go:46` — `reVariableRef = %([^%]+)%`: names are stored without the percent signs
-- `core/parser/extractors.go:184` — `extractVariables` yields bare identifiers (184-209)
-- `internal/ai/context.go:34` — the `VariableEvents` field; `## Variable History` is rendered at 133-141 only when the field is non-empty
-- `internal/service/chat_context.go:347` — the `ContextRequest` is built without `VariableEvents` (347-352); there is no other writer in the Go tree
-- `core/analyzer/dataflow.go:198` — the analyzer's own variable indexes match case exactly (198-202; `rule_uninitialized_variable.go:118-122`)
-- `internal/ai/context.go:218` — the model already sees bare names in "Variables referenced" (218-220) and in `get_block` "variables:" (`tools.go:436-437`)
-
-**Change.** Normalise the tool input: always trim whitespace and strip surrounding `%`. Fall back to a case-insensitive match against `_output` and `Variables` only on a miss, or offer it as a candidate list. Lowercasing all input would disagree with every other variable rule, which matches case exactly. On a miss, list up to five near matches from the document. Then either fill `VariableEvents` or remove the field and its section. To fill it, when a block is selected, take the lineage of the block's `_output` and referenced variables from `AnalysisService.GetVariableLineage`, bounded (for example 5 variables × 10 events).
-
-**Touches.** `internal/ai/tools.go`, `core/analyzer/engine.go`, `internal/service/chat_context.go`, `internal/ai/context.go`, `internal/ai/tools_test.go`, `internal/ai/context_test.go`, `internal/service/chat_context_test.go`
-
-**Done when.**
-- `get_variable_lineage('%Result%')` and `('Result')` return the same events, and `('result')` reaches them through the case-insensitive fallback or candidate list
-- A miss returns up to five candidate names from the document
-- Selecting a block with an output variable renders `## Variable History` (bounded by the cap) in `PreviewContext`, or the field and the section are gone
-
 ### R-analyzer-boundary-5
 
 **Model context lacks rule-level facts (ruleId, finding key, fix type, stage) and there is no way to explain a rule** · tier 2

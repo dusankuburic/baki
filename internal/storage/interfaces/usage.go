@@ -5,10 +5,9 @@ import (
 	"time"
 )
 
-// UsageStore covers AI usage/cost tracking for budget enforcement.
+// UsageStore records AI token usage.
 type UsageStore interface {
 	SaveUsageMetric(ctx context.Context, metric *UsageMetric) error
-	GetDailyUsage(ctx context.Context, userID, orgID string) (float64, error)
 }
 
 // UsageMetric is one AI call's usage row: Model is the id the caller asked for; ServedModel is the model the provider reported answering when different (alias/router/agent), empty otherwise.
@@ -21,6 +20,5 @@ type UsageMetric struct {
 	ServedModel      string    `json:"servedModel,omitempty"`
 	PromptTokens     int       `json:"promptTokens"`
 	CompletionTokens int       `json:"completionTokens"`
-	EstimatedCost    float64   `json:"estimatedCost"`
 	CreatedAt        time.Time `json:"createdAt"`
 }

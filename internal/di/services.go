@@ -108,10 +108,10 @@ func ProvideHistoryStore(configDir string) *analyzer.HistoryStore {
 // ProvideAI builds the GitHub/Copilot auth and the provider factory. With an organisation credential store
 // (cloud) ForOrg and ForEmbeddingOrg fall back to — or, for embeddings, prefer — the org's shared credential.
 // The knowledge base's pinned embedding provider must be a registered, embedding-capable spec (config checks
-// its own copy of the ids; the registry is the authority). Every chain the factory builds consults the daily
-// AI budget before each billed call and the provider policy before any key is read (ADR 0028); both depend on
-// settings and the backend only, so there is no cycle through the services that take the factory.
-func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config, keys service.KeyStore, orgKeys service.OrgKeyStore, budget *service.AIBudget, policy *service.ProviderPolicy) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, error) {
+// its own copy of the ids; the registry is the authority). Every chain the factory builds consults the provider
+// policy before any key is read (ADR 0028); it depends on settings and the backend only, so there is no cycle
+// through the services that take the factory.
+func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.Config, keys service.KeyStore, orgKeys service.OrgKeyStore, policy *service.ProviderPolicy) (*ai.GitHubAuth, *ai.CopilotAuth, *ai.ProviderFactory, error) {
 	if p := cfg.Storage.EmbeddingProvider; p != "" && !ai.SupportsEmbeddings(p) {
 		return nil, nil, nil, fmt.Errorf("PAD_EMBEDDING_PROVIDER=%q is not an embedding-capable provider (registered: %s)", p, strings.Join(ai.EmbeddingFallbackOrder(), ", "))
 	}
@@ -126,11 +126,8 @@ func ProvideAI(configDir string, backend storageif.StorageBackend, cfg *config.C
 			return backend.SaveUsageMetric(ctx, metric)
 		}
 	}
-	// A nil *AIBudget or *ProviderPolicy (a di-only test graph) must not become a non-nil interface.
+	// A nil *ProviderPolicy (a di-only test graph) must not become a non-nil interface.
 	var opts []ai.FactoryOption
-	if budget != nil {
-		opts = append(opts, ai.WithBudgetChecker(budget))
-	}
 	if policy != nil {
 		opts = append(opts, ai.WithProviderPolicy(policy))
 	}
@@ -229,8 +226,8 @@ func ProvideAnalysisService(notifier service.EventNotifier, settings service.Set
 
 // replicatedClient is the client of state that only needs Redis across replicas (the analysis report pair and
 // record claims): the shared one when the deployment can run more than one replica (PAD_MAX_REPLICAS > 1), else nil,
-// so a single replica keeps it in memory and a Redis maintenance window costs it nothing. Gated like the budget
-// ledger (sharedLedgerClient).
+// so a single replica keeps it in memory and a Redis maintenance window costs it nothing. Gated like
+// multiReplicaClient.
 func replicatedClient(redisClient *redis.Client, cfg *config.Config) *redis.Client {
 	if cfg == nil || cfg.Storage.MaxReplicas <= 1 {
 		return nil
@@ -238,33 +235,9 @@ func replicatedClient(redisClient *redis.Client, cfg *config.Config) *redis.Clie
 	return redisClient
 }
 
-// ProvideAIBudget builds the daily AI budget gate chat turns, the knowledge base's billed embedding runs and
-// every provider chain's pre-call hook (ProvideAI) share (R-4, ADR 0028): one in-flight ledger, so an
-// embedding run counts what running chat streams have committed. backend is nil on the desktop (no usage
-// store: spend reads $0, so only the in-flight ledger can trip there).
-func ProvideAIBudget(settings service.SettingsProvider, backend storageif.StorageBackend) *service.AIBudget {
-	return provideAIBudget(settings, backend, nil, nil, nil)
-}
-
-// provideAIBudget is ProvideAIBudget with the in-flight ledger in Redis when the deployment has more than one
-// replica configured (PAD_MAX_REPLICAS > 1) and a Redis client: only then does a stream run somewhere a budget
-// check on another replica cannot see. A single replica keeps the in-process ledger even with PAD_REDIS_URL set
-// (rate limits, rooms and resume use it), because the Redis ledger fails closed: with it, a Redis outage would
-// stop AI on a deployment that has nothing to share. With a daily budget set, an unreachable Redis then refuses new
-// turns and stops running ones at their next budget re-check (ADR 0028 addendum, docs/architecture/ai-providers.md).
-func provideAIBudget(settings service.SettingsProvider, backend storageif.StorageBackend, redisClient *redis.Client, health *redisx.Health, cfg *config.Config) *service.AIBudget {
-	return service.NewAIBudget(settings, backend, service.WithRedisLedger(sharedLedgerClient(redisClient, cfg), health))
-}
-
-// sharedLedgerClient is the client the budget ledger lives on: the shared one with several replicas, else nil (the
-// in-process ledger).
-func sharedLedgerClient(redisClient *redis.Client, cfg *config.Config) *redis.Client {
-	return multiReplicaClient(redisClient, cfg)
-}
-
 // multiReplicaClient is the Redis client of a deployment that can run more than one replica (PAD_MAX_REPLICAS > 1),
-// else nil. The mechanisms that exist only to make the replicas agree use it, and nothing else: the budget ledger, the
-// per-user caps across the replicas, the clientStreamId claim and the replica liveness key. With one replica they stay
+// else nil. The mechanisms that exist only to make the replicas agree use it, and nothing else: the per-user caps
+// across the replicas, the clientStreamId claim and the replica liveness key. With one replica they stay
 // in process even when PAD_REDIS_URL is set, so a Redis maintenance window costs that deployment nothing.
 func multiReplicaClient(redisClient *redis.Client, cfg *config.Config) *redis.Client {
 	if cfg == nil || cfg.Storage.MaxReplicas <= 1 {
@@ -296,21 +269,17 @@ func ProvideProviderPolicy(settings service.SettingsProvider, backend storageif.
 // PAD_EMBEDDING_PROVIDER (validated at boot) pins the embedding provider for
 // the deployment; it is the only way the knowledge base embeds with Azure AI
 // Foundry — through the model registry's "Use for knowledge base"
-// designation when azure (the registry) is wired. budget is the daily AI budget
-// a chat turn consults too (R-4); nil leaves billed runs unlimited.
+// designation when azure (the registry) is wired.
 // leaser is the jobs' lease (nil on the desktop): the background re-embed job runs under it, one replica at a time, and
 // so does every org upload and re-index (a lease per org over the check -> embed -> write window, at most
 // PAD_KNOWLEDGE_LEASE_CAP held per replica).
-func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService, budget *service.AIBudget, bus *eventbus.Bus, leaser lock.Leaser) *rag.KnowledgeService {
+func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService, bus *eventbus.Bus, leaser lock.Leaser) *rag.KnowledgeService {
 	opts := []rag.Option{rag.WithEmbeddingProvider(cfg.Storage.EmbeddingProvider), rag.WithEventBus(bus)}
 	if leaser != nil {
 		opts = append(opts, rag.WithJobLeaser(leaser), rag.WithLeaseCap(cfg.Storage.EffectiveKnowledgeLeaseCap()))
 	}
 	if azure != nil {
 		opts = append(opts, rag.WithAzureEmbedder(azure))
-	}
-	if budget != nil {
-		opts = append(opts, rag.WithBudgetChecker(budget))
 	}
 	return rag.NewKnowledgeService(backend, factory, settings, opts...)
 }
@@ -324,13 +293,12 @@ type knowledgeDeps struct {
 	Settings service.SettingsProvider
 	Cfg      *config.Config
 	Azure    *service.AzureModelService
-	Budget   *service.AIBudget
 	Bus      *eventbus.Bus
 	Leaser   lock.Leaser `optional:"true"`
 }
 
 func provideKnowledgeService(d knowledgeDeps) *rag.KnowledgeService {
-	return ProvideKnowledgeService(d.Backend, d.Factory, d.Settings, d.Cfg, d.Azure, d.Budget, d.Bus, d.Leaser)
+	return ProvideKnowledgeService(d.Backend, d.Factory, d.Settings, d.Cfg, d.Azure, d.Bus, d.Leaser)
 }
 
 // azureDatabaseRegistry is the database's registry when the registry lives
@@ -501,7 +469,6 @@ var ServiceModule = fx.Options(
 		// from internal/app's provideKeyStore (plain fx values, not globals).
 		ProvideAzureRegistry,
 		ProvideAzureModelService,
-		provideAIBudget,
 		ProvideProviderPolicy,
 		provideKnowledgeService,
 		// /api/keys/has and /api/keys/delete for azure-foundry act on the
@@ -577,15 +544,12 @@ var ServiceModule = fx.Options(
 			mode config.DeploymentMode,
 			redisClient *redis.Client,
 			azure *service.AzureModelService,
-			budget *service.AIBudget,
 			cfg *config.Config,
 			health *redisx.Health,
 			lc fx.Lifecycle,
 		) *service.ChatService {
 			chat := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode, service.ChatOptions{
 				Knowledge: knowledge,
-				// The budget the knowledge base consults too (R-4).
-				Budget: budget,
 				// Chat turns and context previews on azure-foundry resolve their
 				// model id on the Azure AI Foundry model registry and run on
 				// exactly that entry's resource.

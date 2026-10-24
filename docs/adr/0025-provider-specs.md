@@ -1,6 +1,6 @@
 # 25. Provider specs: one description per AI provider, every list derived, a catalogue route
 
-Date: 2026-10-10. Status: accepted, implemented (Phase 4b, providers waves 1 and 2).
+Date: 2026-10-10. Status: accepted, implemented (Phase 4b, providers waves 1 and 2). The pricing mode and provider-wide pricing were removed by [ADR 0037](0037-remove-ai-budgets-and-pricing.md) (2026-10-24).
 
 ## Context
 

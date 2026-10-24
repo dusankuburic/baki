@@ -68,8 +68,8 @@ func TestListProviders_SpecDrivenFields(t *testing.T) {
 		if p.Credential == nil || p.Credential.Kind != string(spec.Credential.Kind) || len(p.Credential.Fields) != len(spec.Credential.Fields) {
 			t.Errorf("%s: credential = %+v, want kind %s with %d fields", p.ID, p.Credential, spec.Credential.Kind, len(spec.Credential.Fields))
 		}
-		if p.Pricing != string(spec.Pricing) || p.Color != spec.Color || p.Icon != spec.Icon {
-			t.Errorf("%s: pricing/color/icon = %q/%q/%q, want the spec's", p.ID, p.Pricing, p.Color, p.Icon)
+		if p.Color != spec.Color || p.Icon != spec.Icon {
+			t.Errorf("%s: color/icon = %q/%q, want the spec's", p.ID, p.Color, p.Icon)
 		}
 		if p.AuthType != string(spec.AuthType) {
 			t.Errorf("%s: authType = %q (unchanged wire enum expected)", p.ID, p.AuthType)
@@ -133,8 +133,8 @@ func TestProviderCatalog_ListsUnconfiguredAndFiltersByProfile(t *testing.T) {
 	if claude.Endpoints.Save != "/api/keys/save" || claude.Endpoints.Test != "/api/providers/test" || claude.Endpoints.Start != "" {
 		t.Errorf("claude endpoints = %+v", claude.Endpoints)
 	}
-	if !claude.Configurable || claude.Pricing != string(ai.PricingCatalog) || claude.AuthType != string(ai.AuthAPIKey) {
-		t.Errorf("claude configurable/pricing/authType = %v/%q/%q", claude.Configurable, claude.Pricing, claude.AuthType)
+	if !claude.Configurable || claude.AuthType != string(ai.AuthAPIKey) {
+		t.Errorf("claude configurable/authType = %v/%q", claude.Configurable, claude.AuthType)
 	}
 	if byID["openai"].Configured != true {
 		t.Error("openai: the caller's stored key must read as configured")
@@ -165,7 +165,7 @@ func TestProviderCatalog_ListsUnconfiguredAndFiltersByProfile(t *testing.T) {
 		t.Errorf("local = %+v, want listed unconfigured and configurable on the desktop", local)
 	}
 	for _, e := range catalog {
-		if len(e.Modes) == 0 || len(e.Caps) == 0 || e.Name == "" || e.Pricing == "" {
+		if len(e.Modes) == 0 || len(e.Caps) == 0 || e.Name == "" {
 			t.Errorf("%s: incomplete entry %+v", e.ID, e)
 		}
 	}

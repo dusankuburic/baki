@@ -71,8 +71,6 @@ async function stubChatBoot(page: Page, options: ChatBootOptions = {}) {
             id: 'claude-haiku-4-5',
             displayName: 'Claude Haiku 4.5',
             contextLimit: 200000,
-            inputCostPerM: 1,
-            outputCostPerM: 5,
             supportsTools: true,
           },
         ],

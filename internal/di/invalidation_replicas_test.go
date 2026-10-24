@@ -83,25 +83,25 @@ func resyncCount(reason string) float64 {
 	return 0
 }
 
-func budgetOf(s *service.BackendSettingsProvider) float64 { return s.Get().AI.DailyBudget }
+func markerOf(s *service.BackendSettingsProvider) int { return s.Get().Parser.MaxFileSizeMB }
 
 // An admin lowers a deployment setting on A: B enforces it as soon as the message lands, not 30 s later; a write
 // that rolled back changes nothing on B.
 func TestTwoReplicas_ADeploymentSettingChangeReachesThePeer(t *testing.T) {
 	backend := testutil.NewFakeBackend()
 	seed := models.DefaultSettings()
-	seed.AI.DailyBudget = 100
+	seed.Parser.MaxFileSizeMB = 100
 	if err := backend.SaveSettings(context.Background(), settingsToStorage(t, seed)); err != nil {
 		t.Fatal(err)
 	}
 	_, a, b := startStacks(t, backend)
-	if budgetOf(b.settings) != 100 {
-		t.Fatalf("premise: B reads the seeded budget, got %v", budgetOf(b.settings))
+	if markerOf(b.settings) != 100 {
+		t.Fatalf("premise: B reads the seeded value, got %v", markerOf(b.settings))
 	}
 
 	// A change that rolls back: the writer's own cache drops it (rollback pass), the peer is told nothing.
 	next := models.DefaultSettings()
-	next.AI.DailyBudget = 5
+	next.Parser.MaxFileSizeMB = 5
 	ctx, reg := txhook.With(context.Background())
 	if err := a.settings.Update(ctx, *next); err != nil {
 		t.Fatal(err)
@@ -113,7 +113,7 @@ func TestTwoReplicas_ADeploymentSettingChangeReachesThePeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(200 * time.Millisecond)
-	if got := budgetOf(b.settings); got != 100 {
+	if got := markerOf(b.settings); got != 100 {
 		t.Errorf("B reads %v after a rolled-back change, want 100", got)
 	}
 
@@ -123,11 +123,11 @@ func TestTwoReplicas_ADeploymentSettingChangeReachesThePeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.bus.Publish(ctx, events.SettingsChanged{Scope: events.DeploymentSettings})
-	if got := budgetOf(b.settings); got != 100 {
+	if got := markerOf(b.settings); got != 100 {
 		t.Fatalf("B reads %v before the commit, want the old 100", got)
 	}
 	reg.Commit(nil)
-	redisreplica.Eventually(t, 5*time.Second, "B to read the new budget", func() bool { return budgetOf(b.settings) == 5 })
+	redisreplica.Eventually(t, 5*time.Second, "B to read the new value", func() bool { return markerOf(b.settings) == 5 })
 }
 
 func settingsToStorage(t *testing.T, s *models.AppSettings) *storageif.AppSettings {

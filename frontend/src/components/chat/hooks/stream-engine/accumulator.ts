@@ -2,7 +2,8 @@ import {useCallback} from 'react'
 import type {MutableRefObject} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {utf8ByteLength} from '@/lib/utf8'
-import type {ToolResultPayload} from '@/lib/chatEvent'
+import type {NoticePayload, ToolResultPayload} from '@/lib/chatEvent'
+import {NOTICE_HISTORY_TRUNCATED} from '@/lib/chatEvent'
 import type {ChatStoreState, StreamAcc, AccMeta} from './types'
 
 interface AccDeps {
@@ -89,6 +90,17 @@ export function useStreamAccumulators({streamAccRef, teardownRef, updateStream, 
     [streamAccRef, addToolCall, setStreamMeta],
   )
 
+  const onNotice = useCallback(
+    (notice: NoticePayload, streamId: string) => {
+      const acc = streamAccRef.current.get(streamId)
+      if (!acc) return
+      if (notice.notice === NOTICE_HISTORY_TRUNCATED && notice.keptFrom != null && notice.keptFrom > 0) {
+        setStreamMeta(acc.threadId, {truncated: notice.keptFrom})
+      }
+    },
+    [streamAccRef, setStreamMeta],
+  )
+
   const takeAcc = useCallback(
     (streamId: string): StreamAcc | null => {
       teardownRef.current(streamId)
@@ -147,5 +159,17 @@ export function useStreamAccumulators({streamAccRef, teardownRef, updateStream, 
     [streamAccRef],
   )
 
-  return {streamAccRef, onChunk, onReplace, onToolStatus, onToolResult, takeAcc, dropAcc, beginAcc, onAppend, getAccLength}
+  return {
+    streamAccRef,
+    onChunk,
+    onReplace,
+    onToolStatus,
+    onToolResult,
+    onNotice,
+    takeAcc,
+    dropAcc,
+    beginAcc,
+    onAppend,
+    getAccLength,
+  }
 }

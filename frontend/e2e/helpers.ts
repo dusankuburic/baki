@@ -229,7 +229,6 @@ export function mockDashboardHome() {
     },
     isCloud: true,
     healthTrend: [],
-    costByProvider: [],
     ruleFrequency: [],
     activity: [],
     complexity: [],

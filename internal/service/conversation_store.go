@@ -38,8 +38,6 @@ func toStorageMessages(msgs []models.ChatMessage) []storageif.ChatMessage {
 			Model:            m.Model,
 			ModelLabel:       m.ModelLabel,
 			ServedModel:      m.ServedModel,
-			InputCostPerM:    m.InputCostPerM,
-			OutputCostPerM:   m.OutputCostPerM,
 			FinishReason:     m.FinishReason,
 		}
 		if len(m.ToolCalls) > 0 {
@@ -153,8 +151,6 @@ func toModelMessages(msgs []storageif.ChatMessage) []models.ChatMessage {
 			Model:            m.Model,
 			ModelLabel:       m.ModelLabel,
 			ServedModel:      m.ServedModel,
-			InputCostPerM:    m.InputCostPerM,
-			OutputCostPerM:   m.OutputCostPerM,
 			FinishReason:     m.FinishReason,
 		}
 		if len(m.ToolCalls) > 0 {

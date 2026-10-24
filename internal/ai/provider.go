@@ -21,7 +21,6 @@ type Provider interface {
 	Stream(ctx context.Context, req Request, onChunk func(Chunk)) error
 	EstimateTokens(text string) int
 	ContextLimit() int
-	PricePerMillionTokens() Pricing
 	Embed(ctx context.Context, text []string) ([][]float32, error)
 	// SupportsTools reports whether the provider's Chat path can serialize tool definitions and return tool
 	// calls. The chat service only runs the agentic tool loop against providers that return true.
@@ -45,19 +44,13 @@ type ModelInfo struct {
 	ContextLimit int    `json:"contextLimit"`
 	// MaxOutputTokens is the model's maximum completion length, far smaller than ContextLimit (the input
 	// window). Zero means unknown — callers clamping MaxTokens against it should leave the value untouched then.
-	MaxOutputTokens int     `json:"maxOutputTokens,omitempty"`
-	Pricing         Pricing `json:"pricing"`
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
 	// ServedModel is the underlying model that answers when this entry's ID is only an alias for it — a Foundry
 	// deployment name, a model-router deployment. Empty for catalogue models, whose ID is the model.
 	ServedModel string `json:"servedModel,omitempty"`
 	// Embedding marks an embedding deployment (Azure AI Foundry): kept in Models() so embedding usage is
-	// priced and sized, never offered as a chat model or chosen as the chat default.
+	// sized, never offered as a chat model or chosen as the chat default.
 	Embedding bool `json:"embedding,omitempty"`
-}
-
-type Pricing struct {
-	InputCostPerM  float64 `json:"inputCostPerM"`
-	OutputCostPerM float64 `json:"outputCostPerM"`
 }
 
 type Request struct {
@@ -354,7 +347,6 @@ type MetadataProvider interface {
 	DefaultModel() string
 	FreeModel() string
 	ContextLimit() int
-	PricePerMillionTokens() Pricing
 	EstimateTokens(text string) int
 	// SupportsTools reports whether the provider family can run the agentic tool loop. Used by the provider
 	// listing so the UI can gate the Tools toggle.

@@ -111,7 +111,7 @@ describe('AITab', () => {
         name: 'Claude',
         configured: true,
         authType: 'api_key',
-        models: [{id: 'claude-3', displayName: 'Claude 3', contextLimit: 200000, inputCostPerM: 3, outputCostPerM: 15}],
+        models: [{id: 'claude-3', displayName: 'Claude 3', contextLimit: 200000}],
         defaultModel: 'claude-3',
       },
     ] as ProviderInfo[])

@@ -22,17 +22,6 @@ func padSource(size int) string {
 	return b.String()
 }
 
-// bytesProvider is stubProvider with its EstimateTokens input counted.
-type bytesProvider struct {
-	stubProvider
-	seen *int
-}
-
-func (p bytesProvider) EstimateTokens(text string) int {
-	*p.seen += len(text)
-	return p.stubProvider.EstimateTokens(text)
-}
-
 // A selected 5 MB source file costs the context what its first 64 KB cost:
 // the file is bounded by bytes before it is appended, the assembled text
 // is tokenised by prefix, and the context message is byte-identical to what
@@ -41,12 +30,10 @@ func TestBuildContext_BoundsSourceFilesBeforeTokenising(t *testing.T) {
 	tkm := requireTokenizer(t)
 	src := padSource(5 << 20)
 	doc := makeMinimalDoc("Big")
-	estimated := new(int)
 	req := ContextRequest{
 		Flow:           doc,
 		RawSourceFiles: map[string]string{"Main.txt": src},
 		TokenBudget:    4000,
-		Provider:       bytesProvider{seen: estimated},
 	}
 
 	encoded := countEncodedBytes(t)
@@ -56,7 +43,7 @@ func TestBuildContext_BoundsSourceFilesBeforeTokenising(t *testing.T) {
 	_, ctx := BuildContext(req)
 	runtime.ReadMemStats(&after)
 
-	if n := *encoded + *estimated; n >= 128<<10 {
+	if n := *encoded; n >= 128<<10 {
 		t.Errorf("tokenised %d bytes for a %d-byte source, want under 128 KB", n, len(src))
 	}
 	// Tokenising the 64 KB head alone is ~8 MB of tokenizer garbage; the
@@ -67,7 +54,7 @@ func TestBuildContext_BoundsSourceFilesBeforeTokenising(t *testing.T) {
 
 	// The old implementation's result: the whole file appended, the whole
 	// text encoded, the first budget-3 tokens kept.
-	old := "## Flow: Big\n\n### Source Files (1)\n\n#### Main.txt\n\n```" + src + "\n```\n\n"
+	old := "## Flow: Big\n\n### Source Files (1)\n\n#### Main.txt\n\n```\n" + src + "\n```\n\n"
 	want := refTruncate(t, tkm, old, 4000)
 	if ctx != want {
 		t.Fatalf("context differs from the whole-file result:\n got %d bytes %q…\nwant %d bytes %q…", len(ctx), ctx[:min(120, len(ctx))], len(want), want[:min(120, len(want))])
@@ -117,7 +104,7 @@ func TestBoundSourceText(t *testing.T) {
 func BenchmarkBuildContext_5MBSource(b *testing.B) {
 	src := padSource(5 << 20)
 	doc := makeMinimalDoc("Big")
-	req := ContextRequest{Flow: doc, RawSourceFiles: map[string]string{"Main.txt": src}, TokenBudget: 4000, Provider: stubProvider{}}
+	req := ContextRequest{Flow: doc, RawSourceFiles: map[string]string{"Main.txt": src}, TokenBudget: 4000}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

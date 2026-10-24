@@ -82,14 +82,6 @@ func TestCopilotProvider_Models(t *testing.T) {
 	}
 }
 
-func TestCopilotProvider_Pricing_IsZero(t *testing.T) {
-	p := NewCopilotProvider("test-token")
-	pricing := p.PricePerMillionTokens()
-	if pricing.InputCostPerM != 0 || pricing.OutputCostPerM != 0 {
-		t.Errorf("Copilot pricing should be zero (subscription-based), got %+v", pricing)
-	}
-}
-
 // TestCopilotProvider_Models_BoundedErrorBodyRead is the regression test for the
 // unbounded io.ReadAll on the /models error path: the server returning an error
 // status with a multi-megabyte body used to buffer the whole thing into memory

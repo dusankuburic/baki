@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -119,7 +118,7 @@ func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Requ
 }
 
 // @Summary      Get org settings
-// @Description  handleGetOrgSettings returns org-wide settings. Reading requires org membership — settings carry operational details (budgets, provider configuration) that must not leak across tenants.
+// @Description  handleGetOrgSettings returns org-wide settings. Reading requires org membership — settings carry operational details (provider configuration) that must not leak across tenants.
 // @Tags         system
 // @Param        id path string true "Org ID"
 // @Produce      json
@@ -596,7 +595,7 @@ func (h *SystemHandler) Mount(rb *route.Builder) {
 
 	mountAdmin(rb, h.authz, h.security, func(rb *route.Builder) {
 		rb.Get("/system/health", h.handleAdminSystemHealth)
-		// The deployment-wide ai values (the enforced budgets, the embedding choice): in cloud every member write
+		// The deployment-wide ai values (the embedding choice): in cloud every member write
 		// lands in the member's own document, so this is the document's only writer.
 		rb.Get("/settings/ai", Query(h.getDeploymentAISettings))
 		rb.Put("/settings/ai", JSON(h.updateDeploymentAISettings))
@@ -604,23 +603,23 @@ func (h *SystemHandler) Mount(rb *route.Builder) {
 }
 
 // @Summary      Get the deployment's AI settings
-// @Description  The deployment-wide ai values: the daily budgets the budget gate enforces on every replica (0 = unlimited) and the embedding provider and model every knowledge base shares. Admin only.
+// @Description  The deployment-wide ai values: the embedding provider and model every knowledge base shares. Admin only.
 // @Tags         admin
 // @Produce      json
-// @Success      200 {object} service.DeploymentAISettings "The enforced values"
+// @Success      200 {object} service.DeploymentAISettings "The deployment-wide values"
 // @Router       /api/admin/settings/ai [get]
 func (h *SystemHandler) getDeploymentAISettings(ctx context.Context, _ struct{}) (service.DeploymentAISettings, error) {
 	return h.sysSvc.GetDeploymentAISettings(ctx)
 }
 
 // @Summary      Update the deployment's AI settings
-// @Description  Replaces the deployment-wide ai values with the body's and answers with what is now enforced. The body is the whole set of four fields: one it omits is written as zero (an unlimited budget, the server-default embedding provider or model), so send every field, changed or not. The rest of the deployment document is kept as stored, and a member's own settings write never reaches these fields. An embedding provider whose model ids are deployment aliases (Azure AI Foundry) is refused: it embeds only on the operator's PAD_EMBEDDING_PROVIDER pin. Admin only.
+// @Description  Replaces the deployment-wide ai values with the body's and answers with what is now stored. The body is the whole set of two fields: one it omits is written empty (the server-default embedding provider or model), so send both, changed or not. The rest of the deployment document is kept as stored, and a member's own settings write never reaches these fields. An embedding provider whose model ids are deployment aliases (Azure AI Foundry) is refused: it embeds only on the operator's PAD_EMBEDDING_PROVIDER pin. Admin only.
 // @Tags         admin
 // @Accept       json
 // @Produce      json
-// @Param        request body service.DeploymentAISettings true "The values to enforce, all four"
-// @Success      200 {object} service.DeploymentAISettings "The enforced values, as written"
-// @Failure      400 {object} render.ErrorResponse "BAD_REQUEST: a negative budget, an embedding provider that cannot embed or needs the operator's pin, or an oversized model id"
+// @Param        request body service.DeploymentAISettings true "The values to store, both"
+// @Success      200 {object} service.DeploymentAISettings "The values, as written"
+// @Failure      400 {object} render.ErrorResponse "BAD_REQUEST: an embedding provider that cannot embed or needs the operator's pin, or an oversized model id"
 // @Router       /api/admin/settings/ai [put]
 func (h *SystemHandler) updateDeploymentAISettings(ctx context.Context, req service.DeploymentAISettings) (service.DeploymentAISettings, error) {
 	written, err := h.sysSvc.UpdateDeploymentAISettings(ctx, req)
@@ -630,13 +629,11 @@ func (h *SystemHandler) updateDeploymentAISettings(ctx context.Context, req serv
 		}
 		return service.DeploymentAISettings{}, err
 	}
-	// The row names the deployment, not the admin (that is the actor), and says what the limits became: an
+	// The row names the deployment, not the admin (that is the actor), and says what the values became: an
 	// auditor can tell it from the admin's own settings write and read the change off the log.
 	h.audit.Record(ctx, audit.Entry{Action: audit.ActionSettingsChange, ResourceType: "settings", ResourceID: "deployment", Meta: map[string]string{
-		"dailyBudget":        strconv.FormatFloat(written.DailyBudget, 'f', -1, 64),
-		"perUserDailyBudget": strconv.FormatFloat(written.PerUserDailyBudget, 'f', -1, 64),
-		"embeddingProvider":  written.EmbeddingProvider,
-		"embeddingModel":     written.EmbeddingModel,
+		"embeddingProvider": written.EmbeddingProvider,
+		"embeddingModel":    written.EmbeddingModel,
 	}})
 	return written, nil
 }

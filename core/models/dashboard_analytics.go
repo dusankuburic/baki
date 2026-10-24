@@ -71,7 +71,6 @@ type AnalyticsSummary struct {
 	AnalysesRun   StatValue `json:"analysesRun"`
 	FlowsAnalyzed StatValue `json:"flowsAnalyzed"`
 	Resolved      StatValue `json:"resolved"`
-	AISpend       StatValue `json:"aiSpend"`
 }
 
 // AnalyticsTrendPoint is the fleet's state as of one day: every flow carries
@@ -165,11 +164,10 @@ type AnalyticsTriage struct {
 }
 
 type AIDailyPoint struct {
-	Date      string  `json:"date"`
-	TokensIn  int     `json:"tokensIn"`
-	TokensOut int     `json:"tokensOut"`
-	Cost      float64 `json:"cost"`
-	Calls     int     `json:"calls"`
+	Date      string `json:"date"`
+	TokensIn  int    `json:"tokensIn"`
+	TokensOut int    `json:"tokensOut"`
+	Calls     int    `json:"calls"`
 }
 
 // ModelUsage is one row of the by-model breakdown. Model is what the caller
@@ -177,27 +175,24 @@ type AIDailyPoint struct {
 // the model that actually answered when it differs. Rows are grouped by the
 // served model, so one deployment routed to two models yields two rows.
 type ModelUsage struct {
-	Provider    string  `json:"provider"`
-	Model       string  `json:"model"`
-	ServedModel string  `json:"servedModel,omitempty"`
-	TokensIn    int     `json:"tokensIn"`
-	TokensOut   int     `json:"tokensOut"`
-	Calls       int     `json:"calls"`
-	Cost        float64 `json:"cost"`
+	Provider    string `json:"provider"`
+	Model       string `json:"model"`
+	ServedModel string `json:"servedModel,omitempty"`
+	TokensIn    int    `json:"tokensIn"`
+	TokensOut   int    `json:"tokensOut"`
+	Calls       int    `json:"calls"`
 }
 
 // AnalyticsAI is AI usage for the caller's account and/or the scoped orgs.
 // usage_metrics has no flow id, so FlowScoped is always false and the UI says
 // so instead of pretending the flows filter applied.
 type AnalyticsAI struct {
-	Scoped      string             `json:"scoped"`
-	FlowScoped  bool               `json:"flowScoped"`
-	Daily       []AIDailyPoint     `json:"daily"`
-	ByProvider  []ProviderCostStub `json:"byProvider"`
-	ByModel     []ModelUsage       `json:"byModel"`
-	TotalCost   float64            `json:"totalCost"`
-	PrevCost    *float64           `json:"prevCost"`
-	TotalTokens int                `json:"totalTokens"`
+	Scoped      string              `json:"scoped"`
+	FlowScoped  bool                `json:"flowScoped"`
+	Daily       []AIDailyPoint      `json:"daily"`
+	ByProvider  []ProviderUsageStub `json:"byProvider"`
+	ByModel     []ModelUsage        `json:"byModel"`
+	TotalTokens int                 `json:"totalTokens"`
 }
 
 type ActivityActor struct {

@@ -20,13 +20,12 @@ var localSpec = ProviderSpec{
 			{Name: "contextWindow", Label: "Context window", Type: FieldNumber, Help: "The context length the server runs its models with; empty assumes 8192."},
 		},
 	},
-	Keys:    KeySchema{Primary: localProviderID},
-	Pricing: PricingFree,
-	Wire:    WireOpenAI,
-	Ctor:    func(c Credential) Provider { return NewLocalProvider(c.Key) },
-	Color:   "#f59e0b",
-	Icon:    "drive",
-	Order:   90,
+	Keys:  KeySchema{Primary: localProviderID},
+	Wire:  WireOpenAI,
+	Ctor:  func(c Credential) Provider { return NewLocalProvider(c.Key) },
+	Color: "#f59e0b",
+	Icon:  "drive",
+	Order: 90,
 }
 
 func init() { mustRegisterSpec(localSpec) }

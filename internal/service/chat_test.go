@@ -553,19 +553,6 @@ func collectEvents() (func(string, map[string]interface{}), *[]string) {
 	return func(typ string, _ map[string]interface{}) { evs = append(evs, typ) }, &evs
 }
 
-// TestDailyUsage_NilBackendDoesNotPanic covers local/desktop mode (nil backend): the budget check must report
-// $0 usage instead of dereferencing nil.
-func TestDailyUsage_NilBackendDoesNotPanic(t *testing.T) {
-	svc := &ChatService{} // backend is nil, as in local mode
-	usage, err := svc.aiBudget().dailyUsage(context.Background(), "user-1", "org-1")
-	if err != nil {
-		t.Fatalf("dailyUsage with nil backend returned error: %v", err)
-	}
-	if usage != 0 {
-		t.Errorf("dailyUsage with nil backend = %v, want 0", usage)
-	}
-}
-
 // staticSettings is a minimal SettingsProvider for tests that drive settings without the on-disk store.
 type staticSettings struct{ s models.AppSettings }
 
@@ -574,31 +561,6 @@ func (m *staticSettings) Update(context.Context, models.AppSettings) error { ret
 func (m *staticSettings) AddRecentFile(string, int64) error                { return nil }
 func (m *staticSettings) RemoveRecentFile(string) error                    { return nil }
 func (m *staticSettings) ClearRecentFiles() error                          { return nil }
-
-// TestEnforceBudget_FailsClosedOnStoreError verifies the cost guardrail denies a request when the day's spend
-// can't be read — treating unknown spend as $0 would open an unlimited-spend window during a DB hiccup.
-func TestEnforceBudget_FailsClosedOnStoreError(t *testing.T) {
-	backend := &testutil.FakeBackend{UsageErr: fmt.Errorf("db down")}
-	svc := &ChatService{
-		backend:  backend,
-		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 10}}},
-	}
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0, nil); err == nil {
-		t.Fatal("enforceBudget with a store error returned nil, want a fail-closed error")
-	}
-}
-
-// TestEnforceBudget_AllowsUnderBudget confirms the happy path permits a request below the configured budget.
-func TestEnforceBudget_AllowsUnderBudget(t *testing.T) {
-	backend := &testutil.FakeBackend{DailyUsage: 2}
-	svc := &ChatService{
-		backend:  backend,
-		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 10}}},
-	}
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0, nil); err != nil {
-		t.Fatalf("enforceBudget under budget returned error: %v", err)
-	}
-}
 
 func TestRunToolLoop_ExecutesToolThenFinal(t *testing.T) {
 	stub := &testutil.FakeProvider{Turns: []testutil.FakeTurn{
@@ -893,6 +855,9 @@ type ctxCacheStubProvider struct {
 func (ctxCacheStubProvider) ID() string                  { return "stub" }
 func (ctxCacheStubProvider) EstimateTokens(s string) int { return len(s) / 4 }
 func (ctxCacheStubProvider) ContextLimit() int           { return 100000 }
+
+// Models answers no per-model window, so the context budget derives from ContextLimit.
+func (ctxCacheStubProvider) Models(context.Context) ([]ai.ModelInfo, error) { return nil, nil }
 
 // TestCachedContextCore_CachesAcrossTurns verifies the scrubbed-context cache: consecutive identical turns reuse
 // the same redacted clone (pointer identity); a different cache key rebuilds the TEXT, and InvalidateChatContext

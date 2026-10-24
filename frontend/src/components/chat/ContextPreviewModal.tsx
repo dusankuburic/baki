@@ -58,6 +58,30 @@ export default function ContextPreviewModal({preview, onClose, onConfirm}: Props
 
         {overLimit && <p className="text-xs text-semantic-error">{t('preview.overLimit')}</p>}
 
+        {/* The parts are absent from a server that predates them (a rolling deploy): then only the total shows. */}
+        <div className="space-y-0.5 text-xs text-text-tertiary tabular-nums">
+          {preview.breakdown && (
+            <p>
+              {t('preview.breakdown', {
+                system: preview.breakdown.system.toLocaleString(),
+                flowContext: preview.breakdown.context.toLocaleString(),
+                history: preview.breakdown.history.toLocaleString(),
+                tools: preview.breakdown.tools.toLocaleString(),
+                message: preview.breakdown.user.toLocaleString(),
+              })}
+            </p>
+          )}
+          {!!preview.contextBudget && <p>{t('preview.budget', {budget: preview.contextBudget.toLocaleString()})}</p>}
+          {!!preview.historyDropped && (
+            <p className="text-semantic-warning">
+              {t('preview.historyDropped', {dropped: preview.historyDropped, total: preview.historyMessages})}
+            </p>
+          )}
+          {preview.toolsOffered && preview.tools && preview.tools.length > 0 && (
+            <p className="break-words">{t('preview.tools', {tools: preview.tools.join(', ')})}</p>
+          )}
+        </div>
+
         <CollapsibleSection
           title={t('preview.systemPrompt')}
           expanded={expandSystem}

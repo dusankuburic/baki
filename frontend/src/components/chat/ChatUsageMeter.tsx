@@ -6,8 +6,6 @@ import {formatCompact} from '@/lib/format'
 interface Props {
   promptTokens: number
   completionTokens: number
-  inputCostPerM?: number
-  outputCostPerM?: number
 }
 
 const TOKEN_REFRESH_MS = 250

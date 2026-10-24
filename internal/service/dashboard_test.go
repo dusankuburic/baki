@@ -206,9 +206,6 @@ func TestDashboardService_BuildHome_CloudAdvancedEmptyIsSafe(t *testing.T) {
 	if home.HealthTrend == nil {
 		t.Error("HealthTrend must be non-nil")
 	}
-	if home.CostByProv == nil {
-		t.Error("CostByProv must be non-nil")
-	}
 	if home.RuleFreq == nil {
 		t.Error("RuleFreq must be non-nil")
 	}
@@ -231,9 +228,6 @@ func TestDashboardService_BuildHome_CloudAdvancedMapping(t *testing.T) {
 			HealthTrend: []storageif.DailyHealthPoint{
 				{Date: "2026-06-01", AvgHealth: 80, FlowCount: 3},
 			},
-			CostByProv: []storageif.ProviderCost{
-				{Provider: "claude", Cost: 1.50, TokensIn: 1000, TokensOut: 500},
-			},
 			RuleFreq: []storageif.RuleFrequency{
 				{Rule: "dead-code", Count: 5},
 			},
@@ -252,9 +246,6 @@ func TestDashboardService_BuildHome_CloudAdvancedMapping(t *testing.T) {
 
 	if len(home.HealthTrend) != 1 || home.HealthTrend[0].AvgHealth != 80 {
 		t.Errorf("HealthTrend mapping: got %+v", home.HealthTrend)
-	}
-	if len(home.CostByProv) != 1 || home.CostByProv[0].Cost != 1.50 {
-		t.Errorf("CostByProv mapping: got %+v", home.CostByProv)
 	}
 	if len(home.RuleFreq) != 1 || home.RuleFreq[0].Rule != "dead-code" {
 		t.Errorf("RuleFreq mapping: got %+v", home.RuleFreq)

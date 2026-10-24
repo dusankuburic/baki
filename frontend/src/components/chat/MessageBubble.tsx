@@ -1,8 +1,21 @@
 import {useTranslation} from 'react-i18next'
 import i18n from '@/i18n'
 import clsx from 'clsx'
-import {Copy, Check, RefreshCw, RotateCcw, Bot, User, CircleSlash, Settings, Users, ListFilter} from 'lucide-react'
-import {useCallback, useId, memo} from 'react'
+import {
+  Copy,
+  Check,
+  RefreshCw,
+  RotateCcw,
+  Bot,
+  User,
+  CircleSlash,
+  Settings,
+  Users,
+  ListFilter,
+  ExternalLink as ExternalLinkIcon,
+  Scissors,
+} from 'lucide-react'
+import {useCallback, useId, memo, useState} from 'react'
 import ReactMarkdown, {defaultUrlTransform} from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {ChatMessage as ChatMessageType} from '@/types'
@@ -29,6 +42,8 @@ interface Props {
   resendDisabledReason?: string
   highlight?: string
   isActiveMatch?: boolean
+  /** Compacts the thread; offered on the omitted-history chip of a turn that lost earlier turns. */
+  onCompact?: () => void
 }
 
 const MentionPill = ({path}: {path: string}) => {
@@ -87,15 +102,37 @@ const BlockLink = ({href, children}: {href?: string; children?: React.ReactNode}
       </button>
     )
   }
+  return <ExternalLink href={href}>{children}</ExternalLink>
+}
+
+// A URL the model emits is as trustworthy as the flow and the documents it read (the system prompt tells it to
+// write URLs it finds as plain text), so it is never a navigable link until the user asks to see where it goes:
+// the first click shows the address as the link.
+const ExternalLink = ({href, children}: {href?: string; children?: React.ReactNode}) => {
+  const [revealed, setRevealed] = useState(false)
+  if (!href) return <>{children}</>
+  if (revealed) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-brand-400 hover:text-brand-300 underline underline-offset-2 break-all"
+      >
+        {children} ({href})
+      </a>
+    )
+  }
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-brand-400 hover:text-brand-300 underline underline-offset-2"
+    <button
+      type="button"
+      onClick={() => setRevealed(true)}
+      title={i18n.t('chat:message.externalLink', {url: href})}
+      className="inline-flex items-center gap-0.5 text-brand-400 hover:text-brand-300 underline decoration-dotted underline-offset-2"
     >
       {children}
-    </a>
+      <ExternalLinkIcon size={10} aria-hidden="true" />
+    </button>
   )
 }
 
@@ -359,6 +396,7 @@ function MessageBubble({
   resendDisabledReason,
   highlight,
   isActiveMatch,
+  onCompact,
 }: Props) {
   const {t} = useTranslation('chat')
   const isUser = message.role === 'user'
@@ -485,6 +523,22 @@ function MessageBubble({
         <ToolTrail calls={message.toolCalls} />
       )}
 
+      {!isUser && !!message.truncated && (
+        <div className="flex items-center gap-1.5 px-1 text-2xs text-text-tertiary" data-testid="omitted-history">
+          <Scissors size={10} aria-hidden="true" />
+          <span>{t('message.omitted', {count: message.truncated})}</span>
+          {onCompact && (
+            <button
+              type="button"
+              onClick={onCompact}
+              className="text-brand-400 hover:text-brand-300 underline underline-offset-2"
+            >
+              {t('message.compact')}
+            </button>
+          )}
+        </div>
+      )}
+
       {isInterrupted && (
         <div className="flex items-center gap-1 px-1 text-2xs text-text-tertiary">
           <CircleSlash size={10} />
@@ -556,6 +610,8 @@ export default memo(MessageBubble, (prevProps, nextProps) => {
     prevProps.message.fixProposal === nextProps.message.fixProposal &&
     prevProps.message.fixProposals === nextProps.message.fixProposals &&
     prevProps.message.approvals === nextProps.message.approvals &&
+    prevProps.message.truncated === nextProps.message.truncated &&
+    prevProps.onCompact === nextProps.onCompact &&
     prevProps.isStreaming === nextProps.isStreaming &&
     prevProps.isThinking === nextProps.isThinking &&
     prevProps.isLastAssistant === nextProps.isLastAssistant &&

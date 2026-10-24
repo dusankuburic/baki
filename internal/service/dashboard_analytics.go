@@ -542,17 +542,6 @@ func (s *DashboardService) buildAnalytics(ctx context.Context, userID string, ca
 	// --- AI usage ---
 	if usage != nil {
 		out.AI = aiSection(usage, q, usageMode, orgIDs)
-		costOf := func(d models.AIDailyPoint) (float64, bool) { return d.Cost, true }
-		spark := make([]float64, 0, analyticsSparkBuckets)
-		for _, b := range buckets(len(out.AI.Daily)) {
-			total := 0.0
-			for _, p := range out.AI.Daily[b[0]:b[1]] {
-				v, _ := costOf(p)
-				total += v
-			}
-			spark = append(spark, round2(total))
-		}
-		out.Summary.AISpend = models.StatValue{Available: true, Value: out.AI.TotalCost, Prev: out.AI.PrevCost, Spark: spark}
 	}
 
 	// --- activity ---
@@ -1123,34 +1112,25 @@ func aiSection(u *storageif.UsageRows, q AnalyticsQuery, mode string, orgIDs []s
 			scoped = "user+orgs"
 		}
 	}
-	out := models.AnalyticsAI{Scoped: scoped, FlowScoped: false, Daily: []models.AIDailyPoint{}, ByProvider: []models.ProviderCostStub{}, ByModel: []models.ModelUsage{}}
-	fromKey, toKey, prevKey := q.From.Format(analyticsDay), q.To.Format(analyticsDay), q.PrevFrom().Format(analyticsDay)
+	out := models.AnalyticsAI{Scoped: scoped, FlowScoped: false, Daily: []models.AIDailyPoint{}, ByProvider: []models.ProviderUsageStub{}, ByModel: []models.ModelUsage{}}
+	fromKey, toKey := q.From.Format(analyticsDay), q.To.Format(analyticsDay)
 	byDay := map[string]storageif.UsageDailyRow{}
-	prevCost := 0.0
 	for _, r := range u.Daily {
 		if r.Date >= fromKey && r.Date < toKey {
 			byDay[r.Date] = r
-			out.TotalCost += r.Cost
 			out.TotalTokens += r.TokensIn + r.TokensOut
-		} else if q.Compare && r.Date >= prevKey && r.Date < fromKey {
-			prevCost += r.Cost
 		}
 	}
 	for d := q.From; d.Before(q.To); d = d.AddDate(0, 0, 1) {
 		key := d.Format(analyticsDay)
 		r := byDay[key]
-		out.Daily = append(out.Daily, models.AIDailyPoint{Date: key, TokensIn: r.TokensIn, TokensOut: r.TokensOut, Cost: round2(r.Cost), Calls: r.Calls})
-	}
-	out.TotalCost = round2(out.TotalCost)
-	if q.Compare {
-		p := round2(prevCost)
-		out.PrevCost = &p
+		out.Daily = append(out.Daily, models.AIDailyPoint{Date: key, TokensIn: r.TokensIn, TokensOut: r.TokensOut, Calls: r.Calls})
 	}
 	for _, p := range u.ByProvider {
-		out.ByProvider = append(out.ByProvider, models.ProviderCostStub{Provider: p.Provider, Cost: round2(p.Cost), TokensIn: p.TokensIn, TokensOut: p.TokensOut})
+		out.ByProvider = append(out.ByProvider, models.ProviderUsageStub{Provider: p.Provider, TokensIn: p.TokensIn, TokensOut: p.TokensOut})
 	}
 	for _, m := range u.ByModel {
-		out.ByModel = append(out.ByModel, models.ModelUsage{Provider: m.Provider, Model: m.Model, ServedModel: m.ServedModel, TokensIn: m.TokensIn, TokensOut: m.TokensOut, Calls: m.Calls, Cost: round2(m.Cost)})
+		out.ByModel = append(out.ByModel, models.ModelUsage{Provider: m.Provider, Model: m.Model, ServedModel: m.ServedModel, TokensIn: m.TokensIn, TokensOut: m.TokensOut, Calls: m.Calls})
 	}
 	return out
 }
@@ -1216,7 +1196,7 @@ func emptyAnalytics() *models.DashboardAnalyticsData {
 		Findings: models.AnalyticsFindings{BySeverity: map[string]int{}, ByCategory: []models.CategoryCount{}, ByRule: []models.RuleCount{}, ByConfidence: map[string]int{}},
 		Flows:    models.AnalyticsFlows{HealthBuckets: []models.HealthBucketStub{}, Complexity: []models.FlowPoint{}, Worst: []models.FlowPoint{}, Movers: []models.FlowMover{}},
 		Triage:   models.AnalyticsTriage{Funnel: map[string]int{}, ResolvedByDay: []models.DateCount{}},
-		AI:       models.AnalyticsAI{Scoped: "user", Daily: []models.AIDailyPoint{}, ByProvider: []models.ProviderCostStub{}, ByModel: []models.ModelUsage{}},
+		AI:       models.AnalyticsAI{Scoped: "user", Daily: []models.AIDailyPoint{}, ByProvider: []models.ProviderUsageStub{}, ByModel: []models.ModelUsage{}},
 		Activity: models.AnalyticsActivity{Events: []models.ActivityEvent{}, ByDay: []models.DateCount{}, ByAction: []models.ActionCount{}},
 		Facets:   models.AnalyticsFacets{Severity: []models.FacetCount{}, Category: []models.FacetCount{}, Rule: []models.FacetCount{}, Flows: []models.FacetFlow{}},
 		Partial:  []string{},
@@ -1254,5 +1234,3 @@ func abs(n int) int {
 	}
 	return n
 }
-
-func round2(v float64) float64 { return math.Round(v*100) / 100 }

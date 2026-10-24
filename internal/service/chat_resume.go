@@ -66,11 +66,9 @@ type ResumeResult struct {
 	ErrorShared bool `json:"errorShared,omitempty"`
 	TokensIn    int  `json:"tokensIn"`
 	TokensOut   int  `json:"tokensOut"`
-	// ServedModel is the model that answered (alias providers) plus the USD/1M rates the turn was billed at.
-	ServedModel    string         `json:"servedModel,omitempty"`
-	InputCostPerM  float64        `json:"inputCostPerM,omitempty"`
-	OutputCostPerM float64        `json:"outputCostPerM,omitempty"`
-	Events         []journalEvent `json:"events,omitempty"`
+	// ServedModel is the model that answered (alias providers).
+	ServedModel string         `json:"servedModel,omitempty"`
+	Events      []journalEvent `json:"events,omitempty"`
 }
 
 // resumeSnapshot is the cross-replica-persistable form of a stream's resumable state, plus the owner so a
@@ -80,22 +78,20 @@ type resumeSnapshot struct {
 	// commands go. The store stamps all three on the way out; a v0 snapshot has none and cannot be commanded. Live says
 	// the owner keeps a liveness key (redisx.ReplicaLiveKey), so its absence means the stream died with the replica;
 	// without it (one replica configured, or the release before) the owner's silence proves nothing.
-	V              int            `json:"v,omitempty"`
-	Kind           string         `json:"kind,omitempty"`
-	Replica        string         `json:"replica,omitempty"`
-	Live           bool           `json:"live,omitempty"`
-	Owner          string         `json:"owner"`
-	Text           string         `json:"text"`
-	Done           bool           `json:"done"`
-	Error          string         `json:"error"`
-	ErrorCode      string         `json:"errorCode,omitempty"`
-	ErrorShared    bool           `json:"errorShared,omitempty"`
-	TokensIn       int            `json:"tokensIn"`
-	TokensOut      int            `json:"tokensOut"`
-	ServedModel    string         `json:"servedModel,omitempty"`
-	InputCostPerM  float64        `json:"inputCostPerM,omitempty"`
-	OutputCostPerM float64        `json:"outputCostPerM,omitempty"`
-	Events         []journalEvent `json:"events,omitempty"`
+	V           int            `json:"v,omitempty"`
+	Kind        string         `json:"kind,omitempty"`
+	Replica     string         `json:"replica,omitempty"`
+	Live        bool           `json:"live,omitempty"`
+	Owner       string         `json:"owner"`
+	Text        string         `json:"text"`
+	Done        bool           `json:"done"`
+	Error       string         `json:"error"`
+	ErrorCode   string         `json:"errorCode,omitempty"`
+	ErrorShared bool           `json:"errorShared,omitempty"`
+	TokensIn    int            `json:"tokensIn"`
+	TokensOut   int            `json:"tokensOut"`
+	ServedModel string         `json:"servedModel,omitempty"`
+	Events      []journalEvent `json:"events,omitempty"`
 }
 
 // resumeStore is the pluggable backing for chat-stream resume: the no-op keeps single-replica behavior (local
@@ -540,16 +536,14 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 		// chunk emission for the duration of a full-buffer copy on long streams.
 		buf := ctl.buffer.String()
 		snap := &ResumeResult{
-			Done:           ctl.done,
-			Error:          ctl.errMsg,
-			ErrorCode:      ctl.errCode,
-			ErrorShared:    ctl.errShared,
-			TokensIn:       ctl.tokensIn,
-			TokensOut:      ctl.tokensOut,
-			ServedModel:    ctl.servedModel,
-			InputCostPerM:  ctl.inputCostPerM,
-			OutputCostPerM: ctl.outputCostPerM,
-			Events:         ctl.snapshotEvents(),
+			Done:        ctl.done,
+			Error:       ctl.errMsg,
+			ErrorCode:   ctl.errCode,
+			ErrorShared: ctl.errShared,
+			TokensIn:    ctl.tokensIn,
+			TokensOut:   ctl.tokensOut,
+			ServedModel: ctl.servedModel,
+			Events:      ctl.snapshotEvents(),
 		}
 		ctl.mu.Unlock()
 		snap.Text = sliceFrom(buf, from)
@@ -564,16 +558,14 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 // result is the ResumeResult a snapshot answers with, its text replaced by text (the delta tail or whole buffer).
 func (snap resumeSnapshot) result(text string) *ResumeResult {
 	return &ResumeResult{
-		Text:           text,
-		Done:           snap.Done,
-		Error:          snap.Error,
-		ErrorCode:      snap.ErrorCode,
-		ErrorShared:    snap.ErrorShared,
-		TokensIn:       snap.TokensIn,
-		TokensOut:      snap.TokensOut,
-		ServedModel:    snap.ServedModel,
-		InputCostPerM:  snap.InputCostPerM,
-		OutputCostPerM: snap.OutputCostPerM,
-		Events:         snap.Events,
+		Text:        text,
+		Done:        snap.Done,
+		Error:       snap.Error,
+		ErrorCode:   snap.ErrorCode,
+		ErrorShared: snap.ErrorShared,
+		TokensIn:    snap.TokensIn,
+		TokensOut:   snap.TokensOut,
+		ServedModel: snap.ServedModel,
+		Events:      snap.Events,
 	}
 }

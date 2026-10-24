@@ -193,6 +193,10 @@ func TestApplyWithApproval_ApproveButFindingPersists(t *testing.T) {
 	if !strings.Contains(out, "APPLIED, but") || !strings.Contains(out, "still appears") {
 		t.Errorf("want applied-unresolved summary, got %q", out)
 	}
+	// The apply re-parsed the flow whatever the verification found: the model must learn its IDs are stale.
+	if !strings.Contains(out, "ALL block IDs have changed") {
+		t.Errorf("an unresolved apply must still say the block IDs changed, got %q", out)
+	}
 	evs := rec.snapshot()
 	if evs[len(evs)-1] != "fix_decision:applied-unresolved" {
 		t.Errorf("last event must be applied-unresolved, got %v", evs)

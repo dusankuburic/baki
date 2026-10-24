@@ -119,7 +119,7 @@ describe('api read validation (per schema namespace)', () => {
       authType: 'api_key',
       contextLimit: 200000,
       models: [
-        {id: 'm1', displayName: 'Claude X', contextLimit: 200000, inputCostPerM: 3, outputCostPerM: 15, supportsTools: true},
+        {id: 'm1', displayName: 'Claude X', contextLimit: 200000, supportsTools: true},
       ],
       defaultModel: 'm1',
       configured: true,
@@ -133,7 +133,7 @@ describe('api read validation (per schema namespace)', () => {
 
     it('throws ResponseValidationError when a model entry misses its display name', async () => {
       mockFetch([
-        {...provider, models: [{id: 'm1', contextLimit: 200000, inputCostPerM: 3, outputCostPerM: 15, supportsTools: true}]},
+        {...provider, models: [{id: 'm1', contextLimit: 200000, supportsTools: true}]},
       ])
       await expect(providersApi.listProviders()).rejects.toBeInstanceOf(ResponseValidationError)
     })

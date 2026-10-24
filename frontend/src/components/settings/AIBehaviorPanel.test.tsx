@@ -177,7 +177,6 @@ describe('AIBehaviorPanel providers the bundle does not know', () => {
         caps: ['chat'],
         credential: {kind: 'api_key', fields: []},
         endpoints: {},
-        pricing: 'catalog',
       },
     ])
     render(<AIBehaviorPanel />)
@@ -210,7 +209,6 @@ describe('AIBehaviorPanel embedding providers from the catalogue', () => {
     credential: {kind: 'api_key', fields: []},
     endpoints: {},
     configured: false,
-    pricing: 'catalog',
   })
 
   it('the embedding options follow the catalogue caps, not a literal list', async () => {

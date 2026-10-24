@@ -45,7 +45,6 @@ func TestServiceModule_BuildsInEveryMode(t *testing.T) {
 			var (
 				analysis  *service.AnalysisService
 				azure     *service.AzureModelService
-				budget    *service.AIBudget
 				chat      *service.ChatService
 				dashboard *service.DashboardService
 				knowledge *rag.KnowledgeService
@@ -67,7 +66,7 @@ func TestServiceModule_BuildsInEveryMode(t *testing.T) {
 				fakeKeyStore(),
 				ServiceModule,
 				redisx.Module,
-				fx.Populate(&analysis, &azure, &budget, &chat, &dashboard, &knowledge, &library, &providers, &system),
+				fx.Populate(&analysis, &azure, &chat, &dashboard, &knowledge, &library, &providers, &system),
 			)
 			if err := app.Err(); err != nil {
 				t.Fatalf("build: %v", err)
@@ -78,7 +77,7 @@ func TestServiceModule_BuildsInEveryMode(t *testing.T) {
 			if analysis.AuthEnabled() != m.auth {
 				t.Errorf("AnalysisService.AuthEnabled() = %v, want %v", analysis.AuthEnabled(), m.auth)
 			}
-			if budget == nil || knowledge == nil || chat == nil || dashboard == nil || library == nil || system == nil {
+			if knowledge == nil || chat == nil || dashboard == nil || library == nil || system == nil {
 				t.Error("a service was not built")
 			}
 		})

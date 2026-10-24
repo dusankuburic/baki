@@ -350,7 +350,7 @@ func TestListProviders_LocalOnlyWhenConfigured(t *testing.T) {
 		t.Fatalf("models = %v", p["models"])
 	}
 	first := ms[0].(map[string]any)
-	if first["id"] != "qwen2.5:7b" || first["supportsTools"] != true || first["inputCostPerM"] != float64(0) {
+	if _, priced := first["inputCostPerM"]; first["id"] != "qwen2.5:7b" || first["supportsTools"] != true || priced {
 		t.Errorf("first model = %v", first)
 	}
 	if p["defaultModel"] != "qwen2.5:7b" {

@@ -88,14 +88,19 @@ func TestAzureFoundryE2E(t *testing.T) {
 			gpt["connectionId"] != "default" || gpt["connectionName"] != "s1-res" || gpt["shared"] == true {
 			t.Errorf("gpt-4o entry = %v", gpt)
 		}
-		if azE2ENum(gpt, "inputCostPerM") != 0 || azE2ENum(gpt, "outputCostPerM") != 0 || azE2ENum(gpt, "contextLimit") != 128000 {
-			t.Errorf("gpt-4o entry = %v, want no price (Azure is unpriced by baki) and a 128000 window", gpt)
+		if azE2ENum(gpt, "contextLimit") != 128000 {
+			t.Errorf("gpt-4o entry = %v, want a 128000 window", gpt)
 		}
-		if router["kind"] != "chat" || azE2ENum(router, "inputCostPerM") != 0 {
-			t.Errorf("model-router entry = %v, want an unpriced chat model", router)
+		if router["kind"] != "chat" {
+			t.Errorf("model-router entry = %v, want a chat model", router)
 		}
-		if cl["kind"] != "claude" || azE2ENum(cl, "inputCostPerM") != 0 || azE2ENum(cl, "outputCostPerM") != 0 {
-			t.Errorf("claude entry = %v, want an unpriced Claude model (Azure is unpriced by baki)", cl)
+		if cl["kind"] != "claude" {
+			t.Errorf("claude entry = %v, want a Claude model", cl)
+		}
+		for _, entry := range []map[string]any{gpt, router, cl} {
+			if _, ok := entry["inputCostPerM"]; ok {
+				t.Errorf("entry %v carries a price", entry)
+			}
 		}
 		if got := env.fake.requests(host); len(got) != 0 {
 			t.Errorf("the listing must never call the resource; got %d request(s): %s %s", len(got), got[0].Method, got[0].Path)
@@ -214,8 +219,8 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if d["servedModel"] != served {
 			t.Errorf("done servedModel = %v, want %s", d["servedModel"], served)
 		}
-		if azE2ENum(d, "inputCostPerM") != 0 || azE2ENum(d, "outputCostPerM") != 0 {
-			t.Errorf("done rates = %v/%v, want zero (Azure is unpriced by baki)", d["inputCostPerM"], d["outputCostPerM"])
+		if _, ok := d["inputCostPerM"]; ok {
+			t.Errorf("done payload %v carries a rate", d)
 		}
 
 		reqs := env.fake.requests(host)
@@ -312,7 +317,7 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if second.Err != nil || second.Text != "Routed answer." {
 			t.Fatalf("second turn = err %v text %q", second.Err, second.Text)
 		}
-		if d := second.Done; d["servedModel"] != routed || azE2ENum(d, "inputCostPerM") != 0 || azE2ENum(d, "outputCostPerM") != 0 {
+		if d := second.Done; d["servedModel"] != routed || d["inputCostPerM"] != nil || d["outputCostPerM"] != nil {
 			t.Errorf("router turn done = %v, want servedModel %s and no rates", d, routed)
 		}
 
@@ -392,8 +397,8 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if azE2ENum(d, "tokensIn") != 150 || azE2ENum(d, "tokensOut") != 12 {
 			t.Errorf("done tokens = %v/%v, want 150/12", d["tokensIn"], d["tokensOut"])
 		}
-		if azE2ENum(d, "inputCostPerM") != 0 || azE2ENum(d, "outputCostPerM") != 0 {
-			t.Errorf("done rates = %v/%v, want zero (Azure is unpriced by baki)", d["inputCostPerM"], d["outputCostPerM"])
+		if _, ok := d["inputCostPerM"]; ok {
+			t.Errorf("done payload %v carries a rate", d)
 		}
 
 		reqs := env.fake.requests(host)
@@ -903,8 +908,8 @@ func TestAzureFoundryE2E(t *testing.T) {
 		if d["servedModel"] != served || azE2ENum(d, "tokensIn") != 42 || azE2ENum(d, "tokensOut") != 7 {
 			t.Errorf("done = %v, want servedModel %s and tokens 42/7", d, served)
 		}
-		if azE2ENum(d, "inputCostPerM") != 0 || azE2ENum(d, "outputCostPerM") != 0 {
-			t.Errorf("done rates = %v/%v, want zero (Azure is unpriced by baki)", d["inputCostPerM"], d["outputCostPerM"])
+		if _, ok := d["inputCostPerM"]; ok {
+			t.Errorf("done payload %v carries a rate", d)
 		}
 
 		if msgs := env.conversation(t, u, u.flowID, conv, 2); len(msgs) != 2 || msgs[1]["model"] != agentID ||

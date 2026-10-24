@@ -62,7 +62,7 @@ describe('loadFromBackend', () => {
       appearance: {theme: '', density: '', chatTextSize: ''},
       parser: {maxFileSizeMB: 0},
       layout: {sidebarWidth: 0, inspectorWidth: 0, lastActiveInspectorTab: '', lastViewMode: ''},
-      ai: {activeProvider: '', embeddingProvider: '', dailyBudget: 0},
+      ai: {activeProvider: '', embeddingProvider: ''},
       analysis: {autoAnalyzeOnOpen: false},
     })
 
@@ -73,7 +73,6 @@ describe('loadFromBackend', () => {
     expect(s.appearance.density).toBe('comfortable')
     expect(s.appearance.chatTextSize).toBe('md')
     expect(s.ai.activeProvider).toBeTruthy()
-    expect(s.ai.dailyBudget).toBe(0)
     expect(s.layout.sidebarWidth).toBeGreaterThan(0)
     expect(s.layout.inspectorWidth).toBeGreaterThan(0)
     expect(s.layout.lastActiveInspectorTab).toBeTruthy()

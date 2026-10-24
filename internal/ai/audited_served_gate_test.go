@@ -38,7 +38,7 @@ func TestUsageServedModel_Gating(t *testing.T) {
 // ServedModel empty.
 func TestAudited_NonAliasProviderRecordsNoServedModel(t *testing.T) {
 	stub := &auditStub{
-		models: []ModelInfo{{ID: "known", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models: []ModelInfo{{ID: "known"}},
 		resp:   &Response{TokensIn: 10, TokensOut: 5, ServedModel: "known-2024-08-06"},
 	}
 	if m := awaitMetric(t, stub, Request{Model: "known"}); m.ServedModel != "" {

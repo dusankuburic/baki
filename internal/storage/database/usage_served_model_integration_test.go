@@ -38,10 +38,10 @@ func TestUsageServedModel_Postgres(t *testing.T) {
 
 	now := time.Now()
 	rows := []interfaces.UsageMetric{
-		{ID: user + "-1", UserID: user, Provider: "azure-foundry", Model: "model-router", ServedModel: "gpt-4o", PromptTokens: 100, CompletionTokens: 10, EstimatedCost: 0.5, CreatedAt: now},
-		{ID: user + "-2", UserID: user, Provider: "azure-foundry", Model: "model-router", ServedModel: "gpt-4o", PromptTokens: 100, CompletionTokens: 10, EstimatedCost: 0.5, CreatedAt: now},
-		{ID: user + "-3", UserID: user, Provider: "azure-foundry", Model: "model-router", ServedModel: "gpt-4.1-mini", PromptTokens: 50, CompletionTokens: 5, EstimatedCost: 0.1, CreatedAt: now},
-		{ID: user + "-4", UserID: user, Provider: "openai", Model: "gpt-4o", PromptTokens: 20, CompletionTokens: 2, EstimatedCost: 0.05, CreatedAt: now},
+		{ID: user + "-1", UserID: user, Provider: "azure-foundry", Model: "model-router", ServedModel: "gpt-4o", PromptTokens: 100, CompletionTokens: 10, CreatedAt: now},
+		{ID: user + "-2", UserID: user, Provider: "azure-foundry", Model: "model-router", ServedModel: "gpt-4o", PromptTokens: 100, CompletionTokens: 10, CreatedAt: now},
+		{ID: user + "-3", UserID: user, Provider: "azure-foundry", Model: "model-router", ServedModel: "gpt-4.1-mini", PromptTokens: 50, CompletionTokens: 5, CreatedAt: now},
+		{ID: user + "-4", UserID: user, Provider: "openai", Model: "gpt-4o", PromptTokens: 20, CompletionTokens: 2, CreatedAt: now},
 	}
 	for i := range rows {
 		if err := b.SaveUsageMetric(ctx, &rows[i]); err != nil {
@@ -71,8 +71,8 @@ func TestUsageServedModel_Postgres(t *testing.T) {
 	if len(byKey) != 3 {
 		t.Fatalf("ByModel = %+v, want 3 rows (router→gpt-4o, router→gpt-4.1-mini, openai gpt-4o)", got.ByModel)
 	}
-	if r := byKey[key{"azure-foundry", "model-router", "gpt-4o"}]; r.Calls != 2 || r.TokensIn != 200 || r.Cost != 1.0 {
-		t.Errorf("router→gpt-4o row = %+v, want 2 calls / 200 tokens in / $1.00", r)
+	if r := byKey[key{"azure-foundry", "model-router", "gpt-4o"}]; r.Calls != 2 || r.TokensIn != 200 {
+		t.Errorf("router→gpt-4o row = %+v, want 2 calls / 200 tokens in", r)
 	}
 	if r := byKey[key{"azure-foundry", "model-router", "gpt-4.1-mini"}]; r.Calls != 1 || r.TokensIn != 50 {
 		t.Errorf("router→gpt-4.1-mini row = %+v, want 1 call / 50 tokens in", r)

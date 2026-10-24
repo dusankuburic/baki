@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -10,7 +9,6 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/storage"
 	"pad-analyzer/internal/testutil"
-	"pad-core/models"
 )
 
 const (
@@ -348,24 +346,6 @@ func TestPrepareOrgDeletionAndAccountErasure_DropCaches(t *testing.T) {
 	releaseOwn()
 	if _, cached := svc.modelCache[modelListingKey("u1", "glm")]; cached {
 		t.Error("account erasure must drop the user's cached listings")
-	}
-}
-
-// R-4: the chat service's budget gate (AIBudget) is what the knowledge base consults.
-func TestChatService_CheckBudget(t *testing.T) {
-	backend := testutil.NewFakeBackend()
-	backend.DailyUsage = 5
-	svc := &ChatService{settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 5}}}, backend: backend}
-	if err := svc.aiBudget().CheckBudget(context.Background(), "u1", "org-1"); !errors.Is(err, ErrAIBudgetExceeded) {
-		t.Errorf("spent budget: %v, want ErrAIBudgetExceeded", err)
-	}
-	backend.DailyUsage = 1
-	if err := svc.aiBudget().CheckBudget(context.Background(), "u1", "org-1"); err != nil {
-		t.Errorf("budget left: %v", err)
-	}
-	backend.UsageErr = errors.New("db down")
-	if err := svc.aiBudget().CheckBudget(context.Background(), "u1", "org-1"); !errors.Is(err, ErrAIBudgetUnavailable) {
-		t.Errorf("unreadable spend: %v, want ErrAIBudgetUnavailable (fail closed)", err)
 	}
 }
 

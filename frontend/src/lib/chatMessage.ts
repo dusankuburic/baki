@@ -129,8 +129,6 @@ export function parseChatMessage(raw: unknown): ChatMessage | null {
   const modelLabel = typeof m.modelLabel === 'string' ? storableModelLabel(m.modelLabel, out.model) : undefined
   if (modelLabel) out.modelLabel = modelLabel
   if (typeof m.servedModel === 'string' && m.servedModel) out.servedModel = m.servedModel
-  if (typeof m.inputCostPerM === 'number') out.inputCostPerM = m.inputCostPerM
-  if (typeof m.outputCostPerM === 'number') out.outputCostPerM = m.outputCostPerM
   if (typeof m.finishReason === 'string') out.finishReason = m.finishReason as ChatMessage['finishReason']
 
   const toolCalls = parseToolCalls(m.toolCalls)

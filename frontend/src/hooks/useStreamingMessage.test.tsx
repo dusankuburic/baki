@@ -333,13 +333,14 @@ describe('reconnect resume of a lost stream', () => {
   })
 })
 
-describe('done meta (served model + billed rates)', () => {
+describe('done meta (served model)', () => {
   function doneEvent(streamId: string, data: Record<string, unknown>) {
     return {name: 'chat:event', data: {streamId, type: 'done', data}}
   }
+  // Rates an older server still sends: the client drops them.
   const RATES = {inputCostPerM: 2.5, outputCostPerM: 10}
 
-  it('passes the served model and rates of a live done to the handler', async () => {
+  it('passes the served model of a live done to the handler and drops any rates', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
     await result.current.registerStream('s1', false)
@@ -347,7 +348,7 @@ describe('done meta (served model + billed rates)', () => {
     capturedCb!(chunkEvent('s1', 'hi'))
     capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 1, servedModel: 'gpt-4o', ...RATES}))
 
-    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o', ...RATES})
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o'})
   })
 
   it('passes the stored conversation version a done names, and the version the turn began from', async () => {
@@ -391,7 +392,7 @@ describe('done meta (served model + billed rates)', () => {
     expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', undefined)
   })
 
-  it("keeps the done event's rates through a chunk-mismatch resume and takes the served model from it", async () => {
+  it('takes the served model from a chunk-mismatch resume and drops any rates', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
     await result.current.registerStream('s1', false)
@@ -410,7 +411,7 @@ describe('done meta (served model + billed rates)', () => {
 
     expect(chatApi.resumeStream).toHaveBeenCalledWith('s1', 0)
     expect(handler.onReplace).toHaveBeenCalledWith('hi there', 's1')
-    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o', ...RATES})
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o'})
   })
 
   it('forwards the served model a stall-probe resume reports', async () => {
@@ -450,7 +451,7 @@ describe('done meta (served model + billed rates)', () => {
     expect(handler.onDone).toHaveBeenCalledWith(2, 1, 's1', {servedModel: 'gpt-4o'})
   })
 
-  it('takes the billed rates a finished /begin reports', async () => {
+  it('takes the served model a finished /begin reports', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
     vi.mocked(chatApi.beginStream).mockResolvedValue({
@@ -465,10 +466,10 @@ describe('done meta (served model + billed rates)', () => {
 
     await result.current.registerStream('s1', true)
 
-    expect(handler.onDone).toHaveBeenCalledWith(2, 1, 's1', {servedModel: 'gpt-4o', ...RATES})
+    expect(handler.onDone).toHaveBeenCalledWith(2, 1, 's1', {servedModel: 'gpt-4o'})
   })
 
-  it('lets a finishing resume supply the rates, and ignores non-numeric ones', async () => {
+  it('lets a finishing resume supply the served model, and drops any rate it still carries', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
     await result.current.registerStream('s1', false)
@@ -480,14 +481,13 @@ describe('done meta (served model + billed rates)', () => {
       tokensOut: 3,
       tokensIn: 1,
       servedModel: 'gpt-4o',
-      inputCostPerM: 3,
-      outputCostPerM: 'x' as unknown as number,
+      ...({outputCostPerM: 10} as object),
     })
 
     capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 2}))
     await vi.advanceTimersByTimeAsync(0)
 
-    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o', inputCostPerM: 3})
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {servedModel: 'gpt-4o'})
   })
 })
 

@@ -84,8 +84,6 @@ type ChatMessage struct {
 	Model            string                `json:"model,omitempty"`
 	ModelLabel       string                `json:"modelLabel,omitempty"`
 	ServedModel      string                `json:"servedModel,omitempty"`
-	InputCostPerM    float64               `json:"inputCostPerM,omitempty"`
-	OutputCostPerM   float64               `json:"outputCostPerM,omitempty"`
 	FinishReason     string                `json:"finishReason,omitempty"`
 	ToolCalls        []ToolCallRecord      `json:"toolCalls,omitempty"`
 	FixProposal      *FixProposalSnapshot  `json:"fixProposal,omitempty"` // legacy singular

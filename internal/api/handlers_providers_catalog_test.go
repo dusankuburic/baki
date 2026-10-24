@@ -24,7 +24,7 @@ func TestProviderCatalogRoute_ListsEveryProviderOfTheProfile(t *testing.T) {
 		t.Fatal("empty catalogue")
 	}
 	for i, p := range body.Providers {
-		for _, k := range []string{"id", "name", "authType", "modes", "caps", "credential", "endpoints", "configured", "pricing"} {
+		for _, k := range []string{"id", "name", "authType", "modes", "caps", "credential", "endpoints", "configured"} {
 			if _, ok := p[k]; !ok {
 				t.Errorf("entry %d (%v) lacks %q", i, p["id"], k)
 			}

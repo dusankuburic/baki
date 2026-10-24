@@ -44,7 +44,10 @@ export interface ChatState {
   takeQueuedMessage: (threadId: string) => QueuedMessage | undefined
   addToolCall: (threadId: string, record: ToolCallRecord) => void
   endStream: (threadId: string) => void
-  setStreamMeta: (threadId: string, patch: Partial<Pick<StreamSlot, 'isThinking' | 'tokens' | 'toolStatus'>>) => void
+  setStreamMeta: (
+    threadId: string,
+    patch: Partial<Pick<StreamSlot, 'isThinking' | 'tokens' | 'toolStatus' | 'truncated'>>,
+  ) => void
   setFixProposal: (threadId: string, card: FixProposalCard) => void
   patchFixProposal: (
     threadId: string,

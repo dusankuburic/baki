@@ -3,6 +3,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 
 	"pad-analyzer/internal/ai"
@@ -11,8 +12,8 @@ import (
 
 // FakeTurn scripts one streamed assistant turn for FakeProvider: optional text
 // (or multi-part text via Parts, e.g. to split a secret across chunks) streamed
-// first, then a terminal Done chunk carrying any tool calls, token counts and
-// the finish reason (empty: a normal stop).
+// first, then a terminal Done chunk carrying any tool calls, token counts, the
+// served model and the finish reason (empty: a normal stop).
 type FakeTurn struct {
 	Text         string
 	Parts        []string // multiple text chunks in one turn; overrides Text when set
@@ -20,40 +21,72 @@ type FakeTurn struct {
 	TokensIn     int
 	TokensOut    int
 	FinishReason string
+	ServedModel  string
+	// Err fails this call before any chunk; the next call takes the next turn.
+	Err error
+	// ChunkErr ends the turn, after its text, with an error chunk carrying the turn's token counts and served
+	// model in place of Done: how a provider reports a failure mid-stream.
+	ChunkErr error
+	// Block parks the turn, after its text, until the stream's context ends, then returns the context's error.
+	Block bool
 }
 
 // FakeProvider is a shared, scriptable ai.Provider for tests. Each Stream call
 // consumes the next FakeTurn; once Turns is exhausted it emits Fallback
 // (repeated) when set, otherwise a terminal Done with no tool calls. Set Err to
-// make Stream fail outright. Ctx overrides ContextLimit (0 => a large default
-// that never trips truncation).
+// make every Stream fail outright. Ctx overrides ContextLimit (0 => a large
+// default that never trips truncation). Calls, Requests and Record are safe
+// while a chat worker streams on another goroutine.
 type FakeProvider struct {
 	Turns    []FakeTurn
 	Fallback *FakeTurn
 	Err      error
 	Ctx      int
 	Tools    bool
+	// HonourCtx makes a call on an ended context fail with the context's error before any chunk, as a real
+	// provider's HTTP call does. Off by default: some tests rely on a fake that streams whatever the context.
+	HonourCtx bool
 	// RequireScrubbed, when set, fails the test for every string of an outgoing request that is not already
 	// its own scrubber.ScrubText (UnscrubbedStrings): the chat scrubs each string where it is built and the
 	// provider boundary does not scrub again, so a string the scrubber would still change here is one no
 	// call site scrubbed. Reported from Stream's goroutine, so the test must wait for its stream to finish.
 	RequireScrubbed testing.TB
-	calls           int
-	requests        []ai.Request
+
+	mu       sync.Mutex
+	calls    int
+	requests []ai.Request
 }
 
-// Calls reports how many times Stream has been invoked.
-func (p *FakeProvider) Calls() int { return p.calls }
+// Calls reports how many times Stream has consumed a turn.
+func (p *FakeProvider) Calls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
 
-// Requests returns every request Stream received, in order (the messages slice is copied: callers reuse it).
-func (p *FakeProvider) Requests() []ai.Request { return p.requests }
+// Requests returns a copy of every request Stream (or Record) received, in order.
+func (p *FakeProvider) Requests() []ai.Request {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]ai.Request(nil), p.requests...)
+}
+
+// Record keeps a copy of req (its messages slice copied: callers reuse it) and answers its 0-based index. A stub
+// that scripts its own chunks calls it so the shared recorder still sees every request.
+func (p *FakeProvider) Record(req ai.Request) int {
+	recorded := req
+	recorded.Messages = append([]ai.Message(nil), req.Messages...)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.requests = append(p.requests, recorded)
+	return len(p.requests) - 1
+}
 
 func (p *FakeProvider) ID() string                                     { return "fake" }
 func (p *FakeProvider) Name() string                                   { return "Fake" }
 func (p *FakeProvider) Models(context.Context) ([]ai.ModelInfo, error) { return nil, nil }
 func (p *FakeProvider) DefaultModel() string                           { return "fake-model" }
 func (p *FakeProvider) FreeModel() string                              { return "fake-model" }
-func (p *FakeProvider) PricePerMillionTokens() ai.Pricing              { return ai.Pricing{} }
 func (p *FakeProvider) SupportsTools() bool                            { return p.Tools }
 func (p *FakeProvider) EstimateTokens(t string) int                    { return len(t) / 4 }
 
@@ -70,20 +103,25 @@ func (p *FakeProvider) Chat(context.Context, ai.Request) (*ai.Response, error) {
 	return &ai.Response{}, nil
 }
 
-func (p *FakeProvider) Stream(_ context.Context, req ai.Request, onChunk func(ai.Chunk)) error {
-	recorded := req
-	recorded.Messages = append([]ai.Message(nil), req.Messages...)
-	p.requests = append(p.requests, recorded)
+func (p *FakeProvider) Stream(ctx context.Context, req ai.Request, onChunk func(ai.Chunk)) error {
+	n := p.Record(req) + 1
 	if p.RequireScrubbed != nil {
 		for _, s := range UnscrubbedStrings(req) {
-			p.RequireScrubbed.Errorf("request %d carries a string the scrubber would still change: %s", len(p.requests), s)
+			p.RequireScrubbed.Errorf("request %d carries a string the scrubber would still change: %s", n, s)
 		}
 	}
 	if p.Err != nil {
 		return p.Err
 	}
+	if p.HonourCtx {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	p.mu.Lock()
 	i := p.calls
 	p.calls++
+	p.mu.Unlock()
 
 	var turn FakeTurn
 	switch {
@@ -91,6 +129,9 @@ func (p *FakeProvider) Stream(_ context.Context, req ai.Request, onChunk func(ai
 		turn = p.Turns[i]
 	case p.Fallback != nil:
 		turn = *p.Fallback
+	}
+	if turn.Err != nil {
+		return turn.Err
 	}
 
 	switch {
@@ -101,7 +142,16 @@ func (p *FakeProvider) Stream(_ context.Context, req ai.Request, onChunk func(ai
 	case turn.Text != "":
 		onChunk(ai.Chunk{Text: turn.Text})
 	}
-	onChunk(ai.Chunk{Done: true, ToolCalls: turn.ToolCalls, TokensIn: turn.TokensIn, TokensOut: turn.TokensOut, FinishReason: turn.FinishReason})
+	switch {
+	case turn.Block:
+		<-ctx.Done()
+		return ctx.Err()
+	case turn.ChunkErr != nil:
+		onChunk(ai.Chunk{Error: turn.ChunkErr, TokensIn: turn.TokensIn, TokensOut: turn.TokensOut, ServedModel: turn.ServedModel})
+		return nil
+	}
+	onChunk(ai.Chunk{Done: true, ToolCalls: turn.ToolCalls, TokensIn: turn.TokensIn, TokensOut: turn.TokensOut,
+		FinishReason: turn.FinishReason, ServedModel: turn.ServedModel})
 	return nil
 }
 

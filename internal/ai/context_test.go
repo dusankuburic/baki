@@ -18,7 +18,6 @@ func (stubProvider) Models(_ context.Context) ([]ModelInfo, error)            { 
 func (stubProvider) DefaultModel() string                                     { return "" }
 func (stubProvider) FreeModel() string                                        { return "" }
 func (stubProvider) ContextLimit() int                                        { return 100_000 }
-func (stubProvider) PricePerMillionTokens() Pricing                           { return Pricing{} }
 func (stubProvider) Embed(_ context.Context, _ []string) ([][]float32, error) { return nil, nil }
 func (stubProvider) EstimateTokens(text string) int                           { return EstimateTokens(text) }
 func (stubProvider) Chat(_ context.Context, _ Request) (*Response, error) {
@@ -46,7 +45,6 @@ func TestBuildContext_SystemPromptNeverEmpty(t *testing.T) {
 	req := ContextRequest{
 		Flow:        makeMinimalDoc("MyFlow"),
 		TokenBudget: 8000,
-		Provider:    stubProvider{},
 	}
 	sysPrompt, ctx := BuildContext(req)
 
@@ -79,7 +77,6 @@ func TestBuildContext_SelectedBlock_AppearsInContext(t *testing.T) {
 		Flow:          doc,
 		SelectedBlock: block,
 		TokenBudget:   8000,
-		Provider:      stubProvider{},
 	}
 	_, ctx := BuildContext(req)
 
@@ -106,7 +103,6 @@ func TestBuildContext_SelectedBlock_FindingsIncluded(t *testing.T) {
 		SelectedBlock: block,
 		Findings:      findings,
 		TokenBudget:   8000,
-		Provider:      stubProvider{},
 	}
 	_, ctx := BuildContext(req)
 
@@ -131,7 +127,6 @@ func TestBuildContext_SourceFiles_IncludedInContext(t *testing.T) {
 		Flow:           doc,
 		RawSourceFiles: map[string]string{"main.txt": "LAUNCH Browser\nCLICK btn"},
 		TokenBudget:    8000,
-		Provider:       stubProvider{},
 	}
 	_, ctx := BuildContext(req)
 
@@ -149,7 +144,6 @@ func TestBuildContext_TokenBudget_Respected(t *testing.T) {
 	req := ContextRequest{
 		Flow:        doc,
 		TokenBudget: 5, // extremely small
-		Provider:    stubProvider{},
 	}
 	_, ctx := BuildContext(req)
 
@@ -250,7 +244,6 @@ func TestBuildContext_SelectedSubflow_AppearsInContext(t *testing.T) {
 		Flow:            doc,
 		SelectedSubflow: sf,
 		TokenBudget:     8000,
-		Provider:        stubProvider{},
 	}
 	_, ctx := BuildContext(req)
 
@@ -328,7 +321,6 @@ func TestBuildContext_FindingsSurviveSourceCrowding(t *testing.T) {
 			{RuleID: "unhandled-error", BlockID: "b1", Title: "Action has no error handler", Severity: "warning", Description: "no ON BLOCK ERROR", Fingerprint: "fp-1"},
 		},
 		TokenBudget: 4000,
-		Provider:    stubProvider{},
 	}
 	_, ctx := BuildContext(req)
 
@@ -347,19 +339,19 @@ func TestBuildContext_FindingsSurviveSourceCrowding(t *testing.T) {
 		t.Errorf("summary (idx %d) must precede source files (idx %d)", summaryIdx, sourceIdx)
 	}
 	// And the budget is still respected overall.
-	if req.Provider.EstimateTokens(ctx) > req.TokenBudget {
-		t.Errorf("context exceeded budget: %d > %d", req.Provider.EstimateTokens(ctx), req.TokenBudget)
+	if EstimateTokens(ctx) > req.TokenBudget {
+		t.Errorf("context exceeded budget: %d > %d", EstimateTokens(ctx), req.TokenBudget)
 	}
 }
 func TestBuildContext_NilFlow_ReturnsDefaultPrompt(t *testing.T) {
 	req := ContextRequest{
 		Flow:        nil,
 		TokenBudget: 8000,
-		Provider:    stubProvider{},
 	}
 	sys, ctx := BuildContext(req)
-	if sys != SystemPromptDefault {
-		t.Errorf("expected default system prompt, got %q", sys)
+	// The zero ToolAccess offers no tools: the prompt says so instead of naming fix tools (R-tool-loop-11).
+	if sys != SystemPromptFor(ToolAccessNone) {
+		t.Errorf("expected the no-tools system prompt, got %q", sys)
 	}
 	if ctx != "" {
 		t.Errorf("expected empty context for nil flow, got %q", ctx)
@@ -384,7 +376,6 @@ func TestBuildContext_FlowWithSubflows_IncludesSubflowNames(t *testing.T) {
 	req := ContextRequest{
 		Flow:        doc,
 		TokenBudget: 8000,
-		Provider:    stubProvider{},
 	}
 	_, ctx := BuildContext(req)
 
@@ -429,7 +420,6 @@ func TestBuildContext_SelectedBlock_WithChildren_ShowsNestedCount(t *testing.T) 
 		Flow:          doc,
 		SelectedBlock: block,
 		TokenBudget:   8000,
-		Provider:      stubProvider{},
 	}
 	_, ctx := BuildContext(req)
 
@@ -462,7 +452,6 @@ func TestBuildContext_Findings_DuplicateTitles_ShowsOccurrenceCount(t *testing.T
 		Flow:        doc,
 		Findings:    findings,
 		TokenBudget: 8000,
-		Provider:    stubProvider{},
 	}
 	_, ctx := BuildContext(req)
 

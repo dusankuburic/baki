@@ -34,9 +34,7 @@ function makeAISettings(): AISettings {
     providers: {
       openai: {enabled: true, defaultModel: 'gpt-default', temperature: 0.3, maxTokens: 4096, contextTokenBudget: 8000},
     } as AISettings['providers'],
-    showCostEstimates: true,
     saveConversationHistory: true,
-    dailyBudget: 0,
     prompts: {} as AISettings['prompts'],
   }
 }

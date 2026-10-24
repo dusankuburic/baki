@@ -14,7 +14,7 @@ import (
 // package's tests, so the test checks that a blocked write is counted there instead.
 func TestAudited_UsageWritesRunOnTheDrainedRunner(t *testing.T) {
 	stub := &auditStub{
-		models: []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models: []ModelInfo{{ID: "m"}},
 		resp:   &Response{TokensIn: 10, TokensOut: 10},
 	}
 	started := make(chan struct{}, 1)

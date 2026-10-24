@@ -17,15 +17,11 @@ const HAIKU: ModelDetail = {
   id: 'haiku',
   displayName: 'Haiku',
   contextLimit: 200000,
-  inputCostPerM: 1,
-  outputCostPerM: 5,
 }
 const OPUS: ModelDetail = {
   id: 'opus',
   displayName: 'Opus',
   contextLimit: 200000,
-  inputCostPerM: 15,
-  outputCostPerM: 75,
   supportsTools: false,
 }
 const CLAUDE = {
@@ -41,8 +37,6 @@ const GPT: ModelDetail = {
   id: 'm/gpt4100000',
   displayName: 'GPT-4.1',
   contextLimit: 1_000_000,
-  inputCostPerM: 0,
-  outputCostPerM: 0,
   kind: 'chat',
   purpose: 'general',
   aliases: ['gpt-4.1'],
@@ -52,8 +46,6 @@ const DOCS: ModelDetail = {
   id: 'm/docs000000',
   displayName: 'Docs writer',
   contextLimit: 200000,
-  inputCostPerM: 0,
-  outputCostPerM: 0,
   kind: 'claude',
   purpose: 'documentation',
   description: 'Writes flow documentation',
@@ -180,8 +172,6 @@ describe('useProviderSetup listing', () => {
       id: GPT.id,
       displayName: 'GPT-4.1',
       contextLimit: 1_000_000,
-      inputCostPerM: 0,
-      outputCostPerM: 0,
       kind: 'chat',
       purpose: 'general',
       aliases: ['gpt-4.1'],

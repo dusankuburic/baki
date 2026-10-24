@@ -13,7 +13,6 @@ var githubModelsSpec = ProviderSpec{
 	Keys:         KeySchema{Primary: "github-models-token"},
 	Catalog:      "github-models",
 	DefaultModel: "gpt-4o",
-	Pricing:      PricingFree,
 	Wire:         WireOpenAI,
 	Ctor:         func(c Credential) Provider { return NewGitHubModelsProvider(c.Key) },
 	Color:        "#8b5cf6",

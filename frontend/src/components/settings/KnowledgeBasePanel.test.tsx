@@ -460,16 +460,6 @@ describe('KnowledgeBasePanel', () => {
     expect(screen.queryByText('Re-index failed')).toBeNull()
   })
 
-  it("shows the budget message verbatim when the organisation's AI budget is spent", async () => {
-    seedStore('admin')
-    routeRequests({
-      reindex: () => Promise.reject(new ApiError('daily AI budget exceeded ($5.00 / $5.00)', 429, 'BUDGET_EXCEEDED')),
-    })
-    renderPanel()
-    await confirmFirstReindexDialog()
-    expect(await screen.findByText('daily AI budget exceeded ($5.00 / $5.00)')).toBeInTheDocument()
-  })
-
   it('explains a server timeout before any page committed', async () => {
     seedStore('admin')
     routeRequests({reindex: () => Promise.reject(new ApiError('context deadline exceeded', 504, 'KNOWLEDGE_TIMEOUT'))})

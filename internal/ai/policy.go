@@ -30,20 +30,20 @@ func (f *ProviderFactory) Admit(ctx context.Context, scope, orgID, providerID st
 }
 
 // admitProvider asks the factory's policy, if any, before a builder resolves a credential. An org flow run on
-// a member's own key still names the flow's organisation through WithBudgetScope, so the organisation's list
+// a member's own key still names the flow's organisation through WithUsageScope, so the organisation's list
 // applies to its content whichever credential the chain runs on.
 func (f *ProviderFactory) admitProvider(ctx context.Context, scope, orgID, providerID string) error {
 	if f.policy == nil {
 		return nil
 	}
 	if orgID == "" {
-		if _, org, ok := BudgetScopeFrom(ctx); ok {
+		if _, org, ok := UsageScopeFrom(ctx); ok {
 			orgID = org
 		}
 	}
 	if err := f.policy.Allowed(ctx, scope, orgID, providerID); err != nil {
 		if errors.Is(err, ErrProviderNotAllowed) {
-			recordBudgetRefusal(providerID, "build", "not_allowed")
+			recordPolicyRefusal(providerID)
 		}
 		return err
 	}

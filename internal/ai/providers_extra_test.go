@@ -25,14 +25,6 @@ func TestClaudeProvider_FreeModel(t *testing.T) {
 	}
 }
 
-func TestClaudeProvider_PricePerMillionTokens(t *testing.T) {
-	p := NewClaudeProvider("key")
-	pricing := p.PricePerMillionTokens()
-	if pricing.InputCostPerM <= 0 || pricing.OutputCostPerM <= 0 {
-		t.Errorf("expected positive pricing, got %+v", pricing)
-	}
-}
-
 func TestClaudeProvider_EstimateTokens(t *testing.T) {
 	p := NewClaudeProvider("key")
 	if got := p.EstimateTokens("hello world"); got <= 0 {
@@ -58,10 +50,6 @@ func TestOpenAIProvider_Identity(t *testing.T) {
 	}
 	if p.FreeModel() != "" {
 		t.Errorf("FreeModel() = %q, want empty", p.FreeModel())
-	}
-	pricing := p.PricePerMillionTokens()
-	if pricing.InputCostPerM <= 0 {
-		t.Errorf("expected positive input pricing, got %v", pricing.InputCostPerM)
 	}
 	if got := p.EstimateTokens("hello"); got <= 0 {
 		t.Errorf("EstimateTokens returned %d, want > 0", got)
@@ -98,10 +86,6 @@ func TestGeminiProvider_Identity(t *testing.T) {
 	}
 	if p.FreeModel() != "" {
 		t.Errorf("FreeModel() = %q, want empty", p.FreeModel())
-	}
-	pricing := p.PricePerMillionTokens()
-	if pricing.InputCostPerM <= 0 {
-		t.Errorf("expected positive input pricing: %v", pricing)
 	}
 	if got := p.EstimateTokens("test"); got <= 0 {
 		t.Errorf("EstimateTokens = %d, want > 0", got)
@@ -213,10 +197,6 @@ func TestXAIProvider_Identity(t *testing.T) {
 	}
 	if p.FreeModel() != "" {
 		t.Errorf("FreeModel() = %q, want empty", p.FreeModel())
-	}
-	pricing := p.PricePerMillionTokens()
-	if pricing.InputCostPerM <= 0 {
-		t.Errorf("expected positive input pricing: %v", pricing)
 	}
 	if got := p.EstimateTokens("test"); got <= 0 {
 		t.Errorf("EstimateTokens = %d, want > 0", got)
@@ -348,10 +328,6 @@ func TestGLMProvider_Identity(t *testing.T) {
 	if p.FreeModel() != "" {
 		t.Errorf("FreeModel() = %q, want empty (no free model in catalog)", p.FreeModel())
 	}
-	pricing := p.PricePerMillionTokens()
-	if pricing.InputCostPerM <= 0 {
-		t.Errorf("expected positive input pricing: %v", pricing)
-	}
 	if got := p.EstimateTokens("test"); got <= 0 {
 		t.Errorf("EstimateTokens = %d, want > 0", got)
 	}
@@ -473,10 +449,6 @@ func TestGitHubModelsProvider_Identity(t *testing.T) {
 	}
 	if p.FreeModel() != "" {
 		t.Errorf("FreeModel() = %q, want empty", p.FreeModel())
-	}
-	pricing := p.PricePerMillionTokens()
-	if pricing.InputCostPerM != 0 || pricing.OutputCostPerM != 0 {
-		t.Errorf("GitHub Models should be free (0 cost), got %+v", pricing)
 	}
 	if got := p.EstimateTokens("test"); got <= 0 {
 		t.Errorf("EstimateTokens = %d, want > 0", got)

@@ -132,9 +132,7 @@ export const defaultSettings: AppSettings = {
         contextTokenBudget: 4000,
       },
     },
-    showCostEstimates: false,
     saveConversationHistory: true,
-    dailyBudget: 0,
     prompts: {
       block: [
         'Explain this block',
@@ -302,7 +300,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
               ...loaded.ai,
               activeProvider: loaded.ai?.activeProvider || defaultSettings.ai.activeProvider,
               embeddingProvider: loaded.ai?.embeddingProvider || defaultSettings.ai.embeddingProvider,
-              dailyBudget: loaded.ai?.dailyBudget || defaultSettings.ai.dailyBudget,
               providers: {
                 ...defaultSettings.ai.providers,
                 ...(loaded.ai?.providers ?? {}),

@@ -1492,8 +1492,7 @@ describe('useChatStreamEngine', () => {
     })
   })
 
-  describe('served model + billed rates on done', () => {
-    const RATES = {inputCostPerM: 2.5, outputCostPerM: 10}
+  describe('served model on done', () => {
 
     function seedThread(threadId: string, streamId: string, provider: string) {
       const st = useChatStore.getState()
@@ -1529,22 +1528,20 @@ describe('useChatStreamEngine', () => {
       return {provider: provider as never, model: 'my-deployment'}
     }
 
-    it('pins the served model and the billed rates onto the committed message', () => {
+    it('pins the served model onto the committed message', () => {
       const {result} = renderEngine()
       act(() => {
         result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'azure-foundry'))
         capturedHandler!.onChunk('answer', 'streamA')
       })
       act(() => {
-        capturedHandler!.onDone(9, 4, 'streamA', {servedModel: 'gpt-4o-2024-08-06', ...RATES})
+        capturedHandler!.onDone(9, 4, 'streamA', {servedModel: 'gpt-4o-2024-08-06'})
       })
       const committed = useChatStore.getState().conversations.get('threadA')![0]!
       expect(committed).toMatchObject({
         content: 'answer',
         model: 'my-deployment',
         servedModel: 'gpt-4o-2024-08-06',
-        inputCostPerM: 2.5,
-        outputCostPerM: 10,
         tokensIn: 4,
         tokensOut: 9,
       })
@@ -1572,7 +1569,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'azure-foundry'))
       })
       act(() => {
-        capturedHandler!.onDone(1, 1, 'streamA', {servedModel: 'gpt-4o', ...RATES})
+        capturedHandler!.onDone(1, 1, 'streamA', {servedModel: 'gpt-4o'})
       })
       expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
 
@@ -1594,7 +1591,7 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamA2', 'threadA', {provider: 'azure-foundry' as never, model: 'my-deployment'})
       })
       act(() => {
-        capturedHandler!.onDone(1, 1, 'streamA2', {servedModel: 'gpt-4o', ...RATES})
+        capturedHandler!.onDone(1, 1, 'streamA2', {servedModel: 'gpt-4o'})
       })
       expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
 
@@ -1615,11 +1612,11 @@ describe('useChatStreamEngine', () => {
         result.current.beginAcc('streamB', 'threadB', seedThread('threadB', 'streamB', 'azure-foundry'))
       })
       act(() => {
-        capturedHandler!.onDone(1, 1, 'streamA', {servedModel: 'claude-sonnet-4-20250514', ...RATES})
-        capturedHandler!.onDone(1, 1, 'streamB', {...RATES})
+        capturedHandler!.onDone(1, 1, 'streamA', {servedModel: 'claude-sonnet-4-20250514'})
+        capturedHandler!.onDone(1, 1, 'streamB', {})
       })
       expect(useChatStore.getState().providerEpoch).toBe(epoch0)
-      expect(useChatStore.getState().conversations.get('threadB')![0]).toMatchObject(RATES)
+      expect(useChatStore.getState().conversations.get('threadB')![0]).toBeDefined()
     })
 
     it('titles a provider failure, keeps the server detail, tags the code and refetches on auth/not-configured', () => {
@@ -1773,7 +1770,7 @@ describe('useChatStreamEngine error usage', () => {
       capturedHandler!.onError('raise Max tokens', 'streamA', 'PROVIDER_OUTPUT_LIMIT', {
         tokensIn: 50,
         tokensOut: 4096,
-        meta: {servedModel: 'gpt-5.1', inputCostPerM: 1.25, outputCostPerM: 10},
+        meta: {servedModel: 'gpt-5.1'},
       })
     })
     const st = useChatStore.getState()
@@ -1785,8 +1782,6 @@ describe('useChatStreamEngine error usage', () => {
       tokensIn: 50,
       tokensOut: 4096,
       servedModel: 'gpt-5.1',
-      inputCostPerM: 1.25,
-      outputCostPerM: 10,
     })
     const thread = st.threads.find(t => t.id === 'threadA')!
     expect(thread.tokensIn).toBe(50)
@@ -1856,15 +1851,13 @@ describe('useChatStreamEngine resumeAfterReload', () => {
 
     await act(async () => {
       capturedHandler!.onReplace('the answer', 'live-1')
-      capturedHandler!.onDone(7, 5, 'live-1', {servedModel: 'gpt-4o', inputCostPerM: 2.5, outputCostPerM: 10})
+      capturedHandler!.onDone(7, 5, 'live-1', {servedModel: 'gpt-4o'})
     })
     const st = useChatStore.getState()
     const committed = st.conversations.get('threadA')![0]
     expect(committed).toMatchObject({
       content: 'the answer',
       servedModel: 'gpt-4o',
-      inputCostPerM: 2.5,
-      outputCostPerM: 10,
       tokensIn: 5,
       tokensOut: 7,
     })
@@ -2138,5 +2131,92 @@ describe('useChatStreamEngine model labels', () => {
     expect(answer).not.toHaveProperty('model')
     expect(answer).not.toHaveProperty('modelLabel')
     expect(chatApi.saveConversation).not.toHaveBeenCalled()
+  })
+})
+
+// The history-truncation notice (R-streaming-7): the stream slot keeps the count, the committed message stores it
+// (the chip survives a reload), and a resume replays it from the journal.
+describe('useChatStreamEngine history truncation notice', () => {
+  function setupThread(result: ReturnType<typeof renderEngine>['result']) {
+    act(() => {
+      useChatStore.setState({
+        threads: [
+          {
+            id: 'threadA',
+            flowId: 'flow-1',
+            title: 'T',
+            createdAt: '2024',
+            contextBlockId: null,
+            selectedSourceFiles: [],
+            tokensIn: 0,
+            tokensOut: 0,
+          },
+        ],
+        conversations: new Map([['threadA', []]]),
+      })
+      result.current.beginAcc('streamA', 'threadA', META)
+      useChatStore.setState({
+        streams: {
+          threadA: {
+            streamId: 'streamA',
+            messageId: 'mA',
+            text: '',
+            isThinking: true,
+            tokens: 0,
+            toolStatus: null,
+            toolCalls: [],
+            approvals: [],
+          },
+        },
+      })
+    })
+  }
+
+  it('stores the omitted count on the committed message', () => {
+    const {result} = renderEngine()
+    setupThread(result)
+    act(() => {
+      capturedHandler!.onNotice!({kind: 'notice', notice: 'history_truncated', dropped: 4, keptFrom: 4}, 'streamA')
+      capturedHandler!.onChunk('answer', 'streamA')
+    })
+    expect(useChatStore.getState().streams.threadA!.truncated).toBe(4)
+    act(() => {
+      capturedHandler!.onDone(2, 10, 'streamA')
+    })
+    const msgs = useChatStore.getState().conversations.get('threadA')
+    expect(msgs).toHaveLength(1)
+    expect(msgs![0]!.truncated).toBe(4)
+  })
+
+  it('keeps the latest keptFrom when a later iteration drops more', () => {
+    const {result} = renderEngine()
+    setupThread(result)
+    act(() => {
+      capturedHandler!.onNotice!({kind: 'notice', notice: 'history_truncated', dropped: 4, keptFrom: 4}, 'streamA')
+      capturedHandler!.onNotice!({kind: 'notice', notice: 'history_truncated', dropped: 2, keptFrom: 6}, 'streamA')
+    })
+    expect(useChatStore.getState().streams.threadA!.truncated).toBe(6)
+  })
+
+  it('rebuilds the count from a resumed journal', () => {
+    const {result} = renderEngine()
+    setupThread(result)
+    act(() => {
+      capturedHandler!.onResumeState!(
+        [{kind: 'notice', notice: 'history_truncated', dropped: 3, keptFrom: 3}],
+        'streamA',
+      )
+    })
+    expect(useChatStore.getState().streams.threadA!.truncated).toBe(3)
+  })
+
+  it('leaves the message without a count when nothing was omitted', () => {
+    const {result} = renderEngine()
+    setupThread(result)
+    act(() => {
+      capturedHandler!.onChunk('answer', 'streamA')
+      capturedHandler!.onDone(2, 10, 'streamA')
+    })
+    expect(useChatStore.getState().conversations.get('threadA')![0]!.truncated).toBeUndefined()
   })
 })

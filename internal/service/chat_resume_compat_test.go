@@ -19,7 +19,7 @@ func TestPrevRelease_ResumeSnapshotIsRead(t *testing.T) {
 		t.Fatal("a release-0043 snapshot was not loaded")
 	}
 	if got.Owner != "user-42" || got.Text != "Partial answer ✅" || got.Done || got.TokensIn != 11 || got.TokensOut != 22 ||
-		got.ServedModel != "gpt-test" || got.InputCostPerM != 1.5 || got.OutputCostPerM != 6 {
+		got.ServedModel != "gpt-test" {
 		t.Errorf("snapshot = %+v", got)
 	}
 	if len(got.Events) != 1 || got.Events[0].Type != "tool" {

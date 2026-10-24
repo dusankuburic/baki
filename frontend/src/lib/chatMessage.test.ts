@@ -28,8 +28,8 @@ describe('parseChatMessage', () => {
     expect(m?.model).toBe('gpt-x')
     expect(m?.provider).toBe('openai')
     expect(m?.servedModel).toBe('gpt-x-2024-08-06')
-    expect(m?.inputCostPerM).toBe(2.5)
-    expect(m?.outputCostPerM).toBe(10)
+    expect(m && 'inputCostPerM' in m).toBe(false)
+    expect(m && 'outputCostPerM' in m).toBe(false)
   })
 
   it('rejects payloads missing id or timestamp', () => {

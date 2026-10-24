@@ -1,6 +1,6 @@
 # 29. Redis payload envelope, key registry and health policy
 
-Date: 2026-10-13. Status: accepted, implemented (Phase 5b, wave 0).
+Date: 2026-10-13. Status: accepted, implemented (Phase 5b, wave 0). The in-flight budget ledger keys went with the budget ([ADR 0037](0037-remove-ai-budgets-and-pricing.md), 2026-10-24).
 
 ## Context
 

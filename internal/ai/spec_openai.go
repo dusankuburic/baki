@@ -12,7 +12,6 @@ var openaiSpec = ProviderSpec{
 	Keys:         KeySchema{Primary: "openai"},
 	Catalog:      "openai",
 	DefaultModel: "gpt-4o",
-	Pricing:      PricingCatalog,
 	Wire:         WireOpenAI,
 	Ctor:         func(c Credential) Provider { return NewOpenAIProvider(c.Key) },
 	Color:        "#10a37f",

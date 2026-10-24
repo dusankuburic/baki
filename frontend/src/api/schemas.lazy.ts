@@ -9,7 +9,6 @@ import {
   CREDENTIAL_KINDS,
   PROVIDER_IDS,
   PROVIDER_MODES,
-  PROVIDER_PRICINGS,
   RULE_STAGES,
   isKnown,
   type AnalysisReport,
@@ -403,8 +402,6 @@ export function buildSchemas() {
       id: z.string(),
       displayName: z.string(),
       contextLimit: z.number(),
-      inputCostPerM: z.number(),
-      outputCostPerM: z.number(),
       supportsTools: z.boolean(),
       kind: tolerantEnum(AZURE_MODEL_KINDS).optional(),
       purpose: ModelPurposeSchema.optional(),
@@ -463,7 +460,6 @@ export function buildSchemas() {
     endpoints: ProviderEndpointsSchema,
     color: z.string().optional(),
     icon: z.string().optional(),
-    pricing: tolerantEnum(PROVIDER_PRICINGS).optional(),
   }
 
   const ProviderInfoSchema = z
@@ -483,7 +479,6 @@ export function buildSchemas() {
       endpoints: providerDescription.endpoints.optional(),
       color: providerDescription.color,
       icon: providerDescription.icon,
-      pricing: providerDescription.pricing,
     })
     .passthrough() as unknown as z.ZodType<ProviderInfo>
 
@@ -713,9 +708,6 @@ export function buildSchemas() {
       findings: z.object({available: z.boolean()}).passthrough(),
       isCloud: z.boolean(),
       healthTrend: nilAsEmpty(z.object({date: z.string(), avgHealth: z.number(), flowCount: z.number()}).passthrough()),
-      costByProvider: nilAsEmpty(
-        z.object({provider: z.string(), cost: z.number(), tokensIn: z.number(), tokensOut: z.number()}).passthrough(),
-      ),
       ruleFrequency: nilAsEmpty(z.object({rule: z.string(), count: z.number()}).passthrough()),
       activity: nilAsEmpty(z.object({action: z.string(), createdAt: z.string()}).passthrough()),
       complexity: nilAsEmpty(

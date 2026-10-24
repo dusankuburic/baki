@@ -126,7 +126,7 @@ func TestRunToolLoop_PostFixScrubFailureKeepsTheRedactedClone(t *testing.T) {
 // contextCoreForTest is cachedContextCore for a document whose clone can be made (every fixture here); the
 // fail-closed path has its own test (chat_scrub_failclosed_test.go).
 func (s *ChatService) contextCoreForTest(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
-	cv, err := s.cachedContextCore(ctx, scope, provider, doc, report, req)
+	cv, err := s.cachedContextCore(ctx, scope, provider, req.Model, doc, report, req, ai.ToolAccessNone)
 	if err != nil {
 		panic(err)
 	}
@@ -135,7 +135,7 @@ func (s *ChatService) contextCoreForTest(ctx context.Context, scope string, prov
 
 // computeContextCoreForTest is computeContextCore for a document whose clone can be made.
 func (s *ChatService) computeContextCoreForTest(provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) chatContextValue {
-	cv, err := s.computeContextCore(provider, doc, report, req)
+	cv, err := s.computeContextCore(provider, req.Model, doc, report, req, ai.ToolAccessNone)
 	if err != nil {
 		panic(err)
 	}

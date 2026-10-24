@@ -13,8 +13,6 @@ import (
 // Machine-readable failure codes carried on chat stream "error" events (and ResumeResult.ErrorCode) so the
 // client can branch on the failure class instead of pattern-matching the rewordable message; "" = unclassified.
 const (
-	ChatErrBudgetExceeded        = "AI_BUDGET_EXCEEDED"
-	ChatErrBudgetUnavailable     = "AI_BUDGET_UNAVAILABLE"
 	ChatErrProviderUnavailable   = "PROVIDER_UNAVAILABLE"
 	ChatErrProviderRateLimited   = "PROVIDER_RATE_LIMITED"
 	ChatErrProviderAuth          = "PROVIDER_AUTH"
@@ -96,46 +94,6 @@ func emptyOutputLimitTurn(sawText bool, toolCalls int, finishReason string) bool
 	return !sawText && toolCalls == 0 && isOutputLimitFinish(finishReason)
 }
 
-// ErrAIBudgetExceeded / ErrAIBudgetUnavailable classify enforceBudget failures; match with errors.Is.
-var (
-	ErrAIBudgetExceeded    = errors.New("daily AI budget exceeded")
-	ErrAIBudgetUnavailable = errors.New("daily AI budget check unavailable")
-)
-
-// budgetError is a budget failure whose Error() is client-safe; the cause stays reachable via Unwrap for
-// logging — stream errors bypass the HTTP 5xx masking, so raw driver text used to reach the chat verbatim.
-type budgetError struct {
-	kind  error
-	msg   string
-	cause error
-}
-
-func (e *budgetError) Error() string        { return e.msg }
-func (e *budgetError) Is(target error) bool { return target == e.kind }
-func (e *budgetError) Unwrap() error        { return e.cause }
-
-// BudgetReason implements ai.BudgetReasoner for the refusal metric: "exceeded" or "unavailable".
-func (e *budgetError) BudgetReason() string {
-	if errors.Is(e.kind, ErrAIBudgetExceeded) {
-		return "exceeded"
-	}
-	return "unavailable"
-}
-
-// budgetUnavailable reports a spend read that failed: the storage error is logged here (an operator's problem)
-// and the returned error carries client-safe copy; the caller still fails closed. A read that failed only
-// because the stream itself ended is not worth a warning.
-func budgetUnavailable(scope string, cause error) error {
-	if !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
-		logger.Warn("chat: daily AI budget check failed", "scope", scope, "error", cause)
-	}
-	return &budgetError{
-		kind:  ErrAIBudgetUnavailable,
-		msg:   "couldn't verify today's AI budget — try again in a moment",
-		cause: cause,
-	}
-}
-
 // errProviderSetup stands in for a provider that could not be resolved for a reason the user cannot act on
 // (keystore read/decryption failure, unreadable registry). The cause is logged and never shown — stream errors
 // bypass the HTTP 5xx masking.
@@ -154,17 +112,6 @@ func providerSetupError(scope, providerID string, cause error) error {
 		return cause
 	}
 	return errProviderSetup
-}
-
-// loopBudgetFailure classifies a failed per-iteration budget check: a read that failed because the stream's
-// context ended is reported as that; a real mid-loop budget stop gets the prefix and is worth aggregating. The
-// shared flag is dropped on purpose — a budget stop is never a shared-credential class.
-func loopBudgetFailure(ctx context.Context, ctl *streamCtl, err error) (code, msg string, report bool) {
-	code, msg = ctl.classifyFailure(ctx, err)
-	if ctx.Err() != nil {
-		return code, msg, false
-	}
-	return code, "response stopped: " + msg, true
 }
 
 // errorEventData builds an SSE "error" payload: message, code when known, and the shared flag for the
@@ -238,10 +185,6 @@ func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, m
 		}
 	}
 	switch {
-	case errors.Is(err, ErrAIBudgetExceeded):
-		return ChatErrBudgetExceeded, err.Error()
-	case errors.Is(err, ErrAIBudgetUnavailable):
-		return ChatErrBudgetUnavailable, err.Error()
 	case errors.Is(err, ai.ErrContextLimit):
 		return ChatErrContextLimit, "conversation is too long for this model's context window — start a new conversation or remove some history"
 	case errors.Is(err, ai.ErrRateLimited):

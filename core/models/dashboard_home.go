@@ -16,7 +16,6 @@ type DashboardHomeData struct {
 	IsCloud bool `json:"isCloud"`
 	// Advanced sections (v2). Populated in cloud mode; empty in local mode.
 	HealthTrend []DailyHealthPoint    `json:"healthTrend"`
-	CostByProv  []ProviderCostStub    `json:"costByProvider"`
 	RuleFreq    []RuleFrequencyStub   `json:"ruleFrequency"`
 	Activity    []ActivityStub        `json:"activity"`
 	Complexity  []FlowComplexityStub  `json:"complexity"`
@@ -75,11 +74,11 @@ type DailyHealthPoint struct {
 	FlowCount int    `json:"flowCount"`
 }
 
-type ProviderCostStub struct {
-	Provider  string  `json:"provider"`
-	Cost      float64 `json:"cost"`
-	TokensIn  int     `json:"tokensIn"`
-	TokensOut int     `json:"tokensOut"`
+// ProviderUsageStub is one provider's token totals.
+type ProviderUsageStub struct {
+	Provider  string `json:"provider"`
+	TokensIn  int    `json:"tokensIn"`
+	TokensOut int    `json:"tokensOut"`
 }
 
 type RuleFrequencyStub struct {

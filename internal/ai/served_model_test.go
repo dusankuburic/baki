@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"pad-analyzer/internal/metrics"
 	"pad-analyzer/internal/storage/interfaces"
 )
 
@@ -55,13 +54,13 @@ func TestServedModelMemo_ScopedAndEnriching(t *testing.T) {
 	models := enrichServedModels("u1", "azure-foundry", []ModelInfo{
 		{ID: "my-gpt4o", DisplayName: "my-gpt4o", ContextLimit: 128000},
 		{ID: "unknown", DisplayName: "unknown", ContextLimit: 128000},
-		{ID: "priced", DisplayName: "priced", ContextLimit: 1, Pricing: Pricing{InputCostPerM: 1}},
+		{ID: "priced", DisplayName: "priced", ContextLimit: 1},
 	})
 	got := models[0]
 	if got.ServedModel != "gpt-4o-2024-11-20" || got.DisplayName != "my-gpt4o · gpt-4o-2024-11-20" {
 		t.Errorf("enriched entry = %+v", got)
 	}
-	if got.Pricing != (Pricing{}) || got.MaxOutputTokens != 16384 {
+	if got.MaxOutputTokens != 16384 {
 		t.Errorf("limits not taken from the catalogue (or a price appeared for the unpriced azure-foundry): %+v", got)
 	}
 	if models[1].ServedModel != "" || models[2].DisplayName != "priced" {
@@ -80,14 +79,13 @@ type servedFakeProvider struct {
 	models []ModelInfo
 }
 
-func (f *servedFakeProvider) ID() string                     { return f.id }
-func (f *servedFakeProvider) Name() string                   { return f.id }
-func (f *servedFakeProvider) DefaultModel() string           { return "dep" }
-func (f *servedFakeProvider) FreeModel() string              { return "" }
-func (f *servedFakeProvider) ContextLimit() int              { return 128000 }
-func (f *servedFakeProvider) PricePerMillionTokens() Pricing { return Pricing{} }
-func (f *servedFakeProvider) SupportsTools() bool            { return true }
-func (f *servedFakeProvider) EstimateTokens(s string) int    { return len(s) }
+func (f *servedFakeProvider) ID() string                  { return f.id }
+func (f *servedFakeProvider) Name() string                { return f.id }
+func (f *servedFakeProvider) DefaultModel() string        { return "dep" }
+func (f *servedFakeProvider) FreeModel() string           { return "" }
+func (f *servedFakeProvider) ContextLimit() int           { return 128000 }
+func (f *servedFakeProvider) SupportsTools() bool         { return true }
+func (f *servedFakeProvider) EstimateTokens(s string) int { return len(s) }
 func (f *servedFakeProvider) Embed(context.Context, []string) ([][]float32, error) {
 	return nil, nil
 }
@@ -140,15 +138,12 @@ func TestAuditedProvider_AzureDeploymentRecordsServedModelAtZeroCost(t *testing.
 		if m.PromptTokens != 100 || m.CompletionTokens != 50 {
 			t.Errorf("tokens = %d/%d, want 100/50", m.PromptTokens, m.CompletionTokens)
 		}
-		if m.EstimatedCost != 0 {
-			t.Errorf("cost = %v, want 0 (azure-foundry is unpriced)", m.EstimatedCost)
-		}
 	}
 
 	// The memo learned the mapping, so a fresh listing shows it.
 	fresh := NewAuditedProvider(inner, recorder, "u1", "azure-foundry")
 	models, _ := fresh.Models(context.Background())
-	if models[0].DisplayName != "dep · gpt-4o-2024-11-20" || models[0].Pricing != (Pricing{}) {
+	if models[0].DisplayName != "dep · gpt-4o-2024-11-20" {
 		t.Errorf("listing not enriched from the memo: %+v", models[0])
 	}
 }
@@ -179,184 +174,6 @@ func (s *usageSink) next(t *testing.T) interfaces.UsageMetric {
 	}
 }
 
-// countPricingFallback reads pad_ai_pricing_fallback_total{provider,model}
-// out of the real registry.
-func countPricingFallback(t *testing.T, provider, model string) float64 {
-	t.Helper()
-	fams, err := metrics.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	for _, f := range fams {
-		if f.GetName() != "pad_ai_pricing_fallback_total" {
-			continue
-		}
-		for _, m := range f.GetMetric() {
-			var prov, mdl string
-			for _, l := range m.GetLabel() {
-				switch l.GetName() {
-				case "provider":
-					prov = l.GetValue()
-				case "model":
-					mdl = l.GetValue()
-				}
-			}
-			if prov == provider && mdl == model {
-				return m.GetCounter().GetValue()
-			}
-		}
-	}
-	return 0
-}
-
-func costOf(tokensIn, tokensOut int, p Pricing) float64 {
-	return float64(tokensIn)/1e6*p.InputCostPerM + float64(tokensOut)/1e6*p.OutputCostPerM
-}
-
-func assertCost(t *testing.T, label string, got, want float64) {
-	t.Helper()
-	if diff := got - want; diff > 1e-12 || diff < -1e-12 {
-		t.Errorf("%s: EstimatedCost = %v, want %v", label, got, want)
-	}
-}
-
-// the served-model price lookup ran for EVERY provider, so a free
-// GitHub Models call answered as "gpt-4o-2024-11-20" was billed at the
-// catalogue's gpt-4o list price. Only alias providers consult the served
-// model; everyone else prices from their own listing exactly as before.
-func TestAuditedProvider_ServedModelIgnoredForNonAliasProviders(t *testing.T) {
-	resetServedModels()
-
-	// GitHub Models: zero-priced live listing, catalogued served model → $0.
-	sink := newUsageSink()
-	gh := &servedFakeProvider{id: "github-models", served: "gpt-4o-2024-11-20", models: []ModelInfo{{ID: "gpt-4o", ContextLimit: 8192}}}
-	ap := NewAuditedProvider(gh, sink.recorder(), "u1", "github-models")
-	if _, err := ap.Chat(context.Background(), Request{Model: "gpt-4o"}); err != nil {
-		t.Fatal(err)
-	}
-	assertCost(t, "github-models Chat", sink.next(t).EstimatedCost, 0)
-	if err := ap.Stream(context.Background(), Request{Model: "gpt-4o"}, func(Chunk) {}); err != nil {
-		t.Fatal(err)
-	}
-	assertCost(t, "github-models Stream", sink.next(t).EstimatedCost, 0)
-
-	// OpenAI: the listing price wins over the catalogue entry of the served model.
-	listing := Pricing{InputCostPerM: 1, OutputCostPerM: 2}
-	oa := &servedFakeProvider{id: "openai", served: "gpt-4o-2024-11-20", models: []ModelInfo{{ID: "gpt-4o", Pricing: listing}}}
-	ap = NewAuditedProvider(oa, sink.recorder(), "u1", "openai")
-	if _, err := ap.Chat(context.Background(), Request{Model: "gpt-4o"}); err != nil {
-		t.Fatal(err)
-	}
-	assertCost(t, "openai Chat", sink.next(t).EstimatedCost, costOf(100, 50, listing))
-	if err := ap.Stream(context.Background(), Request{Model: "gpt-4o"}, func(Chunk) {}); err != nil {
-		t.Fatal(err)
-	}
-	assertCost(t, "openai Stream", sink.next(t).EstimatedCost, costOf(100, 50, listing))
-}
-
-// A model-router deployment is recorded with the model that answered THIS
-// call. Azure AI Foundry carries no price table, so
-// every case (router or stable alias, catalogued or unknown served model,
-// served model missing) records the tokens at $0, and the pricing-fallback
-// metric never moves for the alias provider.
-func TestAuditedProvider_AzureAliasTurnsRecordZeroCostWithoutFallback(t *testing.T) {
-	resetServedModels()
-
-	// A router alias: turn 1 was routed to gpt-5-nano; turn 2 to a model the
-	// catalogue does not know.
-	recordServedModel("u1", "azure-foundry", "router", "gpt-5-nano-2025-08-07")
-	recordServedModel("u1", "azure-foundry", "router", "gpt-4.1-nano-2025-04-14") // varied from now on
-	sink := newUsageSink()
-	inner := &servedFakeProvider{id: "azure-foundry", served: "claude-opus-4-1", models: []ModelInfo{{ID: "router", ContextLimit: 128000}}}
-	ap := NewAuditedProvider(inner, sink.recorder(), "u1", "azure-foundry")
-	if models, _ := ap.Models(context.Background()); models[0].ServedModel == "" || models[0].Pricing != (Pricing{}) {
-		t.Fatalf("the listing should show the memo's served model without a price: %+v", models[0])
-	}
-	before := countPricingFallback(t, "azure-foundry", "deployment")
-	expect := func(label, served string) {
-		t.Helper()
-		m := sink.next(t)
-		assertCost(t, label, m.EstimatedCost, 0)
-		if m.PromptTokens != 100 || m.CompletionTokens != 50 {
-			t.Errorf("%s: tokens = %d/%d, want 100/50", label, m.PromptTokens, m.CompletionTokens)
-		}
-		if served != "" && m.ServedModel != served {
-			t.Errorf("%s: recorded served model = %q, want %q", label, m.ServedModel, served)
-		}
-	}
-	if _, err := ap.Chat(context.Background(), Request{Model: "router"}); err != nil {
-		t.Fatal(err)
-	}
-	expect("router served by an uncatalogued model", "claude-opus-4-1")
-
-	// The same router when the response names no model (a stream cut before Done).
-	inner.served = ""
-	ap = NewAuditedProvider(inner, sink.recorder(), "u1", "azure-foundry")
-	_, _ = ap.Models(context.Background())
-	if _, err := ap.Chat(context.Background(), Request{Model: "router"}); err != nil {
-		t.Fatal(err)
-	}
-	expect("varied alias without a served model", "")
-
-	// Named "model-router": treated as a router from the first call.
-	recordServedModel("u1", "azure-foundry", "model-router", "gpt-5-nano-2025-08-07")
-	inner.models = []ModelInfo{{ID: "model-router", ContextLimit: 128000}}
-	ap = NewAuditedProvider(inner, sink.recorder(), "u1", "azure-foundry")
-	_, _ = ap.Models(context.Background())
-	if _, err := ap.Chat(context.Background(), Request{Model: "model-router"}); err != nil {
-		t.Fatal(err)
-	}
-	expect("model-router without a served model", "")
-
-	// A deployment whose served model is unknown.
-	inner.served = "brand-new-model"
-	inner.models = []ModelInfo{{ID: "dep", ContextLimit: 128000}}
-	ap = NewAuditedProvider(inner, sink.recorder(), "u1", "azure-foundry")
-	if err := ap.Stream(context.Background(), Request{Model: "dep"}, func(Chunk) {}); err != nil {
-		t.Fatal(err)
-	}
-	expect("unknown served model", "brand-new-model")
-
-	// A stable alias, with and without a served model.
-	recordServedModel("u1", "azure-foundry", "stable", "gpt-5-nano-2025-08-07")
-	inner.served = ""
-	inner.models = []ModelInfo{{ID: "stable", ContextLimit: 128000}}
-	ap = NewAuditedProvider(inner, sink.recorder(), "u1", "azure-foundry")
-	if _, err := ap.Chat(context.Background(), Request{Model: "stable"}); err != nil {
-		t.Fatal(err)
-	}
-	expect("stable alias without a served model", "")
-
-	if after := countPricingFallback(t, "azure-foundry", "deployment"); after != before {
-		t.Errorf("pricing-fallback metric %v -> %v, want no movement for the unpriced alias provider", before, after)
-	}
-}
-
-// A deployment named after a catalogued model (Azure's portal default), an
-// embedding deployment and an uncatalogued name all record their tokens at
-// $0 with no pricing-fallback metric.
-func TestAuditedProvider_AliasDeploymentNamesRecordZeroCost(t *testing.T) {
-	resetServedModels()
-	sink := newUsageSink()
-	inner := &servedFakeProvider{id: "azure-foundry", models: []ModelInfo{{ID: "text-embedding-3-small"}, {ID: "gpt-4o"}, {ID: "dep"}}}
-	before := countPricingFallback(t, "azure-foundry", "deployment")
-
-	ap := NewAuditedProvider(inner, sink.recorder(), "u1", "azure-foundry").(*auditedProvider)
-	ap.record(context.Background(), "text-embedding-3-small", "", "", usage{In: 1000})
-	if m := sink.next(t); m.PromptTokens != 1000 || m.EstimatedCost != 0 {
-		t.Errorf("embedding deployment: %d tokens cost %v, want 1000 at $0", m.PromptTokens, m.EstimatedCost)
-	}
-	for _, dep := range []string{"gpt-4o", "dep"} { // no served model reported
-		if _, err := ap.Chat(context.Background(), Request{Model: dep}); err != nil {
-			t.Fatal(err)
-		}
-		assertCost(t, dep+" deployment", sink.next(t).EstimatedCost, 0)
-	}
-	if after := countPricingFallback(t, "azure-foundry", "deployment"); after != before {
-		t.Errorf("pricing-fallback metric %v -> %v, want no movement", before, after)
-	}
-}
-
 // a model router (by name, or an alias seen served by more than
 // one model) must not take the last routed model's context window or output
 // cap — the next call may be routed to a smaller-window model. The served
@@ -381,7 +198,7 @@ func TestEnrichServedModels_RouterKeepsListingLimits(t *testing.T) {
 	if router.ContextLimit != 128000 || router.MaxOutputTokens != 0 {
 		t.Errorf("model-router took the routed model's limits: %+v", router)
 	}
-	if router.ServedModel != "gpt-4.1-nano-2025-04-14" || router.Pricing != (Pricing{}) || !strings.Contains(router.DisplayName, " · ") {
+	if router.ServedModel != "gpt-4.1-nano-2025-04-14" || !strings.Contains(router.DisplayName, " · ") {
 		t.Errorf("model-router must still show the routed model, without a price: %+v", router)
 	}
 	if models[2].ContextLimit != 1047576 || models[2].MaxOutputTokens != 32768 {

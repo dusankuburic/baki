@@ -88,7 +88,7 @@ func TestRunToolLoop_SharedCredentialFailureCarriesTheFlag(t *testing.T) {
 	svc := &ChatService{
 		analysisCache: &AnalysisService{},
 		backend:       &testutil.FakeBackend{},
-		settings:      &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 100}}},
+		settings:      &staticSettings{s: models.AppSettings{AI: models.AISettings{}}},
 	}
 	run := func(shared bool) []capturedEvent {
 		ctl := &streamCtl{}

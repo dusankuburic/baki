@@ -111,18 +111,6 @@ func TestReads_UseTheRequestTransaction(t *testing.T) {
 			_, err := b.ListAuditEvents(ctx, interfaces.AuditFilter{UserID: "u1"})
 			return err
 		}},
-		{"GetDailyUsage(user)", func(ctx context.Context, b *PostgresStorageBackend) error {
-			_, err := b.GetDailyUsage(ctx, "u1", "")
-			return err
-		}},
-		{"GetDailyUsage(org)", func(ctx context.Context, b *PostgresStorageBackend) error {
-			_, err := b.GetDailyUsage(ctx, "u1", "o1")
-			return err
-		}},
-		{"GetDailyUsage(local user)", func(ctx context.Context, b *PostgresStorageBackend) error {
-			_, err := b.GetDailyUsage(ctx, "", "")
-			return err
-		}},
 		{"LoadIdentityLink", func(ctx context.Context, b *PostgresStorageBackend) error {
 			_, err := b.LoadIdentityLink(ctx, "oidc", "sub")
 			return err

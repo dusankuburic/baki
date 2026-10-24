@@ -11,6 +11,7 @@ import {
   FixDecisionEventItem,
   FixProposalPayload,
   ToolResultPayload,
+  NoticePayload,
   ChatEvent,
   DoneMeta,
   ErrorUsage,
@@ -35,6 +36,7 @@ export interface StreamHandler {
   onError: (error: string, streamId: string, code?: string, usage?: ErrorUsage) => void
   onToolStatus?: (label: string, streamId: string) => void
   onToolResult?: (record: ToolResultPayload, streamId: string) => void
+  onNotice?: (notice: NoticePayload, streamId: string) => void
   onResumeState?: (events: ChatEvent[], streamId: string) => void
   onFixProposal?: (proposal: FixProposalPayload, streamId: string) => void
   onFixDecision?: (
@@ -50,18 +52,10 @@ export interface StreamHandler {
   onStopUnreachable?: (streamId: string) => void
 }
 
-function rateOf(v: unknown): number | undefined {
-  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
-}
-
 function doneArg(src: DoneMeta, resumed?: DoneMeta): DoneMeta | undefined {
   const meta: DoneMeta = {}
   for (const from of resumed ? [src, resumed] : [src]) {
     if (typeof from.servedModel === 'string' && from.servedModel) meta.servedModel = from.servedModel
-    const inRate = rateOf(from.inputCostPerM)
-    if (inRate !== undefined) meta.inputCostPerM = inRate
-    const outRate = rateOf(from.outputCostPerM)
-    if (outRate !== undefined) meta.outputCostPerM = outRate
     if (from.conversationVersion !== undefined && from.conversationBase !== undefined) {
       meta.conversationVersion = from.conversationVersion
       meta.conversationBase = from.conversationBase
@@ -345,6 +339,9 @@ export function useStreamingMessage(handler: StreamHandler) {
             break
           case 'tool-result':
             handlerRef.current.onToolResult?.(parsed, streamId)
+            break
+          case 'notice':
+            handlerRef.current.onNotice?.(parsed, streamId)
             break
           case 'fix-proposal':
             handlerRef.current.onFixProposal?.(parsed, streamId)

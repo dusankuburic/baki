@@ -53,9 +53,6 @@ func (g *GitHubModelsProvider) Name() string         { return githubModelsSpec.N
 func (g *GitHubModelsProvider) ContextLimit() int    { return 8192 }
 func (g *GitHubModelsProvider) DefaultModel() string { return githubModelsSpec.DefaultModel }
 func (g *GitHubModelsProvider) FreeModel() string    { return "" }
-func (g *GitHubModelsProvider) PricePerMillionTokens() Pricing {
-	return specDefaultPricing(githubModelsSpec)
-}
 
 func (g *GitHubModelsProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	return g.embed(ctx, text)
@@ -131,7 +128,6 @@ func (g *GitHubModelsProvider) fetchModels(ctx context.Context) (models []ModelI
 			ID:           m.Name,
 			DisplayName:  m.Name,
 			ContextLimit: limit,
-			Pricing:      Pricing{InputCostPerM: 0, OutputCostPerM: 0},
 		})
 	}
 

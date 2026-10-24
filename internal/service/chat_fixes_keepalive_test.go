@@ -77,11 +77,11 @@ func TestBeginApplyKeepalive_EndsOnCtxCancel(t *testing.T) {
 }
 
 // TestApplyFixWithApproval_PanicInApplyEndsTheKeepalive drives the production path: the
-// decision is approved, the apply hook panics, and the panic is recovered one frame up
-// (where the stream worker's recover sits in production). The keepalive goroutine started
-// for the apply window must not survive it — before the defer-close fix it was stranded
-// forever, touching the dead stream control every fixDecisionKeepalive and pinning the
-// closure graph, answer buffer included.
+// decision is approved and the apply hook panics. The applier recovers it (R-tool-loop-7):
+// the model gets an error-shaped result, the card is resolved with a fix_decision error
+// instead of waiting while the stream ends as interrupted, and the keepalive goroutine
+// started for the apply window does not survive it — before the defer-close fix it was
+// stranded forever, touching the dead stream control every fixDecisionKeepalive.
 func TestApplyFixWithApproval_PanicInApplyEndsTheKeepalive(t *testing.T) {
 	doc := fixTestDoc()
 	var hookRuns int32
@@ -107,14 +107,13 @@ func TestApplyFixWithApproval_PanicInApplyEndsTheKeepalive(t *testing.T) {
 	}()
 
 	base := runtime.NumGoroutine()
-	func() {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("the apply panic must still propagate to the stream worker's recover")
-			}
-		}()
-		_, _ = ap.ApplyFixWithApproval(context.Background(), prop)
-	}()
+	out, err := ap.ApplyFixWithApproval(context.Background(), prop)
+	if err != nil || !strings.HasPrefix(out, "error: tool apply_fix failed unexpectedly") {
+		t.Errorf("ApplyFixWithApproval = %q, %v; want the error-shaped result and no error", out, err)
+	}
+	if evs := rec.snapshot(); len(evs) == 0 || evs[len(evs)-1] != "fix_decision:error" {
+		t.Errorf("events = %v, want the card resolved with a fix_decision error", evs)
+	}
 
 	if atomic.LoadInt32(&hookRuns) == 0 {
 		t.Fatal("apply hook never ran — the window was not reached")

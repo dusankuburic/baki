@@ -8,52 +8,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/testutil"
-	"pad-core/models"
 )
-
-// TestEnforceBudget_InFlightTerm pins R2: the per-iteration budget check adds
-// the stream's own not-yet-persisted spend — usage records are written
-// asynchronously, so a store-only read lagged by up to one loop iteration.
-func TestEnforceBudget_InFlightTerm(t *testing.T) {
-	// Budget 1.00; persisted usage 0.90 — store-only reads pass, but with
-	// 0.20 in-flight the check must trip.
-	backend := &testutil.FakeBackend{DailyUsage: 0.9}
-	svc := &ChatService{
-		backend:  backend,
-		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 1.0}}},
-	}
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0, nil); err != nil {
-		t.Fatalf("store-only read should pass (0.9 < 1.0): %v", err)
-	}
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0.2, nil); err == nil {
-		t.Fatal("in-flight spend (0.9 + 0.2 ≥ 1.0) must trip the budget")
-	}
-	// And the error mentions the combined figure.
-	if err := svc.enforceBudget(context.Background(), "user-1", "org-1", 0.2, nil); !strings.Contains(err.Error(), "1.10") {
-		t.Errorf("error should report combined usage: %v", err)
-	}
-}
-
-// TestInFlightCost_PricesTokens: local spend priced at provider rates.
-func TestInFlightCost_PricesTokens(t *testing.T) {
-	ctx := context.Background()
-	p := &testutil.FakeProvider{} // Pricing zero-value
-	if got := inFlightCost(inFlightPricing(ctx, p, ""), 0, 0); got != 0 {
-		t.Errorf("zero tokens = %v, want 0", got)
-	}
-	if got := inFlightCost(inFlightPricing(ctx, nil, ""), 100, 100); got != 0 {
-		t.Errorf("nil provider = %v, want 0", got)
-	}
-	// A provider with real pricing via the interface: wrap the fake — use
-	// glm's provider-wide pricing (1.4/4.4 per catalog audit) for real math.
-	g := ai.NewGLMProvider("k")
-	if got := inFlightCost(inFlightPricing(ctx, g, "glm-4.5"), 1_000_000, 0); got != 1.4 {
-		t.Errorf("1M input on GLM = %v, want 1.4", got)
-	}
-	if got := inFlightCost(inFlightPricing(ctx, g, "glm-4.5"), 0, 1_000_000); got != 4.4 {
-		t.Errorf("1M output on GLM = %v, want 4.4", got)
-	}
-}
 
 // TestConvMutexFor_BoundedAndStable pins R3: same conversation → same mutex;
 // the stripe set is bounded (no per-key allocation, so no unbounded growth).

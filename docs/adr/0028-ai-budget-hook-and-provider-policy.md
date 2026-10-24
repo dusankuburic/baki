@@ -1,6 +1,6 @@
 # 28. AI budget as a pre-call hook, and a provider policy at the factory
 
-Date: 2026-10-10. Status: accepted, implemented (Phase 4b, budget wave).
+Date: 2026-10-10. Status: accepted, implemented (Phase 4b, budget wave). The budget half and the in-flight ledger addendum are superseded by [ADR 0037](0037-remove-ai-budgets-and-pricing.md) (2026-10-24); the provider policy stands.
 
 ## Context
 

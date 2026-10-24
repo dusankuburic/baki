@@ -28,9 +28,6 @@ func TestAzureCatalog_UnpricedButKeepsLimits(t *testing.T) {
 			t.Errorf("%s does not resolve — its window/output cap would fall back to the provider-wide default", tc.served)
 			continue
 		}
-		if entry.Pricing != (Pricing{}) {
-			t.Errorf("%s priced %+v, want zero (azure-foundry is unpriced)", tc.served, entry.Pricing)
-		}
 		if entry.ContextLimit != tc.window || entry.MaxOutputTokens != tc.output {
 			t.Errorf("%s limits = %d / %d, want %d / %d", tc.served, entry.ContextLimit, entry.MaxOutputTokens, tc.window, tc.output)
 		}
@@ -41,17 +38,11 @@ func TestAzureCatalog_UnpricedButKeepsLimits(t *testing.T) {
 	// catalogEntryFor is the single guard: the Claude rows an Azure Claude
 	// deployment borrows come back unpriced there, and keep their prices for
 	// the direct Claude provider.
-	if e, ok := catalogEntryFor(azureFoundryProviderID, "claude:claude-opus-5"); !ok || e.Pricing != (Pricing{}) || e.ContextLimit != 1000000 {
-		t.Errorf("Azure Claude entry = %+v (%v), want the 1M window unpriced", e, ok)
+	if e, ok := catalogEntryFor(azureFoundryProviderID, "claude:claude-opus-5"); !ok || e.ContextLimit != 1000000 {
+		t.Errorf("Azure Claude entry = %+v (%v), want the 1M window", e, ok)
 	}
-	if e, ok := catalogEntryFor("claude", "claude-opus-5"); !ok || e.Pricing == (Pricing{}) {
-		t.Errorf("direct Claude entry = %+v (%v), must keep its price", e, ok)
-	}
-	// Every azure table row is zero-priced.
-	for _, e := range modelCatalog[azureFoundryProviderID] {
-		if e.Pricing != (Pricing{}) {
-			t.Errorf("modelCatalog[azure-foundry][%q] carries pricing %+v", e.ID, e.Pricing)
-		}
+	if e, ok := catalogEntryFor("claude", "claude-opus-5"); !ok {
+		t.Errorf("direct Claude entry = %+v (%v), want the catalogue row", e, ok)
 	}
 }
 

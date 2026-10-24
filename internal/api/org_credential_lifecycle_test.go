@@ -2,9 +2,7 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -394,36 +392,6 @@ func TestListProviders_OrgIdOnlyForAdminsAndMembers(t *testing.T) {
 				t.Errorf("%s: azure-foundry = %v, want shared=%v", caller, p, wantShared)
 			}
 		}
-	}
-}
-
-// budgetRefusal is a rag.BudgetChecker refusing with the AI budget's
-// sentinel.
-type budgetRefusal struct{ err error }
-
-func (b *budgetRefusal) CheckBudget(context.Context, string, string) error { return b.err }
-
-// R-4: knowledge upload and re-index over the daily budget are 429
-// BUDGET_EXCEEDED; an unreadable spend is 503 BUDGET_UNAVAILABLE. The run
-// embeds with a priced provider: the embedder is resolved before the budget
-// is consulted (an Azure AI Foundry embedder is never gated).
-func TestKnowledge_BudgetRendered(t *testing.T) {
-	f := newOrgProvidersFixture(t, true)
-	budget := &budgetRefusal{err: fmt.Errorf("refused: %w", service.ErrAIBudgetExceeded)}
-	ks := rag.NewKnowledgeService(testutil.NewFakeBackend(), nil, nil, rag.WithEmbedder(&testutil.FakeProvider{}), rag.WithBudgetChecker(budget))
-	rr := f.doOrg(t, "u-admin", http.MethodPost, "/api/orgs/"+f.orgID+"/knowledge/upload", map[string]string{"filename": "a.md", "content": "text"}, ks)
-	checkStatus(t, rr, http.StatusTooManyRequests)
-	if got := azureDecode(t, rr); got["code"] != "BUDGET_EXCEEDED" {
-		t.Errorf("upload code = %v (body %s)", got["code"], rr.Body.String())
-	}
-	rr = f.doOrg(t, "u-admin", http.MethodPost, "/api/orgs/"+f.orgID+"/knowledge/reindex", nil, ks)
-	checkStatus(t, rr, http.StatusTooManyRequests)
-
-	budget.err = fmt.Errorf("refused: %w", service.ErrAIBudgetUnavailable)
-	rr = f.doOrg(t, "u-admin", http.MethodPost, "/api/orgs/"+f.orgID+"/knowledge/upload", map[string]string{"filename": "a.md", "content": "text"}, ks)
-	checkStatus(t, rr, http.StatusServiceUnavailable)
-	if got := azureDecode(t, rr); got["code"] != "BUDGET_UNAVAILABLE" {
-		t.Errorf("unavailable code = %v", got["code"])
 	}
 }
 

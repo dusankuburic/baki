@@ -7,8 +7,8 @@ import type {PickerProvider} from './ModelPicker'
 import type {ModelDetail} from '@/types'
 
 const models: ModelDetail[] = [
-  {id: 'm1', displayName: 'Sonnet', contextLimit: 200_000, inputCostPerM: 3, outputCostPerM: 15},
-  {id: 'm2', displayName: 'Haiku', contextLimit: 100_000, inputCostPerM: 1, outputCostPerM: 5},
+  {id: 'm1', displayName: 'Sonnet', contextLimit: 200_000},
+  {id: 'm2', displayName: 'Haiku', contextLimit: 100_000},
 ]
 
 const providers: PickerProvider[] = [{id: 'claude', name: 'Claude', models}]
@@ -61,8 +61,6 @@ describe('ChatHeader', () => {
       id: 'm/review0000',
       displayName: 'Review bot',
       contextLimit: 128_000,
-      inputCostPerM: 0,
-      outputCostPerM: 0,
       kind: 'agent',
       purpose: 'review',
       shared: true,
@@ -161,8 +159,6 @@ describe('ChatHeader Foundry agent tools item', () => {
     id: 'm/triage0000',
     displayName: 'Triage',
     contextLimit: 128000,
-    inputCostPerM: 0,
-    outputCostPerM: 0,
     kind: 'agent',
   }
   const azure = (list: ModelDetail[]): PickerProvider[] => [
@@ -234,8 +230,6 @@ describe('ChatHeader context window formatting', () => {
       id: 'big',
       displayName: 'Fable',
       contextLimit: 1_000_000,
-      inputCostPerM: 10,
-      outputCostPerM: 50,
     }
     renderHeader({providers: [{id: 'claude', name: 'Claude', models: [big]}], model: 'big', modelLabel: 'Fable'})
     await openPicker(user)
@@ -260,8 +254,6 @@ describe('ChatHeader unpriced models', () => {
       id: 'gpt-4o',
       displayName: 'gpt-4o',
       contextLimit: 128_000,
-      inputCostPerM: 0,
-      outputCostPerM: 0,
     }
     renderHeader({
       providers: [{id: 'azure-foundry', name: 'Azure AI Foundry', models: [gpt]}],

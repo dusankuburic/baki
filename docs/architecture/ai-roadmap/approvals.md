@@ -160,29 +160,6 @@ The flow change itself is recorded. On the desktop, `PatchFlow` pushes a "before
   - Items 3-5 are reported as not attempted, with a restart message.
   - No event or model-visible text carries a raw `context canceled`.
 
-### R-approvals-3
-
-**One 120 s tool deadline covers both the human decision and the apply + re-analysis** · tier 2
-
-**Problem.** `ExecuteTool` wraps the tool context with `fixApplyToolTimeout = FixDecisionTimeout + 60 s`. The applier uses that same context for the approval wait, the apply and the verifying analysis. A user who takes 55 s to approve leaves 65 s for the write, re-parse, re-analysis and (in cloud) persist. In a batch, up to 10 sequential apply and analysis rounds on a large flow share that window. When the deadline lands mid-apply, the analysis shards abort on `ctx.Err()`. The single-fix path then reports "applied-unresolved … re-analysis failed" for a fix that worked. The batch path marks later items "error: re-analysis failed mid-batch", and a cloud persist can fail after the patch was computed. When the deadline lands inside `applyFixHook`, `ExecuteTool` reports "tool apply_fix timed out" (`internal/ai/tools.go:237-238`) even though the write may already have landed.
-
-**Evidence.**
-- `internal/ai/tools.go:36` — `fixApplyToolTimeout = FixDecisionTimeout + 60 s`
-- `internal/ai/tools.go:230` — `ExecuteTool` replaces `tctx.Ctx` with the timeout ctx for the whole handler (230-234)
-- `internal/service/chat_fixes.go:85` — `requestApproval(ctx, …)` and `applyApprovedFix(ctx, …)` at 103 share that ctx
-- `internal/service/chat_fixes.go:339` — verification `AnalyzeFlow(ctx, updated)`; on error, "applied-unresolved … re-analysis failed" (341-344)
-- `core/analyzer/engine.go:448` — analysis shards abort when `gctx.Err() != nil` (448-451)
-- `internal/service/chat_fixes.go:529` — batch: per-item "re-analysis failed mid-batch" when ctx is gone (529-534)
-
-**Change.** Split the budget. The decision wait keeps its own timer under the stream ctx, as it already does. Apply and verify then run under a fresh timeout derived from the stream ctx, not from the tool deadline. For batches, size that timeout per item (for example 30 s + n × perItem), and keep touching the keepalive. Report a timed-out verification as "applied, verification skipped" rather than "unresolved". The decision wait is capped at 60 s (`internal/service/chat_approvals.go:126`), so apply plus verify always gets at least 60 s. The failure needs both a slow approval and an apply/verify phase longer than 60 s, such as a very large flow or a batch near 10 items. That is a real but edge-case risk, closer to tier 2 than tier 1.
-
-**Touches.** `internal/ai/tools.go`, `internal/service/chat_fixes.go`, `internal/service/chat_approvals.go`, `internal/service/chat_fixes_keepalive_test.go`
-
-**Done when.**
-- A test with `decisionWait` close to its maximum and an analysis stub that sleeps sees the single fix report "applied", not "applied-unresolved".
-- A batch of 10 with a slow analysis stub completes every item.
-- The stream idle watchdog is still touched throughout (the existing keepalive tests pass).
-
 ### R-approvals-11
 
 **Chat can only apply finding-bound auto-fixes although the service already has block-edit primitives** · tier 2

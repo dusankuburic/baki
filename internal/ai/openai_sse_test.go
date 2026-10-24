@@ -121,7 +121,7 @@ func (s *sseStub) Stream(_ context.Context, _ Request, onChunk func(Chunk)) erro
 }
 
 func (s *sseStub) Models(context.Context) ([]ModelInfo, error) {
-	return []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}}, nil
+	return []ModelInfo{{ID: "m"}}, nil
 }
 
 // TestParseOpenAISSE_MidStreamErrorEventIsClassified (PERF-10): a

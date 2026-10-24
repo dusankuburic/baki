@@ -70,11 +70,8 @@ type AISettings struct {
 	// EmbeddingModel mirrors models.AISettings.EmbeddingModel — keep tag parity or the round-trip drops it.
 	EmbeddingModel          string                      `json:"embeddingModel,omitempty"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
-	ShowCostEstimates       bool                        `json:"showCostEstimates"`
 	SaveConversationHistory bool                        `json:"saveConversationHistory"`
 	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
-	DailyBudget             float64                     `json:"dailyBudget"`
-	PerUserDailyBudget      float64                     `json:"perUserDailyBudget,omitempty"`
 	// AllowedProviders mirrors models.AISettings.AllowedProviders (an organisation's allowed-provider list).
 	AllowedProviders []string        `json:"allowedProviders,omitempty"`
 	Prompts          AIPromptsConfig `json:"prompts"`

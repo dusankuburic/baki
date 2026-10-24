@@ -23,11 +23,8 @@ func (s *usageOrgStub) SupportsTools() bool         { return false }
 func (s *usageOrgStub) DefaultModel() string        { return "m1" }
 func (s *usageOrgStub) FreeModel() string           { return "" }
 func (s *usageOrgStub) EstimateTokens(t string) int { return len(t) }
-func (s *usageOrgStub) PricePerMillionTokens() Pricing {
-	return Pricing{InputCostPerM: 1, OutputCostPerM: 1}
-}
 func (s *usageOrgStub) Models(context.Context) ([]ModelInfo, error) {
-	return []ModelInfo{{ID: "m1", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}}, nil
+	return []ModelInfo{{ID: "m1"}}, nil
 }
 func (s *usageOrgStub) Chat(context.Context, Request) (*Response, error) {
 	return &Response{Content: "ok", TokensIn: 10, TokensOut: 2}, nil

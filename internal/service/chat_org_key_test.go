@@ -53,7 +53,7 @@ func orgKeyChatService(memberKeys map[string]string, orgCalls *int, backend chat
 	})
 	return &ChatService{
 		factory:  factory,
-		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 100}}},
+		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{}}},
 		backend:  backend,
 	}
 }
@@ -66,7 +66,7 @@ func TestPrepareTurn_UsesOrgCredentialWhenMemberHasNone(t *testing.T) {
 	svc := orgKeyChatService(map[string]string{"u-own": "own-key"}, &orgCalls, &roleBackend{})
 	orgDoc := &models.FlowDocument{ID: "f1", OrganizationID: "org-A"}
 
-	ctl := &streamCtl{ownerID: "u-none", orgID: "org-A"}
+	ctl := &streamCtl{ownerID: "u-none"}
 	ts, err := svc.prepareTurn(context.Background(), "u-none", orgDoc, models.ChatRequest{Provider: "fake"}, nil, ctl)
 	if err != nil {
 		t.Fatalf("member without a key on an org flow: %v (want the org's credential)", err)
@@ -82,7 +82,7 @@ func TestPrepareTurn_UsesOrgCredentialWhenMemberHasNone(t *testing.T) {
 	}
 
 	orgCalls = 0
-	ownCtl := &streamCtl{ownerID: "u-own", orgID: "org-A"}
+	ownCtl := &streamCtl{ownerID: "u-own"}
 	if _, err := svc.prepareTurn(context.Background(), "u-own", orgDoc, models.ChatRequest{Provider: "fake"}, nil, ownCtl); err != nil {
 		t.Fatalf("member with their own key: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestPrepareTurn_UsesOrgCredentialWhenMemberHasNone(t *testing.T) {
 		t.Errorf("personal flow consulted the org store %d times", orgCalls)
 	}
 
-	_, err = svc.prepareTurn(context.Background(), "u-none", &models.FlowDocument{ID: "f3", OrganizationID: "org-B"}, models.ChatRequest{Provider: "fake"}, nil, &streamCtl{ownerID: "u-none", orgID: "org-B"})
+	_, err = svc.prepareTurn(context.Background(), "u-none", &models.FlowDocument{ID: "f3", OrganizationID: "org-B"}, models.ChatRequest{Provider: "fake"}, nil, &streamCtl{ownerID: "u-none"})
 	if !errors.Is(err, ai.ErrKeyNotConfigured) {
 		t.Errorf("org without a credential: err = %v, want ErrKeyNotConfigured", err)
 	}
@@ -142,7 +142,7 @@ func TestPrepareTurn_SharedCredentialOnlyForAdminsAndMembers(t *testing.T) {
 			}
 			orgCalls := 0
 			svc := orgKeyChatService(keys, &orgCalls, &roleBackend{})
-			ctl := &streamCtl{ownerID: tc.caller, orgID: "org-A"}
+			ctl := &streamCtl{ownerID: tc.caller}
 			ts, err := svc.prepareTurn(context.Background(), tc.caller, orgDoc, models.ChatRequest{Provider: "fake"}, nil, ctl)
 			if tc.wantErr {
 				if !errors.Is(err, ai.ErrKeyNotConfigured) {
@@ -171,7 +171,7 @@ func TestPrepareTurn_SharedCredentialOnlyForAdminsAndMembers(t *testing.T) {
 	t.Run("membership lookup failure fails closed", func(t *testing.T) {
 		orgCalls := 0
 		svc := orgKeyChatService(nil, &orgCalls, &roleBackend{readErr: errors.New("store down")})
-		_, err := svc.prepareTurn(context.Background(), "u-member", orgDoc, models.ChatRequest{Provider: "fake"}, nil, &streamCtl{ownerID: "u-member", orgID: "org-A"})
+		_, err := svc.prepareTurn(context.Background(), "u-member", orgDoc, models.ChatRequest{Provider: "fake"}, nil, &streamCtl{ownerID: "u-member"})
 		if !errors.Is(err, ai.ErrKeyNotConfigured) || orgCalls != 0 {
 			t.Errorf("err = %v, org consulted %d times; want own key only", err, orgCalls)
 		}

@@ -86,7 +86,6 @@ export function mockDashboardAnalytics(opts: AnalyticsFixtureOptions = {}) {
       analysesRun: stat(14, 11),
       flowsAnalyzed: stat(Math.max(0, flowsInScope - 1), Math.max(0, flowsInScope - 2)),
       resolved: stat(7, 4),
-      aiSpend: stat(3.42, 2.1),
     },
     trend: {points, prevPoints},
     findings: {
@@ -196,19 +195,16 @@ export function mockDashboardAnalytics(opts: AnalyticsFixtureOptions = {}) {
         date: day(i, start),
         tokensIn: i % 2 === 0 ? 1200 + i * 30 : 0,
         tokensOut: i % 2 === 0 ? 400 + i * 10 : 0,
-        cost: i % 2 === 0 ? 0.12 : 0,
         calls: i % 2 === 0 ? 3 : 0,
       })),
       byProvider: [
-        {provider: 'anthropic', cost: 2.4, tokensIn: 30000, tokensOut: 9000},
-        {provider: 'openai', cost: 1.02, tokensIn: 12000, tokensOut: 4000},
+        {provider: 'anthropic', tokensIn: 30000, tokensOut: 9000},
+        {provider: 'openai', tokensIn: 12000, tokensOut: 4000},
       ],
       byModel: [
-        {provider: 'anthropic', model: 'claude-sonnet-5', tokensIn: 30000, tokensOut: 9000, calls: 30, cost: 2.4},
-        {provider: 'openai', model: 'gpt-5', tokensIn: 12000, tokensOut: 4000, calls: 15, cost: 1.02},
+        {provider: 'anthropic', model: 'claude-sonnet-5', tokensIn: 30000, tokensOut: 9000, calls: 30},
+        {provider: 'openai', model: 'gpt-5', tokensIn: 12000, tokensOut: 4000, calls: 15},
       ],
-      totalCost: 3.42,
-      prevCost: compare ? 2.1 : null,
       totalTokens: 55000,
     },
     activity: {

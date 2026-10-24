@@ -175,27 +175,6 @@ The exposure is narrower than the listing alone suggests. The audited wrapper's 
 - After that refresh completes, the next turn's `turnGenerationParams` sees the project listing's ServedModel and catalogue window for the deployment, without a picker read.
 - `ResolveChat` latency does not depend on the project endpoint: a hung project endpoint does not slow the chat turn.
 
-### R-replicas-7
-
-**Enabling a budget while streams run leaves those streams invisible to the shared ledger** · tier 3
-
-**Problem.** With the Redis ledger, `hold()` returns nil without entering the stream when no daily budget is configured (`ai_budget.go:126-129`; `capped` reads `DailyBudget > 0`, `:116-122`). `release()` of a stream that was never held is a no-op ("no budget was set when it started", `ai_budget_redis.go:90-92`). An operator may react to a spend spike by setting `DailyBudget`, which is exactly when the cap matters. Every stream already running at that moment stays out of `others()` until it ends: up to 3 per user, each with a full reservation and growing cost. So the first checks after the change admit more than the budget. This happens on the replica that runs those streams as well as on the others. The over-admission is at most the in-flight cost of the streams already running when the budget was set (`inflightCost`, `chat_stream_control.go:265-268`). It lasts at most `maxChatStreamDuration`, 10 min (`chat.go:35-36`), after which their usage rows count. The settings invalidation hook already fires on every deployment-settings write, locally and from peers, and could be used to catch up.
-
-**Evidence.**
-- `internal/service/ai_budget.go:127` — `hold`: `if b.shared && !b.capped() return nil` (127-129); `capped` reads `DailyBudget > 0` (116-122)
-- `internal/service/ai_budget_redis.go:90` — releasing a stream that was never held is a no-op: "never held here: refused before admission, or no budget was set when it started" (90-92)
-- `internal/service/settings_backend.go:157` — `SubscribeSettingsCache` reacts to every `DeploymentSettings` `SettingsChanged`, locally and from a peer's replicated invalidation (158-169)
-- `internal/service/chat_stream_control.go:265` — `inflight()` returns the stream's `inflightCost` (265-268)
-- `internal/service/chat.go:36` — `maxChatStreamDuration = 10 * time.Minute`
-
-**Change.** Pick one of two approaches. Either hold unconditionally when the ledger is shared: one HSET per stream start is cheap, and the refresh loop already runs. Or subscribe `AIBudget` to `SettingsChanged{DeploymentSettings}` and, when `capped` flips to true, hold every entry in `activeStreams`. Keep the "no Redis traffic without a budget" property: hold in process, and publish to Redis only once the budget is capped.
-
-**Touches.** `internal/service/ai_budget.go`, `internal/service/ai_budget_redis.go`, `internal/service/chat.go`, `internal/di/services.go`
-
-**Done when.**
-- Test: a stream starts with `DailyBudget` 0, and the settings change to 5 mid-stream. A check on another replica within one refresh interval sees the stream's reservation.
-- `TestRedisLedger_NoBudgetNeverTouchesRedis` still passes (no round trip until capped).
-
 ### R-replicas-8
 
 **Every provider memo and the circuit breaker are per-process, and the anonymous-struct memos escape the state registry** · tier 3

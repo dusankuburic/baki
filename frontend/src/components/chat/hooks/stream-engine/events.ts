@@ -3,16 +3,15 @@ import type {MutableRefObject} from 'react'
 import i18n from '@/i18n'
 import {uuid} from '@/lib/uuid'
 import {useChatStore} from '@/stores/chatStore'
-import {classifyChatFailure, budgetDetail, providerErrorInfo} from '@/lib/chatErrors'
+import {classifyChatFailure, providerErrorInfo} from '@/lib/chatErrors'
 import {adoptStreamVersion} from '@/lib/conversationSync'
 import type {DoneMeta, ErrorUsage} from '@/lib/chatEvent'
 import type {ChatMessage} from '@/types'
-import type {ChatStoreState, StreamAcc, ToastApi} from './types'
+import type {ChatStoreState, StreamAcc} from './types'
 import {useCommit} from './commit'
 import {providerErrorLine, messageModel, applyDoneMeta, ALIAS_PROVIDERS} from './helpers'
 
 interface EventDeps {
-  toastRef: MutableRefObject<ToastApi | null>
   takeAcc: (streamId: string) => StreamAcc | null
   commitAssistantMessage: ReturnType<typeof useCommit>['commitAssistantMessage']
   bumpThreadTokens: ReturnType<typeof useCommit>['bumpThreadTokens']
@@ -23,7 +22,6 @@ interface EventDeps {
 }
 
 export function useStreamEvents({
-  toastRef,
   takeAcc,
   commitAssistantMessage,
   bumpThreadTokens,
@@ -33,15 +31,6 @@ export function useStreamEvents({
   autoResendRef,
 }: EventDeps) {
   const servedModelSeenRef = useRef(new Set<string>())
-
-  const notifyBudget = useCallback(
-    (detail: string) => {
-      toastRef.current?.warning(i18n.t('chat:errors.budgetTitle', {detail}), {
-        description: i18n.t('chat:errors.budgetBody'),
-      })
-    },
-    [toastRef],
-  )
 
   const onDone = useCallback(
     (tokensOut: number, tokensIn: number, streamId: string, meta?: DoneMeta) => {
@@ -91,11 +80,7 @@ export function useStreamEvents({
       const slot = useChatStore.getState().streams[acc.threadId]
       let errorLine: string
       const providerError = providerErrorInfo(code)
-      if (kind === 'budget') {
-        const detail = budgetDetail(error)
-        notifyBudget(detail)
-        errorLine = i18n.t('chat:errors.budgetBubble', {detail})
-      } else if (kind === 'serverRestarting') {
+      if (kind === 'serverRestarting') {
         errorLine = i18n.t('chat:errors.generic', {message: i18n.t('chat:errors.serverRestarted')})
       } else if (providerError) {
         errorLine = providerErrorLine(providerError, error)
@@ -124,8 +109,8 @@ export function useStreamEvents({
       bumpThreadTokens(acc.threadId, usage?.tokensIn, usage?.tokensOut)
       endStream(acc.threadId)
     },
-    [appendMessage, autoResendRef, bumpProviderEpoch, bumpThreadTokens, endStream, notifyBudget, takeAcc],
+    [appendMessage, autoResendRef, bumpProviderEpoch, bumpThreadTokens, endStream, takeAcc],
   )
 
-  return {notifyBudget, onDone, onError}
+  return {onDone, onError}
 }

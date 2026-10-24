@@ -63,7 +63,7 @@ func TestAzureModels_PickerListing(t *testing.T) {
 	}
 	gpt := azmDetail(t, out.Models, "m/"+legacyAzureEntryID(e.svc.userOwner("legacy"), "chat", "gpt-4o"))
 	if gpt.Kind != "chat" || gpt.Shared || gpt.ConnectionID != "default" || gpt.Status != AzureStatusReady || strings.Join(gpt.Aliases, ",") != "gpt-4o" ||
-		!gpt.IsDefault || gpt.ContextLimit != 128000 || !gpt.SupportsTools || gpt.InputCostPerM != 0 {
+		!gpt.IsDefault || gpt.ContextLimit != 128000 || !gpt.SupportsTools {
 		t.Errorf("gpt-4o = %+v", gpt)
 	}
 	if out.DefaultModel != gpt.ID {

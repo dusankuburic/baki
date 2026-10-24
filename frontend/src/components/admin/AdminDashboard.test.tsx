@@ -22,7 +22,7 @@ vi.mock('@/api/admin', () => ({
     systemHealth: (...a: unknown[]) => systemHealth(...a),
     getDeploymentAISettings: vi
       .fn()
-      .mockResolvedValue({dailyBudget: 0, perUserDailyBudget: 0, embeddingProvider: '', embeddingModel: ''}),
+      .mockResolvedValue({embeddingProvider: '', embeddingModel: ''}),
     updateDeploymentAISettings: vi.fn().mockResolvedValue(undefined),
     setUserRole: vi.fn().mockResolvedValue(undefined),
     startMigration: vi.fn().mockResolvedValue(undefined),

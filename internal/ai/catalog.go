@@ -5,75 +5,75 @@ import (
 	"strings"
 )
 
-// modelCatalog is the single source of truth for the models each provider serves, with pricing and limits —
-// the data that drifts as vendors ship models and change prices, centralized in one auditable place.
+// modelCatalog is the single source of truth for the models each provider serves, with their limits — the
+// data that drifts as vendors ship models, centralized in one auditable place.
 // TestProviderCatalogConsistency validates each provider's DefaultModel/FreeModel against these entries.
 var modelCatalog = map[string][]ModelInfo{
-	// Claude: prices and limits as published on platform.claude.com, checked 2026-09-28. The prices bill the
-	// direct Claude provider only; a Foundry Claude deployment borrows these rows for its window/cap, unpriced.
+	// Claude: limits as published on platform.claude.com, checked 2026-09-28. A Foundry Claude deployment
+	// borrows these rows for its window and output cap.
 	"claude": {
-		{ID: "claude-fable-5-1", DisplayName: "Claude Fable 5.1", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
-		{ID: "claude-fable-5", DisplayName: "Claude Fable 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
-		{ID: "claude-mythos-5-1", DisplayName: "Claude Mythos 5.1", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
-		{ID: "claude-mythos-5", DisplayName: "Claude Mythos 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
+		{ID: "claude-fable-5-1", DisplayName: "Claude Fable 5.1", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-fable-5", DisplayName: "Claude Fable 5", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-mythos-5-1", DisplayName: "Claude Mythos 5.1", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-mythos-5", DisplayName: "Claude Mythos 5", ContextLimit: 1000000, MaxOutputTokens: 128000},
 		// claude-mythos-preview: Foundry lists it but Anthropic publishes no
-		// price row of its own — the Mythos 5/5.1 rate is assumed.
-		{ID: "claude-mythos-preview", DisplayName: "Claude Mythos Preview", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 50.0}},
-		{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 4.0, OutputCostPerM: 20.0}},
-		{ID: "claude-opus-5", DisplayName: "Claude Opus 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
-		{ID: "claude-opus-4-8", DisplayName: "Claude Opus 4.8", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
-		{ID: "claude-opus-4-7", DisplayName: "Claude Opus 4.7", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
-		{ID: "claude-opus-4-6", DisplayName: "Claude Opus 4.6", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
-		{ID: "claude-opus-4-5", DisplayName: "Claude Opus 4.5", ContextLimit: 200000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 5.0, OutputCostPerM: 25.0}},
-		{ID: "claude-sonnet-5-5", DisplayName: "Claude Sonnet 5.5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 10.0}},
-		{ID: "claude-sonnet-5", DisplayName: "Claude Sonnet 5", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 10.0}},
-		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", ContextLimit: 1000000, MaxOutputTokens: 128000, Pricing: Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}},
-		{ID: "claude-sonnet-4-5", DisplayName: "Claude Sonnet 4.5", ContextLimit: 200000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}},
-		{ID: "claude-haiku-4-5", DisplayName: "Claude Haiku 4.5", ContextLimit: 200000, MaxOutputTokens: 64000, Pricing: Pricing{InputCostPerM: 1.0, OutputCostPerM: 5.0}},
+		// row of its own — the Mythos 5/5.1 limits are assumed.
+		{ID: "claude-mythos-preview", DisplayName: "Claude Mythos Preview", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-opus-5", DisplayName: "Claude Opus 5", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-opus-4-8", DisplayName: "Claude Opus 4.8", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-opus-4-7", DisplayName: "Claude Opus 4.7", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-opus-4-6", DisplayName: "Claude Opus 4.6", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-opus-4-5", DisplayName: "Claude Opus 4.5", ContextLimit: 200000, MaxOutputTokens: 64000},
+		{ID: "claude-sonnet-5-5", DisplayName: "Claude Sonnet 5.5", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-sonnet-5", DisplayName: "Claude Sonnet 5", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", ContextLimit: 1000000, MaxOutputTokens: 128000},
+		{ID: "claude-sonnet-4-5", DisplayName: "Claude Sonnet 4.5", ContextLimit: 200000, MaxOutputTokens: 64000},
+		{ID: "claude-haiku-4-5", DisplayName: "Claude Haiku 4.5", ContextLimit: 200000, MaxOutputTokens: 64000},
 	},
 	"openai": {
-		{ID: "gpt-4o", DisplayName: "GPT-4o", ContextLimit: 128000, Pricing: Pricing{InputCostPerM: 2.5, OutputCostPerM: 10.0}},
-		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 128000, Pricing: Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6}},
-		{ID: "gpt-4-turbo", DisplayName: "GPT-4 Turbo", ContextLimit: 128000, Pricing: Pricing{InputCostPerM: 10.0, OutputCostPerM: 30.0}},
+		{ID: "gpt-4o", DisplayName: "GPT-4o", ContextLimit: 128000},
+		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 128000},
+		{ID: "gpt-4-turbo", DisplayName: "GPT-4 Turbo", ContextLimit: 128000},
 	},
 	"gemini": {
-		{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", ContextLimit: 1048576, Pricing: Pricing{InputCostPerM: 1.25, OutputCostPerM: 10.0}},
-		{ID: "gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash", ContextLimit: 1048576, Pricing: Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6}},
+		{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", ContextLimit: 1048576},
+		{ID: "gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash", ContextLimit: 1048576},
 	},
 	"xai": {
-		{ID: "grok-3", DisplayName: "Grok 3", ContextLimit: 131072, Pricing: Pricing{InputCostPerM: 3.0, OutputCostPerM: 15.0}},
-		{ID: "grok-3-mini", DisplayName: "Grok 3 Mini", ContextLimit: 131072, Pricing: Pricing{InputCostPerM: 0.3, OutputCostPerM: 0.5}},
-		{ID: "grok-2", DisplayName: "Grok 2", ContextLimit: 131072, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 10.0}},
+		{ID: "grok-3", DisplayName: "Grok 3", ContextLimit: 131072},
+		{ID: "grok-3-mini", DisplayName: "Grok 3 Mini", ContextLimit: 131072},
+		{ID: "grok-2", DisplayName: "Grok 2", ContextLimit: 131072},
 	},
 	"glm": {
 		// glm-5.3 and glm-5.2 verified against the z.ai coding endpoint 2026-09-23; the -turbo/-air/-flash
 		// variants of either do not exist there (1211 Unknown Model).
-		{ID: "glm-5.3", DisplayName: "GLM-5.3", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}},
-		{ID: "glm-5.2", DisplayName: "GLM-5.2", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}},
-		{ID: "glm-5.1", DisplayName: "GLM-5.1", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.4, OutputCostPerM: 4.4}},
-		{ID: "glm-5", DisplayName: "GLM-5", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 1.0, OutputCostPerM: 3.2}},
-		{ID: "glm-5-turbo", DisplayName: "GLM-5 Turbo", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 0.8, OutputCostPerM: 2.4}},
+		{ID: "glm-5.3", DisplayName: "GLM-5.3", ContextLimit: 200000},
+		{ID: "glm-5.2", DisplayName: "GLM-5.2", ContextLimit: 200000},
+		{ID: "glm-5.1", DisplayName: "GLM-5.1", ContextLimit: 200000},
+		{ID: "glm-5", DisplayName: "GLM-5", ContextLimit: 200000},
+		{ID: "glm-5-turbo", DisplayName: "GLM-5 Turbo", ContextLimit: 200000},
 	},
 	// GitHub Models' free tier enforces an 8 192-token request limit regardless of native window; the
 	// limits cap the context budget so the API never returns a 413.
 	"github-models": {
-		{ID: "gpt-4o", DisplayName: "GPT-4o", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 2.5, OutputCostPerM: 10.0}},
-		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 0.15, OutputCostPerM: 0.6}},
-		{ID: "Meta-Llama-3.3-70B-Instruct", DisplayName: "Llama 3.3 70B", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 0.7, OutputCostPerM: 0.9}},
-		{ID: "Mistral-large-2411", DisplayName: "Mistral Large", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 6.0}},
-		{ID: "Phi-4", DisplayName: "Phi-4", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 0.07, OutputCostPerM: 0.14}},
-		{ID: "DeepSeek-V3-0324", DisplayName: "DeepSeek V3", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 0.49, OutputCostPerM: 0.94}},
-		{ID: "ai21-jamba-1.5-large", DisplayName: "Jamba 1.5 Large", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 2.0, OutputCostPerM: 8.0}},
+		{ID: "gpt-4o", DisplayName: "GPT-4o", ContextLimit: 8192},
+		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 8192},
+		{ID: "Meta-Llama-3.3-70B-Instruct", DisplayName: "Llama 3.3 70B", ContextLimit: 8192},
+		{ID: "Mistral-large-2411", DisplayName: "Mistral Large", ContextLimit: 8192},
+		{ID: "Phi-4", DisplayName: "Phi-4", ContextLimit: 8192},
+		{ID: "DeepSeek-V3-0324", DisplayName: "DeepSeek V3", ContextLimit: 8192},
+		{ID: "ai21-jamba-1.5-large", DisplayName: "Jamba 1.5 Large", ContextLimit: 8192},
 	},
 	"copilot": {
-		{ID: "gpt-4o", DisplayName: "GPT-4o", ContextLimit: 128000, Pricing: Pricing{InputCostPerM: 0, OutputCostPerM: 0}},
-		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 128000, Pricing: Pricing{InputCostPerM: 0, OutputCostPerM: 0}},
-		{ID: "claude-3.5-sonnet", DisplayName: "Claude 3.5 Sonnet", ContextLimit: 200000, Pricing: Pricing{InputCostPerM: 0, OutputCostPerM: 0}},
+		{ID: "gpt-4o", DisplayName: "GPT-4o", ContextLimit: 128000},
+		{ID: "gpt-4o-mini", DisplayName: "GPT-4o Mini", ContextLimit: 128000},
+		{ID: "claude-3.5-sonnet", DisplayName: "Claude 3.5 Sonnet", ContextLimit: 200000},
 	},
 	// Azure AI Foundry serves whatever the user DEPLOYED under a chosen name, so this list is the reference
 	// table the served-model name is sized against. ContextLimit is what the prompt is truncated against:
 	// where Azure documents separate input and output limits (gpt-5 family: 272k in + 128k out) the INPUT
-	// figure goes here, never the total window. No pricing — the Azure portal is the source of truth. Windows
+	// figure goes here, never the total window. Windows
 	// from Microsoft's "models sold directly by Azure" page, checked 2026-09-29; gpt-5.4+ and gpt-6 accept up
 	// to 922,000 input tokens but bill beyond 272,000 at a higher long-context tier, so 272,000 it is.
 	"azure-foundry": {
@@ -157,34 +157,6 @@ var modelCatalog = map[string][]ModelInfo{
 	},
 }
 
-// cacheReadMultiplier is the fraction of the base input rate a cached-input token is billed at for the model
-// a call named or was served by. Anthropic publishes per-family rates (0.025x on Fable/Mythos 5.1, 0.05x on
-// Opus 5.5, 0.1x on every other Claude); everyone else keeps the full input rate.
-func cacheReadMultiplier(providerID, modelID, servedModel string) float64 {
-	claudeRoute := wireOf(providerID) == WireAnthropic || IsClaudeModel(modelID) || isClaudeModelName(servedModel)
-	if !claudeRoute {
-		return 1.0
-	}
-	for _, n := range []string{servedModel, modelID} {
-		n = strings.ToLower(strings.TrimSpace(n))
-		if n == "" {
-			continue
-		}
-		switch {
-		case strings.Contains(n, "fable-5-1"), strings.Contains(n, "mythos-5-1"):
-			return 0.025
-		case strings.Contains(n, "opus-5-5"):
-			return 0.05
-		}
-	}
-	return 0.1
-}
-
-// cacheWriteMultiplier is the rate a 5-minute prompt-cache WRITE token is
-// billed at relative to the base input rate (Anthropic: 1.25x; would be 2x
-// for a 1h TTL, which baki never sends).
-const cacheWriteMultiplier = 1.25
-
 // claudeInviteOnly lists catalogued Claude models offered by invitation only (Project Glasswing): kept so a
 // Foundry deployment of one is sized, but not offered in the direct provider's picker.
 var claudeInviteOnly = map[string]bool{
@@ -213,16 +185,10 @@ func normalizeServedModel(served string) string {
 // catalogEntryFor finds the catalogue entry for the model a provider reported serving: exact on the
 // normalised name, or — for names that only add a numeric/date version to a catalogued ID ("gpt-4.1-2025-04-14")
 // — the longest catalogued ID the name extends. A sibling model ("gpt-5-mini" when only "gpt-5" is catalogued)
-// is NOT matched: silent mispricing would be worse than the explicit fallback.
-// Foundry's Claude deployments are sized by the Claude catalogue, and every Azure entry comes back unpriced.
+// is NOT matched: silently mis-sizing it would be worse than the explicit fallback.
+// Foundry's Claude deployments are sized by the Claude catalogue.
 func catalogEntryFor(providerID, served string) (ModelInfo, bool) {
-	e, ok := catalogEntryLookup(providerID, served)
-	if ok && providerID == azureFoundryProviderID {
-		// Azure AI Foundry is deliberately unpriced: the catalogue supplies
-		// windows and output limits only; the cost is read in the portal.
-		e.Pricing = Pricing{}
-	}
-	return e, ok
+	return catalogEntryLookup(providerID, served)
 }
 
 func catalogEntryLookup(providerID, served string) (ModelInfo, bool) {

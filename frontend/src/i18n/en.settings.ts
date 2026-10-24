@@ -1007,13 +1007,9 @@ export const enSettings = {
       "). Leave blank to use the provider's default. The pgvector index tolerates a model swap; mismatched-dimension chunks are excluded at insert.",
     embeddingModelHintAzure:
       'For Azure AI Foundry, add an embedding model under AI Accounts → Azure AI Foundry and choose "Use for knowledge base" in its menu.',
-    historyCosts: 'History & Costs',
+    historyCosts: 'History',
     saveHistory: 'Save Conversation History',
     saveHistoryHint: 'Keep a local record of your AI chats per flow.',
-    showCosts: 'Show Cost Estimates',
-    showCostsHint: 'Display estimated token usage and costs for each request.',
-    dailyBudget: 'Daily AI Budget ($)',
-    dailyBudgetHint: 'Max spend per day for your account/org. Use 0 for unlimited.',
     customInstructions: 'Custom Instructions',
     customInstructionsHint:
       'Appended to the AI system prompt. Use this to set a preferred language, focus area, or persona.',

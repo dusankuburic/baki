@@ -53,7 +53,7 @@ var (
 	chatToolRefusedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_chat_tool_refused_total",
-			Help: "Tool calls the session's gate refused before the handler, by tool and reason: scope (a scoped API token without the tool's scope) or approval_unavailable (no approval applier in the session). The model was not offered the tool and called it anyway.",
+			Help: "Tool calls the session's gate refused before the handler, by tool and reason: scope (a scoped API token without the tool's scope), approval_unavailable (no approval applier in the session) or flow_permission (the caller may not edit the flow). The model was not offered the tool and called it anyway.",
 		},
 		[]string{"tool", "reason"},
 	)

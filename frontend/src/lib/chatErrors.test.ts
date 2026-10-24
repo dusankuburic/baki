@@ -1,7 +1,6 @@
 import {describe, it, expect} from 'vitest'
 import {
   classifyChatFailure,
-  budgetDetail,
   providerErrorInfo,
   isStreamGone,
   isReplicaUnreachable,
@@ -11,19 +10,14 @@ import {
 
 describe('classifyChatFailure', () => {
   it('trusts the machine-readable code first', () => {
-    expect(classifyChatFailure('anything', 'AI_BUDGET_EXCEEDED')).toBe('budget')
+    expect(classifyChatFailure('anything', 'AI_BUDGET_EXCEEDED')).toBe('generic')
     expect(classifyChatFailure('anything', 'CHAT_CAPACITY_REACHED')).toBe('capacity')
     expect(classifyChatFailure('budget exceeded', 'PROVIDER_UNAVAILABLE')).toBe('generic')
   })
 
   it('falls back to the message for backends that send no code', () => {
-    expect(classifyChatFailure('daily AI budget exceeded ($1.02 / $1.00)')).toBe('budget')
-    expect(classifyChatFailure('per-user daily AI budget exceeded ($2 / $1)')).toBe('budget')
+    expect(classifyChatFailure('daily AI budget exceeded ($1.02 / $1.00)')).toBe('generic')
     expect(classifyChatFailure('too many chat responses running at once')).toBe('capacity')
-  })
-
-  it('does not treat a failed budget CHECK as the budget being reached', () => {
-    expect(classifyChatFailure("couldn't verify today's AI budget — try again in a moment")).toBe('generic')
   })
 
   it('classifies MODEL_NOT_AVAILABLE by its code', () => {
@@ -75,18 +69,6 @@ describe('serverRestartDelayMs', () => {
     expect(serverRestartDelayMs(5, () => 0)).toBe(5_000)
     expect(serverRestartDelayMs(3_600, () => 0)).toBe(10_000)
     expect(serverRestartDelayMs(0, () => 0)).toBe(2_000)
-  })
-})
-
-describe('budgetDetail', () => {
-  it('extracts the spent / limit figures', () => {
-    expect(budgetDetail('daily AI budget exceeded ($1.02 / $1.00, of which $0.00 is in flight)')).toBe(
-      ' ($1.02 / $1.00)',
-    )
-  })
-
-  it('is empty when there are no figures', () => {
-    expect(budgetDetail('budget exceeded')).toBe('')
   })
 })
 

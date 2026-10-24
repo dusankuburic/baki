@@ -12,7 +12,6 @@ var glmSpec = ProviderSpec{
 	Keys:         KeySchema{Primary: "glm"},
 	Catalog:      "glm",
 	DefaultModel: "glm-5.2",
-	Pricing:      PricingCatalog,
 	Wire:         WireOpenAI,
 	Ctor:         func(c Credential) Provider { return NewGLMProvider(c.Key) },
 	Color:        "#06b6d4",

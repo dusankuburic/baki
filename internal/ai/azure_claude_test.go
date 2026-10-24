@@ -460,14 +460,14 @@ func TestAzureClaude_ModelsListClaudeDeployments(t *testing.T) {
 		t.Errorf("listing = %s", got)
 	}
 	if m := byID["claude:claude-sonnet-4-6"]; m.DisplayName != "claude-sonnet-4-6 · Claude" || m.ContextLimit != 1000000 ||
-		m.MaxOutputTokens != 128000 || m.Pricing != (Pricing{}) || m.Embedding {
+		m.MaxOutputTokens != 128000 || m.Embedding {
 		t.Errorf("catalogued Claude deployment = %+v", m)
 	}
-	if m := byID["claude:claude-opus-4-8-20260901"]; m.Pricing != (Pricing{}) || m.MaxOutputTokens != 128000 {
-		t.Errorf("date-suffixed Claude deployment = %+v, want Opus 4.8's cap and no price", m)
+	if m := byID["claude:claude-opus-4-8-20260901"]; m.MaxOutputTokens != 128000 {
+		t.Errorf("date-suffixed Claude deployment = %+v, want Opus 4.8's cap", m)
 	}
-	if m := byID["claude:my-claude"]; m.DisplayName != "my-claude · Claude" || m.ContextLimit != 200000 || m.MaxOutputTokens != claudeOnFoundryDefaultOutput || m.Pricing != (Pricing{}) || m.ServedModel != "" {
-		t.Errorf("custom-named Claude deployment = %+v, want the defaults (output cap %d) and no price", m, claudeOnFoundryDefaultOutput)
+	if m := byID["claude:my-claude"]; m.DisplayName != "my-claude · Claude" || m.ContextLimit != 200000 || m.MaxOutputTokens != claudeOnFoundryDefaultOutput || m.ServedModel != "" {
+		t.Errorf("custom-named Claude deployment = %+v, want the defaults (output cap %d)", m, claudeOnFoundryDefaultOutput)
 	}
 	// The unlisted-deployment default output cap must be the smallest cap
 	// of any Claude model Foundry serves (64K), so the reasoning floor of a
@@ -523,14 +523,14 @@ func TestAzureClaude_ProjectListingDiscoversAnthropicDeployments(t *testing.T) {
 	if got := strings.Join(ids, ","); got != "chat1,claude:sonnet,claude:my-claude,claude:opus" {
 		t.Errorf("listing = %s", got)
 	}
-	if m := byID["claude:sonnet"]; m.ServedModel != "claude-sonnet-4-6" || m.Pricing != (Pricing{}) || m.ContextLimit != 1000000 ||
+	if m := byID["claude:sonnet"]; m.ServedModel != "claude-sonnet-4-6" || m.ContextLimit != 1000000 ||
 		m.MaxOutputTokens != 128000 || m.DisplayName != "sonnet · Claude" || m.Embedding {
 		t.Errorf("re-listed Anthropic deployment = %+v", m)
 	}
-	if m := byID["claude:my-claude"]; m.ServedModel != "claude-haiku-4-5-20260101" || m.Pricing != (Pricing{}) || m.ContextLimit != 200000 {
+	if m := byID["claude:my-claude"]; m.ServedModel != "claude-haiku-4-5-20260101" || m.ContextLimit != 200000 {
 		t.Errorf("document Claude entry enriched by the project = %+v", m)
 	}
-	if m := byID["claude:opus"]; m.ServedModel != "claude-opus-4-8" || m.Pricing != (Pricing{}) || m.MaxOutputTokens != 128000 {
+	if m := byID["claude:opus"]; m.ServedModel != "claude-opus-4-8" || m.MaxOutputTokens != 128000 {
 		t.Errorf("project-only Anthropic deployment = %+v", m)
 	}
 	if m := byID["chat1"]; m.ServedModel != "gpt-4o" || IsClaudeModel(m.ID) {
@@ -629,21 +629,15 @@ func TestAzureClaude_AuditedUnpricedAndMemo(t *testing.T) {
 	ctx := context.Background()
 
 	for _, model := range []string{"claude:my-claude", "claude:claude-opus-4-8"} {
-		if got := ap.ReservationPricing(ctx, model); got != (Pricing{}) {
-			t.Errorf("reservation for %s = %+v, want zero", model, got)
-		}
 		for _, served := range []string{"", "claude-sonnet-4-6-20260301"} {
-			if got, ok := ap.UsagePricing(ctx, model, served); !ok || got != (Pricing{}) {
-				t.Errorf("usage pricing for %s served %q = %+v %v, want zero and found", model, served, got, ok)
-			}
-			if m := ap.usageMetric(ctx, model, served, "", usage{In: 1_000_000}); m.EstimatedCost != 0 || m.PromptTokens != 1_000_000 {
-				t.Errorf("usage metric for %s served %q = cost %v tokens %d, want $0 with tokens recorded", model, served, m.EstimatedCost, m.PromptTokens)
+			if m := ap.usageMetric(model, served, "", usage{In: 1_000_000}); m.PromptTokens != 1_000_000 {
+				t.Errorf("usage metric for %s served %q = %d tokens, want them recorded", model, served, m.PromptTokens)
 			}
 		}
 	}
-	// A router that routed to Claude keeps the catalogue's window and cap but no price.
-	if entry, ok := catalogEntryFor(azureFoundryProviderID, "claude-haiku-4-5"); !ok || entry.Pricing != (Pricing{}) || entry.ContextLimit == 0 {
-		t.Errorf("catalogEntryFor(azure-foundry, claude-haiku-4-5) = %+v %v, want a window and no price", entry, ok)
+	// A router that routed to Claude keeps the catalogue's window and cap.
+	if entry, ok := catalogEntryFor(azureFoundryProviderID, "claude-haiku-4-5"); !ok || entry.ContextLimit == 0 {
+		t.Errorf("catalogEntryFor(azure-foundry, claude-haiku-4-5) = %+v %v, want a window", entry, ok)
 	}
 	if _, ok := catalogEntryFor(azureFoundryProviderID, "claude:my-claude"); ok {
 		t.Error("a custom Claude deployment name must not be resolved by guesswork")
@@ -666,15 +660,12 @@ func TestAzureClaude_AuditedUnpricedAndMemo(t *testing.T) {
 			continue
 		}
 		found = true
-		if m.ServedModel != "claude-sonnet-4-6-20260301" || m.Pricing != (Pricing{}) || m.MaxOutputTokens != 128000 || m.ContextLimit != 1000000 {
+		if m.ServedModel != "claude-sonnet-4-6-20260301" || m.MaxOutputTokens != 128000 || m.ContextLimit != 1000000 {
 			t.Errorf("memo-enriched Claude entry = %+v", m)
 		}
 	}
 	if !found {
 		t.Error("claude:my-claude missing from the listing")
-	}
-	if got := next.ReservationPricing(ctx, "claude:my-claude"); got != (Pricing{}) {
-		t.Errorf("reservation after the memo = %+v, want zero", got)
 	}
 }
 

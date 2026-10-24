@@ -27,8 +27,6 @@ const model = (over: Record<string, unknown> = {}) => ({
   id: 'm/abc',
   displayName: 'Model',
   contextLimit: 128000,
-  inputCostPerM: 1,
-  outputCostPerM: 2,
   supportsTools: true,
   ...over,
 })
@@ -201,7 +199,6 @@ describe('tolerant provider catalogue', () => {
     credential: {kind: 'api_key', fields: [{name: 'key', label: 'API key', type: 'secret', required: true}]},
     endpoints: {save: '/api/keys/save', test: '/api/providers/test'},
     configured: false,
-    pricing: 'catalog',
     ...over,
   })
 

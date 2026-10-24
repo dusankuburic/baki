@@ -109,11 +109,11 @@ func TestProvideAzureModelService_Wiring(t *testing.T) {
 	}
 
 	// The knowledge service embeds through the registry when wired.
-	ks := ProvideKnowledgeService(nil, nil, nil, cfg, cloud, nil, nil, nil)
+	ks := ProvideKnowledgeService(nil, nil, nil, cfg, cloud, nil, nil)
 	if !ks.AzureEmbedderEnabled() {
 		t.Error("the knowledge service does not embed through the registry")
 	}
-	if ProvideKnowledgeService(nil, nil, nil, cfg, nil, nil, nil, nil).AzureEmbedderEnabled() {
+	if ProvideKnowledgeService(nil, nil, nil, cfg, nil, nil, nil).AzureEmbedderEnabled() {
 		t.Error("no registry, no registry embedder")
 	}
 }

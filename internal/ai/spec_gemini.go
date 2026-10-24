@@ -12,7 +12,6 @@ var geminiSpec = ProviderSpec{
 	Keys:         KeySchema{Primary: "gemini"},
 	Catalog:      "gemini",
 	DefaultModel: "gemini-2.5-pro",
-	Pricing:      PricingCatalog,
 	Wire:         WireGemini,
 	Ctor:         func(c Credential) Provider { return NewGeminiProvider(c.Key) },
 	Color:        "#4285f4",

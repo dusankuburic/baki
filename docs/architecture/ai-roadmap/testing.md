@@ -72,7 +72,7 @@ Yet a grep over the `internal/api` tests finds zero hits for `excludedItemIndice
 Three things need attention:
 
 - **Case (c):** the wait override is unexported (`ChatService.fixDecisionWait`, `internal/service/chat.go:340`, and the `fixDecisionTimeout` var, `chat_approvals.go:21-29`). A router test in package `api` cannot set either, so this case needs an exported seam or a router/test constructor option.
-- **Case (a):** asserting the model's next request needs a provider that records requests, which `FakeProvider` cannot do (`internal/testutil/provider.go:59`). That part depends on [R-testing-5](testing.md#r-testing-5).
+- **Case (a):** asserting the model's next request needs a provider that records requests; `FakeProvider.Requests()` does since step 3.
 - **Fallback route:** for approval-sourced cards, the client first posts to `/api/chat/approval-decision` and falls back to `/api/chat/fix-decision` on 404 (`frontend/src/components/chat/hooks/stream-engine/fixes.ts:128-134`, `frontend/src/api/chat.ts:84-90`). No backend route of that name exists, so a rename test must pin the fallback path as well.
 
 **Touches.** `internal/api/handlers_chat_approvals_test.go`, `internal/service/chat_approvals.go`, `internal/testutil/provider.go`
@@ -81,41 +81,6 @@ Three things need attention:
 - Router tests cover `apply_fixes` with `excludedItemIndices`, decline and timeout, asserting the journal's `fix_decision` `items[]` and the stored flow content.
 - Each case runs under `-race` within the existing 5 s poll budget.
 - Renaming `excludedItemIndices` on either side fails a test.
-
-### R-testing-8
-
-**No snapshot of the assembled request (system prompt + context + messages + tools) for a fixture flow; BuildContext is not deterministic** · tier 2
-
-**Problem.** What a model receives for a given flow is assembled across `BuildContext`, the system-prompt suffix, `buildScrubbedContext`, the tool gate and, in marker mode, `ToolPromptInstructionsFor`. No test pins the result as a whole. `context_test.go` checks that fragments are present, `PreviewContext` is tested only in pieces, and the marker-mode concatenation is never tested as text. So a change in ordering, headings, truncation priority or which tools each actor is offered changes the prompt without any golden diff. `BuildContext` also ranges over three unsorted Go maps that are reachable today: the title counts in `writeFindingsSummary`, the selected block's `Properties` in `writeBlockDetail`, and each block finding's `Metadata`. Its bytes are therefore not even stable between two calls, and a golden needs that stability first. `ContextRequest.VariableEvents` is also ranged unsorted, but the chat service never fills it in. The parser's sample corpus (14 flows, including `synthetic_10k.txt`) is never used as prompt input. Internal tests do call the real parser, but only on inline text.
-
-**Evidence.**
-
-- `internal/ai/context_test.go:51` — `BuildContext` tests check only for non-empty output and substrings (51-55); the nil-flow test checks identity only (369-372)
-- `internal/ai/context.go:40` — `BuildContext` composes prompt + suffix + flow sections (40-62); no caller pins the whole output
-- `internal/ai/context.go:101` — `for k, v := range f.Metadata` writes each block finding's metadata in map order
-- `internal/ai/context.go:213` — `for k, v := range block.Properties` writes the selected block's properties in map order
-- `internal/ai/context.go:351` — `for title, count := range counts` writes the Analysis Summary in map order (`RawSourceFiles` is sorted at 66-70; these three are not)
-- `internal/service/chat_context.go:347` — the `ContextRequest` is built without `VariableEvents` (347-369), so the unsorted range at `context.go:135` cannot be reached today
-- `internal/service/chat_context.go:310` — `contextText` is memoised per (doc, generation, request) in `chatCtxCache` (310-323)
-- `internal/service/chat_context.go:632` — `PreviewContext` assembles sysPrompt/contextText/userMessage (632-647); no golden covers it over a fixture flow
-- `internal/service/chat.go:1387` — marker mode appends `ToolPromptInstructionsFor` to `base.SystemPrompt` (1387-1394); the combined text is never tested as a whole
-- `core/parser/testdata/samples` — 14 sample flows (`actions_flow.txt` ... `synthetic_10k.txt`); no test under `internal/` reads them, while internal tests parse inline text (`internal/service/analysis_test.go:15`, `internal/api/azure_foundry_e2e_helpers_test.go:451`)
-
-**Change.** Sort the three reachable map ranges in `BuildContext`: `f.Metadata` at `context.go:101` (the live nondeterminism), `block.Properties` at 213 and the summary counts at 351. Either remove the unused `VariableEvents` field or sort it too. Pin determinism with a two-call byte-equality test that calls `BuildContext` directly, or otherwise bypasses `chatCtxCache`, which memoises `contextText` per document, generation and request. The test's selected block should have findings with two or more metadata keys. Then add a request-snapshot golden test in `internal/service`:
-
-- Cover 3-4 corpus flows × gate (chat-only token, chat+write, no applier) × mode (native tools, marker).
-- Run the same assembly path the worker uses.
-- Write the system prompt, the context text, message roles and lengths, and the offered tool names to `testdata/request_snapshots/<flow>_<gate>_<mode>.golden`.
-- Use a fixed token budget and a `FakeProvider` with a fixed `EstimateTokens` so truncation is reproducible.
-- Compare with CRs stripped, and document a refresh flag.
-
-**Touches.** `internal/ai/context.go`, `internal/ai/context_test.go`, `internal/service/chat_context.go`, `internal/service/chat_request_snapshot_test.go`, `internal/service/testdata/request_snapshots/`, `docs/architecture/safety-nets.md`
-
-**Done when.**
-
-- Two consecutive `BuildContext` calls on the same document produce identical bytes (pinned by a test)
-- A golden per flow × gate × mode exists and fails on any change to prompt text, section order, truncation or offered tools
-- The refresh flag is documented in `safety-nets.md`; the comparison strips CRs
 
 ### R-testing-11
 
@@ -212,79 +177,6 @@ The four SSE parsers and `FuzzParsePromptToolCalls` matter most. Their fuzz bodi
 - Six fuzz targets exist and run in the nightly matrix, with their crash corpus uploaded.
 - Each target's seed corpus includes the existing inline SSE fixtures from `claude_replay_test.go`, `openai_sse_test.go`, `stream_test.go` and `responses_replay_test.go`.
 - The invariants above are asserted inside the fuzz body, not just "no panic".
-
-### R-testing-4
-
-**tools.golden pins neither tool descriptions nor input schemas; the system prompt and marker instructions have no golden** · tier 3
-
-**Problem.** No golden pins the prompt-facing text the model reads from Baki: the eight tool descriptions, their JSON input schemas, `SystemPromptDefault` and the `<tool_call>` marker instructions. `tools.golden` has six metadata columns: name, label, timeout, approval, scope and previewKind. The test that writes it never touches `Def.Description` or `Def.InputSchema`. The schema test only checks that each schema is parseable JSON, and `SystemPromptDefault` is asserted only against itself (`sys == SystemPromptDefault`), never against pinned text. A rewording that changes model behaviour therefore ships without a reviewable diff. Examples are dropping "ALWAYS requires explicit user approval" from `apply_fix`, or letting `apply_fixes`' `maxItems` drift away from `maxBatchFixTargets`.
-
-**Evidence.**
-- `internal/ai/tools_spec_test.go:95` — the golden line format is `# name | label | timeout | approval | scope | previewKind` (95-108); Description and InputSchema are never written
-- `internal/ai/testdata/tools.golden:1` — six columns and eight rows, with no description or schema text
-- `internal/ai/tools.go:316` — the `apply_fix` description and schema (316-317); `apply_fixes` (329-330) has `maxItems` 10 in its schema
-- `internal/ai/tools.go:741` — `maxBatchFixTargets = 10` is enforced by hand in `toolApplyFixes` (753-755); nothing ties it to the schema's `maxItems`
-- `internal/ai/tools_test.go:190` — `TestToolDefinitions_StableAndComplete` only `json.Unmarshal`s each schema (190-197)
-- `internal/ai/context_test.go:370` — the system prompt is checked only as `sys != SystemPromptDefault`; the prompt text itself is at `context.go:11-26`
-
-**Change.**
-- Assert that `apply_fixes`' `maxItems` equals `maxBatchFixTargets`. This is the cheapest valuable part.
-- Extend the tools golden with one block per tool: its description text and its canonicalised `InputSchema` (sorted keys, compact JSON). Refresh it with the existing `-update-tools` flag instead of adding a new one.
-- Add `testdata/prompts.golden` holding `SystemPromptDefault`, `ToolPromptInstructionsFor(nil)` and the chat-only-gate variant, refreshed by `-update-prompts`.
-- Add a schema-versus-handler consistency test. For each tool, build an input from the schema's `required` properties and assert that the handler does not return the "required" error. Then drop each required field in turn and assert that it does.
-- List `-update-prompts` in `docs/architecture/safety-nets.md` and `CLAUDE.md`; both already list `-update-tools`.
-
-**Touches.** `internal/ai/tools_spec_test.go`, `internal/ai/testdata/tools.golden`, `internal/ai/testdata/prompts.golden` (new), `internal/ai/tools_test.go`, `internal/ai/context_test.go`, `docs/architecture/safety-nets.md`, `CLAUDE.md`
-
-**Done when.**
-- Changing one character of any tool Description, any InputSchema, `SystemPromptDefault` or the marker instructions fails a golden test with a readable diff.
-- `-update-prompts` is listed in `docs/architecture/safety-nets.md` and `CLAUDE.md`, beside the existing `-update-tools`.
-- A test proves that each tool's schema `required` set matches the fields its handler rejects as missing, and that `apply_fixes`' `maxItems` equals `maxBatchFixTargets`.
-
-### R-testing-5
-
-**testutil.FakeProvider has no failure modes, ignores ctx and the request, and its call counter is unsynchronised; ~34 ad-hoc provider stubs re-implement it per test file** · tier 3
-
-**Problem.** The shared fake can only script text and Done chunks, or fail before any chunk (`Err`). It ignores ctx and the request and never records what it received. It cannot emit:
-- a mid-stream error chunk
-- a retryable, context-limit, tools-unsupported or budget error
-- usage on an error
-- a keepalive or a served model
-- a delay or a blocking turn
-
-`Chat` returns an empty `Response` and `Embed` returns nil vectors. The fake's `calls` counter is read and written without a mutex while the chat worker calls `Stream` on another goroutine. That is a latent hazard, not an existing race: today every `Calls()` reader runs the loop synchronously.
-
-Every failure-mode test therefore writes its own provider type. A grep finds 34 `Stream` implementations across 28 `*_test.go` files under `internal/`. Ten of them are in `package ai`, which cannot import `testutil` because `testutil` imports `internal/ai`. Examples:
-- `itemsProvider` scripts chunks, errors, limit, weights and models, and records requests.
-- `promptLoopProvider` exists only to record requests.
-- `chunkErrProvider` emits one error chunk.
-- Six are hand-rolled ctx-aware blocking wrappers: `parkedProvider`, `cmdProvider`, `blockingProvider`, `xrBlocking`, `blockingStreamProvider` and `untilCancelledProvider`.
-
-**Evidence.**
-- `internal/testutil/provider.go:25` — FakeProvider has the fields Turns, Fallback, Err, Ctx, Tools and calls (25-32); there is no per-turn error, delay or request capture
-- `internal/testutil/provider.go:59` — `Stream(_ context.Context, _ ai.Request, ...)` ignores ctx and req; `Err` fails before any chunk; `i := p.calls; p.calls++` (63-64) has no mutex; only Text/Parts and one Done chunk are scriptable (59-84)
-- `internal/testutil/provider.go:55` — `Chat` returns `&ai.Response{}` (55-57); `Embed` returns `nil, nil` (46)
-- `internal/testutil/provider.go:6` — `testutil` imports `internal/ai`, so `package ai` tests cannot use it
-- `internal/service/chat_test.go:612` — the `Calls()` readers run the loop synchronously (612-702; also `chat_activestream_report_test.go:381-515`)
-- `internal/service/chat_replay_test.go:25` — `itemsProvider` re-implements scripted chunks, errors, limit, weights, models and request recording (25-61)
-- `internal/service/chat_shutdown_test.go:26` — `parkedProvider`, a ctx-aware blocking wrapper (26-50); `cmdProvider` (`chat_commands_test.go:24-29`) and `blockingProvider` (`chat_turn_lifecycle_test.go:452-457`) are two more
-- `internal/di/two_replicas_test.go:66` — `xrBlocking`, another ctx-blocking wrapper; also `internal/api/handlers_chat_activestream_test.go:25` and `internal/app/stop_sequence_test.go:334`
-- `internal/service/chat_errors_test.go:124` — `chunkErrProvider` emits a mid-stream error chunk; `promptLoopProvider` (`chat_prompt_loop_test.go:15-26`) exists only to record requests
-- `internal/service/chat_turn_lifecycle_test.go:496` — `TestStream_LegacyCancelledBeforeBegin_RecordsTerminalState` depends on a fake that ignores ctx (496-500)
-
-**Change.** Narrow the change instead of building one over-general fake:
-- Guard `calls` with a mutex.
-- Add an optional `Requests()` recorder and an opt-in ctx check to `testutil.FakeProvider`. The check is opt-in because `TestStream_LegacyCancelledBeforeBegin_RecordsTerminalState` depends on a fake that ignores ctx.
-- Fold in the stubs that only duplicate the fake: `itemsProvider`'s request recording and `promptLoopProvider`.
-
-Limit the change to stubs outside `internal/ai`. Do not add an archtest ratchet on test-file `Stream` implementations. `internal/archtest` ratchets production layering rules, and a stub that embeds the shared fake to override one method is a legitimate pattern, not drift.
-
-**Touches.** `internal/testutil/provider.go`, `internal/testutil/provider_test.go` (new), `internal/service/chat_replay_test.go`, `internal/service/chat_prompt_loop_test.go`
-
-**Done when.**
-- `FakeProvider` records every `Request`. With its ctx check enabled it returns when the stream's context ends; with the check off, `TestStream_LegacyCancelledBeforeBegin_RecordsTerminalState` still passes.
-- `Calls()` and `Requests()` pass `-race` when read concurrently with `Stream`.
-- `promptLoopProvider` and `itemsProvider`'s request recording are replaced by the shared fake, and no archtest ratchet pins test-file `Stream` implementations.
 
 ### R-testing-9
 
@@ -427,22 +319,3 @@ Add a chat e2e that:
 
 **Done when.**
 - With the offline loader stubbed to fail, `TestTruncateToTokenLimit_PrefixPathIsExact` fails instead of skipping.
-
-### R-testing-19
-
-**tools.golden is compared byte-for-byte while safety-nets.md says every golden strips CR** · tier 3
-
-**Problem.** `TestToolSpecsGolden` compares `string(want) != got` with no CRLF normalisation, unlike `providers.golden` and `metrics.golden`, which strip `\r\n`. The test only passes on Windows because `.gitattributes` forces `.golden` files to LF. An editor or copy that re-ends the file produces a misleading whole-file diff, and the documentation's blanket statement is false for this test.
-
-**Evidence.**
-- `internal/ai/tools_spec_test.go:124` — `if string(want) != got {` with no normalisation
-- `internal/ai/spec_test.go:271` — `strings.ReplaceAll(string(want), "\r\n", "\n")` before comparing `providers.golden`
-- `internal/metrics/metrics_golden_test.go:197` — the same normalisation for `metrics.golden`
-- `docs/architecture/safety-nets.md:3` — "Golden tests compare with CR stripped"
-
-**Change.** Normalise `\r\n` in `TestToolSpecsGolden` the way the other two goldens do. If the tools golden rewrite in [R-testing-4](testing.md#r-testing-4) lands first, fold this into it.
-
-**Touches.** `internal/ai/tools_spec_test.go`
-
-**Done when.**
-- `TestToolSpecsGolden` passes when `testdata/tools.golden` is re-ended CRLF in a temp copy that the test reads.

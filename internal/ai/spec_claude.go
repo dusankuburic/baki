@@ -1,7 +1,6 @@
 package ai
 
-// claudeSpec: Anthropic's Messages API with a bare key; the only provider billing prompt-cache reads and
-// writes at their own rates (cacheReadMultiplier).
+// claudeSpec: Anthropic's Messages API with a bare key.
 var claudeSpec = ProviderSpec{
 	ID:           "claude",
 	Name:         "Claude",
@@ -13,7 +12,6 @@ var claudeSpec = ProviderSpec{
 	Keys:         KeySchema{Primary: "claude"},
 	Catalog:      "claude",
 	DefaultModel: "claude-sonnet-4-6",
-	Pricing:      PricingCatalog,
 	Wire:         WireAnthropic,
 	Ctor:         func(c Credential) Provider { return NewClaudeProvider(c.Key) },
 	Color:        "#d4a574",

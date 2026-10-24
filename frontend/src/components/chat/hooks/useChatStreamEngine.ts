@@ -55,13 +55,12 @@ export function useChatStreamEngine() {
   const cancelRef = useRef<(streamId: string) => void>(() => {})
   const autoResendRef = useRef<(streamId: string) => string | null>(() => null)
 
-  const {onChunk, onReplace, onToolStatus, onToolResult, takeAcc, dropAcc, beginAcc, onAppend, getAccLength} =
+  const {onChunk, onReplace, onToolStatus, onToolResult, onNotice, takeAcc, dropAcc, beginAcc, onAppend, getAccLength} =
     useStreamAccumulators({streamAccRef, teardownRef, updateStream, setStreamMeta, addToolCall})
 
   const {commitAssistantMessage, bumpThreadTokens} = useCommit({toastRef, appendMessage, updateThread})
 
-  const {notifyBudget, onDone, onError} = useStreamEvents({
-    toastRef,
+  const {onDone, onError} = useStreamEvents({
     takeAcc,
     commitAssistantMessage,
     bumpThreadTokens,
@@ -78,6 +77,7 @@ export function useChatStreamEngine() {
     patchFixProposal,
     replaceStreamTools,
     replaceStreamFixes,
+    setStreamMeta,
   })
 
   const onStopUnreachable = useCallback((streamId: string) => offerStopRetry(toastRef.current, streamId), [toastRef])
@@ -90,6 +90,7 @@ export function useChatStreamEngine() {
       onError,
       onToolStatus,
       onToolResult,
+      onNotice,
       onFixProposal,
       onFixDecision,
       onResumeState,
@@ -104,6 +105,7 @@ export function useChatStreamEngine() {
       onError,
       onToolStatus,
       onToolResult,
+      onNotice,
       onFixProposal,
       onFixDecision,
       onResumeState,
@@ -135,7 +137,6 @@ export function useChatStreamEngine() {
     dropAcc,
     beginAcc,
     commitAssistantMessage,
-    notifyBudget,
     startStream,
     endStream,
     updateStream,

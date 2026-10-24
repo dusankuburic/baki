@@ -164,7 +164,6 @@ export default function HomeDashboard() {
     findings,
     isCloud,
     healthTrend,
-    costByProvider,
     ruleFrequency,
     activity,
     complexity,
@@ -217,7 +216,6 @@ export default function HomeDashboard() {
           healthTrend={isCloud ? healthTrend : []}
           severityTrend={isCloud ? severityTrend : []}
           fixability={fixability}
-          costByProvider={isCloud ? costByProvider : []}
           onViewFindings={isCloud ? () => setMainPaneView('portfolio') : undefined}
           onViewFlows={isCloud ? () => setMainPaneView('library') : undefined}
           className="mb-4"
@@ -259,7 +257,6 @@ export default function HomeDashboard() {
               <ChartSlot span="home-span-8" bodyHeight={170}>
                 <AiUsageCard
                   tokens={tokenUsage}
-                  cost={costByProvider}
                   isCloud
                   onDetails={cloudDetails('analytics-ai')}
                   className="home-span-8"

@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	dto "github.com/prometheus/client_model/go"
-
 	"pad-analyzer/internal/metrics"
 )
 
@@ -42,34 +40,5 @@ func TestRecordAITokens_SkipsZero(t *testing.T) {
 	metrics.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
 	if strings.Contains(rr.Body.String(), `provider="zero-test-provider"`) {
 		t.Error("zero token counts should not emit an ai_tokens_total series")
-	}
-}
-
-// TestAIUsageCost_GlobalAndUnlabelled: the cost counter is one global series. A {user_id, org_id} label once made
-// it one permanent series per tenant (aiUsageCostTotal's comment); the recorder is touched first, so the family is
-// present to inspect rather than absent and therefore clean.
-func TestAIUsageCost_GlobalAndUnlabelled(t *testing.T) {
-	recordAIUsageCost(0.01)
-
-	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	var found bool
-	for _, mf := range families {
-		if mf.GetName() == "pad_ai_usage_estimated_cost_total" {
-			found = true
-			if got := mf.GetType(); got != dto.MetricType_COUNTER {
-				t.Errorf("type = %v, want COUNTER", got)
-			}
-			for _, m := range mf.GetMetric() {
-				if len(m.GetLabel()) != 0 {
-					t.Errorf("expected an unlabelled global counter, got labels %v", m.GetLabel())
-				}
-			}
-		}
-	}
-	if !found {
-		t.Error("pad_ai_usage_estimated_cost_total was not gathered")
 	}
 }

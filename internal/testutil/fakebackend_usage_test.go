@@ -15,7 +15,7 @@ func TestFakeBackend_SaveUsageMetricKeepsServedModel(t *testing.T) {
 	be := &FakeBackend{}
 	ctx := context.Background()
 
-	m := interfaces.UsageMetric{ID: "u-1", UserID: "user-1", Provider: "azure-foundry", Model: "model-router", ServedModel: "gpt-4o", PromptTokens: 10, CompletionTokens: 2, EstimatedCost: 0.01}
+	m := interfaces.UsageMetric{ID: "u-1", UserID: "user-1", Provider: "azure-foundry", Model: "model-router", ServedModel: "gpt-4o", PromptTokens: 10, CompletionTokens: 2}
 	if err := be.SaveUsageMetric(ctx, &m); err != nil {
 		t.Fatalf("SaveUsageMetric: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestFakeBackend_SaveUsageMetricKeepsServedModel(t *testing.T) {
 	if got[0].Model != "model-router" || got[0].ServedModel != "gpt-4o" {
 		t.Errorf("row = %+v, want Model=model-router ServedModel=gpt-4o (a copy, not the caller's struct)", got[0])
 	}
-	if got[0].EstimatedCost != 0.01 || got[0].PromptTokens != 10 || got[0].CompletionTokens != 2 {
+	if got[0].PromptTokens != 10 || got[0].CompletionTokens != 2 {
 		t.Errorf("row lost its usage fields: %+v", got[0])
 	}
 }
@@ -68,15 +68,15 @@ func TestFakeBackend_SaveUsageMetricConcurrent(t *testing.T) {
 	}
 }
 
-// DeleteUser keeps the erased user's organisation spend as the organisation's (without the user) and deletes their
-// personal spend, as Postgres's erasure does (lifecycle_users.go).
-func TestFakeBackend_DeleteUserKeepsOrgSpend(t *testing.T) {
+// DeleteUser keeps the erased user's organisation usage as the organisation's (without the user) and deletes their
+// personal usage, as Postgres's erasure does (lifecycle_users.go).
+func TestFakeBackend_DeleteUserKeepsOrgUsage(t *testing.T) {
 	ctx := context.Background()
 	be := NewFakeBackend()
 	for _, m := range []*interfaces.UsageMetric{
-		{ID: "org", UserID: "gone", OrgID: "o1", EstimatedCost: 1.5},
-		{ID: "own", UserID: "gone", EstimatedCost: 0.7},
-		{ID: "other", UserID: "stays", OrgID: "o1", EstimatedCost: 2},
+		{ID: "org", UserID: "gone", OrgID: "o1", PromptTokens: 15},
+		{ID: "own", UserID: "gone", PromptTokens: 7},
+		{ID: "other", UserID: "stays", OrgID: "o1", PromptTokens: 20},
 	} {
 		if err := be.SaveUsageMetric(ctx, m); err != nil {
 			t.Fatal(err)
@@ -91,6 +91,6 @@ func TestFakeBackend_DeleteUserKeepsOrgSpend(t *testing.T) {
 	}
 	want := map[string]string{"org": "|o1", "other": "stays|o1"}
 	if len(got) != len(want) || got["org"] != want["org"] || got["other"] != want["other"] {
-		t.Errorf("usage rows after erasure = %v, want %v (organisation spend kept without the user, personal spend gone)", got, want)
+		t.Errorf("usage rows after erasure = %v, want %v (organisation usage kept without the user, personal usage gone)", got, want)
 	}
 }

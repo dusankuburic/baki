@@ -48,9 +48,9 @@ func (b *txSettingsBackend) commit() {
 	b.mu.Unlock()
 }
 
-func withBudget(budget float64) *models.AppSettings {
+func withMarker(marker int) *models.AppSettings {
 	s := models.DefaultSettings()
-	s.AI.DailyBudget = budget
+	s.Parser.MaxFileSizeMB = marker
 	return s
 }
 
@@ -60,20 +60,20 @@ func withBudget(budget float64) *models.AppSettings {
 func TestSettingsCache_RefreshBeforeCommitIsDroppedAfterIt(t *testing.T) {
 	for _, outcome := range []string{"commit", "rollback"} {
 		t.Run(outcome, func(t *testing.T) {
-			b := &txSettingsBackend{committed: settingsFromModel(withBudget(5))}
+			b := &txSettingsBackend{committed: settingsFromModel(withMarker(5))}
 			p := NewBackendSettingsProvider(context.Background(), b)
 			bus := eventbus.New(nil, 0)
 			SubscribeSettingsCache(bus, p)
 			sys := NewSystemService(p, nil, NilNotifier{}, nil, "cloud", nil, bus)
 
 			ctx, reg := txhook.With(context.Background())
-			if err := sys.UpdateSettings(ctx, *withBudget(100)); err != nil {
+			if err := sys.UpdateSettings(ctx, *withMarker(100)); err != nil {
 				t.Fatal(err)
 			}
-			if got := p.Get().AI.DailyBudget; got != 5 {
+			if got := p.Get().Parser.MaxFileSizeMB; got != 5 {
 				t.Fatalf("read before the commit = %v, want the committed 5", got)
 			}
-			want := 5.0
+			want := 5
 			if outcome == "commit" {
 				b.commit()
 				reg.Commit(nil)
@@ -81,7 +81,7 @@ func TestSettingsCache_RefreshBeforeCommitIsDroppedAfterIt(t *testing.T) {
 			} else {
 				reg.Abort()
 			}
-			if got := p.Get().AI.DailyBudget; got != want {
+			if got := p.Get().Parser.MaxFileSizeMB; got != want {
 				t.Errorf("read after the %s = %v, want %v", outcome, got, want)
 			}
 		})
@@ -91,19 +91,19 @@ func TestSettingsCache_RefreshBeforeCommitIsDroppedAfterIt(t *testing.T) {
 // A refresh that read before an invalidation (a write committed while it was reading) must not cache what it
 // read: the next Get reloads.
 func TestSettingsCache_RefreshRacingAnInvalidationIsNotCached(t *testing.T) {
-	b := &txSettingsBackend{committed: settingsFromModel(withBudget(5))}
+	b := &txSettingsBackend{committed: settingsFromModel(withMarker(5))}
 	p := NewBackendSettingsProvider(context.Background(), b)
 	p.Invalidate()
 	b.onLoad = func() {
 		b.mu.Lock()
-		b.committed = settingsFromModel(withBudget(100))
+		b.committed = settingsFromModel(withMarker(100))
 		b.mu.Unlock()
 		p.Invalidate()
 	}
-	if got := p.Get().AI.DailyBudget; got != 5 {
+	if got := p.Get().Parser.MaxFileSizeMB; got != 5 {
 		t.Fatalf("the racing read = %v, want what it read (5)", got)
 	}
-	if got := p.Get().AI.DailyBudget; got != 100 {
+	if got := p.Get().Parser.MaxFileSizeMB; got != 100 {
 		t.Errorf("after the racing read = %v, want the reload's 100 (the stale read was cached)", got)
 	}
 }

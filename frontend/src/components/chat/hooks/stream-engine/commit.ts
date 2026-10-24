@@ -87,6 +87,8 @@ export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
       if (slot && slot.toolCalls.length > 0) {
         msg.toolCalls = slot.toolCalls.map(tc => ({...tc}))
       }
+      // The omitted-history count stays on the message, so the chip survives a reload.
+      if (slot?.truncated) msg.truncated = slot.truncated
       const fixCards = slot ? slot.approvals.filter(card => card.source === 'fix') : []
       if (fixCards.length > 0) {
         msg.fixProposals = fixCards.map(card => ({

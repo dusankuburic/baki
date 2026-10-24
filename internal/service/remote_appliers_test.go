@@ -18,20 +18,20 @@ import (
 
 func TestSettingsCache_AppliesARemoteInvalidation(t *testing.T) {
 	b := &countingBackend{}
-	storedWithBudget(t, b, 100)
+	storedWithMarker(t, b, 100)
 	p := NewBackendSettingsProvider(context.Background(), b)
 	bus := eventbus.New(nil, time.Second)
 	SubscribeSettingsCache(bus, p)
 
-	storedWithBudget(t, b, 200) // another replica's write
-	if got := p.Get().AI.DailyBudget; got != 100 {
+	storedWithMarker(t, b, 200) // another replica's write
+	if got := p.Get().Parser.MaxFileSizeMB; got != 100 {
 		t.Fatalf("premise: the cached value is served until the TTL, got %v", got)
 	}
 	if !bus.DeliverRemote("settings.deployment", nil) {
 		t.Fatal("no applier for settings.deployment")
 	}
-	if got := p.Get().AI.DailyBudget; got != 200 {
-		t.Errorf("after the remote invalidation DailyBudget = %v, want the other replica's 200", got)
+	if got := p.Get().Parser.MaxFileSizeMB; got != 200 {
+		t.Errorf("after the remote invalidation MaxFileSizeMB = %v, want the other replica's 200", got)
 	}
 }
 

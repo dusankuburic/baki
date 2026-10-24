@@ -260,9 +260,10 @@ export default function AITab() {
         resendDisabledReason={sendBlockedReason}
         highlight={searchQuery || undefined}
         isActiveMatch={i === activeMatchIndex}
+        onCompact={readOnly ? undefined : handleCompact}
       />
     ),
-    [listedModelName, lastAssistantId, handleResend, sendBlockedReason, searchQuery, activeMatchIndex],
+    [listedModelName, lastAssistantId, handleResend, sendBlockedReason, searchQuery, activeMatchIndex, readOnly, handleCompact],
   )
 
   const streamFooter = useStreamFooter({
@@ -482,8 +483,6 @@ export default function AITab() {
               promptTokens={activeThread.tokensIn ?? 0}
               completionTokens={activeThread.tokensOut ?? 0}
               contextLimit={threadModelDetail?.contextLimit || undefined}
-              inputCostPerM={threadModelDetail?.inputCostPerM}
-              outputCostPerM={threadModelDetail?.outputCostPerM}
               guidance={guidance}
             />
           </div>

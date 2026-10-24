@@ -154,9 +154,6 @@ func TestLocalProvider_ListingChatAndNoAuthHeader(t *testing.T) {
 		t.Errorf("models = %+v, want the two chat models only", models)
 	}
 	// Free pricing: the budget meter stays at $0.
-	if p.PricePerMillionTokens() != (Pricing{}) {
-		t.Error("local models must price at zero")
-	}
 	// The document names no model: the listing's first chat model is the
 	// default (the service's chooseDefaultModel).
 	if p.DefaultModel() != "" {

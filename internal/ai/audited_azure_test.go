@@ -61,7 +61,6 @@ func TestAuditedAzure_EmbedThroughFactoryChainRecordsDeploymentUnpriced(t *testi
 			tokens += raw.EstimateTokens(s)
 		}
 		p := f.wrapChain(raw, "u1", azureFoundryProviderID)
-		before := countPricingFallback(t, azureFoundryProviderID, "deployment")
 		if _, err := p.Embed(context.Background(), texts); err != nil {
 			t.Fatalf("%s: Embed: %v", tc.deployment, err)
 		}
@@ -69,14 +68,8 @@ func TestAuditedAzure_EmbedThroughFactoryChainRecordsDeploymentUnpriced(t *testi
 		if m.Model != tc.deployment {
 			t.Errorf("usage model = %q, want the embedding deployment %q", m.Model, tc.deployment)
 		}
-		if m.EstimatedCost != 0 {
-			t.Errorf("%s: cost = %v, want 0 (azure-foundry is unpriced)", tc.deployment, m.EstimatedCost)
-		}
 		if m.PromptTokens != tokens {
 			t.Errorf("%s: prompt tokens = %d, want %d", tc.deployment, m.PromptTokens, tokens)
-		}
-		if fallbacks := countPricingFallback(t, azureFoundryProviderID, "deployment") - before; fallbacks != 0 {
-			t.Errorf("%s: pricing-fallback metric moved by %v, want 0", tc.deployment, fallbacks)
 		}
 	}
 }
@@ -92,7 +85,6 @@ func TestAuditedAzure_FullTurnRecordsTokensAtZeroCost(t *testing.T) {
 		f := &ProviderFactory{recorder: sink.recorder()}
 		raw := newAzureKeyProvider(t, srv, func(c *AzureFoundryConfig) { c.ChatDeployment = "chat" })
 		p := f.wrapChain(raw, "u1", azureFoundryProviderID)
-		before := countPricingFallback(t, azureFoundryProviderID, "deployment")
 
 		resp, err := p.Chat(context.Background(), Request{Model: "chat", Messages: []Message{{Role: "user", Content: "hi"}}})
 		if err != nil {
@@ -105,14 +97,8 @@ func TestAuditedAzure_FullTurnRecordsTokensAtZeroCost(t *testing.T) {
 		if m.PromptTokens != 10 || m.CompletionTokens != 5 {
 			t.Errorf("%s: recorded tokens = %d/%d, want 10/5", served, m.PromptTokens, m.CompletionTokens)
 		}
-		if m.EstimatedCost != 0 {
-			t.Errorf("%s: recorded cost = %v, want 0 (azure-foundry is unpriced)", served, m.EstimatedCost)
-		}
 		if m.Provider != azureFoundryProviderID || m.Model != "chat" || m.ServedModel != served {
 			t.Errorf("%s: recorded row = %+v, want provider/model/served model attributed", served, m)
-		}
-		if after := countPricingFallback(t, azureFoundryProviderID, "deployment"); after != before {
-			t.Errorf("%s: pricing-fallback metric moved by %v, want 0", served, after-before)
 		}
 	}
 }
@@ -152,67 +138,9 @@ func TestAuditedAzure_ServedModelMemoScopedToResource(t *testing.T) {
 		if m.ID != "chat" {
 			continue
 		}
-		if m.ContextLimit != 128000 || m.ServedModel != "" || strings.Contains(m.DisplayName, " · ") || m.Pricing != (Pricing{}) {
+		if m.ContextLimit != 128000 || m.ServedModel != "" || strings.Contains(m.DisplayName, " · ") {
 			t.Errorf("R2's chat inherited R1's mapping: %+v", m)
 		}
-	}
-}
-
-// slowListingEmbedStub embeds instantly but lists models slowly, the Azure
-// cache-miss situation (several serial requests).
-type slowListingEmbedStub struct {
-	embedAuditStub
-	release     chan struct{}
-	listCtxDead atomic.Bool
-}
-
-func (s *slowListingEmbedStub) ID() string { return azureFoundryProviderID }
-func (s *slowListingEmbedStub) Models(ctx context.Context) ([]ModelInfo, error) {
-	select {
-	case <-s.release:
-	case <-time.After(3 * time.Second): // a synchronous caller would wait here
-	}
-	s.listCtxDead.Store(ctx.Err() != nil)
-	return s.models, nil
-}
-
-// Finding #21: pricing an embedding may need the live model listing (for the
-// providers whose listing carries prices; Azure is unpriced and needs none).
-// The per-turn RAG query embeds under an 800 ms budget, so Embed returns as
-// soon as the vectors arrive and prices/records on a detached, bounded
-// context — the caller's cancellation neither delays the call nor cuts the
-// listing.
-func TestAuditedEmbed_PricesOnDetachedContext(t *testing.T) {
-	resetServedModels()
-	stub := &slowListingEmbedStub{
-		embedAuditStub: embedAuditStub{
-			auditStub:  auditStub{models: []ModelInfo{{ID: "emb", Pricing: Pricing{InputCostPerM: 0.5}}}},
-			embedModel: "emb",
-		},
-		release: make(chan struct{}),
-	}
-	sink := newUsageSink()
-	// A priced (non-alias) provider label: only those consult the listing.
-	ap := NewAuditedProvider(stub, sink.recorder(), "u1", "slow-listing")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
-	start := time.Now()
-	if _, err := ap.Embed(ctx, []string{"abcdefgh"}); err != nil {
-		t.Fatalf("Embed: %v", err)
-	}
-	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
-		t.Errorf("Embed blocked %v on the model listing", elapsed)
-	}
-	if ctx.Err() != nil {
-		t.Error("the caller's budget was spent inside Embed")
-	}
-	cancel() // the RAG turn moves on (or ends) before pricing finishes
-	close(stub.release)
-
-	m := sink.next(t)
-	assertCost(t, "detached embedding record", m.EstimatedCost, costOf(2, 0, Pricing{InputCostPerM: 0.5}))
-	if stub.listCtxDead.Load() {
-		t.Error("the listing ran on the caller's cancelled context")
 	}
 }
 
@@ -220,7 +148,7 @@ func TestAuditedEmbed_PricesOnDetachedContext(t *testing.T) {
 // recorder frees its slot and never takes the process down.
 func TestAuditedEmbed_DetachedRecordRecoversAndFreesSlot(t *testing.T) {
 	stub := &embedAuditStub{
-		auditStub:  auditStub{models: []ModelInfo{{ID: "emb", Pricing: Pricing{InputCostPerM: 1}}}},
+		auditStub:  auditStub{models: []ModelInfo{{ID: "emb"}}},
 		embedModel: "emb",
 	}
 	var calls atomic.Int32

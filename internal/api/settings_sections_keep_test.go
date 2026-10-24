@@ -78,6 +78,7 @@ func TestSettingsWrite_AbsentSectionKeepsItsStoredValue(t *testing.T) {
 			}
 			profile := models.ProfileSettings{Bio: "Automates invoices", JobTitle: "RPA developer", Timezone: "Europe/Belgrade"}
 			doc := models.DefaultSettings()
+			doc.AI.SystemPromptSuffix = "Keep this."
 			doc.Profile = profile
 			doc.Layout.SidebarWidth = 333
 			post(doc)
@@ -96,8 +97,8 @@ func TestSettingsWrite_AbsentSectionKeepsItsStoredValue(t *testing.T) {
 			// A body naming one section leaves every other one as stored.
 			post(map[string]any{"layout": map[string]any{"sidebarWidth": 290}})
 			got = get()
-			if got.Profile != profile || got.Appearance.Theme != "light" || got.Layout.SidebarWidth != 290 || got.AI.DailyBudget != doc.AI.DailyBudget {
-				t.Errorf("after a layout-only write: profile %+v, theme %q, sidebar %d, budget %v", got.Profile, got.Appearance.Theme, got.Layout.SidebarWidth, got.AI.DailyBudget)
+			if got.Profile != profile || got.Appearance.Theme != "light" || got.Layout.SidebarWidth != 290 || got.AI.SystemPromptSuffix != doc.AI.SystemPromptSuffix {
+				t.Errorf("after a layout-only write: profile %+v, theme %q, sidebar %d, suffix %q", got.Profile, got.Appearance.Theme, got.Layout.SidebarWidth, got.AI.SystemPromptSuffix)
 			}
 			post(map[string]any{})
 			if again := get(); again.Profile != profile || again.Layout.SidebarWidth != 290 {
@@ -131,14 +132,14 @@ func TestOrgSettingsWrite_AbsentSectionKeepsItsStoredValue(t *testing.T) {
 		checkStatus(t, doRequestWithAuth(t, rt, http.MethodPost, "/api/system/settings/org/"+orgID, bearer, body), http.StatusOK)
 	}
 
-	post(map[string]any{"ai": map[string]any{"dailyBudget": 42, "showCostEstimates": true}, "parser": map[string]any{"maxFileSizeMB": 7}})
+	post(map[string]any{"ai": map[string]any{"systemPromptSuffix": "Be brief.", "saveConversationHistory": true}, "parser": map[string]any{"maxFileSizeMB": 7}})
 	post(map[string]any{"analysis": map[string]any{"rules": map[string]any{"dead-code": map[string]any{"enabled": false, "severity": "info"}}}})
 
 	rr := doRequestWithAuth(t, rt, http.MethodGet, "/api/system/settings/org/"+orgID, bearer, nil)
 	checkStatus(t, rr, http.StatusOK)
 	var got models.AppSettings
 	decodeJSON(t, rr, &got)
-	if got.AI.DailyBudget != 42 || !got.AI.ShowCostEstimates || got.Parser.MaxFileSizeMB != 7 {
+	if got.AI.SystemPromptSuffix != "Be brief." || !got.AI.SaveConversationHistory || got.Parser.MaxFileSizeMB != 7 {
 		t.Errorf("a rules-only write wiped the other sections: ai %+v, parser %+v", got.AI, got.Parser)
 	}
 	if rule, ok := got.Analysis.Rules["dead-code"]; !ok || rule.Enabled {

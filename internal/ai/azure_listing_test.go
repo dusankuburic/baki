@@ -67,7 +67,7 @@ func TestAzureFoundry_ModelsIncludeProjectDeploymentsAndAgents(t *testing.T) {
 	if got := strings.Join(ids, ","); got != "chat1,emb1,extra,vec,agent:Helper,agent:Second" {
 		t.Errorf("listing = %s, want the document's deployments, the project's others in listing order, then the agents", got)
 	}
-	if m := byID["chat1"]; m.DisplayName != "chat1 · gpt-4o" || m.Pricing != (Pricing{}) || m.ServedModel != "gpt-4o" || m.Embedding {
+	if m := byID["chat1"]; m.DisplayName != "chat1 · gpt-4o" || m.ServedModel != "gpt-4o" || m.Embedding {
 		t.Errorf("chat1 = %+v", m)
 	}
 	if m := byID["emb1"]; !m.Embedding || m.ServedModel != "text-embedding-3-small" {
@@ -79,7 +79,7 @@ func TestAzureFoundry_ModelsIncludeProjectDeploymentsAndAgents(t *testing.T) {
 	if m := byID["vec"]; !m.Embedding {
 		t.Errorf("project deployment whose capabilities say embeddings = %+v, want the embedding flag", m)
 	}
-	if m := byID["agent:Helper"]; m.DisplayName != "Agent · Helper · gpt-4.1" || m.ServedModel != "gpt-4.1" || m.Pricing != (Pricing{}) {
+	if m := byID["agent:Helper"]; m.DisplayName != "Agent · Helper · gpt-4.1" || m.ServedModel != "gpt-4.1" {
 		t.Errorf("agent entry = %+v", m)
 	}
 
@@ -581,13 +581,13 @@ func TestAzureFoundry_AgentOnCustomDeploymentResolvesItsModel(t *testing.T) {
 		byID[m.ID] = m
 	}
 	if m := byID["agent:triage"]; m.ServedModel != "gpt-4.1" || m.ContextLimit != 1047576 || m.MaxOutputTokens != 32768 ||
-		m.Pricing != (Pricing{}) || m.DisplayName != "Agent · triage · gpt-4.1" {
+		m.DisplayName != "Agent · triage · gpt-4.1" {
 		t.Errorf("agent on a custom-named deployment = %+v, want the deployment's model", m)
 	}
 	if m := byID["agent:named"]; m.ServedModel != "Phi-4" || m.ContextLimit != 16384 {
 		t.Errorf("agent on a catalogued deployment name = %+v", m)
 	}
-	if m := byID["agent:mystery"]; m.ServedModel != "" || m.Pricing != (Pricing{}) || m.ContextLimit != p.ContextLimit() || m.DisplayName != "Agent · mystery" {
+	if m := byID["agent:mystery"]; m.ServedModel != "" || m.ContextLimit != p.ContextLimit() || m.DisplayName != "Agent · mystery" {
 		t.Errorf("agent on an unknown deployment = %+v, want an empty served model for the memo to fill", m)
 	}
 

@@ -15,7 +15,7 @@ type DashboardStore interface {
 	// LoadFlowHealthBatch resolves many flows' snapshots in one query; map omits never-analyzed flows, never nil; caller-side authorization. Also the portfolio read: a snapshot carries its rule set's digest only.
 	LoadFlowHealthBatch(ctx context.Context, flowIDs []string) (map[string]*HealthSnapshot, error)
 	FlowDashboardData(ctx context.Context, ownerID string, days int) (*DashboardData, error)
-	// FlowDashboardAdvanced returns trend, cost-by-provider, rule-frequency, activity, complexity-scatter, and security-posture data.
+	// FlowDashboardAdvanced returns trend, rule-frequency, activity, complexity-scatter, and security-posture data.
 	FlowDashboardAdvanced(ctx context.Context, ownerID string, days int) (*DashboardAdvancedData, error)
 
 	// Analytics reads (GET /api/dashboard/analytics); the service authorises the flow id set.
@@ -111,10 +111,9 @@ type HealthBucket struct {
 	Count int
 }
 
-// DashboardAdvancedData extends DashboardData with trend, cost, rule, activity, complexity, and security sections.
+// DashboardAdvancedData extends DashboardData with trend, rule, activity, complexity, and security sections.
 type DashboardAdvancedData struct {
 	HealthTrend []DailyHealthPoint
-	CostByProv  []ProviderCost
 	RuleFreq    []RuleFrequency
 	Activity    []ActivityEntry
 	Complexity  []FlowComplexityPoint
@@ -140,10 +139,9 @@ type DailyHealthPoint struct {
 	FlowCount int
 }
 
-// ProviderCost aggregates AI spend by provider for the donut chart.
-type ProviderCost struct {
+// ProviderUsage aggregates AI token usage by provider.
+type ProviderUsage struct {
 	Provider  string
-	Cost      float64
 	TokensIn  int
 	TokensOut int
 }

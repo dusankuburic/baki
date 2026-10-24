@@ -30,7 +30,7 @@ type prev0043Snapshot struct {
 func TestNewRelease_SnapshotIsStillReadByRelease0043(t *testing.T) {
 	c := redisreplica.New(t, 1)
 	st := redisResumeStore{c: c.Replicas[0].Client, instance: "replica-7"}
-	want := resumeSnapshot{Owner: "u1", Text: "héllo", TokensIn: 3, TokensOut: 4, ServedModel: "m", InputCostPerM: 1.5}
+	want := resumeSnapshot{Owner: "u1", Text: "héllo", TokensIn: 3, TokensOut: 4, ServedModel: "m"}
 	if !st.Save(context.Background(), "s1", want, resumeRetention) {
 		t.Fatal("Save failed")
 	}
@@ -49,7 +49,7 @@ func TestNewRelease_SnapshotIsStillReadByRelease0043(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &old); err != nil {
 		t.Fatalf("release 0043 cannot decode the new snapshot: %v", err)
 	}
-	if old.Owner != "u1" || old.Text != "héllo" || old.TokensIn != 3 || old.TokensOut != 4 || old.ServedModel != "m" || old.InputCostPerM != 1.5 {
+	if old.Owner != "u1" || old.Text != "héllo" || old.TokensIn != 3 || old.TokensOut != 4 || old.ServedModel != "m" {
 		t.Errorf("release 0043 read %+v, want the fields intact", old)
 	}
 }

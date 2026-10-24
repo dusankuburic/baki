@@ -71,7 +71,7 @@ func getDeploymentAISettings(t *testing.T, rt *Router, bearer string) service.De
 
 // TestDeploymentAISettings_Routes pins the admin AI settings contract: a member is refused, a refused value
 // answers 400 naming the field, a write answers with the values it wrote (which the next read serves) and records
-// an audit row that says what the deployment's limits became. On the fake backend, through both settings stores.
+// an audit row that says what the deployment's values became. On the fake backend, through both settings stores.
 func TestDeploymentAISettings_Routes(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -83,7 +83,7 @@ func TestDeploymentAISettings_Routes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := tc.rt(t)
 			admin, member := adminAndMember(t, rt)
-			in := service.DeploymentAISettings{DailyBudget: 200, PerUserDailyBudget: 20, EmbeddingProvider: "gemini", EmbeddingModel: "text-embedding-004"}
+			in := service.DeploymentAISettings{EmbeddingProvider: "gemini", EmbeddingModel: "text-embedding-004"}
 
 			checkStatus(t, doRequestWithAuth(t, rt, http.MethodGet, deploymentAISettingsPath, member, nil), http.StatusForbidden)
 			checkStatus(t, doRequestWithAuth(t, rt, http.MethodPut, deploymentAISettingsPath, member, in), http.StatusForbidden)
@@ -93,8 +93,6 @@ func TestDeploymentAISettings_Routes(t *testing.T) {
 				body service.DeploymentAISettings
 				want string
 			}{
-				{service.DeploymentAISettings{DailyBudget: -1}, "ai.dailyBudget"},
-				{service.DeploymentAISettings{PerUserDailyBudget: -1}, "ai.perUserDailyBudget"},
 				{service.DeploymentAISettings{EmbeddingProvider: "claude"}, "ai.embeddingProvider"},
 				{service.DeploymentAISettings{EmbeddingProvider: "azure-foundry"}, "PAD_EMBEDDING_PROVIDER=azure-foundry"},
 				{service.DeploymentAISettings{EmbeddingModel: strings.Repeat("m", 201)}, "ai.embeddingModel"},
@@ -122,9 +120,8 @@ func TestDeploymentAISettings_Routes(t *testing.T) {
 			}
 			ev := nextAuditEvent(t, ch)
 			if ev.ResourceType != "settings" || ev.ResourceID != "deployment" || ev.UserID != "ai-admin" ||
-				ev.Meta["dailyBudget"] != "200" || ev.Meta["perUserDailyBudget"] != "20" ||
 				ev.Meta["embeddingProvider"] != "gemini" || ev.Meta["embeddingModel"] != "text-embedding-004" {
-				t.Errorf("audit row = %+v, want settings/deployment by ai-admin with the four written values in meta", ev)
+				t.Errorf("audit row = %+v, want settings/deployment by ai-admin with the written values in meta", ev)
 			}
 		})
 	}
@@ -144,7 +141,7 @@ func TestDeploymentAISettings_PutAnswersWithTheWrite_Postgres(t *testing.T) {
 	admin, _ := adminAndMember(t, rt)
 
 	before := getDeploymentAISettings(t, rt, admin)
-	in := service.DeploymentAISettings{DailyBudget: before.DailyBudget + 150, PerUserDailyBudget: 20, EmbeddingProvider: "gemini", EmbeddingModel: "text-embedding-004"}
+	in := service.DeploymentAISettings{EmbeddingProvider: "gemini", EmbeddingModel: before.EmbeddingModel + "-next"}
 	rr := doRequestWithAuth(t, rt, http.MethodPut, deploymentAISettingsPath, admin, in)
 	checkStatus(t, rr, http.StatusOK)
 	var got service.DeploymentAISettings

@@ -55,6 +55,8 @@ go test ./internal/metrics/ -run TestMetricsGolden -update-metrics
 go test ./internal/lifecycle/ -run TestJobRegistry_Golden -update-jobs
 go test ./internal/ai/ -run TestProviderSpecs_Golden -update-provider-specs
 go test ./internal/ai/ -run TestToolSpecsGolden -update-tools
+go test ./internal/ai/ -run TestPromptsGolden -update-prompts
+go test ./internal/service/ -run TestRequestSnapshots_Golden -update-request-snapshots
 ```
 
 ## Windows checkouts

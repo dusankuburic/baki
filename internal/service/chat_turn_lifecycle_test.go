@@ -4,15 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/rag"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/testutil"
 	"pad-core/models"
@@ -50,190 +47,11 @@ func keyedFactory() *ai.ProviderFactory {
 
 // --- D-3: orgID is fixed before the control is published ------------------------
 
-// The control is stored in activeStreams before the worker runs; another
-// stream's budget check reads orgID from it lock-free, so it must be set at
-// construction — a late write from the worker was a data race.
-func TestStreamChatMessage_OrgIDVisibleBeforeWorkerRuns(t *testing.T) {
-	release := make(chan struct{})
-	factory := ai.NewProviderFactory(func(_, _ string) (string, error) {
-		<-release
-		return "", fmt.Errorf("test: provider released")
-	}, nil, nil, nil)
-	svc := &ChatService{notifier: &testutil.CountingNotifier{}, flowCache: &FlowService{}, analysisCache: &AnalysisService{}, factory: factory}
-	doc := &models.FlowDocument{ID: "f1", OrganizationID: "org-1"}
-
-	id, err := svc.StreamChatMessage(context.Background(), "u1", doc, nil, models.ChatRequest{Provider: "claude"})
-	if err != nil {
-		t.Fatalf("StreamChatMessage: %v", err)
-	}
-	v, ok := svc.activeStreams.Load(id)
-	if !ok {
-		t.Fatal("stream not in activeStreams")
-	}
-	if got := v.(*streamCtl).orgID; got != "org-1" {
-		t.Errorf("orgID at publication = %q, want org-1 (set from the flow document at construction)", got)
-	}
-	close(release)
-	waitStreamFinished(t, svc, id)
-
-	// Second half (meaningful under -race): a concurrent budget check reads
-	// every active stream's orgID while a stream runs end to end.
-	registerFakeProvider()
-	raced := &ChatService{
-		notifier: &testutil.CountingNotifier{}, configDir: t.TempDir(), flowCache: &FlowService{}, analysisCache: &AnalysisService{},
-		factory: keyedFactory(), settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 1}}},
-		backend: testutil.NewFakeBackend(), chatCtxCache: newChatContextCache(),
-	}
-	stop := make(chan struct{})
-	checked := make(chan struct{})
-	go func() {
-		defer close(checked)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-				_ = raced.enforceBudget(context.Background(), "other", "org-1", 0, nil)
-			}
-		}
-	}()
-	id2, err := raced.StreamChatMessage(context.Background(), "u1", doc, nil, models.ChatRequest{Provider: "fake", Model: "fake-model", UserMessage: "hi", ClientStreamID: "12345678-1234-5678-1234-567812345678"})
-	if err != nil {
-		t.Fatalf("StreamChatMessage: %v", err)
-	}
-	ctl := waitStreamFinished(t, raced, id2)
-	close(stop)
-	<-checked
-	if snap := ctl.snapshot(); !snap.Done {
-		t.Errorf("stream did not complete: %+v", snap)
-	}
-}
-
 // --- D-21: the reservation is published before the turn-start budget check ------
-
-// blockingUsageStore parks GetDailyUsage until released, so the window in
-// which the turn-start budget check runs can be observed.
-type blockingUsageStore struct {
-	*testutil.FakeBackend
-	entered chan struct{}
-	release chan struct{}
-	once    atomic.Bool
-}
-
-func (b *blockingUsageStore) GetDailyUsage(ctx context.Context, scope, orgID string) (float64, error) {
-	if b.once.CompareAndSwap(false, true) {
-		close(b.entered)
-		select {
-		case <-b.release:
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		}
-	}
-	return b.FakeBackend.GetDailyUsage(ctx, scope, orgID)
-}
-
-// pricedFakeProvider is a scripted provider with a real provider-wide rate
-// (the shared fake is $0, which reserves nothing by design).
-type pricedFakeProvider struct{ *testutil.FakeProvider }
-
-func (p *pricedFakeProvider) ID() string { return "priced-fake" }
-func (p *pricedFakeProvider) PricePerMillionTokens() ai.Pricing {
-	return ai.Pricing{InputCostPerM: 2.5, OutputCostPerM: 10}
-}
-
-func TestPrepareTurn_ReservesBeforeBudgetCheck(t *testing.T) {
-	ai.RegisterProvider("priced-fake", func(string) ai.Provider {
-		return &pricedFakeProvider{FakeProvider: &testutil.FakeProvider{Turns: []testutil.FakeTurn{{Text: "ok", TokensIn: 1, TokensOut: 1}}}}
-	})
-	store := &blockingUsageStore{FakeBackend: testutil.NewFakeBackend(), entered: make(chan struct{}), release: make(chan struct{})}
-	svc := &ChatService{
-		notifier: &testutil.CountingNotifier{}, configDir: t.TempDir(), flowCache: &FlowService{}, analysisCache: &AnalysisService{},
-		factory: keyedFactory(), settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 1}}},
-		backend: store, chatCtxCache: newChatContextCache(),
-	}
-	doc := &models.FlowDocument{ID: "f1"}
-	id, err := svc.StreamChatMessage(context.Background(), "u1", doc, nil, models.ChatRequest{Provider: "priced-fake", Model: "fake-model", UserMessage: "hi", ClientStreamID: "12345678-1234-5678-1234-567812345679"})
-	if err != nil {
-		t.Fatalf("StreamChatMessage: %v", err)
-	}
-	select {
-	case <-store.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the budget check never read the store")
-	}
-	v, ok := svc.activeStreams.Load(id)
-	if !ok {
-		t.Fatal("stream not in activeStreams while its budget check runs")
-	}
-	if got := v.(*streamCtl).inflight(); got <= 0 {
-		t.Errorf("in-flight reservation during the turn-start budget check = %v, want > 0 (published BEFORE the check so overlapping starts see it)", got)
-	}
-	close(store.release)
-	if snap := waitStreamFinished(t, svc, id).snapshot(); !snap.Done {
-		t.Errorf("stream did not complete: %+v", snap)
-	}
-}
 
 // --- D-22: a refused turn never starts the (billed) RAG embedding ----------------
 
-func TestPrepareTurn_BudgetRefusalSkipsRAG(t *testing.T) {
-	registerFakeProvider()
-	calls := 0
-	backend := &memberBackend{FakeBackend: testutil.FakeBackend{DailyUsage: 5}}
-	svc := &ChatService{
-		factory:   keyedFactory(),
-		settings:  &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 1}}},
-		backend:   backend,
-		knowledge: rag.NewKnowledgeService(nil, recordingKeyFactory(map[string]bool{"openai": true}, &calls), nil),
-	}
-	doc := &models.FlowDocument{ID: "f1", OrganizationID: "org-A"}
-	ctl := &streamCtl{ownerID: "user-1", orgID: "org-A"}
-	ts, err := svc.prepareTurn(context.Background(), "user-1", doc, models.ChatRequest{Provider: "fake", UserMessage: "question"}, nil, ctl)
-	if !errors.Is(err, ErrAIBudgetExceeded) {
-		t.Fatalf("prepareTurn error = %v, want ErrAIBudgetExceeded", err)
-	}
-	if ts.ragDone != nil {
-		t.Error("a refused turn must not have started the RAG lookup")
-	}
-	time.Sleep(50 * time.Millisecond) // a goroutine started before the gate would resolve the embedder by now
-	if calls != 0 {
-		t.Errorf("embedder resolved %d times for a refused turn — the RAG lookup ran before the budget gate", calls)
-	}
-}
-
 // --- D-38: an alias provider reserves nothing, whatever it reports -------------
-
-// reservationPricerProvider is an alias provider that also implements
-// ai.ReservationPricer, as the audited wrapper does.
-type reservationPricerProvider struct {
-	*aliasPricedProvider
-	reservation ai.Pricing
-}
-
-func (p *reservationPricerProvider) ReservationPricing(context.Context, string) ai.Pricing {
-	return p.reservation
-}
-
-func TestInFlightPricing_AliasIgnoresListingAndReservationPricer(t *testing.T) {
-	listing := ai.Pricing{InputCostPerM: 0.05, OutputCostPerM: 0.4} // a router's memo of its last routed model
-	sentinel := ai.Pricing{InputCostPerM: 3, OutputCostPerM: 15}
-	p := &reservationPricerProvider{
-		aliasPricedProvider: &aliasPricedProvider{FakeProvider: &testutil.FakeProvider{}, id: ai.AzureFoundryProviderID,
-			listing: []ai.ModelInfo{{ID: "model-router", Pricing: listing}}},
-		reservation: sentinel,
-	}
-	if got := inFlightPricing(context.Background(), p, "model-router"); got != (ai.Pricing{}) {
-		t.Errorf("inFlightPricing = %+v, want no reservation for the unpriced alias provider", got)
-	}
-	// A non-alias provider never consults the interface.
-	other := &reservationPricerProvider{
-		aliasPricedProvider: &aliasPricedProvider{FakeProvider: &testutil.FakeProvider{}, id: "openai", price: ai.Pricing{InputCostPerM: 2.5, OutputCostPerM: 10}},
-		reservation:         sentinel,
-	}
-	if got := inFlightPricing(context.Background(), other, "gpt-4o"); got != other.price {
-		t.Errorf("non-alias provider reserves at %+v, want its provider-wide rate", got)
-	}
-}
 
 // --- D-2: truncation pins the CURRENT turn ---------------------------------------
 
@@ -522,20 +340,15 @@ func TestStream_LegacyCancelledBeforeBegin_RecordsTerminalState(t *testing.T) {
 
 // --- D-13: the done payload carries the served model and its rate -----------------
 
-// servedFakeProvider is a provider whose terminal chunk names the model that
-// answered and which carries a provider-wide rate. The factory wraps it in
-// the audited wrapper — the ai.UsagePricer the done payload consults — which
-// prices a non-alias provider by that rate.
+// servedFakeProvider is a provider whose terminal chunk names the model that answered.
 type servedFakeProvider struct {
 	*testutil.FakeProvider
 	served string
-	rate   ai.Pricing
 	tools  bool
 }
 
-func (p *servedFakeProvider) ID() string                        { return "served-fake" }
-func (p *servedFakeProvider) SupportsTools() bool               { return p.tools }
-func (p *servedFakeProvider) PricePerMillionTokens() ai.Pricing { return p.rate }
+func (p *servedFakeProvider) ID() string          { return "served-fake" }
+func (p *servedFakeProvider) SupportsTools() bool { return p.tools }
 func (p *servedFakeProvider) Stream(ctx context.Context, req ai.Request, onChunk func(ai.Chunk)) error {
 	return p.FakeProvider.Stream(ctx, req, func(c ai.Chunk) {
 		if c.Done {
@@ -545,7 +358,7 @@ func (p *servedFakeProvider) Stream(ctx context.Context, req ai.Request, onChunk
 	})
 }
 
-func TestStreamChatMessage_DonePayloadCarriesServedModelAndRate(t *testing.T) {
+func TestStreamChatMessage_DonePayloadCarriesServedModel(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		useTools bool
@@ -553,7 +366,7 @@ func TestStreamChatMessage_DonePayloadCarriesServedModelAndRate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &servedFakeProvider{
 				FakeProvider: &testutil.FakeProvider{Turns: []testutil.FakeTurn{{Text: "answer", TokensIn: 7, TokensOut: 3}}},
-				served:       "gpt-4o-2024-11-20", rate: ai.Pricing{InputCostPerM: 2.5, OutputCostPerM: 10}, tools: tc.useTools,
+				served:       "gpt-4o-2024-11-20", tools: tc.useTools,
 			}
 			ai.RegisterProvider("served-fake", func(string) ai.Provider { return p })
 			notifier := &testutil.CountingNotifier{}
@@ -577,8 +390,13 @@ func TestStreamChatMessage_DonePayloadCarriesServedModelAndRate(t *testing.T) {
 			if done == nil {
 				t.Fatalf("no done event: %v", types)
 			}
-			if done["servedModel"] != "gpt-4o-2024-11-20" || done["inputCostPerM"] != 2.5 || done["outputCostPerM"] != 10.0 {
-				t.Errorf("done payload = %v, want servedModel gpt-4o-2024-11-20 with rates 2.5 / 10", done)
+			if done["servedModel"] != "gpt-4o-2024-11-20" || done["tokensIn"] != 7 || done["tokensOut"] != 3 {
+				t.Errorf("done payload = %v, want servedModel gpt-4o-2024-11-20 with 7/3 tokens", done)
+			}
+			for _, key := range []string{"inputCostPerM", "outputCostPerM", "cost"} {
+				if _, ok := done[key]; ok {
+					t.Errorf("done payload carries %s: %v", key, done)
+				}
 			}
 			if snap := ctl.snapshot(); snap.ServedModel != "gpt-4o-2024-11-20" {
 				t.Errorf("snapshot.ServedModel = %q", snap.ServedModel)
@@ -589,13 +407,10 @@ func TestStreamChatMessage_DonePayloadCarriesServedModelAndRate(t *testing.T) {
 			}
 		})
 	}
-	// A bare provider (no UsagePricer, no served model) keeps the plain payload.
-	plain := doneEventData(context.Background(), &testutil.FakeProvider{}, "m", "", 1, 2, 3)
+	// A provider that names no served model keeps the plain payload.
+	plain := doneEventData("", 1, 2, 3)
 	if _, ok := plain["servedModel"]; ok {
 		t.Error("servedModel must be omitted when the provider named none")
-	}
-	if _, ok := plain["inputCostPerM"]; ok {
-		t.Error("rates must be omitted when the provider cannot price the turn")
 	}
 }
 

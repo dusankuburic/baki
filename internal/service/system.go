@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"reflect"
 	"runtime"
 	"strings"
@@ -199,9 +198,6 @@ func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, s
 	if sections != nil {
 		sections.keepUnnamed(&settings, storedModel)
 	}
-	// The budgets are enforced from the deployment document alone (UpdateDeploymentAISettings): a member's write
-	// leaves the ones their own document carries as they are, so nothing they send reads as a personal limit.
-	settings.AI.DailyBudget, settings.AI.PerUserDailyBudget = storedModel.AI.DailyBudget, storedModel.AI.PerUserDailyBudget
 	if err := s.backend.SaveUserSettings(ctx, userID, settingsFromModel(&settings)); err != nil {
 		return err
 	}
@@ -210,19 +206,17 @@ func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, s
 	return nil
 }
 
-// DeploymentAISettings is the deployment-wide part of the ai section: what the budget gate enforces and the
-// embedding choice every knowledge base shares. It has one writer, the deployment's admin.
+// DeploymentAISettings is the deployment-wide part of the ai section: the embedding choice every knowledge base
+// shares. It has one writer, the deployment's admin.
 type DeploymentAISettings struct {
-	DailyBudget        float64 `json:"dailyBudget"`
-	PerUserDailyBudget float64 `json:"perUserDailyBudget"`
-	EmbeddingProvider  string  `json:"embeddingProvider"`
-	EmbeddingModel     string  `json:"embeddingModel"`
+	EmbeddingProvider string `json:"embeddingProvider"`
+	EmbeddingModel    string `json:"embeddingModel"`
 }
 
 // maxEmbeddingModelChars bounds the embedding model id an admin can store.
 const maxEmbeddingModelChars = 200
 
-// GetDeploymentAISettings returns the enforced values, as the budget gate reads them.
+// GetDeploymentAISettings returns the deployment-wide ai values.
 func (s *SystemService) GetDeploymentAISettings(ctx context.Context) (out DeploymentAISettings, err error) {
 	defer logger.Guard("SystemService.GetDeploymentAISettings", &err)
 	settings, err := s.GetSettings(ctx)
@@ -233,7 +227,7 @@ func (s *SystemService) GetDeploymentAISettings(ctx context.Context) (out Deploy
 }
 
 // UpdateDeploymentAISettings writes the deployment-wide ai values and announces the change, so every replica's
-// budget gate compares against them next. Only these fields move: the document is re-read before the write. It
+// knowledge base embeds with them next. Only these fields move: the document is re-read before the write. It
 // answers with the values as written, never with a re-read: in cloud the write sits in the request's transaction
 // until the response, and the provider's cache refreshes outside it, where the row is still the old one.
 func (s *SystemService) UpdateDeploymentAISettings(ctx context.Context, in DeploymentAISettings) (written DeploymentAISettings, err error) {
@@ -245,8 +239,6 @@ func (s *SystemService) UpdateDeploymentAISettings(ctx context.Context, in Deplo
 		return DeploymentAISettings{}, err
 	}
 	err = updateSettingsWith(ctx, s.settings, func(settings *models.AppSettings) error {
-		settings.AI.DailyBudget = in.DailyBudget
-		settings.AI.PerUserDailyBudget = in.PerUserDailyBudget
 		settings.AI.EmbeddingProvider = in.EmbeddingProvider
 		settings.AI.EmbeddingModel = in.EmbeddingModel
 		written = deploymentAISettingsOf(settings)
@@ -262,24 +254,17 @@ func (s *SystemService) UpdateDeploymentAISettings(ctx context.Context, in Deplo
 // deploymentAISettingsOf is the deployment-wide part of settings' ai section.
 func deploymentAISettingsOf(settings *models.AppSettings) DeploymentAISettings {
 	return DeploymentAISettings{
-		DailyBudget:        settings.AI.DailyBudget,
-		PerUserDailyBudget: settings.AI.PerUserDailyBudget,
-		EmbeddingProvider:  settings.AI.EmbeddingProvider,
-		EmbeddingModel:     settings.AI.EmbeddingModel,
+		EmbeddingProvider: settings.AI.EmbeddingProvider,
+		EmbeddingModel:    settings.AI.EmbeddingModel,
 	}
 }
 
-// validateDeploymentAISettings refuses what the gate or the knowledge indexer could not use: a negative or
-// non-finite budget, an embedding provider no spec describes or that cannot embed, an oversized model id. A
+// validateDeploymentAISettings refuses what the knowledge indexer could not use: an embedding provider no spec
+// describes or that cannot embed, an oversized model id. A
 // provider whose model ids are deployment aliases (ai.CapModelAliases, Azure AI Foundry) embeds the knowledge base
 // only on the operator's PAD_EMBEDDING_PROVIDER pin, which no settings write sets: stored here it would answer
 // 200 and fail every index and query after.
 func validateDeploymentAISettings(in DeploymentAISettings) error {
-	for name, v := range map[string]float64{"dailyBudget": in.DailyBudget, "perUserDailyBudget": in.PerUserDailyBudget} {
-		if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
-			return fmt.Errorf("%w: ai.%s must be a non-negative amount (0 = unlimited)", ErrSettingsInvalid, name)
-		}
-	}
 	if in.EmbeddingProvider != "" && !ai.SupportsEmbeddings(in.EmbeddingProvider) {
 		return fmt.Errorf("%w: ai.embeddingProvider %q is not a provider that can embed", ErrSettingsInvalid, in.EmbeddingProvider)
 	}

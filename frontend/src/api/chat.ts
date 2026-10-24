@@ -44,8 +44,6 @@ export interface BeginStreamResult {
   tokensIn?: number
   tokensOut?: number
   servedModel?: string
-  inputCostPerM?: number
-  outputCostPerM?: number
 }
 
 // A stop that landed on a server other than the one running the stream is relayed to it; when that fails (503
@@ -101,8 +99,6 @@ export const chatApi = {
     tokensIn: number
     tokensOut: number
     servedModel?: string
-    inputCostPerM?: number
-    outputCostPerM?: number
     events?: {type: string; data: Record<string, unknown>}[]
   }> => request('/api/chat/resume', {body: {id, from}}),
 

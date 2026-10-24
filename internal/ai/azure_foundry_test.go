@@ -689,10 +689,10 @@ func TestAzureFoundry_ModelsListsConfiguredDeployments(t *testing.T) {
 		t.Fatalf("listing = %v, want the configured deployments in document order", ids)
 	}
 	custom, gpt4o, phi, router, emb := models[0], models[1], models[2], models[3], models[4]
-	if custom.ContextLimit != p.ContextLimit() || custom.Pricing != (Pricing{}) || custom.MaxOutputTokens != 0 || custom.Embedding {
+	if custom.ContextLimit != p.ContextLimit() || custom.MaxOutputTokens != 0 || custom.Embedding {
 		t.Errorf("custom-named deployment = %+v, want the provider default window and no guessed price", custom)
 	}
-	if gpt4o.Pricing != (Pricing{}) || gpt4o.ContextLimit != 128000 || gpt4o.MaxOutputTokens != 16384 || gpt4o.Embedding {
+	if gpt4o.ContextLimit != 128000 || gpt4o.MaxOutputTokens != 16384 || gpt4o.Embedding {
 		t.Errorf("catalogued name = %+v, want the catalogue's limits and no price (azure-foundry is unpriced)", gpt4o)
 	}
 	// a small-window model named after itself is sized right
@@ -704,7 +704,7 @@ func TestAzureFoundry_ModelsListsConfiguredDeployments(t *testing.T) {
 		t.Errorf("model-router = %+v, want the conservative default window", router)
 	}
 	// The embedding deployment stays listed but flagged.
-	if !emb.Embedding || emb.Pricing != (Pricing{}) || emb.ContextLimit != 8191 {
+	if !emb.Embedding || emb.ContextLimit != 8191 {
 		t.Errorf("embedding deployment = %+v, want Embedding, its window and no price", emb)
 	}
 	if n := len(srv.requests()); n != 0 {

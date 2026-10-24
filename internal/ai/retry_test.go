@@ -289,7 +289,7 @@ func TestRetry_Stream_HeldErrorChunkKeepsUsage(t *testing.T) {
 // the withheld error chunk records those exact counts, not an estimate.
 func TestAudited_StreamBillsUsageCarriedOnHeldError(t *testing.T) {
 	stub := &auditStub{
-		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models:       []ModelInfo{{ID: "m"}},
 		streamChunks: []Chunk{{Error: errors.New("the agent asked for approval"), TokensIn: 11, TokensOut: 4, ServedModel: "gpt-4.1"}},
 	}
 	recorded := make(chan *interfaces.UsageMetric, 1)

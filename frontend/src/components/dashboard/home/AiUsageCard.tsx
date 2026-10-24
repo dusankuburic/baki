@@ -2,7 +2,7 @@ import {useTranslation} from 'react-i18next'
 import {ChartCard, StackedAreaChart, useChartTheme} from '@/components/charts'
 import {formatCompactIntl, formatDateLong} from '@/lib/format'
 import {DetailsAction} from './DetailsAction'
-import type {DailyTokenUsage, ProviderCost} from '@/types'
+import type {DailyTokenUsage} from '@/types'
 
 export function AiUsageCard({
   tokens,
@@ -11,7 +11,6 @@ export function AiUsageCard({
   className,
 }: {
   tokens: DailyTokenUsage[]
-  cost?: ProviderCost[]
   isCloud: boolean
   onDetails?: () => void
   className?: string

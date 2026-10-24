@@ -7,7 +7,6 @@ export interface DashboardHomeData {
   findings: DashboardFindingsAgg
   isCloud: boolean
   healthTrend: DailyHealthPoint[]
-  costByProvider: ProviderCost[]
   ruleFrequency: RuleFrequency[]
   activity: ActivityEntry[]
   complexity: FlowComplexityPoint[]
@@ -61,9 +60,8 @@ export interface DailyHealthPoint {
   flowCount: number
 }
 
-export interface ProviderCost {
+export interface ProviderUsage {
   provider: string
-  cost: number
   tokensIn: number
   tokensOut: number
 }
@@ -160,7 +158,6 @@ export interface AnalyticsSummary {
   analysesRun: StatValue
   flowsAnalyzed: StatValue
   resolved: StatValue
-  aiSpend: StatValue
 }
 
 export interface AnalyticsTrendPoint {
@@ -254,7 +251,6 @@ export interface AIDailyPoint {
   date: string
   tokensIn: number
   tokensOut: number
-  cost: number
   calls: number
 }
 
@@ -265,17 +261,14 @@ export interface ModelUsage {
   tokensIn: number
   tokensOut: number
   calls: number
-  cost: number
 }
 
 export interface AnalyticsAI {
   scoped: 'user' | 'org' | 'user+orgs'
   flowScoped: boolean
   daily: AIDailyPoint[]
-  byProvider: ProviderCost[]
+  byProvider: ProviderUsage[]
   byModel: ModelUsage[]
-  totalCost: number
-  prevCost: number | null
   totalTokens: number
 }
 

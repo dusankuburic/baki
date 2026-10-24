@@ -271,7 +271,7 @@ const docTemplate = `{
         },
         "/api/admin/settings/ai": {
             "get": {
-                "description": "The deployment-wide ai values: the daily budgets the budget gate enforces on every replica (0 = unlimited) and the embedding provider and model every knowledge base shares. Admin only.",
+                "description": "The deployment-wide ai values: the embedding provider and model every knowledge base shares. Admin only.",
                 "produces": [
                     "application/json"
                 ],
@@ -281,7 +281,7 @@ const docTemplate = `{
                 "summary": "Get the deployment's AI settings",
                 "responses": {
                     "200": {
-                        "description": "The enforced values",
+                        "description": "The deployment-wide values",
                         "schema": {
                             "$ref": "#/definitions/service.DeploymentAISettings"
                         }
@@ -289,7 +289,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Replaces the deployment-wide ai values with the body's and answers with what is now enforced. The body is the whole set of four fields: one it omits is written as zero (an unlimited budget, the server-default embedding provider or model), so send every field, changed or not. The rest of the deployment document is kept as stored, and a member's own settings write never reaches these fields. An embedding provider whose model ids are deployment aliases (Azure AI Foundry) is refused: it embeds only on the operator's PAD_EMBEDDING_PROVIDER pin. Admin only.",
+                "description": "Replaces the deployment-wide ai values with the body's and answers with what is now stored. The body is the whole set of two fields: one it omits is written empty (the server-default embedding provider or model), so send both, changed or not. The rest of the deployment document is kept as stored, and a member's own settings write never reaches these fields. An embedding provider whose model ids are deployment aliases (Azure AI Foundry) is refused: it embeds only on the operator's PAD_EMBEDDING_PROVIDER pin. Admin only.",
                 "consumes": [
                     "application/json"
                 ],
@@ -302,7 +302,7 @@ const docTemplate = `{
                 "summary": "Update the deployment's AI settings",
                 "parameters": [
                     {
-                        "description": "The values to enforce, all four",
+                        "description": "The values to store, both",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -313,13 +313,13 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "The enforced values, as written",
+                        "description": "The values, as written",
                         "schema": {
                             "$ref": "#/definitions/service.DeploymentAISettings"
                         }
                     },
                     "400": {
-                        "description": "BAD_REQUEST: a negative budget, an embedding provider that cannot embed or needs the operator's pin, or an oversized model id",
+                        "description": "BAD_REQUEST: an embedding provider that cannot embed or needs the operator's pin, or an oversized model id",
                         "schema": {
                             "$ref": "#/definitions/render.ErrorResponse"
                         }
@@ -3582,7 +3582,7 @@ const docTemplate = `{
         },
         "/api/chat/preview-context": {
             "post": {
-                "description": "Returns a preview of the context that will be sent to the AI provider: the system prompt, the context text, the user message, an estimate of their tokens and the model's context window. The model and the provider resolve as the turn's would: for provider azure-foundry a model registry id the caller cannot use is refused with 400 and code MODEL_NOT_AVAILABLE; a provider no spec describes with 400 PROVIDER_UNKNOWN; one the provider policy refuses (disabled in the deployment, or off the flow's organisation's allowed-provider list) with 400 PROVIDER_NOT_ALLOWED.",
+                "description": "Returns a preview of the request the turn would send, built by the turn's own assembly: the system prompt (the marker-mode tool instructions included), the flow context (the cached analysis report included, as the turn includes it), the user turn (the organisation's guidelines included), the prompt's token estimate as the window check counts it (system prompt, tool schemas, every message of the stored or forwarded history, the turn) with its breakdown by part, how many history messages the window would drop, the tools offered, the effective context budget and the model's context window. The model and the provider resolve as the turn's would: for provider azure-foundry a model registry id the caller cannot use is refused with 400 and code MODEL_NOT_AVAILABLE; a provider no spec describes with 400 PROVIDER_UNKNOWN; one the provider policy refuses (disabled in the deployment, or off the flow's organisation's allowed-provider list) with 400 PROVIDER_NOT_ALLOWED.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3752,7 +3752,7 @@ const docTemplate = `{
         },
         "/api/chat/stream": {
             "post": {
-                "description": "Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent) and inputCostPerM / outputCostPerM (the per-million-token rates the turn was billed at). When the server stored the turn itself (cloud mode, the request carried no history) the answer is in the store before done is sent, and done and error also carry conversationVersion (the stored conversation's version after the server's own writes) and conversationBase (the version the turn began from), only while no other writer changed the thread in between; a client still at conversationBase can adopt conversationVersion without saving or reloading. An error payload carries message and, when classified, code (AI_BUDGET_EXCEEDED, AI_BUDGET_UNAVAILABLE, PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, PROVIDER_UNKNOWN when the turn names a provider no spec describes, PROVIDER_NOT_ALLOWED when the provider policy refused it — disabled in the deployment or off the organisation's allowed-provider list (ADR 0028), MODEL_NOT_AVAILABLE, SERVER_RESTARTING when the server's stop ended the stream, …). A provider id the registry does not know is refused before any stream starts with 400 and code PROVIDER_UNKNOWN. For provider azure-foundry the model is a model registry id (\"m/\u003centryId\u003e\"; \"\" for the server default; a pre-registry deployment, \"claude:\" or \"agent:\" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE. While the server is stopping no stream starts: 503 with code SERVER_RESTARTING, a Retry-After header and details.retryAfterSeconds; the request may be sent again once after that wait. A clientStreamId that already names a stream (running, or finished within the resume window, on any replica) is refused with 409 and code STREAM_ID_IN_USE: a resent start whose first send went through gets it, and resumes that stream (POST /api/chat/resume) instead of starting another.",
+                "description": "Initiates a streaming chat session with an AI provider. The answer arrives on the event stream as chunk, tool, tool_result, done and error events. The done payload carries tokensIn, tokensOut and chunks, plus — when known — servedModel (the model that answered an alias such as an Azure AI Foundry deployment, router or agent). When the server stored the turn itself (cloud mode, the request carried no history) the answer is in the store before done is sent, and done and error also carry conversationVersion (the stored conversation's version after the server's own writes) and conversationBase (the version the turn began from), only while no other writer changed the thread in between; a client still at conversationBase can adopt conversationVersion without saving or reloading. An error payload carries message and, when classified, code (PROVIDER_AUTH, PROVIDER_PERMISSION, PROVIDER_NOT_CONFIGURED, PROVIDER_UNKNOWN when the turn names a provider no spec describes, PROVIDER_NOT_ALLOWED when the provider policy refused it — disabled in the deployment or off the organisation's allowed-provider list (ADR 0028), MODEL_NOT_AVAILABLE, SERVER_RESTARTING when the server's stop ended the stream, …). A provider id the registry does not know is refused before any stream starts with 400 and code PROVIDER_UNKNOWN. For provider azure-foundry the model is a model registry id (\"m/\u003centryId\u003e\"; \"\" for the server default; a pre-registry deployment, \"claude:\" or \"agent:\" id still resolves for one release): one the caller cannot use — removed, another owner's, no longer shared with them — is refused before any stream starts with 400 and code MODEL_NOT_AVAILABLE. While the server is stopping no stream starts: 503 with code SERVER_RESTARTING, a Retry-After header and details.retryAfterSeconds; the request may be sent again once after that wait. A clientStreamId that already names a stream (running, or finished within the resume window, on any replica) is refused with 409 and code STREAM_ID_IN_USE: a resent start whose first send went through gets it, and resumes that stream (POST /api/chat/resume) instead of starting another.",
                 "consumes": [
                     "application/json"
                 ],
@@ -7716,7 +7716,7 @@ const docTemplate = `{
                         }
                     },
                     "429": {
-                        "description": "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED) or the daily AI budget is spent (BUDGET_EXCEEDED)",
+                        "description": "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -7734,7 +7734,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE), the budget could not be checked (BUDGET_UNAVAILABLE) or the background job could not be started (KNOWLEDGE_JOB_UNAVAILABLE) or the knowledge base lock could not be taken (KNOWLEDGE_LOCK_UNAVAILABLE)",
+                        "description": "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE), the background job could not be started (KNOWLEDGE_JOB_UNAVAILABLE) or the knowledge base lock could not be taken (KNOWLEDGE_LOCK_UNAVAILABLE)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -8877,7 +8877,7 @@ const docTemplate = `{
         },
         "/api/orgs/{id}/providers/azure-foundry/test": {
             "post": {
-                "description": "POST /api/providers/azure-foundry/test for the organisation's registry, on the organisation's credentials only (never the caller's own): {connectionId}, {config} (a draft; with connectionId the stored secret carries over), optional model ({id} or a draft {kind, deployment}) — every outcome a 200 service.AzureTestResult {ok, latencyMs, error?, code?}, a 4xx only for an invalid request. A resource test makes no model call; a model test one tiny request Azure bills to the organisation's resource (baki's daily budget does not count Azure usage); an agent test only looks the agent up. Before any probe the provider policy is asked for the organisation (ADR 0028): code PROVIDER_NOT_ALLOWED when azure-foundry is disabled in this deployment or off the organisation's allowed-provider list, PROVIDER_POLICY_UNAVAILABLE when the organisation's settings could not be read; a model test is also gated on the organisation's daily budget (AI_BUDGET_EXCEEDED / AI_BUDGET_UNAVAILABLE). Deprecated form (one release): an EMPTY body tests the organisation's resource \"default\" (else its first) as a resource — an authenticated probe, no model call — and answers the legacy models.ProviderTestResult {ok, latencyMs, error?, code?} (code: PROVIDER_UNKNOWN, PROVIDER_NOT_ALLOWED, PROVIDER_POLICY_UNAVAILABLE or the budget codes). Org admins only. Rides the chat rate-limit bucket; audited (providers.test).",
+                "description": "POST /api/providers/azure-foundry/test for the organisation's registry, on the organisation's credentials only (never the caller's own): {connectionId}, {config} (a draft; with connectionId the stored secret carries over), optional model ({id} or a draft {kind, deployment}) — every outcome a 200 service.AzureTestResult {ok, latencyMs, error?, code?}, a 4xx only for an invalid request. A resource test makes no model call; a model test one tiny request Azure bills to the organisation's resource; an agent test only looks the agent up. Before any probe the provider policy is asked for the organisation (ADR 0028): code PROVIDER_NOT_ALLOWED when azure-foundry is disabled in this deployment or off the organisation's allowed-provider list, PROVIDER_POLICY_UNAVAILABLE when the organisation's settings could not be read. Deprecated form (one release): an EMPTY body tests the organisation's resource \"default\" (else its first) as a resource — an authenticated probe, no model call — and answers the legacy models.ProviderTestResult {ok, latencyMs, error?, code?} (code: PROVIDER_UNKNOWN, PROVIDER_NOT_ALLOWED, PROVIDER_POLICY_UNAVAILABLE or the budget codes). Org admins only. Rides the chat rate-limit bucket; audited (providers.test).",
                 "consumes": [
                     "application/json"
                 ],
@@ -10227,7 +10227,7 @@ const docTemplate = `{
         },
         "/api/providers/test": {
             "post": {
-                "description": "Tests the connection to a specific AI provider with one tiny billed chat call per candidate model. Every outcome is a 200 {ok, latencyMs, error?, code?}; code names a refusal the client branches on: PROVIDER_UNKNOWN (no such provider), PROVIDER_NOT_ALLOWED (the provider policy refused it: disabled in this deployment — this route tests the caller's own credential, so the organisation's allowed-provider list applies to the org test route, POST /api/orgs/{id}/providers/azure-foundry/test, instead), AI_BUDGET_EXCEEDED / AI_BUDGET_UNAVAILABLE (the daily AI budget gates the test like any other call — nothing was sent). For azure-foundry this form is deprecated (one release): it tests the caller's resource \"default\" (else their first resource) as a resource — an authenticated probe, no model call; use POST /api/providers/azure-foundry/test to test one resource or model.",
+                "description": "Tests the connection to a specific AI provider with one tiny billed chat call per candidate model. Every outcome is a 200 {ok, latencyMs, error?, code?}; code names a refusal the client branches on: PROVIDER_UNKNOWN (no such provider), PROVIDER_NOT_ALLOWED (the provider policy refused it: disabled in this deployment — this route tests the caller's own credential, so the organisation's allowed-provider list applies to the org test route, POST /api/orgs/{id}/providers/azure-foundry/test, instead). For azure-foundry this form is deprecated (one release): it tests the caller's resource \"default\" (else their first resource) as a resource — an authenticated probe, no model call; use POST /api/providers/azure-foundry/test to test one resource or model.",
                 "consumes": [
                     "application/json"
                 ],
@@ -10499,7 +10499,7 @@ const docTemplate = `{
         },
         "/api/system/settings/org/{id}": {
             "get": {
-                "description": "handleGetOrgSettings returns org-wide settings. Reading requires org membership — settings carry operational details (budgets, provider configuration) that must not leak across tenants.",
+                "description": "handleGetOrgSettings returns org-wide settings. Reading requires org membership — settings carry operational details (provider configuration) that must not leak across tenants.",
                 "produces": [
                     "application/json"
                 ],
@@ -11426,18 +11426,12 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
-                "inputCostPerM": {
-                    "type": "number"
-                },
                 "model": {
                     "type": "string"
                 },
                 "modelLabel": {
                     "description": "ModelLabel is the model's friendly name at send time (Model is the opaque\n\"m/\u003centryId\u003e\"), so history and exports keep naming it after renames;\nempty for catalogue models.",
                     "type": "string"
-                },
-                "outputCostPerM": {
-                    "type": "number"
                 },
                 "provider": {
                     "type": "string"
@@ -11446,7 +11440,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "servedModel": {
-                    "description": "ServedModel is the model that actually answered when Model is a resolvable\nalias, and Input/OutputCostPerM the USD per 1M rates billed — all from the\nstream's done event, so a reloaded conversation prices the turn at what it\ncost. Zero/empty = not reported.",
+                    "description": "ServedModel is the model that actually answered when Model is a resolvable\nalias, from the stream's done event. Empty = not reported.",
                     "type": "string"
                 },
                 "timestamp": {
@@ -11464,12 +11458,24 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/pad-core_models.ToolCallRecord"
                     }
+                },
+                "truncated": {
+                    "description": "Truncated is how many earlier history messages the turn left out to fit the model's context window\n(the stream's history_truncated notices summed), so a reloaded conversation still shows the chip.",
+                    "type": "integer"
                 }
             }
         },
         "pad-core_models.ContextPreview": {
             "type": "object",
             "properties": {
+                "breakdown": {
+                    "description": "Breakdown is the estimate by part; HistoryMessages the history messages forwarded; HistoryDropped how\nmany of them the window check would leave out.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/pad-core_models.ContextPreviewBreakdown"
+                        }
+                    ]
+                },
                 "contextBlock": {
                     "description": "ContextBlock reports the request's context block: \"resolved\" (its section is in the context, found by\nid or by anchor), \"missing\" (no longer in the flow; the context says so) or \"\" (none asked for).",
                     "type": "string"
@@ -11477,6 +11483,10 @@ const docTemplate = `{
                 "contextBlockId": {
                     "description": "ContextBlockID is the id the context block resolved to, when that is not the request's.",
                     "type": "string"
+                },
+                "contextBudget": {
+                    "description": "ContextBudget is the token budget the flow context was built to: the caller's per-provider setting, else\nthe one derived from the model's window.",
+                    "type": "integer"
                 },
                 "contextLimit": {
                     "type": "integer"
@@ -11487,11 +11497,47 @@ const docTemplate = `{
                 "estimatedTokens": {
                     "type": "integer"
                 },
+                "historyDropped": {
+                    "type": "integer"
+                },
+                "historyMessages": {
+                    "type": "integer"
+                },
                 "systemPrompt": {
                     "type": "string"
                 },
+                "tools": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "toolsOffered": {
+                    "description": "ToolsOffered says the turn offers tools; Tools names them (natively, or in the marker-mode instructions).",
+                    "type": "boolean"
+                },
                 "userMessage": {
                     "type": "string"
+                }
+            }
+        },
+        "pad-core_models.ContextPreviewBreakdown": {
+            "type": "object",
+            "properties": {
+                "context": {
+                    "type": "integer"
+                },
+                "history": {
+                    "type": "integer"
+                },
+                "system": {
+                    "type": "integer"
+                },
+                "tools": {
+                    "type": "integer"
+                },
+                "user": {
+                    "type": "integer"
                 }
             }
         },
@@ -11653,9 +11699,6 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
-                "inputCostPerM": {
-                    "type": "number"
-                },
                 "isDefault": {
                     "description": "IsDefault marks the server default for new chats; IsOrgDefault the organisation's default.",
                     "type": "boolean"
@@ -11672,9 +11715,6 @@ const docTemplate = `{
                 },
                 "orgName": {
                     "type": "string"
-                },
-                "outputCostPerM": {
-                    "type": "number"
                 },
                 "purpose": {
                     "description": "Purpose is a preset key (general, documentation, fixes, review,\nrefactoring, testing) or \"custom\" with PurposeCustom's text; the picker\ngroups by it.",
@@ -11743,9 +11783,6 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
-                },
-                "pricing": {
-                    "type": "string"
                 }
             }
         },
@@ -11779,7 +11816,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "caps": {
-                    "description": "The provider spec on the wire (ADR 0025), all optional so an older server's listing still parses: what the\nprovider can do, the deployment profiles it is offered in, how its credential is entered, where its prices\ncome from, the generic panel's accent and glyph, and whether the caller can manage the credential through\nthe catalogue's routes.",
+                    "description": "The provider spec on the wire (ADR 0025), all optional so an older server's listing still parses: what the\nprovider can do, the deployment profiles it is offered in, how its credential is entered, the generic panel's\naccent and glyph, and whether the caller can manage the credential through the catalogue's routes.",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -11825,9 +11862,6 @@ const docTemplate = `{
                     }
                 },
                 "name": {
-                    "type": "string"
-                },
-                "pricing": {
                     "type": "string"
                 },
                 "shared": {
@@ -12474,17 +12508,11 @@ const docTemplate = `{
         "service.DeploymentAISettings": {
             "type": "object",
             "properties": {
-                "dailyBudget": {
-                    "type": "number"
-                },
                 "embeddingModel": {
                     "type": "string"
                 },
                 "embeddingProvider": {
                     "type": "string"
-                },
-                "perUserDailyBudget": {
-                    "type": "number"
                 }
             }
         },

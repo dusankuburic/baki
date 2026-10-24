@@ -9,7 +9,6 @@ import type {
   DailyHealthPoint,
   DailySeverityPoint,
   Fixability,
-  ProviderCost,
 } from '@/types'
 
 export function HomeKpiRow({
@@ -27,7 +26,6 @@ export function HomeKpiRow({
   healthTrend: DailyHealthPoint[]
   severityTrend: DailySeverityPoint[]
   fixability: Fixability
-  costByProvider?: ProviderCost[]
   onViewFindings?: () => void
   onViewFlows?: () => void
   className?: string

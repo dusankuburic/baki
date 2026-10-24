@@ -88,10 +88,29 @@ func TestAudited_ServedModelBlankWhenSameOrUnknown(t *testing.T) {
 	}
 
 	unknown := &auditStub{
-		models: []ModelInfo{{ID: "known", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models: []ModelInfo{{ID: "known"}},
 		resp:   &Response{TokensIn: 10, TokensOut: 5},
 	}
 	if m := awaitMetric(t, unknown, Request{Model: "known"}); m.ServedModel != "" {
 		t.Errorf("ServedModel = %q, want empty when the provider reported none", m.ServedModel)
+	}
+}
+
+// awaitAliasedMetric runs one Chat through an audited wrapper whose provider label is an alias provider
+// (azure-foundry). Recording is async; the metric arrives on the channel.
+func awaitAliasedMetric(t *testing.T, stub *auditStub, req Request) *interfaces.UsageMetric {
+	t.Helper()
+	ch := make(chan *interfaces.UsageMetric, 1)
+	rec := func(_ context.Context, m *interfaces.UsageMetric) error { ch <- m; return nil }
+	ap := NewAuditedProvider(stub, rec, "user-1", azureFoundryProviderID)
+	if _, err := ap.Chat(context.Background(), req); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	select {
+	case m := <-ch:
+		return m
+	case <-time.After(2 * time.Second):
+		t.Fatal("usage metric was not recorded")
+		return nil
 	}
 }

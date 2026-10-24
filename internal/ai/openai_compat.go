@@ -604,7 +604,6 @@ func (b *openaiBase) chat(ctx context.Context, req Request) (*Response, error) {
 			err:         fmt.Errorf("%w: the response was stopped by the content filter", ErrContentFiltered),
 			tokensIn:    parsed.Usage.PromptTokens,
 			tokensOut:   parsed.Usage.CompletionTokens,
-			cacheRead:   cacheRead,
 			servedModel: parsed.Model,
 		}
 	}
@@ -806,8 +805,7 @@ func (b *openaiBase) streamViaChat(ctx context.Context, req Request, onChunk fun
 	if err != nil {
 		var held *heldUsageError
 		if errors.As(err, &held) {
-			onChunk(Chunk{Error: held.err, TokensIn: held.tokensIn, TokensOut: held.tokensOut,
-				CacheReadTokens: held.cacheRead, CacheWriteTokens: held.cacheWrite, ServedModel: held.servedModel})
+			onChunk(Chunk{Error: held.err, TokensIn: held.tokensIn, TokensOut: held.tokensOut, ServedModel: held.servedModel})
 			return nil
 		}
 		return err

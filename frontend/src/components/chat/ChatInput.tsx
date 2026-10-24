@@ -29,8 +29,6 @@ interface Props {
   sourceFiles?: SourceFileInfo[]
   promptTokens?: number
   completionTokens?: number
-  inputCostPerM?: number
-  outputCostPerM?: number
   contextLimit?: number
   guidance?: {text: string; actionLabel: string; onAction: () => void} | null
 }
@@ -49,8 +47,6 @@ export default function ChatInput({
   sourceFiles = EMPTY_SOURCE_FILES,
   promptTokens = 0,
   completionTokens = 0,
-  inputCostPerM,
-  outputCostPerM,
   contextLimit,
   guidance,
 }: Props) {
@@ -528,12 +524,7 @@ export default function ChatInput({
                 {t('composer.tokenEstimate', {count: tokenEstimate})}
               </span>
             )}
-            <ChatUsageMeter
-              promptTokens={promptTokens}
-              completionTokens={completionTokens}
-              inputCostPerM={inputCostPerM}
-              outputCostPerM={outputCostPerM}
-            />
+            <ChatUsageMeter promptTokens={promptTokens} completionTokens={completionTokens} />
             {onPreview && hasContent && !isDisabled && !sendBlocked && (
               <ComposerIconButton icon={Eye} label={t('composer.previewContext')} onClick={handlePreview} />
             )}

@@ -119,3 +119,8 @@ func TestEmbedder_AzureRegistryDesignation(t *testing.T) {
 		}
 	})
 }
+
+// azureEmbedder is fixedEmbedder answering as Azure AI Foundry.
+type azureEmbedder struct{ *fixedEmbedder }
+
+func (azureEmbedder) ID() string { return azureFoundryProviderID }

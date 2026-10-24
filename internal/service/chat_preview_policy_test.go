@@ -31,7 +31,7 @@ func TestPreviewContext_PolicySeesTheFlowsOrg(t *testing.T) {
 	factory := ai.NewProviderFactory(func(string, string) (string, error) { return "own-key", nil }, nil, nil, nil, ai.WithProviderPolicy(policy))
 	svc := &ChatService{
 		factory:  factory,
-		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 100}}},
+		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{}}},
 		backend:  &roleBackend{},
 	}
 	doc := &models.FlowDocument{ID: "f1", OrganizationID: "org-A"}

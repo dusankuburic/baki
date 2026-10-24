@@ -11,13 +11,12 @@ import (
 	"pad-analyzer/internal/storage/interfaces"
 )
 
-// auditStub is a minimal Provider for exercising auditedProvider.record cost
-// math: it returns a fixed response and a configurable catalog + default price.
+// auditStub is a minimal Provider for exercising auditedProvider.record: it
+// returns a fixed response and a configurable catalog.
 type auditStub struct {
 	Provider
 	models       []ModelInfo
 	modelsCalls  atomic.Int32 // counts Models() invocations (memoisation tests)
-	price        Pricing
 	resp         *Response
 	streamChunks []Chunk
 	streamErr    error // returned after replaying streamChunks
@@ -34,9 +33,8 @@ func (s *auditStub) Models(_ context.Context) ([]ModelInfo, error) {
 	s.modelsCalls.Add(1)
 	return s.models, nil
 }
-func (s *auditStub) PricePerMillionTokens() Pricing { return s.price }
-func (s *auditStub) ID() string                     { return "stub" }
-func (s *auditStub) EstimateTokens(t string) int    { return len(t) / 4 }
+func (s *auditStub) ID() string                  { return "stub" }
+func (s *auditStub) EstimateTokens(t string) int { return len(t) / 4 }
 
 // awaitMetric runs a Chat through the audited wrapper and returns the recorded
 // metric (recording is async). Fails the test if nothing is recorded.
@@ -63,7 +61,7 @@ func awaitMetric(t *testing.T, stub *auditStub, req Request) *interfaces.UsageMe
 // TestAudited_NilRecorderDoesNotPanic: a nil recorder (local/desktop wiring) must skip recording on Chat and Stream.
 func TestAudited_NilRecorderDoesNotPanic(t *testing.T) {
 	stub := &auditStub{
-		models: []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models: []ModelInfo{{ID: "m"}},
 		resp:   &Response{Content: "ok", TokensIn: 100, TokensOut: 100},
 	}
 	ap := NewAuditedProvider(stub, nil, "user-1", "stub")
@@ -78,23 +76,10 @@ func TestAudited_NilRecorderDoesNotPanic(t *testing.T) {
 	time.Sleep(20 * time.Millisecond) // let the record goroutine run (it must no-op)
 }
 
-// TestAudited_PricesFromCatalogWhenModelKnown guards the catalog-price path.
-func TestAudited_PricesFromCatalogWhenModelKnown(t *testing.T) {
-	stub := &auditStub{
-		models: []ModelInfo{{ID: "known", Pricing: Pricing{InputCostPerM: 3, OutputCostPerM: 15}}},
-		price:  Pricing{InputCostPerM: 99, OutputCostPerM: 99}, // should NOT be used
-		resp:   &Response{TokensIn: 1_000_000, TokensOut: 1_000_000},
-	}
-	m := awaitMetric(t, stub, Request{Model: "known"})
-	if got, want := m.EstimatedCost, 18.0; got != want {
-		t.Errorf("EstimatedCost = %v, want %v (catalog price)", got, want)
-	}
-}
-
-// TestAudited_RecordsOrgID (T4.2): usage carries the request's OrgID, so org flows sum into the org budget.
+// TestAudited_RecordsOrgID (T4.2): usage carries the request's OrgID, so org flows sum into the org's usage.
 func TestAudited_RecordsOrgID(t *testing.T) {
 	stub := &auditStub{
-		models: []ModelInfo{{ID: "known", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models: []ModelInfo{{ID: "known"}},
 		resp:   &Response{TokensIn: 1000, TokensOut: 1000},
 	}
 	m := awaitMetric(t, stub, Request{Model: "known", OrgID: "org-42"})
@@ -106,25 +91,11 @@ func TestAudited_RecordsOrgID(t *testing.T) {
 	}
 }
 
-// TestAudited_FallsBackToProviderPriceForUnknownModel (T1.3): an out-of-catalog model prices from
-// PricePerMillionTokens, never $0 (which would let the daily budget never trip).
-func TestAudited_FallsBackToProviderPriceForUnknownModel(t *testing.T) {
-	stub := &auditStub{
-		models: []ModelInfo{{ID: "something-else", Pricing: Pricing{InputCostPerM: 3, OutputCostPerM: 15}}},
-		price:  Pricing{InputCostPerM: 2, OutputCostPerM: 10},
-		resp:   &Response{TokensIn: 1_000_000, TokensOut: 1_000_000},
-	}
-	m := awaitMetric(t, stub, Request{Model: "brand-new-model"})
-	if got, want := m.EstimatedCost, 12.0; got != want {
-		t.Errorf("EstimatedCost = %v, want %v (provider fallback price), not $0", got, want)
-	}
-}
-
 // TestAudited_RecordsEstimatedUsageOnTruncatedStream: a stream ending without Done still consumed tokens —
 // usage is recorded from estimates, not silently $0.
 func TestAudited_RecordsEstimatedUsageOnTruncatedStream(t *testing.T) {
 	stub := &auditStub{
-		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models:       []ModelInfo{{ID: "m"}},
 		streamChunks: []Chunk{{Text: "some partial output before the stream died"}},
 		streamErr:    errStreamTruncated("stub"),
 	}
@@ -157,7 +128,7 @@ func TestAudited_RecordsEstimatedUsageOnTruncatedStream(t *testing.T) {
 // open, connection refused) must not bill an estimate for a call that consumed nothing.
 func TestAudited_NoUsageForStreamThatNeverStarted(t *testing.T) {
 	stub := &auditStub{
-		models:    []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models:    []ModelInfo{{ID: "m"}},
 		streamErr: ErrCircuitOpen,
 	}
 	recorded := make(chan *interfaces.UsageMetric, 1)
@@ -181,7 +152,7 @@ func TestAudited_NoUsageForStreamThatNeverStarted(t *testing.T) {
 // then blocked on recordSem. The acquire is non-blocking: past maxConcurrentRecords the metric is dropped.
 func TestAudited_RecorderBoundedUnderSaturation(t *testing.T) {
 	stub := &auditStub{
-		models: []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models: []ModelInfo{{ID: "m"}},
 		resp:   &Response{TokensIn: 10, TokensOut: 10},
 	}
 
@@ -232,7 +203,7 @@ func TestAudited_RecorderBoundedUnderSaturation(t *testing.T) {
 // Models() that multiplied into a live HTTP GET per usage record.
 func TestAudited_ModelsMemoisedPerInstance(t *testing.T) {
 	stub := &auditStub{
-		models: []ModelInfo{{ID: "m", ContextLimit: 8192, Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models: []ModelInfo{{ID: "m", ContextLimit: 8192}},
 		resp:   &Response{TokensIn: 100, TokensOut: 100},
 	}
 	ap := NewAuditedProvider(stub, func(_ context.Context, _ *interfaces.UsageMetric) error { return nil }, "user-1", "stub")
@@ -295,7 +266,7 @@ func awaitEmbedMetric(t *testing.T, stub *embedAuditStub, texts []string) *inter
 func TestAuditedEmbed_RecordsUsage(t *testing.T) {
 	stub := &embedAuditStub{
 		auditStub: auditStub{
-			models: []ModelInfo{{ID: "text-embedding-3-small", Pricing: Pricing{InputCostPerM: 0.02}}},
+			models: []ModelInfo{{ID: "text-embedding-3-small"}},
 		},
 		embedModel: "text-embedding-3-small",
 	}
@@ -312,9 +283,6 @@ func TestAuditedEmbed_RecordsUsage(t *testing.T) {
 	}
 	if m.Model != "text-embedding-3-small" {
 		t.Errorf("Model = %q, want the embedding model name (catalog pricing)", m.Model)
-	}
-	if want := 11.0 / 1_000_000 * 0.02; m.EstimatedCost != want {
-		t.Errorf("EstimatedCost = %v, want %v", m.EstimatedCost, want)
 	}
 	if m.OrgID != "" {
 		t.Errorf("OrgID = %q, want empty (personal attribution — Embed carries no org context)", m.OrgID)
@@ -370,7 +338,7 @@ func awaitStreamMetric(t *testing.T, stub *auditStub, req Request) *interfaces.U
 // stream with Done(0,0); without the fallback every such stream billed $0.
 func TestAuditedStream_DoneWithZeroUsageEstimates(t *testing.T) {
 	stub := &auditStub{
-		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 2}}},
+		models:       []ModelInfo{{ID: "m"}},
 		streamChunks: []Chunk{{Text: "hello world, this is output"}, {Done: true}}, // Done(0,0)
 	}
 	req := Request{
@@ -388,9 +356,6 @@ func TestAuditedStream_DoneWithZeroUsageEstimates(t *testing.T) {
 	}
 	if m.CompletionTokens != wantOut {
 		t.Errorf("CompletionTokens = %d, want %d (estimated from streamed text)", m.CompletionTokens, wantOut)
-	}
-	if m.EstimatedCost == 0 {
-		t.Error("EstimatedCost = 0 — stream billed nothing")
 	}
 }
 
@@ -449,7 +414,7 @@ func assertExactlyOneRecorded(t *testing.T, rec *countedRecorder) {
 // mutually exclusive via sawDone — deleting the gate would double-bill every successful stream.
 func TestAuditedStream_RecordsUsageExactlyOnce_Done(t *testing.T) {
 	stub := &auditStub{
-		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models:       []ModelInfo{{ID: "m"}},
 		streamChunks: []Chunk{{Text: "a streamed answer"}, {Done: true, TokensIn: 100, TokensOut: 50}},
 	}
 	rec := &countedRecorder{}
@@ -464,7 +429,7 @@ func TestAuditedStream_RecordsUsageExactlyOnce_Done(t *testing.T) {
 // one estimated-usage metric for a stream cut before Done, never two.
 func TestAuditedStream_RecordsUsageExactlyOnce_Truncated(t *testing.T) {
 	stub := &auditStub{
-		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models:       []ModelInfo{{ID: "m"}},
 		streamChunks: []Chunk{{Text: "some output before the stream died"}},
 		streamErr:    errStreamTruncated("stub"),
 	}
@@ -480,7 +445,7 @@ func TestAuditedStream_RecordsUsageExactlyOnce_Truncated(t *testing.T) {
 // negative, and slices beyond the total priced tokens never sent. Read ∈ [0, In], Write ∈ [0, In-Read].
 func TestAudited_CacheSlicesClamped(t *testing.T) {
 	const perM = 1_000_000.0
-	models := []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 0}}}
+	models := []ModelInfo{{ID: "m"}}
 	for _, tc := range []struct {
 		name     string
 		resp     Response
@@ -499,12 +464,6 @@ func TestAudited_CacheSlicesClamped(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := tc.resp
 			m := awaitMetric(t, &auditStub{models: models, resp: &resp}, Request{Model: "m"})
-			if m.EstimatedCost < 0 {
-				t.Fatalf("EstimatedCost = %g, must never be negative", m.EstimatedCost)
-			}
-			if diff := m.EstimatedCost - tc.wantCost; diff > 1e-12 || diff < -1e-12 {
-				t.Errorf("EstimatedCost = %g, want %g", m.EstimatedCost, tc.wantCost)
-			}
 			if m.PromptTokens != tc.resp.TokensIn {
 				t.Errorf("PromptTokens = %d, want the reported total %d", m.PromptTokens, tc.resp.TokensIn)
 			}

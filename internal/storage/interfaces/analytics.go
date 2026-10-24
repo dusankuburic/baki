@@ -78,7 +78,6 @@ type UsageDailyRow struct {
 	TokensIn  int
 	TokensOut int
 	Calls     int
-	Cost      float64
 }
 
 // UsageModelRow: rows are grouped by ServedModel (the model that answered when it differs from Model), so one alias served by two models yields two rows.
@@ -89,13 +88,12 @@ type UsageModelRow struct {
 	TokensIn    int
 	TokensOut   int
 	Calls       int
-	Cost        float64
 }
 
 // UsageRows: Daily spans the previous and current windows; the breakdowns cover the current one.
 type UsageRows struct {
 	Daily      []UsageDailyRow
-	ByProvider []ProviderCost
+	ByProvider []ProviderUsage
 	ByModel    []UsageModelRow
 }
 

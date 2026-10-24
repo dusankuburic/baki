@@ -214,14 +214,14 @@ func TestFlowAccessChecker_TranslatesServiceErrors(t *testing.T) {
 // in cloud mode, deployment-wide settings must come from the storage backend,
 // not from the local file store. They used to come from the store, which in a
 // container is recreated from defaults on every start — so an administrator
-// could save a rule override, an AI daily budget or an embedding provider and
+// could save a rule override or an embedding provider and
 // the analysis path would keep reading the defaults.
 func TestProvideSettingsProvider_CloudUsesBackend(t *testing.T) {
 	t.Parallel()
 
 	backend := &testutil.FakeBackend{}
 	stored := models.DefaultSettings()
-	stored.AI.DailyBudget = 100
+	stored.AI.EmbeddingModel = "text-embedding-3-large"
 	if err := backend.SaveSettings(context.Background(), toStorageSettings(t, stored)); err != nil {
 		t.Fatalf("seed backend settings: %v", err)
 	}
@@ -229,8 +229,8 @@ func TestProvideSettingsProvider_CloudUsesBackend(t *testing.T) {
 	store := storage.NewInMemorySettingsStore()
 	provider := ProvideSettingsProvider(context.Background(), config.ModeCloud, store, backend)
 
-	if got := provider.Get().AI.DailyBudget; got != 100 {
-		t.Errorf("cloud settings provider returned DailyBudget %v, want the backend's 100 "+
+	if got := provider.Get().AI.EmbeddingModel; got != "text-embedding-3-large" {
+		t.Errorf("cloud settings provider returned EmbeddingModel %q, want the backend's "+
 			"(a default here means it is reading the local store again)", got)
 	}
 	if provider == service.SettingsProvider(store) {

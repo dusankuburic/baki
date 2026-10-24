@@ -1000,41 +1000,15 @@ func (b *PostgresStorageBackend) listAuditEvents(ctx context.Context, filter int
 
 func (b *PostgresStorageBackend) SaveUsageMetric(ctx context.Context, metric *interfaces.UsageMetric) error {
 	query := `
-		INSERT INTO usage_metrics (id, user_id, org_id, provider, model, served_model, prompt_tokens, completion_tokens, estimated_cost, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO usage_metrics (id, user_id, org_id, provider, model, served_model, prompt_tokens, completion_tokens, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 	_, err := b.db.ExecContext(ctx, query,
 		metric.ID, metric.UserID, metric.OrgID, metric.Provider, metric.Model, metric.ServedModel,
-		metric.PromptTokens, metric.CompletionTokens, metric.EstimatedCost, metric.CreatedAt,
+		metric.PromptTokens, metric.CompletionTokens, metric.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: insert usage_metric: %w", err)
 	}
 	return nil
-}
-
-// GetDailyUsage returns the total estimated AI spend so far in the current calendar day (the org's when
-// orgID is non-empty, else the user's) — used to enforce the daily budget.
-func (b *PostgresStorageBackend) GetDailyUsage(ctx context.Context, userID, orgID string) (float64, error) {
-	var (
-		total float64
-		err   error
-	)
-	if orgID != "" {
-		err = b.query(ctx).QueryRowContext(ctx,
-			`SELECT COALESCE(SUM(estimated_cost), 0) FROM usage_metrics
-			 WHERE org_id = $1 AND created_at >= date_trunc('day', now())`, orgID).Scan(&total)
-	} else {
-		// Every row of the user, org rows included: the personal budget and the per-user sub-limit count a member's
-		// org spend (ai_budget.go). "" is the local single user's scope (no accounts), whose org spend counts the same
-		// way. Erasure leaves an erased member's org spend under "" too (lifecycle_users.go), but only a deployment
-		// with accounts erases, and there no caller's scope is "".
-		err = b.query(ctx).QueryRowContext(ctx,
-			`SELECT COALESCE(SUM(estimated_cost), 0) FROM usage_metrics
-			 WHERE user_id = $1 AND created_at >= date_trunc('day', now())`, userID).Scan(&total)
-	}
-	if err != nil {
-		return 0, fmt.Errorf("postgres: get daily usage: %w", err)
-	}
-	return total, nil
 }

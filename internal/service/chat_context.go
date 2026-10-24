@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
 	"pad-core/ai/scrubber"
+	"pad-core/analyzer"
 	"pad-core/cache"
 	"pad-core/logger"
 	"pad-core/models"
@@ -83,7 +85,8 @@ func normalizeChatParams(temperature float64, maxTokens, ctxLimit, maxOutput int
 var (
 	chatContexts = cache.Declare("chat.context",
 		cache.Keys(cache.KindTenant, cache.KindResource, cache.KindVersion,
-			cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam),
+			cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam, cache.KindParam,
+			cache.KindParam),
 		cache.ReplicaLocal("a turn is served by the replica its stream runs on; another rebuilds the context on a miss"))
 	scrubbedDocs = cache.Declare("chat.scrubbed-docs",
 		cache.Keys(cache.KindTenant, cache.KindResource, cache.KindVersion),
@@ -113,7 +116,7 @@ func (s *ChatService) InvalidateChatContext(flowID string) {
 
 // chatContextKeyAt keys a turn's context texts for a generation the caller already read; the zero Key (uncached)
 // for a flow without an id.
-func (s *ChatService) chatContextKeyAt(scope, flowID string, gen uint64, req models.ChatRequest, providerID, model string, report *models.AnalysisReport, sourceFP string, tokenBudget int) cache.Key {
+func (s *ChatService) chatContextKeyAt(scope, flowID string, gen uint64, req models.ChatRequest, providerID, model string, report *models.AnalysisReport, sourceFP string, tokenBudget int, access ai.ToolAccess) cache.Key {
 	if flowID == "" {
 		return cache.Key{}
 	}
@@ -123,11 +126,13 @@ func (s *ChatService) chatContextKeyAt(scope, flowID string, gen uint64, req mod
 	}
 	// sourceFP keys a source selection AND any on-disk change to it; ExcludeContext MUST be in the key.
 	// req.SystemPrompt holds the MERGED suffix (settings + request), so editing the setting cannot serve a stale
-	// context; the caller's token budget bounds the text, so it is in the key for the same reason.
+	// context; the caller's token budget bounds the text, and the tool access picks the system prompt, so both
+	// are in the key for the same reason.
 	k, _ := chatContexts.Key(callerTenant(scope), cache.Resource(flowID), cache.Version(strconv.FormatUint(gen, 10)),
 		cache.Param("block", req.ContextBlockID), cache.Param("prompt", req.SystemPrompt), cache.Param("provider", providerID),
 		cache.Param("model", model), cache.Param("report", reportFP), cache.Param("sources", sourceFP),
-		cache.Param("exclude", strconv.FormatBool(req.ExcludeContext)), cache.Param("budget", strconv.Itoa(tokenBudget)))
+		cache.Param("exclude", strconv.FormatBool(req.ExcludeContext)), cache.Param("budget", strconv.Itoa(tokenBudget)),
+		cache.Param("tools", strconv.Itoa(int(access))))
 	return k
 }
 
@@ -167,6 +172,7 @@ type chatContextValue struct {
 	scrubbedDoc *models.FlowDocument
 	sysPrompt   string
 	contextText string
+	tokenBudget int // the budget the context was built to (the preview shows it)
 }
 
 // chatContextEntry is the cached texts only — a strong pointer here let 32 entries pin 32 clones. src is the
@@ -213,16 +219,6 @@ func (s *ChatService) scrubbedDocFor(ctx context.Context, scope string, doc *mod
 		cc.docs.Set(key, scrubbedDocEntry{src: src, doc: sd}, 1, 0)
 	}
 	return sd, nil
-}
-
-// buildScrubbedContext is the SYNCHRONOUS path (shared with PreviewContext); guidelines belong to the user message, never the byte-stable system prompt.
-func (s *ChatService) buildScrubbedContext(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (scrubbedDoc *models.FlowDocument, sysPrompt, contextText, guidelines string, err error) {
-	cv, err := s.cachedContextCore(ctx, scope, provider, doc, report, req)
-	if err != nil {
-		return nil, "", "", "", err
-	}
-	guidelines = s.ragGuidelines(ctx, scope, doc, req.UserMessage)
-	return cv.scrubbedDoc, cv.sysPrompt, cv.contextText, scrubber.ScrubText(guidelines), nil
 }
 
 // ragGuidelines returns the turn's KB guidelines or "": this RLS-exempt path gates org knowledge on MEMBERSHIP, fail closed.
@@ -303,23 +299,23 @@ func (s *ChatService) registryCredentialOrg(ctx context.Context, orgID, scope st
 // cachedContextCore returns the memoised scrub+BuildContext result; bypassed with no document or no cache. A
 // document whose redacting clone cannot be made is an error (errContextScrub), never a context built on the
 // document itself.
-func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (chatContextValue, error) {
+func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provider ai.Provider, model string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest, access ai.ToolAccess) (chatContextValue, error) {
 	// Resolve the caller's custom instructions and context budget once, here where the caller is known.
 	req.SystemPrompt = s.systemPromptSuffix(ctx, req)
-	tokenBudget := s.contextTokenBudget(ctx, provider.ID())
+	tokenBudget := s.contextTokenBudget(ctx, provider, model)
 	if s.chatCtxCache == nil || doc == nil {
 		sd, err := scrubbedOrNil(doc)
 		if err != nil {
 			return chatContextValue{}, err
 		}
-		return s.computeContextCoreWith(provider, doc, sd, report, req, tokenBudget), nil
+		return s.computeContextCoreWith(doc, sd, report, req, tokenBudget, access), nil
 	}
 	// One generation read for both keys, before the build: the entry and the clone it points into must agree,
 	// and an invalidation during the build refuses the fill.
 	gen := s.chatCtxGen.Load(doc.ID)
 	src := weak.Make(doc)
 	key := s.chatContextKeyAt(scope, doc.ID, gen, req, provider.ID(), req.Model, report,
-		sourceFilesFingerprint(filepath.Dir(doc.FilePath), req.SelectedSourceFiles), tokenBudget)
+		sourceFilesFingerprint(filepath.Dir(doc.FilePath), req.SelectedSourceFiles), tokenBudget, access)
 	// The texts are memoised; the clone comes from the doc cache, never the entry.
 	if e, ok := s.chatCtxCache.texts.Get(key); ok && e.src == src {
 		sd, err := s.scrubbedDocFor(ctx, scope, doc, gen)
@@ -332,7 +328,7 @@ func (s *ChatService) cachedContextCore(ctx context.Context, scope string, provi
 	if err != nil {
 		return chatContextValue{}, err
 	}
-	cv := s.computeContextCoreWith(provider, doc, sd, report, req, tokenBudget)
+	cv := s.computeContextCoreWith(doc, sd, report, req, tokenBudget, access)
 	if s.chatCtxGen.FillOK(ctx, doc.ID, gen) {
 		s.chatCtxCache.texts.Set(key, chatContextEntry{src: src, sysPrompt: cv.sysPrompt, contextText: cv.contextText}, 1, 0)
 	}
@@ -380,25 +376,45 @@ const defaultContextTokenBudget = 4000
 // size.
 const MaxContextTokenBudget = 128000
 
-// contextTokenBudget is the caller's context token budget for providerID: their own document in cloud (a user's
-// setting is theirs, not the deployment's), s.settings on the desktop; at most MaxContextTokenBudget.
-func (s *ChatService) contextTokenBudget(ctx context.Context, providerID string) int {
+// contextTokenBudget is the caller's context token budget for a turn on provider and model: their own document
+// in cloud (a user's setting is theirs, not the deployment's), s.settings on the desktop, at most
+// MaxContextTokenBudget; without a setting, the budget the model's window affords (derivedContextBudget).
+func (s *ChatService) contextTokenBudget(ctx context.Context, provider ai.Provider, model string) int {
 	if prefs := s.callerPreferences(ctx); prefs != nil {
-		if pc, ok := prefs.AI.Providers[providerID]; ok && pc.ContextTokenBudget > 0 {
+		if pc, ok := prefs.AI.Providers[provider.ID()]; ok && pc.ContextTokenBudget > 0 {
 			return min(pc.ContextTokenBudget, MaxContextTokenBudget)
 		}
 	}
-	return defaultContextTokenBudget
+	return derivedContextBudget(ai.ContextLimitFor(ctx, provider, model))
 }
+
+// derivedContextBudget is the context budget a model's window affords when the caller set none (R-config-9): a
+// quarter of the window less the answer's reserve, so the history, the tool results and the answer have the
+// rest — never under the old flat default (an 8k window gets what it always got) and never over
+// MaxContextTokenBudget (the retrieval tools give the model the rest of a large flow). The budget is in the
+// context cache key, so the preview and the send derive the same one.
+func derivedContextBudget(window int) int {
+	if window <= 0 {
+		return defaultContextTokenBudget
+	}
+	budget := max(defaultContextTokenBudget, min(MaxContextTokenBudget, (window-contextReserve)/4))
+	// A window under twice the floor cannot hold the floor beside an answer: half of it, then.
+	return min(budget, max(window/2, 1))
+}
+
+// maxSourceTokenBudget bounds what a selected source file is cut to before the AST scrub and the tokenizer see
+// it (BoundSourceText: 16 bytes per token, 256 KB here), whatever the context budget: the scrub runs per cache
+// miss at ~0.5 s/MB, and the context's final cut keeps the first budget tokens anyway.
+const maxSourceTokenBudget = 16_000
 
 // computeContextCore is the uncached scrub+BuildContext path — expensive per-block work identical across turns.
 // Without a caller (no ctx) the budget is the deployment's default one.
-func (s *ChatService) computeContextCore(provider ai.Provider, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (chatContextValue, error) {
+func (s *ChatService) computeContextCore(provider ai.Provider, model string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest, access ai.ToolAccess) (chatContextValue, error) {
 	sd, err := scrubbedOrNil(doc)
 	if err != nil {
 		return chatContextValue{}, err
 	}
-	return s.computeContextCoreWith(provider, doc, sd, report, req, s.contextTokenBudget(context.Background(), provider.ID())), nil
+	return s.computeContextCoreWith(doc, sd, report, req, s.contextTokenBudget(context.Background(), provider, model), access), nil
 }
 
 // scrubbedOrNil is the redacting clone of a document that may be absent; a clone that cannot be made is
@@ -416,12 +432,12 @@ func scrubbedOrNil(doc *models.FlowDocument) (*models.FlowDocument, error) {
 
 // computeContextCoreWith is computeContextCore for a clone already scrubbed (shared via the doc cache) and a
 // budget already resolved (it is in the cache key).
-func (s *ChatService) computeContextCoreWith(provider ai.Provider, doc, scrubbedDoc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest, tokenBudget int) chatContextValue {
+func (s *ChatService) computeContextCoreWith(doc, scrubbedDoc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest, tokenBudget int, access ai.ToolAccess) chatContextValue {
 	ctxReq := ai.ContextRequest{
 		Flow:               scrubbedDoc,
 		TokenBudget:        tokenBudget,
-		Provider:           provider,
 		SystemPromptSuffix: req.SystemPrompt,
+		ToolAccess:         access,
 	}
 	if report != nil {
 		ctxReq.Findings = report.Findings
@@ -432,12 +448,15 @@ func (s *ChatService) computeContextCoreWith(provider ai.Provider, doc, scrubbed
 		ctxReq.SelectedSubflow = scrubbedDoc.BlockSubflow[req.ContextBlockID]
 		// Not even by its anchor (resolveContextBlock ran first): the model is told, not left without the section.
 		ctxReq.SelectedBlockMissing = ctxReq.SelectedBlock == nil
+		if ctxReq.SelectedBlock != nil {
+			ctxReq.VariableEvents = selectedBlockLineage(scrubbedDoc, ctxReq.SelectedBlock)
+		}
 	}
 	// Selected source files (desktop only). AST-scrubbed — the regex pass misses PAD password syntax — and byte-bounded.
 	if !req.ExcludeContext && len(req.SelectedSourceFiles) > 0 && s.flowCache != nil && doc != nil && doc.FilePath != "" {
 		if sources, sErr := s.flowCache.ReadSourceFiles(doc, req.SelectedSourceFiles); sErr == nil && len(sources) > 0 {
 			for name, content := range sources {
-				sources[name] = scrubSourceText(ai.BoundSourceText(content, tokenBudget))
+				sources[name] = scrubSourceText(ai.BoundSourceText(content, min(tokenBudget, maxSourceTokenBudget)))
 			}
 			ctxReq.RawSourceFiles = sources
 		}
@@ -445,7 +464,38 @@ func (s *ChatService) computeContextCoreWith(provider ai.Provider, doc, scrubbed
 
 	sysPrompt, contextText := ai.BuildContext(ctxReq)
 	// Scrubbed here, once per cache entry: every reusing turn used to scrub both texts again.
-	return chatContextValue{scrubbedDoc: scrubbedDoc, sysPrompt: contextScrub(sysPrompt), contextText: contextScrub(contextText)}
+	return chatContextValue{scrubbedDoc: scrubbedDoc, sysPrompt: contextScrub(sysPrompt), contextText: contextScrub(contextText), tokenBudget: tokenBudget}
+}
+
+// maxLineageVariables bounds the variables whose lineage the selected block's Variable History shows: its
+// output variable, then the variables it references, in the block's order (BuildContext bounds the events).
+const maxLineageVariables = 5
+
+// selectedBlockLineage is the Variable History of the selected block (R-analyzer-boundary-4), computed on the
+// redacted clone (an event names a block and a line, never a value); nil when the block sets and reads nothing.
+func selectedBlockLineage(doc *models.FlowDocument, block *models.Block) map[string][]models.VariableEvent {
+	var names []string
+	if out := strings.TrimSpace(block.Properties["_output"]); out != "" {
+		names = append(names, out)
+	}
+	for _, v := range block.Variables {
+		if v = strings.TrimSpace(v); v != "" && !slices.Contains(names, v) {
+			names = append(names, v)
+		}
+	}
+	if len(names) > maxLineageVariables {
+		names = names[:maxLineageVariables]
+	}
+	var events map[string][]models.VariableEvent
+	for _, name := range names {
+		if h := analyzer.BuildVariableLineage(doc, name); h != nil && len(h.Events) > 0 {
+			if events == nil {
+				events = make(map[string][]models.VariableEvent, len(names))
+			}
+			events[name] = h.Events
+		}
+	}
+	return events
 }
 
 // buildScopedMessages assembles scrubbed history plus ONE user turn; only user/assistant roles pass.
@@ -467,12 +517,13 @@ func buildScopedMessages(scope string, req models.ChatRequest, contextText, guid
 	}
 	// Through the memo too: this question is the next turn's history.
 	userContent := historyScrubs.scrubText(scope, req.UserMessage)
-	// The RAG guidelines ride in the user turn so the prompt cache covers the byte-identical prefix.
+	// The RAG guidelines ride in the user turn so the prompt cache covers the byte-identical prefix. They and the
+	// flow context sit in their data frames (ADR 0036): the system prompt says what is inside is not instructions.
 	if guidelines != "" {
-		userContent = guidelines + "\n\n" + userContent
+		userContent = ai.Frame(ai.FrameGuidelines, guidelines) + "\n\n" + userContent
 	}
 	if !req.ExcludeContext && contextText != "" {
-		userContent = "Context:\n" + contextText + "\n\n" + userContent
+		userContent = ai.Frame(ai.FrameFlowContext, contextText) + "\n\n" + userContent
 	}
 	return append(messages, ai.Message{Role: "user", Content: userContent})
 }
@@ -683,17 +734,131 @@ func countPromptTokens(ctx context.Context, provider ai.Provider, req *ai.Reques
 	return n, true
 }
 
-// PreviewContext returns what would be sent for a turn without a chat call.
+// currentReport is the turn's analysis report: the caller's, else the cached current one (the chat is grounded
+// in cached findings without re-analysing per turn); nil when no analysis has run. The preview resolves it the
+// same way, so it shows the Analysis Summary the turn sends first and shares the turn's cache entry.
+func (s *ChatService) currentReport(doc *models.FlowDocument, report *models.AnalysisReport) *models.AnalysisReport {
+	if report == nil && s.analysisCache != nil && doc != nil {
+		if cached, ok := s.analysisCache.CurrentReport(doc); ok {
+			return cached
+		}
+	}
+	return report
+}
+
+// guidelineSource hands assembleTurnRequest the turn's knowledge-base guidelines once the context is built (the
+// worker's lookup runs meanwhile): ok is false when the turn was cancelled while waiting.
+type guidelineSource func() (guidelines string, ok bool)
+
+// fixedGuidelines is a guidelineSource with the text in hand.
+func fixedGuidelines(text string) guidelineSource {
+	return func() (string, bool) { return text, true }
+}
+
+// turnAssembly is a turn's request as the first provider call sees it, before the window check, with the parts
+// the preview shows: the context's own system prompt and text (unframed), the guidelines, the budget the context
+// was built to and how many history messages were forwarded.
+type turnAssembly struct {
+	req         ai.Request
+	scrubbedDoc *models.FlowDocument
+	sysPrompt   string
+	contextText string
+	guidelines  string
+	tokenBudget int
+	history     int
+}
+
+// assembleTurnRequest builds the request of a turn: the memoised scrubbed context, the scrubbed history and the
+// question with the flow context and the guidelines in their frames, the generation parameters and — when the
+// turn uses tools — the gate's tool definitions (a provider with function calling) or the marker-mode tool
+// instructions appended to the system prompt. buildStreamRequest and PreviewContext share it, so the preview
+// shows what the worker sends (R-analyzer-boundary-3) and the request snapshot golden pins it (R-testing-8).
+func (s *ChatService) assembleTurnRequest(ctx context.Context, scope string, ts turnSetup, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest, guidelines guidelineSource, gate ai.ToolGate, useTools bool) (a turnAssembly, ok bool, err error) {
+	core, err := s.cachedContextCore(ctx, scope, ts.provider, ts.model.resolved, doc, report, req, ai.ToolAccessOf(useTools, gate))
+	if err != nil {
+		return turnAssembly{}, false, err
+	}
+	text := ""
+	if guidelines != nil {
+		if text, ok = guidelines(); !ok {
+			return turnAssembly{}, false, nil
+		}
+	}
+	text = scrubber.ScrubText(text)
+	messages := buildScopedMessages(scope, req, core.contextText, text)
+	// The provider-level id (ts.model.resolved) — a registry "m/<entryId>" answers to no deployment.
+	temperature, maxTokens := turnGenerationParams(ctx, ts.provider, req, ts.model)
+	aiReq := ai.Request{
+		SystemPrompt: core.sysPrompt,
+		Messages:     messages,
+		Model:        ts.model.resolved,
+		Temperature:  temperature,
+		// An explicit temperature (0 included) is sent as chosen; unset keeps "provider default".
+		TemperatureSet: req.TemperatureSet,
+		MaxTokens:      maxTokens,
+		// Per-provider reasoning depth; "" keeps the provider default.
+		ReasoningEffort: req.ReasoningEffort,
+		OrgID:           ts.orgID,
+	}
+	if useTools {
+		if ts.provider.SupportsTools() {
+			aiReq.Tools = ai.ToolDefinitionsFor(gate)
+		} else {
+			// Marker mode: the instructions are APPENDED to the system prompt, never injected as a leading system
+			// message (truncation pins Messages[:1]).
+			aiReq.SystemPrompt = withSuffix(aiReq.SystemPrompt, ai.ToolPromptInstructionsFor(gate))
+		}
+	}
+	return turnAssembly{req: aiReq, scrubbedDoc: core.scrubbedDoc, sysPrompt: core.sysPrompt, contextText: core.contextText,
+		guidelines: text, tokenBudget: core.tokenBudget, history: len(messages) - 1}, true, nil
+}
+
+// withSuffix appends suffix to text after a blank line, or is suffix when text is empty.
+func withSuffix(text, suffix string) string {
+	if text == "" {
+		return suffix
+	}
+	return text + "\n\n" + suffix
+}
+
+// requestTokenEstimate is the prompt estimate the window check works with — the system prompt, every tool schema
+// (+8 framing) and every message (+4 framing), by the provider's estimator — by part: the last message split
+// into the flow-context frame and the rest of the turn.
+func requestTokenEstimate(provider ai.Provider, req *ai.Request, contextFrame string) (int, models.ContextPreviewBreakdown) {
+	est := provider.EstimateTokens
+	var b models.ContextPreviewBreakdown
+	b.System = est(req.SystemPrompt)
+	for _, td := range req.Tools {
+		b.Tools += est(string(td.InputSchema)) + 8
+	}
+	n := len(req.Messages)
+	for _, m := range req.Messages[:max(n-1, 0)] {
+		b.History += est(m.Content) + 4
+	}
+	if n > 0 {
+		last := est(req.Messages[n-1].Content) + 4
+		if contextFrame != "" {
+			b.Context = est(contextFrame)
+		}
+		b.User = max(last-b.Context, 0)
+	}
+	return b.System + b.Tools + b.History + b.Context + b.User, b
+}
+
+// PreviewContext returns what a turn would send, without a chat call: the turn's own request assembly
+// (assembleTurnRequest) over the cached report, the stored history and the tool gate, as StreamChatMessage builds
+// it, so the preview and the send agree and share one chat.context entry (R-analyzer-boundary-3).
 func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (res *models.ContextPreview, err error) {
 	defer logger.Guard("App.PreviewContext", &err)
 	ctx = withTurnMemo(ctx) // one org-role and settings read, as a turn makes
+	report = s.currentReport(doc, report)
 
 	// Same resolution as prepareTurn: the preview must accept exactly what the turn would.
 	orgID := ""
 	if doc != nil {
 		orgID = doc.OrganizationID
 	}
-	ctx = ai.WithBudgetScope(ctx, scope, orgID) // the flow's org for the policy, as the worker seeds it
+	ctx = ai.WithUsageScope(ctx, scope, orgID) // the flow's org for the policy, as the worker seeds it
 	azure, err := s.resolveAzureModel(ctx, scope, doc, req)
 	if err != nil {
 		return nil, err
@@ -704,27 +869,72 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 	}
 	model := newTurnModel(req, azure)
 
+	// The stored conversation, as the send rebuilds it when the request carries no history (in cloud mode the
+	// model's context ends before a question already stored under its id, as persistUserTurnVersioned cuts it);
+	// a history that cannot be read previews without one, as the turn then answers.
+	if len(req.Messages) == 0 && doc != nil {
+		if history, hErr := s.reconstructHistory(ctx, doc, req); hErr == nil {
+			if i := storedUserTurn(req, history); i >= 0 && s.useBackendConversations() {
+				history = history[:i]
+			}
+			req.Messages = history
+		} else {
+			logger.Warn("chat preview: history load failed; previewing without prior context", "error", hErr)
+		}
+	}
 	asked := req.ContextBlockID
 	req, blockStatus := resolveContextBlock(doc, req)
-	_, sysPrompt, contextText, guidelines, err := s.buildScrubbedContext(ctx, scope, provider, doc, report, req)
+	useTools := req.UseTools || model.agent()
+	gate := ai.NewToolGate(auth.ActorFromContext(ctx), s.flowCache != nil, s.canEditFlow(ctx, doc))
+	ts := turnSetup{provider: provider, model: model, orgID: orgID}
+	// The knowledge base under the stream's deadline: a slow lookup previews without guidelines, as the turn runs.
+	guidelines := func() (string, bool) {
+		ragCtx, cancel := context.WithTimeout(ctx, ragGuidelinesDeadline)
+		defer cancel()
+		return s.ragGuidelines(ragCtx, scope, doc, req.UserMessage), true
+	}
+	a, _, err := s.assembleTurnRequest(ctx, scope, ts, doc, report, req, guidelines, gate, useTools)
 	if err != nil {
 		return nil, err
 	}
-	// The free-text scrub, as the request build's (historyScrubs): the preview shows what is sent.
-	scrubbedUserMsg := scrubber.ScrubFreeText(req.UserMessage)
-	if guidelines != "" {
-		// Shown where they are sent: in the user turn, not the system prompt.
-		scrubbedUserMsg = guidelines + "\n\n" + scrubbedUserMsg
+
+	ctxLimit := ai.ContextLimitFor(ctx, provider, model.resolved)
+	// The window check the send makes, on a copy: how many history messages it would leave out.
+	probe := a.req
+	dropped := 0
+	if pin := len(probe.Messages) - 1; pin >= 0 {
+		if newPin, tErr := truncateForContextWindow(ctx, provider, &probe, ctxLimit, pin); tErr == nil {
+			dropped = pin - newPin
+		} else {
+			dropped = pin // not even the turn alone fits: the history would all go, and the turn still fail
+		}
+	}
+	contextText, contextFrame := "", ""
+	if !req.ExcludeContext && a.contextText != "" {
+		contextText = a.contextText
+		contextFrame = ai.Frame(ai.FrameFlowContext, a.contextText) + "\n\n"
+	}
+	total, breakdown := requestTokenEstimate(provider, &a.req, contextFrame)
+	var tools []string
+	if useTools {
+		for _, td := range ai.ToolDefinitionsFor(gate) {
+			tools = append(tools, td.Name)
+		}
 	}
 
-	total := provider.EstimateTokens(sysPrompt + contextText + scrubbedUserMsg)
-
 	res = &models.ContextPreview{
-		SystemPrompt:    sysPrompt,
-		ContextText:     contextText,
-		UserMessage:     scrubbedUserMsg,
+		SystemPrompt: a.req.SystemPrompt,
+		ContextText:  contextText,
+		// The turn as sent, less the flow-context frame shown above: the guidelines in their frame, the question.
+		UserMessage:     strings.TrimPrefix(a.req.Messages[len(a.req.Messages)-1].Content, contextFrame),
 		EstimatedTokens: total,
-		ContextLimit:    ai.ContextLimitFor(ctx, provider, model.resolved),
+		ContextLimit:    ctxLimit,
+		Breakdown:       breakdown,
+		HistoryMessages: a.history,
+		HistoryDropped:  dropped,
+		ToolsOffered:    useTools,
+		Tools:           tools,
+		ContextBudget:   a.tokenBudget,
 		ContextBlock:    blockStatus,
 	}
 	if req.ContextBlockID != asked {

@@ -41,9 +41,6 @@ export type CredentialFieldType = (typeof CREDENTIAL_FIELD_TYPES)[number]
 export const PROVIDER_MODES = ['cloud', 'desktop'] as const
 export type ProviderMode = (typeof PROVIDER_MODES)[number]
 
-export const PROVIDER_PRICINGS = ['catalog', 'free', 'unpriced'] as const
-export type ProviderPricing = (typeof PROVIDER_PRICINGS)[number]
-
 export const PROVIDER_CAP_EMBEDDINGS = 'embeddings'
 /** Model ids are deployment aliases (Azure AI Foundry): the knowledge base embeds with such a provider only on the
  * operator's PAD_EMBEDDING_PROVIDER pin. Mirrors internal/ai CapModelAliases. */
@@ -92,7 +89,6 @@ export interface ProviderSpec {
   configured: boolean
   color?: string
   icon?: string
-  pricing?: Tolerant<ProviderPricing>
 }
 
 export interface ProviderCatalog {
@@ -103,8 +99,6 @@ export interface ModelDetail {
   id: string
   displayName: string
   contextLimit: number
-  inputCostPerM: number
-  outputCostPerM: number
   supportsTools?: boolean
   kind?: Tolerant<AzureModelKind>
   purpose?: Tolerant<ModelPurpose>
@@ -136,7 +130,6 @@ export interface ProviderInfo {
   endpoints?: ProviderEndpoints
   color?: string
   icon?: string
-  pricing?: Tolerant<ProviderPricing>
 }
 
 export interface ProviderTestResult {

@@ -3,6 +3,7 @@ package service
 import (
 	"testing"
 
+	"pad-analyzer/internal/ai"
 	"pad-core/models"
 )
 
@@ -26,7 +27,7 @@ func TestBuildMessages_MergesContextIntoSingleUserTurn(t *testing.T) {
 	if last.Role != "user" {
 		t.Errorf("last message role = %q, want user", last.Role)
 	}
-	want := "Context:\nFLOW CONTEXT HERE\n\nwhat does this flow do?"
+	want := ai.Frame(ai.FrameFlowContext, "FLOW CONTEXT HERE") + "\n\nwhat does this flow do?"
 	if last.Content != want {
 		t.Errorf("merged user turn = %q, want %q", last.Content, want)
 	}
@@ -98,14 +99,14 @@ func TestBuildMessages_GuidelinesInUserTurnNotSystemPrompt(t *testing.T) {
 	if len(out) != 3 || out[0].Content != "earlier" || out[1].Content != "answer" {
 		t.Fatalf("history changed: %+v", out)
 	}
-	want := "Context:\nFLOW CONTEXT\n\n" + guidelines + "\n\nwhat does this flow do?"
+	want := ai.Frame(ai.FrameFlowContext, "FLOW CONTEXT") + "\n\n" + ai.Frame(ai.FrameGuidelines, guidelines) + "\n\nwhat does this flow do?"
 	if got := out[2].Content; got != want {
 		t.Errorf("user turn = %q, want %q", got, want)
 	}
 
 	req.ExcludeContext = true
 	out = buildScopedMessages("", req, "FLOW CONTEXT", guidelines)
-	if got := out[2].Content; got != guidelines+"\n\nwhat does this flow do?" {
+	if got := out[2].Content; got != ai.Frame(ai.FrameGuidelines, guidelines)+"\n\nwhat does this flow do?" {
 		t.Errorf("ExcludeContext user turn = %q, want the guidelines kept and the context dropped", got)
 	}
 }

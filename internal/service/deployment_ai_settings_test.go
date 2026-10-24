@@ -13,18 +13,18 @@ import (
 	"pad-core/models"
 )
 
-// R-config-1: in cloud mode the deployment settings document (the enforced AI budgets, the embedding choice) had
-// no admin writer, and the ai.* values a user saves were never read.
+// R-config-1: in cloud mode the deployment settings document (the embedding choice) had no admin writer, and the
+// ai.* values a user saves were never read.
 
 // TestSetRuleEnabled_KeepsAnotherReplicasAIWrite: a rule write wrote back the WHOLE deployment document from its
-// replica's 30 s cache, so a budget an admin had just set on another replica was silently reverted.
+// replica's 30 s cache, so an embedding model an admin had just set on another replica was silently reverted.
 func TestSetRuleEnabled_KeepsAnotherReplicasAIWrite(t *testing.T) {
 	ctx := context.Background()
 	b := &countingBackend{}
 	onA := NewBackendSettingsProvider(ctx, b)
 	onB := NewBackendSettingsProvider(ctx, b) // primed before A's write; no invalidation reaches it
 	written := onA.Get()
-	written.AI.DailyBudget = 200
+	written.AI.EmbeddingModel = "text-embedding-3-large"
 	if err := onA.Update(ctx, *written); err != nil {
 		t.Fatal(err)
 	}
@@ -44,49 +44,14 @@ func TestSetRuleEnabled_KeepsAnotherReplicasAIWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.AI.DailyBudget != 200 {
-		t.Errorf("DailyBudget = %v after rule writes on another replica, want the admin's 200", stored.AI.DailyBudget)
+	if stored.AI.EmbeddingModel != "text-embedding-3-large" {
+		t.Errorf("EmbeddingModel = %q after rule writes on another replica, want the admin's", stored.AI.EmbeddingModel)
 	}
 	if rc := stored.Analysis.Rules["hardcoded-url"]; rc.Enabled {
 		t.Error("the rule write itself was lost")
 	}
 	if rc := stored.Analysis.Rules["deep-nesting"]; rc.Severity != "low" {
 		t.Errorf("the rule config write was lost: %+v", rc)
-	}
-}
-
-// TestUpdateUserSettings_IgnoresBudgetFields: budgets are enforced from the deployment document only, so a member's
-// write leaves the budgets their own document carries as they are, and the enforced value does not move.
-func TestUpdateUserSettings_IgnoresBudgetFields(t *testing.T) {
-	ctx := context.Background()
-	b := &countingBackend{FakeBackend: testutil.FakeBackend{Users: map[string]*storageif.User{"u1": {ID: "u1"}}}}
-	storedWithBudget(t, b, 200)
-	sys := NewSystemService(NewBackendSettingsProvider(ctx, b), nil, &testutil.CountingNotifier{}, b, config.ModeCloud, nil, nil)
-
-	before, err := b.LoadUserSettings(ctx, "u1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	in := models.DefaultSettings()
-	in.AI.DailyBudget = before.AI.DailyBudget + 1
-	in.AI.PerUserDailyBudget = 999
-	in.AI.ShowCostEstimates = !before.AI.ShowCostEstimates
-	if err := sys.UpdateUserSettings(ctx, "u1", *in, nil); err != nil {
-		t.Fatalf("UpdateUserSettings: %v", err)
-	}
-	mine, err := b.LoadUserSettings(ctx, "u1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mine.AI.DailyBudget != before.AI.DailyBudget || mine.AI.PerUserDailyBudget != before.AI.PerUserDailyBudget {
-		t.Errorf("a member write moved their document's budgets to %v/%v", mine.AI.DailyBudget, mine.AI.PerUserDailyBudget)
-	}
-	if mine.AI.ShowCostEstimates == before.AI.ShowCostEstimates {
-		t.Error("the rest of the ai section was not written")
-	}
-	deployment, _ := b.FakeBackend.LoadSettings(ctx)
-	if deployment.AI.DailyBudget != 200 {
-		t.Errorf("a member write moved the enforced budget to %v", deployment.AI.DailyBudget)
 	}
 }
 

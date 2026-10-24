@@ -23,6 +23,7 @@ var journaledEventTypes = map[string]bool{
 	"tool_result":  true,
 	"fix_proposal": true,
 	"fix_decision": true,
+	"notice":       true,
 }
 
 // maxJournalEvents bounds the journal: a handful of events per tool iteration, one per batch fix — 100 covers
@@ -31,11 +32,6 @@ const maxJournalEvents = 100
 
 // recordJournal appends an event when its type is journaled; called on the base emit path under the ctl mutex.
 func (c *streamCtl) recordJournal(eventType string, data map[string]interface{}) {
-	// The error path carries the billed usage of a failed turn: a client that missed the live event must get
-	// the same rates from ResumeStream / BeginStream.
-	if eventType == "done" || eventType == "error" {
-		c.noteDoneRates(data)
-	}
 	if !journaledEventTypes[eventType] {
 		return
 	}
@@ -50,15 +46,18 @@ func (c *streamCtl) recordJournal(eventType string, data map[string]interface{})
 	c.journalSeq++
 }
 
-// noteDoneRates records the USD per 1M token rates a done event carries, so a client that missed the live event
-// still gets them from ResumeStream / BeginStream. Caller holds c.mu.
-func (c *streamCtl) noteDoneRates(data map[string]interface{}) {
-	if v, ok := data["inputCostPerM"].(float64); ok {
-		c.inputCostPerM = v
-	}
-	if v, ok := data["outputCostPerM"].(float64); ok {
-		c.outputCostPerM = v
-	}
+// setDroppedHistory records the turn's cumulative history_truncated count.
+func (c *streamCtl) setDroppedHistory(n int) {
+	c.mu.Lock()
+	c.droppedHistory = n
+	c.mu.Unlock()
+}
+
+// droppedHistoryCount is the turn's cumulative history_truncated count so far.
+func (c *streamCtl) droppedHistoryCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.droppedHistory
 }
 
 // snapshotEvents returns a copy of the journal (callers must not alias the live slice).
@@ -78,6 +77,10 @@ type streamCtl struct {
 	cancel context.CancelFunc
 	// streamID addresses this stream's events (journal replay, emit envelopes).
 	streamID string
+	// droppedHistory is how many history messages the turn has left out to fit the window in all (the request
+	// build's, then each loop iteration's), under mu: the stored answer reads it here, since the journal that
+	// carries the notices may have been trimmed.
+	droppedHistory int
 	// started is closed (once) by BeginStream so every waiter unblocks together.
 	started   chan struct{}
 	startOnce sync.Once
@@ -94,15 +97,10 @@ type streamCtl struct {
 	tokensOut int
 	// servedModel is the model that answered (alias providers: the deployment's underlying model); guarded by mu.
 	servedModel string
-	// inputCostPerM / outputCostPerM are the rates the finished turn was billed at (noteDoneRates); guarded by mu.
-	inputCostPerM  float64
-	outputCostPerM float64
-	// ownerID, orgID, streamID, flowID and convKey are IMMUTABLE after publication: the budget ledger (spender) /
-	// ActiveStreamFor read them from other goroutines without a lock, so a later write would be a data race.
-	// orgID is the budget scope ("" = personal); flowID/convKey identify the conversation, so GET conversation
-	// can report the in-flight stream to a client that reloaded mid-turn.
+	// ownerID, streamID, flowID and convKey are IMMUTABLE after publication: ActiveStreamFor reads them from other
+	// goroutines without a lock, so a later write would be a data race. flowID/convKey identify the conversation,
+	// so GET conversation can report the in-flight stream to a client that reloaded mid-turn.
 	ownerID string // caller identity (scope) that created this stream
-	orgID   string
 	flowID  string // flow document the stream chats over ("" without one)
 	convKey string // conversation key (ChatRequest.ConversationKey)
 	// userTurnStored is set once the turn's question is in the stored conversation; ActiveStreamFor reports only
@@ -120,9 +118,6 @@ type streamCtl struct {
 	// published is set once another replica can know of the stream (its snapshot or an approval of it is in Redis): a
 	// replica that cannot keep its liveness key stops such streams (fencePublishedStreams).
 	published atomic.Bool
-	// inflightCost is THIS stream's spend-so-far plus one more maximum response, for OTHER streams' budget
-	// checks — usage rows land asynchronously, so N streams started together would all pass the same read.
-	inflightCost float64
 	// cancelReason is the client-facing explanation for a deliberate cancellation; it replaces the raw
 	// "context canceled" wrapping when the failure is reported. cancelCode is its class ("" = ChatErrStopped).
 	cancelReason string
@@ -250,22 +245,6 @@ func (c *streamCtl) sawOutput(text, toolCalls, done bool) {
 	if text || toolCalls || done {
 		c.awaitingOutput.Store(false)
 	}
-}
-
-// setInflight publishes this stream's spend-so-far plus reservation (see inflightCost).
-func (c *streamCtl) setInflight(cost float64) {
-	c.mu.Lock()
-	c.inflightCost = cost
-	c.mu.Unlock()
-}
-
-// spender is who the in-flight spend is charged to: the caller and the budget's org ("" = personal).
-func (c *streamCtl) spender() (scope, orgID string) { return c.ownerID, c.orgID }
-
-func (c *streamCtl) inflight() float64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.inflightCost
 }
 
 // cancelWithReason records why the stream is being deliberately cancelled, then cancels it; first reason wins.
@@ -399,14 +378,13 @@ func isStreamTruncation(err error) bool {
 // with the buffer and journal standing in by length and append count. Equal marks mean equal snapshots, so the
 // resume mirror skips the write (mirrorStream).
 type mirrorMark struct {
-	textLen               int
-	done                  bool
-	errMsg, errCode       string
-	errShared             bool
-	tokensIn, tokensOut   int
-	servedModel           string
-	inputRate, outputRate float64
-	journalSeq            uint64
+	textLen             int
+	done                bool
+	errMsg, errCode     string
+	errShared           bool
+	tokensIn, tokensOut int
+	servedModel         string
+	journalSeq          uint64
 	// unpublished is never set by markLocked, so a mark carrying it forces the next mirror tick to write.
 	unpublished bool
 }
@@ -418,8 +396,7 @@ var unpublishedMark = mirrorMark{unpublished: true}
 func (c *streamCtl) markLocked() mirrorMark {
 	return mirrorMark{
 		textLen: c.buffer.Len(), done: c.done, errMsg: c.errMsg, errCode: c.errCode, errShared: c.errShared,
-		tokensIn: c.tokensIn, tokensOut: c.tokensOut, servedModel: c.servedModel,
-		inputRate: c.inputCostPerM, outputRate: c.outputCostPerM, journalSeq: c.journalSeq,
+		tokensIn: c.tokensIn, tokensOut: c.tokensOut, servedModel: c.servedModel, journalSeq: c.journalSeq,
 	}
 }
 
@@ -452,17 +429,15 @@ func (c *streamCtl) snapshot() resumeSnapshot {
 // snapshotLocked is snapshot with c.mu held.
 func (c *streamCtl) snapshotLocked() resumeSnapshot {
 	return resumeSnapshot{
-		Owner:          c.ownerID,
-		Text:           c.buffer.String(),
-		Done:           c.done,
-		Error:          c.errMsg,
-		ErrorCode:      c.errCode,
-		ErrorShared:    c.errShared,
-		TokensIn:       c.tokensIn,
-		TokensOut:      c.tokensOut,
-		ServedModel:    c.servedModel,
-		InputCostPerM:  c.inputCostPerM,
-		OutputCostPerM: c.outputCostPerM,
-		Events:         c.snapshotEvents(),
+		Owner:       c.ownerID,
+		Text:        c.buffer.String(),
+		Done:        c.done,
+		Error:       c.errMsg,
+		ErrorCode:   c.errCode,
+		ErrorShared: c.errShared,
+		TokensIn:    c.tokensIn,
+		TokensOut:   c.tokensOut,
+		ServedModel: c.servedModel,
+		Events:      c.snapshotEvents(),
 	}
 }

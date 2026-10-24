@@ -386,31 +386,6 @@ func (b *PostgresStorageBackend) FlowDashboardAdvanced(ctx context.Context, owne
 		return nil, fmt.Errorf("iterate severity trend: %w", err)
 	}
 
-	// B. Cost breakdown by provider.
-	costRows, err := b.query(ctx).QueryContext(ctx, `
-		SELECT provider,
-		       COALESCE(SUM(estimated_cost), 0)::float,
-		       COALESCE(SUM(prompt_tokens), 0)::int,
-		       COALESCE(SUM(completion_tokens), 0)::int
-		FROM usage_metrics
-		WHERE user_id = $1 AND created_at >= NOW() - ($2::int * INTERVAL '1 day')
-		GROUP BY provider
-		ORDER BY SUM(estimated_cost) DESC`, ownerID, days)
-	if err != nil {
-		return nil, fmt.Errorf("dashboard cost by provider: %w", err)
-	}
-	defer costRows.Close()
-	for costRows.Next() {
-		var pc interfaces.ProviderCost
-		if err := costRows.Scan(&pc.Provider, &pc.Cost, &pc.TokensIn, &pc.TokensOut); err != nil {
-			return nil, fmt.Errorf("scan cost: %w", err)
-		}
-		out.CostByProv = append(out.CostByProv, pc)
-	}
-	if err := costRows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate cost by provider: %w", err)
-	}
-
 	// C. Rule frequency distribution (jsonb fan-out on flow_analysis.by_rule).
 	ruleRows, err := b.query(ctx).QueryContext(ctx, `
 		SELECT kv.key, SUM(kv.value::int)::int

@@ -234,41 +234,6 @@ A Gemini turn that spends its budget thinking ends with `MAX_TOKENS` and no answ
 - `ReasoningOutputFloor("gemini-2.5-pro") == 16384` and `ReasoningOutputFloor("gemini-2.0-flash") == 0`.
 - A Gemini Stream request with `ReasoningEffort` `"low"` serialises `generationConfig.thinkingConfig` with a `thinkingBudget`; `""` omits it. `providers.golden` lists reasoning in Gemini's caps.
 
-### R-provider-15
-
-**pricingFor has no policy for an unknown, zero or free price: a $0 listing row is authoritative, a missing row bills at the default model's rate, and a PricingFree provider is billed from its paid catalogue rows when the listing fails** · tier 1
-
-**Problem.** `pricingFor` short-circuits only `PricingUnpriced`. Otherwise it returns the first listing entry with `m.ID == modelID`, as found, whatever its `Pricing` (`audited.go:605-616`). When the model is absent, `usageMetric` falls back to `PricePerMillionTokens`, records a fallback metric and logs a WARN naming the model (513-520). Every bare-key provider implements that fallback as `specDefaultPricing`: the catalogue row of the spec's `DefaultModel`.
-
-For paid providers a $0 listing row does not occur. Claude, OpenAI, Gemini, xAI and GLM list only the static catalogue, and every one of those rows is priced. Live listings with $0 rows exist only for free providers (Copilot, GitHub Models), where $0 is correct. Two real gaps remain:
-- **(a) Uncatalogued models.** An uncatalogued, client-chosen model is billed at the default model's rate, not at $0. A new, more expensive model is therefore under-billed, and the daily cap trips only at the default model's rate. In the metric, `pricingMetricModel` collapses the name to `uncatalogued`; the WARN line is the only place it appears.
-- **(b) GitHub Models outages.** The GitHub Models spec is `PricingFree` ("nothing is metered"), and the live listing sets every row to 0/0. But `fetchModels` silently returns `catalogModels` on a request error, non-200, decode error or empty list, with `live=false` and no error, and the github-models catalogue rows carry paid prices. A turn during a `/models` outage therefore records real cost against the daily budget for a service the spec declares free. The no-token branch cannot occur on a chat turn.
-
-**Evidence.**
-- `internal/ai/audited.go:605` — `pricingFor`: only `spec.Pricing == PricingUnpriced` returns zero (606-608). The first listing entry with `m.ID == modelID` is returned as found whatever its `Pricing` (609-614).
-- `internal/ai/audited.go:514` — `usageMetric`: when not found, it uses `inner.PricePerMillionTokens`, calls `recordPricingFallback` and logs a WARN that names the model (513-520).
-- `internal/ai/spec.go:414` — `specDefaultPricing` is the `DefaultModel`'s catalogue row, and `Pricing{}` for free or unpriced providers (414-424). It is used by `claude.go:81`, `openai.go:51`, `xai.go:32` and `glm.go:49`.
-- `internal/ai/claude.go:92` — Claude's `Models` is the static catalogue. OpenAI's is too (`openai.go:57-59`), and every Claude, OpenAI, Gemini, xAI and GLM catalogue row is priced (`catalog.go:14-56`).
-- `internal/ai/copilot.go:170` — the Copilot live listing sets $0 rows (170-175), as does GitHub Models (`github_models.go:130-135`).
-- `internal/ai/served_model.go:263` — `pricingMetricModel` collapses an unknown name to `uncatalogued` (263-271).
-- `internal/ai/spec_github_models.go:16` — `Pricing: PricingFree`; the header comment (3-4) says "Free tier: nothing is metered".
-- `internal/ai/github_models.go:93` — `fetchModels` returns `catalogModels` with `live=false` and no error in five cases: no token (97-98), request error (102, 108), non-200 (113), decode error (121) and an empty list (139). The live rows set `Pricing` 0/0 (134).
-- `internal/ai/catalog.go:59` — the github-models catalogue rows are priced 2.5/10, 0.15/0.6, 0.7/0.9, 2.0/6.0, 0.07/0.14, 0.49/0.94 and 2.0/8.0 (59-67).
-
-**Change.**
-- Keep this item to the tier-1 fix. In `pricingFor`, `UsagePricing` and `ReservationPricing`, return a zero `Pricing` that counts as found when `spec.Pricing == PricingFree`, as `PricingUnpriced` already does.
-- Strip the prices from the github-models catalogue rows and keep their windows.
-- Add a `spec_test` assertion that a `PricingFree` catalogue has no priced rows.
-
-Two ideas are dropped from this item: an `UnknownPricePolicy` per deployment (price an uncatalogued model at the provider's most expensive catalogue row, or refuse the call), and a rule that a $0 row on a `PricingCatalog` provider means "unknown". Both reverse the documented pricing decisions (`docs/adr/0025-provider-specs.md:12`). They belong in a separate tier-3 item with its own ADR. That item would also surface "price unknown" in the model picker and the done payload; the done path already distinguishes `priced=false` (`internal/service/chat.go:1572-1573`).
-
-**Touches.** `internal/ai/audited.go`, `internal/ai/spec.go`, `internal/ai/catalog.go`, `internal/ai/github_models.go`, `internal/ai/audited_pricing_test.go`, `internal/ai/spec_test.go`
-
-**Done when.**
-- With the GitHub `/models` GET stubbed to 500, a chat turn's usage row has `estimated_cost` 0 and the done payload's rates are 0. A test asserts that every `PricingFree` catalogue row is unpriced.
-- Only in the separate tier-3 item, under its own ADR: a listing entry with `Pricing{}` on an openai-compatible `PricingCatalog` provider is billed at the provider's maximum catalogue rate under the default policy. Policy `refuse` makes a call on an uncatalogued model fail before the request, with a classified code.
-- `pad_ai_pricing_fallback_total` still increments on the fallback path.
-
 ### R-provider-18
 
 **Bare-key providers have no 'unreadable after rotation' state** · tier 1

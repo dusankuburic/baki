@@ -329,7 +329,7 @@ func TestParseOpenAISSE_OneChunkPerDecodedEvent(t *testing.T) {
 // reasoning feeds the estimate like text does; keepalives add nothing.
 func TestAudited_ReasoningCountsTowardCancelledEstimate(t *testing.T) {
 	stub := &auditStub{
-		models:       []ModelInfo{{ID: "m", Pricing: Pricing{InputCostPerM: 1, OutputCostPerM: 1}}},
+		models:       []ModelInfo{{ID: "m"}},
 		streamChunks: []Chunk{{}, {Reasoning: strings.Repeat("r", 400)}, {}},
 		streamErr:    context.Canceled,
 	}

@@ -49,9 +49,6 @@ func TestProviderSpecs_Complete(t *testing.T) {
 			if p.DefaultModel() != spec.DefaultModel && !spec.Caps.Has(CapModelAliases) {
 				t.Errorf("Ctor(...).DefaultModel() = %q, spec says %q", p.DefaultModel(), spec.DefaultModel)
 			}
-			if p.PricePerMillionTokens() != specDefaultPricing(spec) {
-				t.Errorf("Ctor(...).PricePerMillionTokens() = %+v, spec derives %+v", p.PricePerMillionTokens(), specDefaultPricing(spec))
-			}
 
 			if spec.Catalog != "" {
 				if len(modelCatalog[spec.Catalog]) == 0 {
@@ -60,23 +57,6 @@ func TestProviderSpecs_Complete(t *testing.T) {
 				if !spec.Caps.Has(CapModelAliases) && !catalogHas(spec.Catalog, spec.DefaultModel) {
 					t.Errorf("DefaultModel %q is not a %q catalogue row", spec.DefaultModel, spec.Catalog)
 				}
-			} else if spec.Pricing == PricingCatalog {
-				t.Error("Pricing catalog without a Catalog")
-			}
-			switch spec.Pricing {
-			case PricingCatalog:
-				if specDefaultPricing(spec) == (Pricing{}) {
-					t.Error("Pricing catalog derives a zero fallback price")
-				}
-			case PricingFree, PricingUnpriced:
-				if specDefaultPricing(spec) != (Pricing{}) {
-					t.Errorf("Pricing %s must derive Pricing{}", spec.Pricing)
-				}
-			default:
-				t.Errorf("Pricing %q is not a PricingMode", spec.Pricing)
-			}
-			if (spec.Pricing == PricingUnpriced) != spec.Caps.Has(CapModelAliases) {
-				t.Errorf("Pricing unpriced ⇔ CapModelAliases (pricing %s, aliases %v)", spec.Pricing, spec.Caps.Has(CapModelAliases))
 			}
 
 			keyed := spec.Ctor(Credential{Key: "k"})
@@ -249,9 +229,9 @@ func TestProviderSpecs_Golden(t *testing.T) {
 		if s.Keys.Family {
 			keys += "," + s.Keys.Primary + "/*"
 		}
-		fmt.Fprintf(&b, "%s order=%d name=%q auth=%s wire=%s caps=%s modes=%s keys=%s egress=%s pricing=%s catalog=%q default=%q credential=%s fields=%s resolver=%v color=%s icon=%s\n",
+		fmt.Fprintf(&b, "%s order=%d name=%q auth=%s wire=%s caps=%s modes=%s keys=%s egress=%s catalog=%q default=%q credential=%s fields=%s resolver=%v color=%s icon=%s\n",
 			s.ID, s.Order, s.Name, s.AuthType, s.Wire, strings.Join(s.Caps.Names(), ","), strings.Join(modes, ","), keys,
-			s.Egress.Kind, s.Pricing, s.Catalog, s.DefaultModel, s.Credential.Kind, strings.Join(fields, ","), s.Resolver != nil,
+			s.Egress.Kind, s.Catalog, s.DefaultModel, s.Credential.Kind, strings.Join(fields, ","), s.Resolver != nil,
 			s.Color, s.Icon)
 	}
 	path := filepath.Join("testdata", "providers.golden")

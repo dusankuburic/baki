@@ -238,36 +238,6 @@ On either path, a `fix_decision` lost in the gap leaves the card at "applying". 
 
 **ADR.** ADR 0030 specifies resume-by-offset; it does not describe the race branch.
 
-### R-streaming-7
-
-**History truncation to the context window is invisible to the user** · tier 2
-
-**Problem.** Before each provider call, the server drops the oldest turns until the prompt fits the window. It does this again on every tool-loop iteration as tool results grow. It discards the returned pin and emits nothing. The journaled event set has no kind for this: it holds `tool`, `tool_result`, `fix_proposal` and `fix_decision`, and the non-test emit sites send only `chunk`, `done`, `error`, `heartbeat` and those four. `parseChatEvent` returns null for an unknown type. The effects:
-
-- The assistant silently forgets earlier instructions on long threads or large flows.
-- The user cannot tell why an answer ignores something said ten turns ago.
-- Nothing suggests compaction until a `CONTEXT_LIMIT` error finally fires.
-
-**Evidence.**
-- `internal/service/chat.go:628` — the result of `truncateForContextWindow` is discarded (`if _, err :=` at 629); only the error is handled
-- `internal/service/chat.go:1119` — `trimmedTurn` re-truncates on each loop iteration (1120-1128) and fails only on overflow
-- `internal/service/chat_context.go:445` — `truncateForContextWindow` drops the oldest turns; `keep()` rewrites `req.Messages` (531-541)
-- `internal/service/chat_stream_control.go:21` — `journaledEventTypes` are tool, tool_result, fix_proposal and fix_decision; the only non-test `emit("...")` call sites in `internal/service` send chunk, done, error, heartbeat and those four
-- `frontend/src/lib/chatEvent.ts:184` — `parseChatEvent`'s switch has no notice or status kind; unknown types return null (234-235)
-
-**Change.** `truncateForContextWindow` already returns the moved pin (`chat_context.go:595`), so compute the dropped count as old pin minus new pin; the signature stays the same. Emit one journaled `notice` event `{kind:'history_truncated', dropped, keptFrom}` before the first chunk, and once more for each loop iteration that drops turns.
-
-A notice channel already exists. Provider status lines go out as journaled `tool` events built by `noticeEventData` (`chat.go:965-970`, `1248`, `1436`). The client already parses them (`chatEvent.ts:212-213`) and resume replays them. A first version could reuse that channel, but a persistent chip needs the new kind.
-
-On the client: parse the event and show a chip above the streaming bubble ("Earlier turns omitted (n)") with a Compact action. Store `truncated: n` on the committed message and render the chip from the message after reload.
-
-**Touches.** `internal/service/chat_context.go`, `internal/service/chat.go`, `internal/service/chat_stream_control.go`, `frontend/src/lib/chatEvent.ts`, `frontend/src/hooks/useStreamingMessage.ts`, `frontend/src/components/chat/hooks/stream-engine/accumulator.ts`, `frontend/src/components/chat/hooks/stream-engine/commit.ts`, `frontend/src/components/chat/MessageBubble.tsx`
-
-**Done when.**
-- Service test: a history over the window emits exactly one notice with `dropped > 0` before the first chunk, and the resume journal replays it.
-- `chatEvent.test` parses the notice, and a `useChatStreamEngine` test stores `truncated` on the committed message.
-- A `MessageBubble` test renders the chip with the count and a Compact action.
-
 ### R-streaming-2
 
 **The bounded journal silently truncates the persisted tool trail and orphans fix proposals/decisions on long agentic turns** · tier 3
@@ -292,37 +262,6 @@ When it happens, `persistAssistantTurn` derives `ToolCalls` and `FixProposals` f
 **Done when.**
 - A journal holds 150 tool pairs, plus one `fix_proposal` at index 3 and its `fix_decision` at index 149. `journalTurnRecord` returns the proposal with its decided status, and `ToolCalls` includes the truncation marker.
 - Journal memory stays bounded: `len(journal) <= cap + number of approval events`.
-
-### R-streaming-9
-
-**BuildContext bytes are non-deterministic across rebuilds (Go map iteration)** · tier 3
-
-**Problem.** `BuildContext` ranges over four Go maps: finding metadata (`context.go:101`), variable-event history (`:135`), block properties (`:213`) and the per-title finding counts (`:351`). Identical inputs can therefore produce differently ordered context bytes on every rebuild. The variable-event loop is dead code: the chat service never sets `VariableEvents` (`computeContextCoreWith`, `chat_context.go:347-369`), and the field is referenced only in `context.go`. The per-turn context cache hides the reordering within one generation on one replica. But it holds only 32 entries across all callers (`chat_context.go:23-24`) and is `ReplicaLocal` (`:83-86`). An eviction under multi-user load, or a turn on another replica, rebuilds the context in a new order.
-
-The provider prompt cache is not affected, for three reasons:
-- The context goes only into the final user message (`chat_context.go:399-402`).
-- Stored history keeps the bare question (`chat_conversation_version.go:302`), so a later turn's prefix never contains an earlier context.
-- Within a turn, `aiReq` is built once (`chat.go:597-626`) and reused by every tool-loop iteration.
-
-The comment at `chat_context.go:395` is about the RAG guidelines, not the context. The system prompt involves no map iteration (`context.go:40-44`). No context golden exists. The residual effect is small. When the text exceeds the budget, `TruncateToTokenLimit` (`context.go:156`) can keep different metadata, property or title lines from one rebuild to the next. The context preview can also list them in a different order from the context that is sent. This is tier 3.
-
-**Evidence.**
-- `internal/ai/context.go:101` — `for k, v := range f.Metadata` in the selected-block findings
-- `internal/ai/context.go:135` — `for varName, events := range req.VariableEvents`; the field is never set by the chat service (`chat_context.go:347-369`)
-- `internal/ai/context.go:213` — `for k, v := range block.Properties` in `writeBlockDetail`
-- `internal/ai/context.go:351` — `for title, count := range counts` in the findings summary
-- `internal/ai/context.go:156` — `TruncateToTokenLimit(b.String(), req.TokenBudget)` cuts the reordered text
-- `internal/service/chat_context.go:23` — `maxChatContextCache = 32` (24); `chatContexts` is declared `ReplicaLocal` (83-86), so another replica rebuilds on a miss
-- `internal/service/chat_context.go:399` — the context text is prepended to the final user turn only (399-402); the comment at 395 is about the RAG guidelines
-- `internal/service/chat_conversation_version.go:302` — the stored user turn keeps `req.UserMessage`, without the context
-- `internal/ai/testdata/` — holds only `tools.golden` and `providers.golden`
-
-**Change.** Sort map keys before iterating, in all four places (`slices.Sorted(maps.Keys(...))`). Add a determinism test that builds the same `ContextRequest` twice and asserts byte equality. Consider ordering the findings summary by count descending, then by title, rather than plain key order.
-
-**Touches.** `internal/ai/context.go`, `internal/ai/context_test.go`
-
-**Done when.**
-- `BuildContext` called twice on a request with 5 metadata keys, 3 variables, 4 properties and 6 finding titles yields identical `sysPrompt` and `contextMessage` bytes.
 
 ### R-streaming-10
 

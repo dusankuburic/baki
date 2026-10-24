@@ -160,10 +160,6 @@ func renderKnowledgeEmbeddingError(w http.ResponseWriter, err error) bool {
 // renderKnowledgeEmbeddingErrorDetails adds structured details: a re-index failed after committing pages reports its resume cursor.
 func renderKnowledgeEmbeddingErrorDetails(w http.ResponseWriter, err error, details map[string]any) bool {
 	switch {
-	case errors.Is(err, service.ErrAIBudgetExceeded):
-		render.ErrorWithCodeAndDetails(w, err, http.StatusTooManyRequests, "BUDGET_EXCEEDED", details)
-	case errors.Is(err, service.ErrAIBudgetUnavailable):
-		render.ErrorWithCodeAndDetails(w, err, http.StatusServiceUnavailable, "BUDGET_UNAVAILABLE", details)
 	case errors.Is(err, ai.ErrOrgEmbeddingDeploymentMissing), errors.Is(err, rag.ErrEmbeddingOrgCredentialRequired):
 		// Before ErrEmbeddingUnavailable, which wraps it: the org's shared credential names no embedding deployment,
 		// or a background re-index was asked for on a personal key.
@@ -297,8 +293,8 @@ func decodeKnowledgeReindexRequest(body io.Reader) (knowledgeReindexRequest, err
 // @Success      202 {object} map[string]string "background=true: the knowledge_reembed job was started ({status: accepted, job}); its progress is the job's run state (pad_job_* metrics, the job_runs row) and the document list's embeddingStranded counts"
 // @Failure      400 {object} map[string]string "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment, or a background run was asked for on a personal key), not allowed here (PROVIDER_NOT_ALLOWED), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED), a request the provider rejected (EMBEDDING_PROVIDER_REJECTED) or malformed body / cursor"
 // @Failure      409 {object} map[string]string "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED; resend with force — on a resumed request: the caller's model is not the one the run converted to), the caller's embedder is not PAD_EMBEDDING_DIM wide (EMBEDDING_WIDTH_OFF; set the pin to its width and restart, or resend with force), or another upload/re-index of this org — or a background re-index on any replica — is in flight, or this replica is at its lease cap (KNOWLEDGE_BUSY)"
-// @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED) or the daily AI budget is spent (BUDGET_EXCEEDED)"
-// @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE), the budget could not be checked (BUDGET_UNAVAILABLE) or the background job could not be started (KNOWLEDGE_JOB_UNAVAILABLE) or the knowledge base lock could not be taken (KNOWLEDGE_LOCK_UNAVAILABLE)"
+// @Failure      429 {object} map[string]string "Embedding provider throttled the request (EMBEDDING_RATE_LIMITED)"
+// @Failure      503 {object} map[string]string "Embedding provider unavailable (EMBEDDING_PROVIDER_UNAVAILABLE), the background job could not be started (KNOWLEDGE_JOB_UNAVAILABLE) or the knowledge base lock could not be taken (KNOWLEDGE_LOCK_UNAVAILABLE)"
 // @Failure      504 {object} map[string]string "The request's deadline ran out before a page was committed (KNOWLEDGE_TIMEOUT)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/orgs/{id}/knowledge/reindex [post]

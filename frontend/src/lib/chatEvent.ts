@@ -1,8 +1,6 @@
 
 export interface DoneMeta {
   servedModel?: string
-  inputCostPerM?: number
-  outputCostPerM?: number
   /**
    * Where the server's own writes left the stored conversation (ADR 0031, addendum): the version it holds after
    * this turn's question and answer, and the version the turn began from. A client still on the base version may
@@ -26,6 +24,7 @@ export type ChatEvent =
   | ({kind: 'error'; message: string; code?: string} & ErrorUsage)
   | {kind: 'heartbeat'}
   | {kind: 'tool'; label: string}
+  | NoticePayload
   | {kind: 'tool-result'; name: string; label: string; ok: boolean; durationMs: number; summary: string}
   | {
       kind: 'fix-proposal'
@@ -46,6 +45,19 @@ export type ChatEvent =
     }
 
 export type ApprovalSource = 'fix' | 'approval'
+
+/**
+ * A journaled notice about the turn itself. history_truncated: the server left `dropped` earlier history
+ * messages out to fit the model's context window, `keptFrom` of them in all so far.
+ */
+export interface NoticePayload {
+  kind: 'notice'
+  notice: string
+  dropped?: number
+  keptFrom?: number
+}
+
+export const NOTICE_HISTORY_TRUNCATED = 'history_truncated'
 
 export interface FixProposalEventItem {
   id: string
@@ -88,10 +100,6 @@ function doneMeta(data: Record<string, unknown>): DoneMeta {
   const meta: DoneMeta = {}
   const servedModel = asString(data.servedModel)
   if (servedModel) meta.servedModel = servedModel
-  const inputCostPerM = asNumber(data.inputCostPerM)
-  if (inputCostPerM !== null) meta.inputCostPerM = inputCostPerM
-  const outputCostPerM = asNumber(data.outputCostPerM)
-  if (outputCostPerM !== null) meta.outputCostPerM = outputCostPerM
   const conversationVersion = asVersion(data.conversationVersion)
   const conversationBase = asVersion(data.conversationBase)
   if (conversationVersion !== null && conversationBase !== null) {
@@ -211,6 +219,18 @@ export function parseChatEvent(raw: unknown): ChatEvent | null {
       return {kind: 'heartbeat'}
     case 'tool':
       return {kind: 'tool', label: asString(data.label) ?? asString(data.name) ?? 'Using tool'}
+    case 'notice': {
+      const notice = asString(data.kind)
+      if (!notice) return null
+      const dropped = asNumber(data.dropped)
+      const keptFrom = asNumber(data.keptFrom)
+      return {
+        kind: 'notice',
+        notice,
+        ...(dropped !== null ? {dropped} : {}),
+        ...(keptFrom !== null ? {keptFrom} : {}),
+      }
+    }
     case 'tool_result': {
       const name = asString(data.name)
       if (!name) return null

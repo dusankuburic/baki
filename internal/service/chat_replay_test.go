@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -37,9 +36,6 @@ type itemsProvider struct {
 	weights map[string]int // EstimateTokens by exact text; nil = len/4
 	models  []ai.ModelInfo
 	turns   []itemsTurn
-
-	mu   sync.Mutex
-	reqs []ai.Request
 }
 
 func (p *itemsProvider) ID() string          { return p.id }
@@ -58,13 +54,9 @@ func (p *itemsProvider) EstimateTokens(s string) int {
 }
 func (p *itemsProvider) Models(context.Context) ([]ai.ModelInfo, error) { return p.models, nil }
 
+// Stream records req with the shared fake's recorder and answers from the script.
 func (p *itemsProvider) Stream(_ context.Context, req ai.Request, onChunk func(ai.Chunk)) error {
-	p.mu.Lock()
-	cp := req
-	cp.Messages = append([]ai.Message(nil), req.Messages...)
-	p.reqs = append(p.reqs, cp)
-	i := len(p.reqs) - 1
-	p.mu.Unlock()
+	i := p.Record(req)
 	if i >= len(p.turns) {
 		onChunk(ai.Chunk{Text: "done"})
 		onChunk(ai.Chunk{Done: true, FinishReason: "end_turn"})
@@ -79,11 +71,7 @@ func (p *itemsProvider) Stream(_ context.Context, req ai.Request, onChunk func(a
 	return nil
 }
 
-func (p *itemsProvider) requests() []ai.Request {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]ai.Request(nil), p.reqs...)
-}
+func (p *itemsProvider) requests() []ai.Request { return p.Requests() }
 
 // toolTurn is a scripted turn that calls one tool and carries a record.
 func toolTurn(id, name, input, items string) itemsTurn {

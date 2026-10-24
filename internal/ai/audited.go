@@ -33,11 +33,8 @@ type auditedProvider struct {
 	// the resource, so a new resource's same-named deployment never inherits the old resource's mapping.
 	memoScope string
 	// usageOrg is the organisation whose SHARED credential this chain runs on ("" = the caller's own): a usage
-	// row without an org of its own is attributed to it, so every call on an org credential is capped by its budget.
+	// row without an org of its own is attributed to it.
 	usageOrg string
-	// budget is the pre-call gate (ADR 0028): consulted by admit before Chat, Stream and Embed reach the breaker
-	// and the retry policy. nil (a wrapper built outside the factory, the desktop) admits everything.
-	budget BudgetChecker
 	// embedNamer names the embedding model for usage records; nil falls back to a type assertion on inner.
 	embedNamer embedModelNamer
 	// embedIdentifier is the RAW provider's EmbeddingIdentifier, adopted for every provider (the wrappers hide it).
@@ -55,7 +52,7 @@ type auditedProvider struct {
 	modelsErr  error
 }
 
-// NewAuditedProvider wraps an existing provider and intercepts Chat/Stream calls to record cost metrics when
+// NewAuditedProvider wraps an existing provider and intercepts Chat/Stream calls to record token usage when
 // they finish. scope is the caller's key scope (user ID); providerID identifies which provider generated the usage.
 const maxConcurrentRecords = 16
 
@@ -63,18 +60,14 @@ func NewAuditedProvider(inner Provider, recorder UsageRecorder, scope, providerI
 	return newAuditedProvider(inner, recorder, scope, providerID)
 }
 
-// usage is one call's token usage: In/Out are the totals, CacheRead/CacheWrite the cached-input slice INCLUDED
-// in In (see Response). The totals drive the meter and the row; the slice is priced at the cached rates.
+// usage is one call's token usage: the input and output totals the meter and the row record.
 type usage struct {
-	In, Out, CacheRead, CacheWrite int
+	In, Out int
 }
 
-// clamped bounds a call's usage before it is priced: upstream counts can be negative, or a slice beyond the
-// total it is part of. CacheRead stays within [0, In], CacheWrite within [0, In-CacheRead].
+// clamped bounds a call's usage before it is recorded: upstream counts can be negative.
 func (u usage) clamped() usage {
 	u.In, u.Out = max(u.In, 0), max(u.Out, 0)
-	u.CacheRead = min(max(u.CacheRead, 0), u.In)
-	u.CacheWrite = min(max(u.CacheWrite, 0), u.In-u.CacheRead)
 	return u
 }
 
@@ -123,32 +116,10 @@ func (p *auditedProvider) adoptRawHints(raw Provider) {
 	}
 }
 
-// admit is the pre-call budget hook: the first thing Chat, Stream and Embed do, above the breaker and the
-// retry policy, so a refused call never counts as a provider failure and is never retried. An alias-model
-// provider (Azure AI Foundry) is exempt, as the chat and knowledge-base gates always had it — baki neither
-// prices nor counts its usage. The spender is the context's budget scope when one was set (WithBudgetScope),
-// else this chain's scope and the request's org, else the shared credential's org: the same resolution the
-// usage row makes, so what is gated is what is recorded. The checker's error is returned as is.
-func (p *auditedProvider) admit(ctx context.Context, kind BudgetCallKind, model, reqOrgID string) error {
-	if p.budget == nil || UsesModelAliases(p.providerID) || UsesModelAliases(p.inner.ID()) {
-		return nil
-	}
-	scope, orgID := p.spender(ctx, reqOrgID)
-	err := p.budget.Check(ctx, BudgetCall{Scope: scope, OrgID: orgID, ProviderID: p.providerID, Model: model, Kind: kind})
-	if err != nil {
-		reason := "unavailable"
-		if r, ok := err.(BudgetReasoner); ok {
-			reason = r.BudgetReason()
-		}
-		recordBudgetRefusal(p.providerID, string(kind), reason)
-	}
-	return err
-}
-
-// spender is who a call under ctx is charged to: the context's budget scope, else the chain's scope with the
+// user is who a call under ctx is recorded for: the context's usage scope, else the chain's scope with the
 // request's org (reqOrgID) or, without one, the shared credential's.
-func (p *auditedProvider) spender(ctx context.Context, reqOrgID string) (scope, orgID string) {
-	if s, o, ok := BudgetScopeFrom(ctx); ok {
+func (p *auditedProvider) user(ctx context.Context, reqOrgID string) (scope, orgID string) {
+	if s, o, ok := UsageScopeFrom(ctx); ok {
 		return s, o
 	}
 	if reqOrgID == "" {
@@ -158,9 +129,6 @@ func (p *auditedProvider) spender(ctx context.Context, reqOrgID string) (scope, 
 }
 
 func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, error) {
-	if err := p.admit(ctx, BudgetCallChat, req.Model, req.OrgID); err != nil {
-		return nil, err
-	}
 	start := time.Now()
 	resp, err := p.inner.Chat(ctx, req)
 	observeAIRequest(p.providerID, time.Since(start).Seconds())
@@ -173,34 +141,24 @@ func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, err
 		if in, out, served, ok := usageOf(err); ok && (in > 0 || out > 0) {
 			recordServedModel(p.memoScope, p.providerID, req.Model, served)
 			recordAITokens(p.providerID, in, out)
-			cr, cw := cacheUsageOf(err)
-			p.record(ctx, req.Model, served, req.OrgID, usage{In: in, Out: out, CacheRead: cr, CacheWrite: cw})
+			p.record(ctx, req.Model, served, req.OrgID, usage{In: in, Out: out})
 		}
 		return resp, err
 	}
 	if resp != nil {
 		recordAITokens(p.providerID, resp.TokensIn, resp.TokensOut)
 		recordServedModel(p.memoScope, p.providerID, req.Model, resp.ServedModel)
-		p.record(ctx, req.Model, resp.ServedModel, req.OrgID, usage{
-			In:         resp.TokensIn,
-			Out:        resp.TokensOut,
-			CacheRead:  resp.CacheReadTokens,
-			CacheWrite: resp.CacheWriteTokens,
-		})
+		p.record(ctx, req.Model, resp.ServedModel, req.OrgID, usage{In: resp.TokensIn, Out: resp.TokensOut})
 	}
 	return resp, err
 }
 
 func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
-	if err := p.admit(ctx, BudgetCallStream, req.Model, req.OrgID); err != nil {
-		return err
-	}
 	start := time.Now()
 	var tokensIn, tokensOut int
-	var cacheRead, cacheWrite int
 	// sawAny: any non-keepalive upstream chunk. sawContent: text or reasoning delivered. estOut is that
-	// content's token estimate, summed per delta (over-counting at boundaries — the safe direction for a spend
-	// cap) and folded early on long streams so memory stays bounded.
+	// content's token estimate, summed per delta (over-counting at boundaries) and folded early on long streams
+	// so memory stays bounded.
 	var sawChunkErr, sawDone, sawAny, sawContent bool
 	estOut := deltaEstimate{estimate: p.inner.EstimateTokens}
 	var servedModel string
@@ -215,9 +173,6 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 		if c.TokensOut > 0 {
 			tokensOut = c.TokensOut
 		}
-		if c.CacheReadTokens > 0 || c.CacheWriteTokens > 0 {
-			cacheRead, cacheWrite = c.CacheReadTokens, c.CacheWriteTokens
-		}
 		if c.ServedModel != "" {
 			servedModel = c.ServedModel
 		}
@@ -229,28 +184,28 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 			sawContent = true
 			estOut.add(c.Text)
 		}
-		// Split-off reasoning is billed output too: a stream cancelled or cut while the model is still thinking
-		// must not escape the estimate.
+		// Split-off reasoning is output too: a stream cancelled or cut while the model is still thinking must
+		// not escape the estimate.
 		if c.Reasoning != "" {
 			sawContent = true
 			estOut.add(c.Reasoning)
 		}
 		if c.ToolEvent != nil && c.ToolEvent.Done {
 			// Hosted steps are billed by Azure per call / session / GB-day,
-			// outside the token spend; count them so the gap is visible.
+			// outside the token counts; count them so they are visible.
 			recordAIHostedToolStep(p.providerID, c.ToolEvent.Name)
 		}
 		if c.Done {
 			sawDone = true
 			recordServedModel(p.memoScope, p.providerID, req.Model, servedModel)
 			// Compat servers that ignore stream_options (older vLLM/Ollama/proxies — reachable because base
-			// URLs are env-overridable) end with Done(0,0); without this fallback every such stream billed $0.
+			// URLs are env-overridable) end with Done(0,0); without this fallback every such stream recorded no tokens.
 			if tokensIn == 0 && tokensOut == 0 && (sawContent || len(c.ToolCalls) > 0) {
 				tokensOut = estOut.total()
 				tokensIn = p.estimateRequestTokens(req)
 			}
 			recordAITokens(p.providerID, tokensIn, tokensOut)
-			p.record(ctx, req.Model, servedModel, req.OrgID, usage{In: tokensIn, Out: tokensOut, CacheRead: cacheRead, CacheWrite: cacheWrite})
+			p.record(ctx, req.Model, servedModel, req.OrgID, usage{In: tokensIn, Out: tokensOut})
 		}
 		onChunk(c)
 	}
@@ -274,14 +229,11 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 			if served != "" {
 				servedModel = served
 			}
-			if cr, cw := cacheUsageOf(err); cr > 0 || cw > 0 {
-				cacheRead, cacheWrite = cr, cw
-			}
 		}
 	}
 	// A stream that ended without Done (truncation, mid-stream error, cancel) still consumed tokens; record
 	// what the provider reported, falling back to estimates. Gated on evidence the request reached the provider,
-	// so a circuit-open or refused connection isn't billed an estimate.
+	// so a circuit-open or refused connection records no estimate.
 	if !sawDone && (sawAny || sawContent || tokensIn > 0 || tokensOut > 0 || sawChunkErr) {
 		if tokensOut == 0 {
 			tokensOut = estOut.total()
@@ -292,7 +244,7 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 		// The model that answered rides on every content chunk, so a stream cut before Done still teaches the memo.
 		recordServedModel(p.memoScope, p.providerID, req.Model, servedModel)
 		recordAITokens(p.providerID, tokensIn, tokensOut)
-		p.record(ctx, req.Model, servedModel, req.OrgID, usage{In: tokensIn, Out: tokensOut, CacheRead: cacheRead, CacheWrite: cacheWrite})
+		p.record(ctx, req.Model, servedModel, req.OrgID, usage{In: tokensIn, Out: tokensOut})
 	}
 	return err
 }
@@ -415,15 +367,12 @@ func (p *auditedProvider) estimateRequestTokens(req Request) int {
 	return total
 }
 
-// detachedPricingTimeout bounds the background pricing step of recordDetached (a provider model listing at worst).
-const detachedPricingTimeout = 10 * time.Second
-
 func (p *auditedProvider) record(ctx context.Context, modelID, servedModel, orgID string, u usage) {
 	u = u.clamped()
 	if p.recorder == nil || (u.In == 0 && u.Out == 0) {
 		return
 	}
-	metric := p.usageMetric(ctx, modelID, servedModel, orgID, u)
+	metric := p.usageMetric(modelID, servedModel, orgID, u)
 
 	// Asynchronously record the usage so it doesn't block the caller. The semaphore acquire is NON-blocking:
 	// when all slots are in flight the metric is DROPPED (recordUsageDropped) rather than parking
@@ -432,8 +381,8 @@ func (p *auditedProvider) record(ctx context.Context, modelID, servedModel, orgI
 		return
 	}
 	// Usage accounting must survive the request that generated it: binding this to the caller's context would
-	// drop the spend record for exactly the turns a user cancels, under-counting the daily budget the chat path
-	// then enforces. usageRecords drains it at shutdown; the semaphore above bounds concurrency.
+	// drop the record for exactly the turns a user cancels. usageRecords drains it at shutdown; the semaphore
+	// above bounds concurrency.
 	p.goRecord(modelID, func() { p.save(&metric) })
 }
 
@@ -457,25 +406,6 @@ func (p *auditedProvider) goRecord(modelID string, fn func()) {
 		recordUsageDropped("runner")
 		logger.Warn("AI usage metric dropped — usage runner refused it", "provider", p.providerID, "model", modelID)
 	}
-}
-
-// recordDetached is record for callers on a short deadline (the per-turn RAG query embeds under 800 ms):
-// pricing may need the live model listing, so pricing AND saving run in the background slot detached from the
-// caller's cancellation, with their own timeout.
-func (p *auditedProvider) recordDetached(ctx context.Context, modelID, servedModel, orgID string, u usage) {
-	u = u.clamped()
-	if p.recorder == nil || (u.In == 0 && u.Out == 0) {
-		return
-	}
-	if !p.acquireRecordSlot(modelID) {
-		return
-	}
-	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedPricingTimeout)
-	p.goRecord(modelID, func() {
-		defer cancel()
-		metric := p.usageMetric(pctx, modelID, servedModel, orgID, u)
-		p.save(&metric)
-	})
 }
 
 // acquireRecordSlot takes one of the maxConcurrentRecords background slots without blocking; false (metric dropped and counted) when all are busy.
@@ -508,25 +438,10 @@ func (p *auditedProvider) save(metric *interfaces.UsageMetric) {
 	}
 }
 
-// usageMetric prices one call's tokens and builds its usage row. A model with no known price falls back to the
-// provider-wide PricePerMillionTokens — recording $0 would let the daily budget never trip.
-func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel, orgID string, u usage) interfaces.UsageMetric {
-	pricing, found := p.pricingFor(ctx, modelID, servedModel)
-	if !found {
-		pricing = p.inner.PricePerMillionTokens()
-		recordPricingFallback(p.providerID, pricingMetricModel(p.providerID, modelID))
-		logger.Warn("AI usage priced from provider default — model not in catalog",
-			"provider", p.providerID, "model", modelID, "servedModel", servedModel)
-	}
-	// Cached input tokens bill at their own rates (Claude reads 0.025-0.1× by family, 5-minute writes 1.25×;
-	// every other route keeps 1.0; Foundry unpriced). u.In stays the TOTAL the meter and row record.
-	uncached := max(u.In-u.CacheRead-u.CacheWrite, 0)
-	readMul := cacheReadMultiplier(p.providerID, modelID, servedModel)
-	inputCost := (float64(uncached) + readMul*float64(u.CacheRead) + cacheWriteMultiplier*float64(u.CacheWrite)) / 1000000.0 * pricing.InputCostPerM
-	outputCost := (float64(u.Out) / 1000000.0) * pricing.OutputCostPerM
-
+// usageMetric builds one call's usage row.
+func (p *auditedProvider) usageMetric(modelID, servedModel, orgID string, u usage) interfaces.UsageMetric {
 	if orgID == "" {
-		// A chain built from an org's shared credential bills the org even when the call carried no org.
+		// A chain built from an org's shared credential records the org even when the call carried no org.
 		orgID = p.usageOrg
 	}
 
@@ -534,7 +449,7 @@ func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel,
 		ID:     uuid.NewString(),
 		UserID: p.scope,
 		// OrgID is carried on the request, not fixed at construction, so one audited provider attributes
-		// org-scoped and personal usage correctly — this is what lets GetDailyUsage enforce org budgets.
+		// org-scoped and personal usage correctly.
 		OrgID:    orgID,
 		Provider: p.providerID,
 		Model:    modelID,
@@ -542,12 +457,8 @@ func (p *auditedProvider) usageMetric(ctx context.Context, modelID, servedModel,
 		ServedModel:      usageServedModel(p.providerID, modelID, servedModel),
 		PromptTokens:     u.In,
 		CompletionTokens: u.Out,
-		EstimatedCost:    inputCost + outputCost,
 		CreatedAt:        time.Now(),
 	}
-	// Deployment-wide spend only: a user+org label would mint one permanent Prometheus series per user and
-	// would take the scrape down (per-tenant attribution is the UsageMetric row above).
-	recordAIUsageCost(inputCost + outputCost)
 	return metric
 }
 
@@ -576,64 +487,20 @@ func usageServedModel(providerID, modelID, servedModel string) string {
 	return served
 }
 
-// ReservationPricing is the rate an in-flight budget reservation for model is priced at: the spec's pricing
-// mode decides — an unpriced family (Azure AI Foundry) reserves nothing; every other provider, and a provider
-// the registry does not know (a test stub), keeps its provider-wide rate.
-func (p *auditedProvider) ReservationPricing(ctx context.Context, model string) Pricing {
-	if spec, ok := lookupSpec(p.providerID); ok && spec.Pricing == PricingUnpriced {
-		return Pricing{}
-	}
-	return p.inner.PricePerMillionTokens()
-}
-
-// UsagePricing is the rate a finished turn on model (answered by served) was billed at — the same resolution
-// as usageMetric, without recording — for the done payload. false only when nothing at all prices the call.
-func (p *auditedProvider) UsagePricing(ctx context.Context, model, served string) (Pricing, bool) {
-	if pricing, ok := p.pricingFor(ctx, model, served); ok {
-		return pricing, true
-	}
-	if pricing := p.inner.PricePerMillionTokens(); pricing != (Pricing{}) {
-		return pricing, true
-	}
-	return Pricing{}, false
-}
-
-// pricingFor resolves the per-million rates a call is billed at; false sends the caller to the provider-wide
-// fallback. Model-name providers price by the request model's own listing entry — a live listing is
-// authoritative, including deliberate $0 entries, and the served model is never consulted; an unpriced family
-// by its spec (Foundry deployments, model-router, agents) is a zero price that counts as found.
-func (p *auditedProvider) pricingFor(ctx context.Context, modelID, servedModel string) (Pricing, bool) {
-	if spec, ok := lookupSpec(p.providerID); ok && spec.Pricing == PricingUnpriced {
-		return Pricing{}, true
-	}
-	if models, err := p.Models(ctx); err == nil {
-		for _, m := range models {
-			if m.ID == modelID {
-				return m.Pricing, true
-			}
-		}
-	}
-	return Pricing{}, false
-}
-
 // Delegate everything else to the inner provider
-func (p *auditedProvider) SupportsTools() bool            { return p.inner.SupportsTools() }
-func (p *auditedProvider) ID() string                     { return p.inner.ID() }
-func (p *auditedProvider) Name() string                   { return p.inner.Name() }
-func (p *auditedProvider) ContextLimit() int              { return p.inner.ContextLimit() }
-func (p *auditedProvider) PricePerMillionTokens() Pricing { return p.inner.PricePerMillionTokens() }
+func (p *auditedProvider) SupportsTools() bool { return p.inner.SupportsTools() }
+func (p *auditedProvider) ID() string          { return p.inner.ID() }
+func (p *auditedProvider) Name() string        { return p.inner.Name() }
+func (p *auditedProvider) ContextLimit() int   { return p.inner.ContextLimit() }
 
 // embedModelNamer is implemented by providers that expose the model name sent to their /embeddings-equivalent
-// endpoint, so embedding usage is priced against the model actually used.
+// endpoint, so embedding usage is recorded under the model actually used.
 type embedModelNamer interface {
 	EmbeddingModel() string
 }
 
 func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	// Embed carries no Request: the model is the embedding model named below, the org the context's.
-	if err := p.admit(ctx, BudgetCallEmbed, "", ""); err != nil {
-		return nil, err
-	}
 	start := time.Now()
 	res, err := p.inner.Embed(ctx, text)
 	observeAIRequest(p.providerID, time.Since(start).Seconds())
@@ -641,10 +508,9 @@ func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32
 		recordAIError(p.providerID)
 		return res, err
 	}
-	// Embedding APIs bill per INPUT token (no output): estimate the batch's input tokens and record under the
-	// embedding model's name; spend attributes to the user and the org the call was gated on — the context's
-	// budget scope (an org corpus embedded through a member's own key still bills the org), else the shared
-	// credential's org (usageOrg).
+	// Embedding APIs count INPUT tokens only: estimate the batch's input tokens and record under the embedding
+	// model's name, for the context's usage scope (an org corpus embedded through a member's own key is the
+	// org's), else the shared credential's org (usageOrg).
 	if len(text) > 0 {
 		tokensIn := 0
 		for _, t := range text {
@@ -660,10 +526,8 @@ func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32
 			model = p.inner.DefaultModel()
 		}
 		recordAITokens(p.providerID, tokensIn, 0)
-		_, orgID := p.spender(ctx, "")
-		// Pricing may need the live model listing; the per-turn RAG query embeds under an 800 ms budget, which
-		// must never be spent on it.
-		p.recordDetached(ctx, model, "", orgID, usage{In: tokensIn})
+		_, orgID := p.user(ctx, "")
+		p.record(ctx, model, "", orgID, usage{In: tokensIn})
 	}
 	return res, err
 }
@@ -694,7 +558,7 @@ func (p *auditedProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 			// A registered model is listed whatever the live listing returned (an agent beyond its cap, a
 			// failed listing), so it is sized like a listed one below.
 			p.models = addUnlistedRegistryModels(p.models, registry)
-			// Deployment aliases (Azure AI Foundry) learn their served model, price and context window from
+			// Deployment aliases (Azure AI Foundry) learn their served model and context window from
 			// the model that served them last on the same resource, clamped by their own rejection's window.
 			p.models = enrichServedModels(p.memoScope, p.providerID, p.models)
 			// The user's own sizing of a registered model beats the catalogue, the listing and the memo — but

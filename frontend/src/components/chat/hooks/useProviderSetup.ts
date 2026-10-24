@@ -46,8 +46,6 @@ function toModelDetail(m: ModelDetail): ModelDetail {
     id: m.id || '',
     displayName: m.displayName || m.id || '',
     contextLimit: m.contextLimit || 0,
-    inputCostPerM: m.inputCostPerM || 0,
-    outputCostPerM: m.outputCostPerM || 0,
   }
   if (typeof m.supportsTools === 'boolean') out.supportsTools = m.supportsTools
   if (typeof m.kind === 'string' && m.kind) out.kind = m.kind

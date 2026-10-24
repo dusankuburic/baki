@@ -34,8 +34,7 @@ func sampleSettings() *interfaces.AppSettings {
 		AI: interfaces.AISettings{
 			ActiveProvider:     "openai",
 			Providers:          map[string]interfaces.AIProviderConfig{"openai": {Enabled: true, DefaultModel: "gpt", Temperature: 0.2}},
-			DailyBudget:        12.5,
-			PerUserDailyBudget: 2,
+			SystemPromptSuffix: "Be brief.",
 			Prompts:            interfaces.AIPromptsConfig{Flow: []string{"Summarize"}},
 		},
 		Parser: interfaces.ParserSettings{MaxFileSizeMB: 20},
@@ -181,7 +180,7 @@ func TestPostgres_SettingsSections_FallBackToTheBlobPerSection(t *testing.T) {
 	if got.Appearance.Theme != "dracula" {
 		t.Errorf("appearance theme = %q, want the row's dracula", got.Appearance.Theme)
 	}
-	if got.AI.DailyBudget != 12.5 || got.Parser.MaxFileSizeMB != 20 {
+	if got.AI.SystemPromptSuffix != "Be brief." || got.Parser.MaxFileSizeMB != 20 {
 		t.Errorf("the sections without rows did not come from the blob: %+v", *got)
 	}
 }
@@ -300,7 +299,7 @@ func TestPostgres_SettingsSections_NewerVersionIsNeverDowngraded(t *testing.T) {
 		t.Errorf("theme = %q, want the newer row's light", got.Appearance.Theme)
 	}
 	got.Appearance.Theme = "dark"
-	got.AI.DailyBudget = 99
+	got.AI.SystemPromptSuffix = "Answer in English."
 	if err := b.SaveUserSettings(ctx, user, got); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -309,14 +308,14 @@ func TestPostgres_SettingsSections_NewerVersionIsNeverDowngraded(t *testing.T) {
 		t.Errorf("appearance row = v%d %s, want version 5, dark, future kept", r.version, r.data)
 	}
 	var ai struct {
-		DailyBudget float64                   `json:"dailyBudget"`
-		Providers   map[string]map[string]any `json:"providers"`
+		SystemPromptSuffix string                    `json:"systemPromptSuffix"`
+		Providers          map[string]map[string]any `json:"providers"`
 	}
 	if err := json.Unmarshal(rows["ai"].data, &ai); err != nil {
 		t.Fatal(err)
 	}
-	if ai.DailyBudget != 99 || ai.Providers["openai"]["topP"] != 0.9 {
-		t.Errorf("ai row = %s, want the new budget and topP kept", rows["ai"].data)
+	if ai.SystemPromptSuffix != "Answer in English." || ai.Providers["openai"]["topP"] != 0.9 {
+		t.Errorf("ai row = %s, want the new suffix and topP kept", rows["ai"].data)
 	}
 }
 

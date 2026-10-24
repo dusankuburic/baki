@@ -407,11 +407,12 @@ func TestOpenAICompat_StreamFallbackCarriesCachedTokens(t *testing.T) {
 	})
 	p := newAzureKeyProvider(t, srv, nil)
 	for _, tc := range []struct {
-		model string
-		pick  func(Chunk) bool
+		model     string
+		pick      func(Chunk) bool
+		cacheRead int // a filtered answer's error chunk carries the token totals only
 	}{
-		{"my-o1", func(c Chunk) bool { return c.Done }},
-		{"my-o1-filtered", func(c Chunk) bool { return c.Error != nil }},
+		{"my-o1", func(c Chunk) bool { return c.Done }, 64},
+		{"my-o1-filtered", func(c Chunk) bool { return c.Error != nil }, 0},
 	} {
 		var got *Chunk
 		if err := p.Stream(context.Background(), Request{Model: tc.model, Messages: []Message{{Role: "user", Content: "hi"}}}, func(c Chunk) {
@@ -421,8 +422,8 @@ func TestOpenAICompat_StreamFallbackCarriesCachedTokens(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("%s: Stream: %v", tc.model, err)
 		}
-		if got == nil || got.TokensIn != 100 || got.CacheReadTokens != 64 {
-			t.Errorf("%s: usage chunk = %+v, want TokensIn 100 with CacheReadTokens 64", tc.model, got)
+		if got == nil || got.TokensIn != 100 || got.CacheReadTokens != tc.cacheRead {
+			t.Errorf("%s: usage chunk = %+v, want TokensIn 100 with CacheReadTokens %d", tc.model, got, tc.cacheRead)
 		}
 	}
 }

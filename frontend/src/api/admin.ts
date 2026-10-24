@@ -112,10 +112,8 @@ function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   return request<T>(path, {method: 'GET', noDedup: true, signal})
 }
 
-// The deployment-wide ai values the server enforces for everyone (GET/PUT /api/admin/settings/ai).
+// The deployment-wide ai values every knowledge base shares (GET/PUT /api/admin/settings/ai).
 export interface DeploymentAISettings {
-  dailyBudget: number
-  perUserDailyBudget: number
   embeddingProvider: string
   embeddingModel: string
 }

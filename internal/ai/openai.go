@@ -43,12 +43,11 @@ func openAIMaxTokensParam(baseURL string) string {
 
 func (o *OpenAIProvider) SupportsTools() bool { return true }
 
-func (o *OpenAIProvider) ID() string                     { return openaiSpec.ID }
-func (o *OpenAIProvider) Name() string                   { return openaiSpec.Name }
-func (o *OpenAIProvider) ContextLimit() int              { return 128000 }
-func (o *OpenAIProvider) DefaultModel() string           { return openaiSpec.DefaultModel }
-func (o *OpenAIProvider) FreeModel() string              { return "" }
-func (o *OpenAIProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(openaiSpec) }
+func (o *OpenAIProvider) ID() string           { return openaiSpec.ID }
+func (o *OpenAIProvider) Name() string         { return openaiSpec.Name }
+func (o *OpenAIProvider) ContextLimit() int    { return 128000 }
+func (o *OpenAIProvider) DefaultModel() string { return openaiSpec.DefaultModel }
+func (o *OpenAIProvider) FreeModel() string    { return "" }
 
 func (o *OpenAIProvider) EstimateTokens(text string) int {
 	return EstimateTokensOpenAI(text)

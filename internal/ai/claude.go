@@ -73,12 +73,11 @@ func (c *ClaudeProvider) classifyUnauthorized(status int, body []byte) error {
 
 func (c *ClaudeProvider) SupportsTools() bool { return true }
 
-func (c *ClaudeProvider) ID() string                     { return claudeSpec.ID }
-func (c *ClaudeProvider) Name() string                   { return claudeSpec.Name }
-func (c *ClaudeProvider) ContextLimit() int              { return 200000 }
-func (c *ClaudeProvider) DefaultModel() string           { return claudeSpec.DefaultModel }
-func (c *ClaudeProvider) FreeModel() string              { return "" }
-func (c *ClaudeProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(claudeSpec) }
+func (c *ClaudeProvider) ID() string           { return claudeSpec.ID }
+func (c *ClaudeProvider) Name() string         { return claudeSpec.Name }
+func (c *ClaudeProvider) ContextLimit() int    { return 200000 }
+func (c *ClaudeProvider) DefaultModel() string { return claudeSpec.DefaultModel }
+func (c *ClaudeProvider) FreeModel() string    { return "" }
 
 func (c *ClaudeProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	return nil, fmt.Errorf("embeddings not supported by Claude provider")

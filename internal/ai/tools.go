@@ -24,17 +24,14 @@ import (
 // context budget. Results are truncated with a marker when they exceed it.
 const maxToolResultBytes = 6000
 
-// defaultToolTimeout bounds a single tool execution: the grounding tools are in-memory scans; only apply_fix
-// runs longer (it waits for a human decision) and carries its own per-tool timeout.
+// defaultToolTimeout bounds a single tool execution: the grounding tools are in-memory scans. An approval tool
+// (apply_fix, apply_fixes) gets no tool deadline: its applier bounds its own phases — the decision wait
+// (FixDecisionTimeout), then the apply + re-analysis, sized per item from the moment of approval (R-approvals-3).
 const defaultToolTimeout = 30 * time.Second
 
 // FixDecisionTimeout bounds how long apply_fix waits for the user's approve/decline (nothing is written on
 // timeout). Exported so the chat service's applier shares the number; below the 90s stream idle timeout.
 const FixDecisionTimeout = 60 * time.Second
-
-// fixApplyToolTimeout covers the decision wait plus the apply + re-analyze
-// round-trip on a large flow.
-const fixApplyToolTimeout = FixDecisionTimeout + 60*time.Second
 
 // ToolAnalysis is the slice of the analysis service the tools need, declared here so the ai package stays a
 // leaf of service (no dependency cycle). *service.AnalysisService satisfies it.
@@ -109,8 +106,8 @@ const PreviewKindFixPatch = "fix-patch"
 type ToolSpec struct {
 	Def   ToolDefinition
 	Label string // friendly status-line label, e.g. "Searching flow"
-	// Timeout bounds this tool's execution (0 ⇒ defaultToolTimeout). Only the
-	// approval-gated tools override it — their decision wait alone can exceed the default.
+	// Timeout bounds this tool's execution (0 ⇒ defaultToolTimeout). An approval tool ignores it: its applier
+	// bounds the decision wait and the apply separately (see ExecuteTool).
 	Timeout time.Duration
 	// RequiresApproval: the handler asks the stream's owner before any effect (an approval card).
 	RequiresApproval bool
@@ -123,8 +120,9 @@ type ToolSpec struct {
 }
 
 // ToolGate decides whether a session may use a tool: built once per stream with NewToolGate, it selects the
-// tools offered to the model (ToolDefinitionsFor) and is asked again at execution (ToolContext.Allow).
-type ToolGate func(ToolSpec) bool
+// tools offered to the model (ToolDefinitionsFor) and is asked again at execution (ToolContext.Allow). It answers
+// "" when the tool may run, else the refusal reason (the label of pad_chat_tool_refused_total).
+type ToolGate func(ToolSpec) string
 
 // The reasons ToolRefusal gives, the label values of pad_chat_tool_refused_total.
 const (
@@ -132,24 +130,32 @@ const (
 	ToolRefusedScope = "scope"
 	// ToolRefusedApprovalUnavailable: the tool needs an approval and the session has no applier wired (ToolContext.Fixes).
 	ToolRefusedApprovalUnavailable = "approval_unavailable"
+	// ToolRefusedFlowPermission: the tool changes the flow (it needs an approval) and the caller may not edit it —
+	// a viewer's stream, which needs only ChatUse.
+	ToolRefusedFlowPermission = "flow_permission"
 )
 
 // ToolRefusal reports why actor may not use spec in a session where approvalsWired says whether an approval
-// applier exists, or "" when it may. A nil actor is local mode, which restricts nothing (the same rule as the
-// fix applier's scope check); an unscoped session or token allows every scope.
-func ToolRefusal(spec ToolSpec, actor *auth.Actor, approvalsWired bool) string {
+// applier exists and canEditFlow whether the caller may edit the flow, or "" when it may. A nil actor is local
+// mode, which restricts nothing (the same rule as the fix applier's scope check); an unscoped session or token
+// allows every scope. The reasons are checked in that order: the scope names what the caller could change first.
+func ToolRefusal(spec ToolSpec, actor *auth.Actor, approvalsWired, canEditFlow bool) string {
 	if spec.RequiresApproval && !approvalsWired {
 		return ToolRefusedApprovalUnavailable
 	}
 	if spec.RequiredScope != "" && actor != nil && !actor.Allows(spec.RequiredScope) {
 		return ToolRefusedScope
 	}
+	if spec.RequiresApproval && !canEditFlow {
+		return ToolRefusedFlowPermission
+	}
 	return ""
 }
 
-// NewToolGate builds the gate of one session from its actor and whether approvals can be requested.
-func NewToolGate(actor *auth.Actor, approvalsWired bool) ToolGate {
-	return func(spec ToolSpec) bool { return ToolRefusal(spec, actor, approvalsWired) == "" }
+// NewToolGate builds the gate of one session from its actor, whether approvals can be requested and whether the
+// caller may edit the flow, all resolved once at stream start.
+func NewToolGate(actor *auth.Actor, approvalsWired, canEditFlow bool) ToolGate {
+	return func(spec ToolSpec) string { return ToolRefusal(spec, actor, approvalsWired, canEditFlow) }
 }
 
 // toolRegistry is the grounding and fix tool set the model can be offered.
@@ -181,7 +187,7 @@ func ToolDefinitionsFor(gate ToolGate) []ToolDefinition {
 	specs := ToolSpecs()
 	out := make([]ToolDefinition, 0, len(specs))
 	for _, s := range specs {
-		if gate == nil || gate(s) {
+		if gate == nil || gate(s) == "" {
 			out = append(out, s.Def)
 		}
 	}
@@ -216,7 +222,7 @@ func ExecuteTool(name string, input json.RawMessage, tctx ToolContext) string {
 		return "error: unknown tool " + name
 	}
 	// The session's gate, before the handler: the offer is not the boundary (see ToolContext.Allow).
-	if tctx.Allow != nil && !tctx.Allow(t) {
+	if tctx.Allow != nil && tctx.Allow(t) != "" {
 		return fmt.Sprintf("error: tool %s is not available in this session — nothing was changed; explain the change so the user can make it instead", name)
 	}
 	// Malformed argument JSON (a call cut mid-argument, or the malformed JSON open models emit) becomes the
@@ -228,7 +234,9 @@ func ExecuteTool(name string, input json.RawMessage, tctx ToolContext) string {
 	if timeout <= 0 {
 		timeout = defaultToolTimeout
 	}
-	if tctx.Ctx != nil {
+	// One deadline over a human decision and the write left a slow approval too little time to apply; an
+	// approval tool's applier bounds the decision and the apply separately, so it runs on the stream's context.
+	if tctx.Ctx != nil && !t.RequiresApproval {
 		ctx, cancel := context.WithTimeout(tctx.Ctx, timeout)
 		defer cancel()
 		tctx.Ctx = ctx
@@ -318,7 +326,6 @@ func buildToolRegistry() map[string]ToolSpec {
 			InputSchema: schema(`{"type":"object","properties":{"blockId":{"type":"string","description":"Block ID of the finding"},"ruleId":{"type":"string","description":"Rule ID of the finding"}},"required":["blockId","ruleId"]}`),
 		},
 		Exec:             toolApplyFix,
-		Timeout:          fixApplyToolTimeout,
 		RequiresApproval: true,
 		RequiredScope:    auth.ScopeWrite,
 		PreviewKind:      PreviewKindFixPatch,
@@ -331,7 +338,6 @@ func buildToolRegistry() map[string]ToolSpec {
 			InputSchema: schema(`{"type":"object","properties":{"targets":{"type":"array","minItems":1,"maxItems":10,"description":"Findings to fix, each as {blockId, ruleId} from list_findings","items":{"type":"object","properties":{"blockId":{"type":"string"},"ruleId":{"type":"string"}},"required":["blockId","ruleId"]}}},"required":["targets"]}`),
 		},
 		Exec:             toolApplyFixes,
-		Timeout:          fixApplyToolTimeout,
 		RequiresApproval: true,
 		RequiredScope:    auth.ScopeWrite,
 		PreviewKind:      PreviewKindFixPatch,
@@ -424,6 +430,9 @@ func toolGetBlock(tctx ToolContext, input json.RawMessage) (string, error) {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("invalid input: %w", err)
 	}
+	if strings.TrimSpace(in.BlockID) == "" {
+		return "", fmt.Errorf("blockId is required")
+	}
 	if tctx.Doc == nil {
 		return "no flow loaded", nil
 	}
@@ -458,6 +467,9 @@ func toolGetSubflowBlocks(tctx ToolContext, input json.RawMessage) (string, erro
 	}
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("invalid input: %w", err)
+	}
+	if strings.TrimSpace(in.SubflowID) == "" {
+		return "", fmt.Errorf("subflowId is required")
 	}
 	if tctx.Doc == nil {
 		return "no flow loaded", nil
@@ -576,6 +588,80 @@ const maxFindingsPerPage = 40
 // is never truncated.
 const listFindingsPageBytes = maxToolResultBytes - 400
 
+// maxLineageCandidates bounds the near matches a lineage miss offers.
+const maxLineageCandidates = 5
+
+// normalizeVariableName is the bare identifier of a variable the model named: whitespace and the %…% of a
+// reference removed (%Result%, " Result " and Result are one variable).
+func normalizeVariableName(name string) string {
+	name = strings.TrimSpace(name)
+	if len(name) >= 2 && name[0] == '%' && name[len(name)-1] == '%' {
+		name = strings.TrimSpace(name[1 : len(name)-1])
+	}
+	return name
+}
+
+// documentVariables is every variable name the document sets (_output) or reads (Variables), each once, sorted.
+func documentVariables(doc *models.FlowDocument) []string {
+	if doc == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	for i := range doc.Subflows {
+		var walk func(blocks []models.Block)
+		walk = func(blocks []models.Block) {
+			for j := range blocks {
+				b := &blocks[j]
+				if out := strings.TrimSpace(b.Properties["_output"]); out != "" {
+					seen[out] = true
+				}
+				for _, v := range b.Variables {
+					if v = strings.TrimSpace(v); v != "" {
+						seen[v] = true
+					}
+				}
+				walk(b.Children)
+			}
+		}
+		walk(doc.Subflows[i].Blocks)
+	}
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// variableInAnyCase is the one of names that equals name in another case; false when there is none or several.
+func variableInAnyCase(names []string, name string) (string, bool) {
+	match, n := "", 0
+	for _, candidate := range names {
+		if candidate != name && strings.EqualFold(candidate, name) {
+			match, n = candidate, n+1
+		}
+	}
+	return match, n == 1
+}
+
+// nearVariableNames is up to limit of names that contain name or that name contains, case-insensitively, in
+// name order — the hint a miss carries (two variables that differ only in case are both offered).
+func nearVariableNames(names []string, name string, limit int) []string {
+	q := strings.ToLower(name)
+	var out []string
+	for _, candidate := range names {
+		c := strings.ToLower(candidate)
+		if candidate == name || (!strings.Contains(c, q) && !strings.Contains(q, c)) {
+			continue
+		}
+		out = append(out, candidate)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out
+}
+
 func toolGetVariableLineage(tctx ToolContext, input json.RawMessage) (string, error) {
 	var in struct {
 		Name string `json:"name"`
@@ -583,15 +669,31 @@ func toolGetVariableLineage(tctx ToolContext, input json.RawMessage) (string, er
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("invalid input: %w", err)
 	}
-	if strings.TrimSpace(in.Name) == "" {
+	// The walk compares bare identifiers; property values and source files spell a reference %Name%, and the
+	// model copies what it reads, so the percent signs and the whitespace go (R-analyzer-boundary-4).
+	name := normalizeVariableName(in.Name)
+	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
 	if tctx.Analysis == nil || tctx.Doc == nil {
 		return "analysis not available", nil
 	}
-	hist, err := tctx.Analysis.GetVariableLineage(tctx.Doc, in.Name)
+	hist, err := tctx.Analysis.GetVariableLineage(tctx.Doc, name)
+	var known []string
 	if err != nil || hist == nil || len(hist.Events) == 0 {
-		return fmt.Sprintf("No lineage found for variable %q.", in.Name), nil
+		// A miss falls back to the one variable of that name in another case (every other variable rule
+		// matches case exactly, so lowercasing every input would disagree with them), else offers near matches.
+		known = documentVariables(tctx.Doc)
+		if match, ok := variableInAnyCase(known, name); ok {
+			hist, err = tctx.Analysis.GetVariableLineage(tctx.Doc, match)
+		}
+	}
+	if err != nil || hist == nil || len(hist.Events) == 0 {
+		msg := fmt.Sprintf("No lineage found for variable %q.", name)
+		if near := nearVariableNames(known, name, maxLineageCandidates); len(near) > 0 {
+			msg += " Did you mean: " + strings.Join(near, ", ") + "?"
+		}
+		return scrubber.ScrubText(msg), nil
 	}
 	var lines []string
 	for _, e := range hist.Events {
@@ -815,7 +917,7 @@ func toolApplyFix(tctx ToolContext, input json.RawMessage) (string, error) {
 }
 
 // maxBatchFixTargets bounds one apply_fixes batch: each item costs a sequential apply + re-parse +
-// re-analysis; 10 stays inside fixApplyToolTimeout while covering every realistic "fix these" request.
+// re-analysis, and the applier's apply deadline grows per item; 10 covers every realistic "fix these" request.
 const maxBatchFixTargets = 10
 
 func toolApplyFixes(tctx ToolContext, input json.RawMessage) (string, error) {

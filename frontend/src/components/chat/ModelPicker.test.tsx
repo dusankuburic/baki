@@ -10,8 +10,6 @@ const entry = (id: string, displayName: string, over: Partial<ModelDetail> = {})
   id: `m/${id.padEnd(10, '0')}`,
   displayName,
   contextLimit: 128_000,
-  inputCostPerM: 0,
-  outputCostPerM: 0,
   kind: 'chat',
   purpose: 'general',
   ...over,
@@ -39,15 +37,11 @@ const SONNET: ModelDetail = {
   id: 'claude-sonnet-4-6',
   displayName: 'Claude Sonnet 4.6',
   contextLimit: 200_000,
-  inputCostPerM: 3,
-  outputCostPerM: 15,
 }
 const HAIKU: ModelDetail = {
   id: 'claude-haiku-4-5',
   displayName: 'Claude Haiku 4.5',
   contextLimit: 200_000,
-  inputCostPerM: 1,
-  outputCostPerM: 5,
   supportsTools: false,
 }
 const CLAUDE: PickerProvider = {id: 'claude', name: 'Claude', models: [SONNET, HAIKU]}

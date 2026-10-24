@@ -43,11 +43,6 @@ func (g *GLMProvider) DefaultModel() string { return glmSpec.DefaultModel }
 // the default model alone).
 func (g *GLMProvider) FreeModel() string { return "" }
 
-// PricePerMillionTokens is the fallback price used to meter out-of-catalog models (audited.record): the
-// default model's catalogue row, so it cannot drift (a stale/lowball value once silently under-billed usage
-// and kept the daily budget from ever tripping for models the catalogue had not caught up to).
-func (g *GLMProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(glmSpec) }
-
 func (g *GLMProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	return g.embed(ctx, text)
 }

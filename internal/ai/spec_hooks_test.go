@@ -78,27 +78,3 @@ func TestConfigureProviders_AppliesEachSpecsEgress(t *testing.T) {
 		}
 	}
 }
-
-// TestReservationPricing_FromSpec: the in-flight reservation rate is the spec's pricing mode — nothing for an
-// unpriced family, the provider-wide rate otherwise; a provider the registry does not know (a test stub) keeps
-// the rate its provider reports.
-func TestReservationPricing_FromSpec(t *testing.T) {
-	ctx := context.Background()
-	az := NewAuditedProvider(&auditStub{price: Pricing{InputCostPerM: 9, OutputCostPerM: 9}}, nil, "u1", azureFoundryProviderID).(ReservationPricer)
-	if got := az.ReservationPricing(ctx, "dep"); got != (Pricing{}) {
-		t.Errorf("unpriced family reserves %+v, want zero (spec.Pricing)", got)
-	}
-	cl := NewAuditedProvider(NewClaudeProvider("k"), nil, "u1", "claude").(ReservationPricer)
-	if got, want := cl.ReservationPricing(ctx, "claude-sonnet-4-6"), specDefaultPricing(claudeSpec); got != want || got == (Pricing{}) {
-		t.Errorf("catalogue-priced provider reserves %+v, want %+v", got, want)
-	}
-	// pricingFor: an unpriced family is a zero that counts as found; a free one still consults its listing.
-	ap := newAuditedProvider(&auditStub{price: Pricing{InputCostPerM: 9}}, nil, "u1", azureFoundryProviderID)
-	if got, ok := ap.pricingFor(ctx, "dep", ""); !ok || got != (Pricing{}) {
-		t.Errorf("pricingFor(unpriced) = %+v %v, want zero, found", got, ok)
-	}
-	free := newAuditedProvider(&auditStub{}, nil, "u1", "copilot")
-	if _, ok := free.pricingFor(ctx, "not-listed", ""); ok {
-		t.Error("a free provider's unlisted model is still a listing miss (the provider-wide rate applies)")
-	}
-}

@@ -206,10 +206,6 @@ type heldUsageError struct {
 	tokensIn    int
 	tokensOut   int
 	servedModel string
-	// cacheRead/cacheWrite are the cached-input breakdown of tokensIn the withheld chunk carried, so a
-	// failed run's usage is still priced at the cached rates. Zero when none was reported.
-	cacheRead  int
-	cacheWrite int
 }
 
 func (e *heldUsageError) Error() string { return e.err.Error() }
@@ -222,16 +218,6 @@ func usageOf(err error) (tokensIn, tokensOut int, servedModel string, ok bool) {
 		return 0, 0, "", false
 	}
 	return he.tokensIn, he.tokensOut, he.servedModel, true
-}
-
-// cacheUsageOf extracts the cached-token breakdown a Stream error carried
-// (heldUsageError), if any — the same read as usageOf for the cache slice.
-func cacheUsageOf(err error) (read, write int) {
-	var he *heldUsageError
-	if !errors.As(err, &he) {
-		return 0, 0
-	}
-	return he.cacheRead, he.cacheWrite
 }
 
 // Stream retries only when the stream fails before any content reaches the caller: an error chunk arriving
@@ -251,13 +237,11 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 		delivered := false
 		var heldErr error
 		var heldTokensIn, heldTokensOut int
-		var heldCacheRead, heldCacheWrite int
 		var heldServedModel string
 		err := rp.Provider.Stream(ctx, req, func(c Chunk) {
 			if c.Error != nil && !delivered {
 				heldErr = c.Error
 				heldTokensIn, heldTokensOut, heldServedModel = c.TokensIn, c.TokensOut, c.ServedModel
-				heldCacheRead, heldCacheWrite = c.CacheReadTokens, c.CacheWriteTokens
 				return
 			}
 			// A hosted tool step also counts — shown in the trail (ToolEvent) or not (ServerStep): the
@@ -270,7 +254,7 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 		if err == nil {
 			err = heldErr
 			if err != nil && (heldTokensIn > 0 || heldTokensOut > 0 || heldServedModel != "") {
-				err = &heldUsageError{err: err, tokensIn: heldTokensIn, tokensOut: heldTokensOut, cacheRead: heldCacheRead, cacheWrite: heldCacheWrite, servedModel: heldServedModel}
+				err = &heldUsageError{err: err, tokensIn: heldTokensIn, tokensOut: heldTokensOut, servedModel: heldServedModel}
 			}
 		}
 		if err == nil || !isRetryable(err) || delivered {

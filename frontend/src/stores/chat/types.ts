@@ -104,6 +104,8 @@ export interface StreamSlot {
   toolStatus: string | null
   toolCalls: ToolCallRecord[]
   approvals: ApprovalCard[]
+  /** Earlier history messages the server left out of this turn so far (the latest history_truncated notice). */
+  truncated?: number
 }
 
 export interface QueuedMessage {

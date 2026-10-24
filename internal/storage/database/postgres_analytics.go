@@ -251,7 +251,7 @@ func usageScope(mode, userID string, orgIDs []string, args *sqlArgs) string {
 }
 
 func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID string, orgIDs []string, mode string, w interfaces.AnalyticsWindow) (*interfaces.UsageRows, error) {
-	out := &interfaces.UsageRows{Daily: []interfaces.UsageDailyRow{}, ByProvider: []interfaces.ProviderCost{}, ByModel: []interfaces.UsageModelRow{}}
+	out := &interfaces.UsageRows{Daily: []interfaces.UsageDailyRow{}, ByProvider: []interfaces.ProviderUsage{}, ByModel: []interfaces.UsageModelRow{}}
 	start := w.From
 	if !w.PrevFrom.IsZero() {
 		start = w.PrevFrom
@@ -267,7 +267,7 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 	daily, err := b.query(ctx).QueryContext(ctx, fmt.Sprintf(`
 		SELECT TO_CHAR((u.created_at AT TIME ZONE %s)::date, 'YYYY-MM-DD'),
 		       COALESCE(SUM(u.prompt_tokens), 0)::int, COALESCE(SUM(u.completion_tokens), 0)::int,
-		       COUNT(*)::int, COALESCE(SUM(u.estimated_cost), 0)::float
+		       COUNT(*)::int
 		FROM usage_metrics u
 		WHERE %s AND u.created_at >= %s AND u.created_at < %s
 		GROUP BY 1
@@ -278,7 +278,7 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 	defer daily.Close()
 	for daily.Next() {
 		var r interfaces.UsageDailyRow
-		if err := daily.Scan(&r.Date, &r.TokensIn, &r.TokensOut, &r.Calls, &r.Cost); err != nil {
+		if err := daily.Scan(&r.Date, &r.TokensIn, &r.TokensOut, &r.Calls); err != nil {
 			return nil, fmt.Errorf("scan usage daily: %w", err)
 		}
 		out.Daily = append(out.Daily, r)
@@ -291,19 +291,19 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 	args = append(sqlArgs{}, scope...)
 	from, to = args.add(w.From), args.add(w.To)
 	prov, err := b.query(ctx).QueryContext(ctx, fmt.Sprintf(`
-		SELECT u.provider, COALESCE(SUM(u.estimated_cost), 0)::float,
+		SELECT u.provider,
 		       COALESCE(SUM(u.prompt_tokens), 0)::int, COALESCE(SUM(u.completion_tokens), 0)::int
 		FROM usage_metrics u
 		WHERE %s AND u.created_at >= %s AND u.created_at < %s
 		GROUP BY u.provider
-		ORDER BY 2 DESC`, pred, from, to), args...)
+		ORDER BY SUM(u.prompt_tokens) + SUM(u.completion_tokens) DESC, u.provider`, pred, from, to), args...)
 	if err != nil {
 		return nil, fmt.Errorf("analytics usage providers: %w", err)
 	}
 	defer prov.Close()
 	for prov.Next() {
-		var r interfaces.ProviderCost
-		if err := prov.Scan(&r.Provider, &r.Cost, &r.TokensIn, &r.TokensOut); err != nil {
+		var r interfaces.ProviderUsage
+		if err := prov.Scan(&r.Provider, &r.TokensIn, &r.TokensOut); err != nil {
 			return nil, fmt.Errorf("scan usage providers: %w", err)
 		}
 		out.ByProvider = append(out.ByProvider, r)
@@ -317,11 +317,11 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 	mod, err := b.query(ctx).QueryContext(ctx, fmt.Sprintf(`
 		SELECT u.provider, COALESCE(u.model, ''), COALESCE(NULLIF(u.served_model, ''), u.model, ''),
 		       COALESCE(SUM(u.prompt_tokens), 0)::int,
-		       COALESCE(SUM(u.completion_tokens), 0)::int, COUNT(*)::int, COALESCE(SUM(u.estimated_cost), 0)::float
+		       COALESCE(SUM(u.completion_tokens), 0)::int, COUNT(*)::int
 		FROM usage_metrics u
 		WHERE %s AND u.created_at >= %s AND u.created_at < %s
 		GROUP BY 1, 2, 3
-		ORDER BY 7 DESC
+		ORDER BY SUM(u.prompt_tokens) + SUM(u.completion_tokens) DESC, 1, 2, 3
 		LIMIT 10`, pred, from, to), args...)
 	if err != nil {
 		return nil, fmt.Errorf("analytics usage models: %w", err)
@@ -329,7 +329,7 @@ func (b *PostgresStorageBackend) LoadUsageAnalytics(ctx context.Context, userID 
 	defer mod.Close()
 	for mod.Next() {
 		var r interfaces.UsageModelRow
-		if err := mod.Scan(&r.Provider, &r.Model, &r.ServedModel, &r.TokensIn, &r.TokensOut, &r.Calls, &r.Cost); err != nil {
+		if err := mod.Scan(&r.Provider, &r.Model, &r.ServedModel, &r.TokensIn, &r.TokensOut, &r.Calls); err != nil {
 			return nil, fmt.Errorf("scan usage models: %w", err)
 		}
 		if r.ServedModel == r.Model {

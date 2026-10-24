@@ -44,8 +44,6 @@ describe('parseChatEvent', () => {
       tokensIn: 2,
       chunks: undefined,
       servedModel: 'gpt-4o-2024-08-06',
-      inputCostPerM: 2.5,
-      outputCostPerM: 10,
     })
   })
 
@@ -57,7 +55,7 @@ describe('parseChatEvent', () => {
     const junk = parseChatEvent({
       streamId: 's1',
       type: 'done',
-      data: {tokensOut: 1, tokensIn: 1, servedModel: '', inputCostPerM: '3', outputCostPerM: Number.NaN},
+      data: {tokensOut: 1, tokensIn: 1, servedModel: '', inputCostPerM: '3'},
     })
     expect(Object.keys(junk!)).toEqual(['kind', 'tokensOut', 'tokensIn', 'chunks'])
   })
@@ -319,8 +317,6 @@ describe('parseChatEvent failure codes and keepalives', () => {
           tokensIn: 50,
           tokensOut: 4096,
           servedModel: 'gpt-5.1',
-          inputCostPerM: 1.25,
-          outputCostPerM: 10,
         },
       }),
     ).toEqual({
@@ -329,7 +325,7 @@ describe('parseChatEvent failure codes and keepalives', () => {
       code: 'PROVIDER_OUTPUT_LIMIT',
       tokensIn: 50,
       tokensOut: 4096,
-      meta: {servedModel: 'gpt-5.1', inputCostPerM: 1.25, outputCostPerM: 10},
+      meta: {servedModel: 'gpt-5.1'},
     })
   })
 
@@ -571,5 +567,24 @@ describe('conversation version on the terminal events', () => {
       expect(ev).not.toHaveProperty('conversationVersion')
       expect(ev).not.toHaveProperty('conversationBase')
     }
+  })
+})
+
+// The history-truncation notice (R-streaming-7): a journaled event the client parses live and on resume.
+describe('parseChatEvent notice', () => {
+  it('parses a history_truncated notice with its counts', () => {
+    expect(
+      parseChatEvent({streamId: 's1', type: 'notice', data: {kind: 'history_truncated', dropped: 3, keptFrom: 3}}),
+    ).toEqual({kind: 'notice', notice: 'history_truncated', dropped: 3, keptFrom: 3})
+  })
+
+  it('drops a notice without a kind', () => {
+    expect(parseChatEvent({streamId: 's1', type: 'notice', data: {}})).toBeNull()
+  })
+
+  it('replays a journaled notice on resume', () => {
+    expect(parseResumeEvents([{type: 'notice', data: {kind: 'history_truncated', dropped: 2, keptFrom: 5}}])).toEqual([
+      {kind: 'notice', notice: 'history_truncated', dropped: 2, keptFrom: 5},
+    ])
   })
 })

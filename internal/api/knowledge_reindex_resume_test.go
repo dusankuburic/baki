@@ -197,16 +197,18 @@ func TestKnowledge_DeadlineIs504(t *testing.T) {
 	}
 }
 
-// TestBeginFinishedBody_CarriesServedModelAndRates (R-3): the begin answer
-// for an already-finished stream hands the client the served model and the
-// billed rates it missed with the done event, and omits them when the turn
-// reported none.
-func TestBeginFinishedBody_CarriesServedModelAndRates(t *testing.T) {
+// TestBeginFinishedBody_CarriesServedModel (R-3): the begin answer for an
+// already-finished stream hands the client the served model it missed with the
+// done event, omits it when the turn reported none, and carries no cost.
+func TestBeginFinishedBody_CarriesServedModel(t *testing.T) {
 	raw, _ := json.Marshal(beginFinishedBody(&service.ResumeResult{
 		Text: "answer", Done: true, TokensIn: 7, TokensOut: 3,
-		ServedModel: "gpt-4o-2024-11-20", InputCostPerM: 2.5, OutputCostPerM: 10,
+		ServedModel: "gpt-4o-2024-11-20",
 	}))
-	for _, want := range []string{`"status":"finished"`, `"servedModel":"gpt-4o-2024-11-20"`, `"inputCostPerM":2.5`, `"outputCostPerM":10`, `"tokensIn":7`} {
+	if strings.Contains(string(raw), "CostPerM") {
+		t.Errorf("begin body %s carries a cost rate", raw)
+	}
+	for _, want := range []string{`"status":"finished"`, `"servedModel":"gpt-4o-2024-11-20"`, `"tokensIn":7`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("begin body %s lacks %s", raw, want)
 		}
@@ -219,7 +221,7 @@ func TestBeginFinishedBody_CarriesServedModelAndRates(t *testing.T) {
 
 // TestRenderKnowledgeEmbeddingError_ContextErrors: the ladder itself maps
 // the context's errors to 504 KNOWLEDGE_TIMEOUT ahead of the provider
-// causes they may be joined with, and keeps the budget codes first.
+// causes they may be joined with.
 func TestRenderKnowledgeEmbeddingError_ContextErrors(t *testing.T) {
 	cases := []struct {
 		name   string

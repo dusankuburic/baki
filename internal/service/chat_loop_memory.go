@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"pad-analyzer/internal/ai"
-	"pad-analyzer/internal/auth"
 	"pad-core/models"
 )
 
@@ -82,8 +81,8 @@ func (m *loopToolMemory) exec(name string, input json.RawMessage, tctx *ai.ToolC
 
 	// A call the session's gate refuses (ExecuteTool answers it) is counted by reason: a model that keeps
 	// calling a tool it was not offered is visible without reading transcripts.
-	if spec, ok := ai.ToolSpecOf(name); ok {
-		if reason := ai.ToolRefusal(spec, auth.ActorFromContext(tctx.Ctx), tctx.Fixes != nil); reason != "" {
+	if spec, ok := ai.ToolSpecOf(name); ok && tctx.Allow != nil {
+		if reason := tctx.Allow(spec); reason != "" {
 			recordChatToolRefused(name, reason)
 		}
 	}

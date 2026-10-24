@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"context"
 	"strings"
 	"sync"
 	"time"
@@ -241,31 +240,3 @@ func annotateServedModel(providerID string, m *ModelInfo, served string, withLim
 // UsesModelAliases reports whether providerID's model ids are user-chosen
 // aliases (Azure AI Foundry deployment names) rather than model names (CapModelAliases).
 func UsesModelAliases(providerID string) bool { return aliasModelProviders[providerID] }
-
-// ReservationPricer is implemented by the audited wrapper and answers the rate an in-flight budget
-// reservation for model is priced at. The chat service does not consult it today: it reserves through its own
-// inFlightPricing (the provider-wide rate, nothing for an alias provider), which answers the same; the
-// interface stays for a caller that needs the wrapper's resolution (a router's listing price is the memo of
-// an EARLIER routed call).
-type ReservationPricer interface {
-	ReservationPricing(ctx context.Context, model string) Pricing
-}
-
-// UsagePricer is implemented by the audited wrapper and answers the rates a finished turn was billed at, so
-// the chat service can put the answering model and its rate on the done payload without a listing refetch.
-type UsagePricer interface {
-	UsagePricing(ctx context.Context, model, served string) (Pricing, bool)
-}
-
-// pricingMetricModel keeps the pricing-fallback metric's model label bounded: aliases collapse to one
-// "deployment" label, non-alias providers keep a catalogued model's name else "uncatalogued" — a fallback
-// for an unknown client-chosen name would mint one permanent series per unique string.
-func pricingMetricModel(providerID, modelID string) string {
-	if aliasModelProviders[providerID] {
-		return "deployment"
-	}
-	if _, ok := catalogEntryFor(providerID, modelID); !ok {
-		return "uncatalogued"
-	}
-	return modelID
-}

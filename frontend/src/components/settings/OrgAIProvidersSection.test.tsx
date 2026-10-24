@@ -108,7 +108,7 @@ describe('OrgAIProvidersSection', () => {
   it('saves a restriction onto the fresh document, in catalogue order, keeping the other sections', async () => {
     settings.getOrgSettings
       .mockResolvedValueOnce(orgDoc())
-      .mockResolvedValueOnce(orgDoc({dailyBudget: 3}, {'dead-code': {enabled: false, severity: 'info'}}))
+      .mockResolvedValueOnce(orgDoc({systemPromptSuffix: 'Be brief.'}, {'dead-code': {enabled: false, severity: 'info'}}))
     renderSection()
     fireEvent.click(await limitSwitch())
     fireEvent.click(screen.getByRole('checkbox', {name: 'Google Gemini'}))
@@ -119,7 +119,7 @@ describe('OrgAIProvidersSection', () => {
     expect(settings.updateOrgSettings.mock.calls[0]![0]).toBe('org-1')
     const sent = sentDocument()
     expect(sent.ai.allowedProviders).toEqual(['claude', 'gemini'])
-    expect(sent.ai.dailyBudget).toBe(3)
+    expect(sent.ai.systemPromptSuffix).toBe('Be brief.')
     expect(sent.analysis.rules).toEqual({'dead-code': {enabled: false, severity: 'info'}})
     expect(await screen.findByText('AI providers saved')).toBeInTheDocument()
   })

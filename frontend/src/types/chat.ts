@@ -65,8 +65,6 @@ export interface ChatMessage {
   model?: string
   modelLabel?: string
   servedModel?: string
-  inputCostPerM?: number
-  outputCostPerM?: number
   finishReason?: 'stop' | 'interrupted' | 'error'
   errorCode?: string
   errorShared?: boolean
@@ -74,6 +72,8 @@ export interface ChatMessage {
   fixProposal?: FixProposalSnapshot
   fixProposals?: FixProposalSnapshot[]
   approvals?: ApprovalSnapshot[]
+  /** How many earlier history messages the turn left out to fit the model's context window. */
+  truncated?: number
 }
 
 export interface ChatRequest {
@@ -103,12 +103,27 @@ export interface TokenUsage {
   totalTokens: number
 }
 
+export interface ContextPreviewBreakdown {
+  system: number
+  context: number
+  history: number
+  tools: number
+  user: number
+}
+
+/** What the turn would send, built by the turn's own request assembly: the estimate counts every part the window check counts. */
 export interface ContextPreview {
   systemPrompt: string
   contextText: string
   userMessage: string
   estimatedTokens: number
   contextLimit: number
+  breakdown: ContextPreviewBreakdown
+  historyMessages: number
+  historyDropped?: number
+  toolsOffered: boolean
+  tools?: string[]
+  contextBudget: number
   contextBlock?: 'resolved' | 'missing'
   contextBlockId?: string
 }

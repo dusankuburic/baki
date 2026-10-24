@@ -266,52 +266,6 @@ func TestTruncateForContextWindow_SmallWindowScaledReserve(t *testing.T) {
 	}
 }
 
-// The stream's in-flight reservation (prepareTurn, before the clamps) never
-// falls below what the turn then sends, on any window: the backstop only
-// lowers the cap, and an unset cap reserves the providers' common default —
-// the most a small window is sent in its place, and what the provider sends
-// on a large one. The reservation reads as tokens: the spy is priced at one
-// dollar per output token.
-func TestPrepareTurn_ReservationCoversWhatIsSent(t *testing.T) {
-	ctx := context.Background()
-	doc := &models.FlowDocument{ID: "f1", Name: "f1"}
-	for _, window := range []int{1024, 4096, 8192, 16384, 128000} {
-		e := newAzChatEnv(t)
-		c := e.mustConn(t, azmUser, "res", azmKeyConfig("k"))
-		entries := []AzureModelView{
-			e.mustModel(t, azmUser, AzureModelInput{ConnectionID: c.ID, Kind: "chat", Deployment: "phi-small", ContextWindow: window}),
-			e.mustModel(t, azmUser, AzureModelInput{ConnectionID: c.ID, Kind: "chat", Deployment: "gpt-5-mini", ContextWindow: window, MaxOutputTokens: 512}),
-		}
-		spy := &pricedSpy{&itemsProvider{id: "registry-spy", limit: 1 << 20, models: []ai.ModelInfo{
-			{ID: "phi-small", ContextLimit: window},
-			{ID: "gpt-5-mini", ContextLimit: window, MaxOutputTokens: 512},
-		}}}
-		e.scriptProviders(spy)
-		for _, m := range entries {
-			res, err := e.svc.ResolveChat(ctx, "u1", "", m.ModelID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, maxTokens := range []int{0, 256, 512, 4096, 100000} {
-				req := models.ChatRequest{Provider: ai.AzureFoundryProviderID, Model: m.ModelID, MaxTokens: maxTokens, UserMessage: "q"}
-				ctl := &streamCtl{ownerID: "u1"}
-				ts, err := e.chat.prepareTurn(ctx, "u1", doc, req, &res, ctl)
-				if err != nil {
-					t.Fatalf("prepareTurn: %v", err)
-				}
-				_, sent := turnGenerationParams(ctx, ts.provider, req, ts.model)
-				covered := float64(sent)
-				if sent == 0 {
-					covered = float64(maxOutputTokens(ai.Request{})) // the provider's own default goes out
-				}
-				if reserved := ctl.inflight(); reserved < covered {
-					t.Errorf("%s, window %d, max tokens %d: reserved %v tokens, sent %d", m.Deployment, window, maxTokens, reserved, sent)
-				}
-			}
-		}
-	}
-}
-
 // Generation params on a small window: the backstop keeps half the window for the prompt
 // instead of all of it (a 4096 window used to cap max tokens at 96, a 1024 one at 0 — the
 // provider's own default then went out), the reasoning floor is re-capped by it, and an

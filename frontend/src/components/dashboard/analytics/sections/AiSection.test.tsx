@@ -33,7 +33,6 @@ describe('AiSection model breakdown', () => {
         tokensIn: 100,
         tokensOut: 10,
         calls: 2,
-        cost: 0,
       },
       {
         provider: 'azure-foundry',
@@ -42,9 +41,8 @@ describe('AiSection model breakdown', () => {
         tokensIn: 50,
         tokensOut: 5,
         calls: 1,
-        cost: 0,
       },
-      {provider: 'openai', model: 'gpt-5', tokensIn: 12000, tokensOut: 4000, calls: 15, cost: 1.02},
+      {provider: 'openai', model: 'gpt-5', tokensIn: 12000, tokensOut: 4000, calls: 15},
     ]
     render(<AiSection data={data} refetching={false} />)
 
@@ -88,11 +86,11 @@ describe('AiSection provider and model token telemetry', () => {
   function azureData(): DashboardAnalyticsData {
     const data: DashboardAnalyticsData = mockDashboardAnalytics()
     data.ai.byProvider = [
-      {provider: 'azure-foundry', cost: 0, tokensIn: 150, tokensOut: 15},
-      {provider: 'openai', cost: 0, tokensIn: 12000, tokensOut: 4000},
+      {provider: 'azure-foundry', tokensIn: 150, tokensOut: 15},
+      {provider: 'openai', tokensIn: 12000, tokensOut: 4000},
     ]
     data.ai.byModel = [
-      {provider: 'openai', model: 'gpt-5', tokensIn: 12000, tokensOut: 4000, calls: 15, cost: 0},
+      {provider: 'openai', model: 'gpt-5', tokensIn: 12000, tokensOut: 4000, calls: 15},
       {
         provider: 'azure-foundry',
         model: 'model-router',
@@ -100,7 +98,6 @@ describe('AiSection provider and model token telemetry', () => {
         tokensIn: 150,
         tokensOut: 15,
         calls: 3,
-        cost: 0,
       },
     ]
     return data

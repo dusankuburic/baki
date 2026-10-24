@@ -22,9 +22,6 @@ type ProviderFactory struct {
 	// embeddingDims is the knowledge base's vector width (PAD_EMBEDDING_DIM), handed by ForEmbedding to
 	// providers whose embedding model can shorten its vectors (text-embedding-3-*). 0 = don't ask.
 	embeddingDims int
-	// budget is the pre-call gate every chain this factory builds consults (WithBudgetChecker, ADR 0028); nil
-	// gates nothing.
-	budget BudgetChecker
 	// policy decides which providers may be built at all (WithProviderPolicy), asked before any key is read;
 	// nil allows every registered provider.
 	policy ProviderPolicy
@@ -32,11 +29,6 @@ type ProviderFactory struct {
 
 // FactoryOption configures NewProviderFactory.
 type FactoryOption func(*ProviderFactory)
-
-// WithBudgetChecker makes every chain the factory builds consult b before each billed call.
-func WithBudgetChecker(b BudgetChecker) FactoryOption {
-	return func(f *ProviderFactory) { f.budget = b }
-}
 
 // WithProviderPolicy makes every builder ask p whether the provider may be used, before it reads a credential.
 func WithProviderPolicy(p ProviderPolicy) FactoryOption {
@@ -258,7 +250,7 @@ func credentialOrg(orgID, memoScope string) string {
 // wrapChainScoped is wrapChain with the memo scope named separately: scope attributes usage (the member),
 // memoScope keys the served-model memo and learned windows (OrgScope for an org's shared credential, so the
 // org's members share what one learned), and usageOrg is that organisation — rows the chain records without
-// an org of their own are attributed to it, so spend on an org credential lands on the org's budget.
+// an org of their own are attributed to it.
 func (f *ProviderFactory) wrapChainScoped(p Provider, scope, memoScope, usageOrg, providerID string) Provider {
 	r := f.resilience.withDefaults() // a ProviderFactory literal (tests) has none set
 	cb := NewCircuitBreakerProviderWithConfig(p, r.Threshold, r.OpenFor)
@@ -267,7 +259,6 @@ func (f *ProviderFactory) wrapChainScoped(p Provider, scope, memoScope, usageOrg
 	ap := newAuditedProvider(NewTracedProvider(rp), f.recorder, scope, providerID)
 	ap.memoScope = memoScope
 	ap.usageOrg = usageOrg
-	ap.budget = f.budget
 	// The wrappers above hide the raw provider's optional methods; the
 	// audited wrapper reads what it needs from p before they do.
 	ap.adoptRawHints(p)

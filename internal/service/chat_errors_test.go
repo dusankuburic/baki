@@ -25,8 +25,6 @@ func TestClassifyFailure_Codes(t *testing.T) {
 		wantCode string
 		wantMsg  string
 	}{
-		{"budget exceeded", &budgetError{kind: ErrAIBudgetExceeded, msg: "daily AI budget exceeded ($2.00 / $1.00)"}, ChatErrBudgetExceeded, "daily AI budget exceeded"},
-		{"budget unavailable", &budgetError{kind: ErrAIBudgetUnavailable, msg: "couldn't verify today's AI budget"}, ChatErrBudgetUnavailable, "couldn't verify"},
 		{"provider down (wrapped)", fmt.Errorf("claude stream error: %w", ai.ErrProviderDown), ChatErrProviderUnavailable, "temporarily unavailable"},
 		{"circuit open", ai.ErrCircuitOpen, ChatErrProviderUnavailable, "temporarily unavailable"},
 		{"rate limited", ai.ErrRateLimited, ChatErrProviderRateLimited, "rate-limiting"},
@@ -63,52 +61,14 @@ func TestClassifyFailure_Codes(t *testing.T) {
 }
 
 // A deliberate stop surfaces its reason (and the STOPPED code) whatever error
-// the cancelled call happened to return — including a spend read that failed
-// only because the stream's context was cancelled.
+// the cancelled call happened to return.
 func TestClassifyFailure_StopWinsOverTheResultingError(t *testing.T) {
 	ctl := &streamCtl{cancelReason: "response stopped"}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	code, msg := ctl.classifyFailure(ctx, budgetUnavailable("user-1", context.Canceled))
+	code, msg := ctl.classifyFailure(ctx, fmt.Errorf("provider call: %w", context.Canceled))
 	if code != ChatErrStopped || msg != "response stopped" {
 		t.Errorf("got (%q, %q), want the stop reason", code, msg)
-	}
-}
-
-// --- budget errors --------------------------------------------------------------
-
-func TestEnforceBudget_ExceededIsTyped(t *testing.T) {
-	svc := &ChatService{
-		backend:  &testutil.FakeBackend{DailyUsage: 12},
-		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 10}}},
-	}
-	err := svc.enforceBudget(context.Background(), "user-1", "", 0, nil)
-	if !errors.Is(err, ErrAIBudgetExceeded) {
-		t.Fatalf("err = %v, want ErrAIBudgetExceeded", err)
-	}
-	if !strings.Contains(err.Error(), "daily AI budget exceeded ($12.00 / $10.00") {
-		t.Errorf("message lost its figures: %q", err.Error())
-	}
-}
-
-// The storage error behind a failed spend read is an operator's problem: it is
-// logged, never shown. Stream errors bypass the HTTP layer's 5xx masking, so
-// this text used to reach the chat verbatim.
-func TestEnforceBudget_UnavailableHidesStorageDetails(t *testing.T) {
-	cause := fmt.Errorf("postgres: get daily usage: pq: connection refused")
-	svc := &ChatService{
-		backend:  &testutil.FakeBackend{UsageErr: cause},
-		settings: &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 10}}},
-	}
-	err := svc.enforceBudget(context.Background(), "user-1", "", 0, nil)
-	if !errors.Is(err, ErrAIBudgetUnavailable) {
-		t.Fatalf("err = %v, want ErrAIBudgetUnavailable", err)
-	}
-	if strings.Contains(err.Error(), "postgres") || strings.Contains(err.Error(), "pq:") {
-		t.Errorf("client-facing message leaks the storage error: %q", err.Error())
-	}
-	if !errors.Is(err, cause) {
-		t.Error("the cause must stay reachable for logging (errors.Unwrap)")
 	}
 }
 
@@ -204,22 +164,17 @@ func installReportSink(t *testing.T) *reportSink {
 	return sink
 }
 
-// Stopped while a tool or approval wait ran: the per-iteration budget read
-// fails on the cancelled context. That is a stop, not a budget fault — and
-// not something to page an operator about.
-func TestRunToolLoop_StopDuringBudgetCheckReportsTheStop(t *testing.T) {
+// Stopped before the loop's first provider call: that is a stop, reported as one, and not something to page an
+// operator about.
+func TestRunToolLoop_StoppedBeforeTheFirstCallReportsTheStop(t *testing.T) {
 	sink := installReportSink(t)
-	svc := &ChatService{
-		analysisCache: &AnalysisService{},
-		backend:       &testutil.FakeBackend{UsageErr: context.Canceled},
-		settings:      &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 10}}},
-	}
+	svc := &ChatService{analysisCache: &AnalysisService{}}
 	ctl := &streamCtl{cancelReason: "response stopped"}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	emit, events := captureEvents()
 
-	svc.runToolLoop(ctx, &testutil.FakeProvider{}, ai.Request{}, "user-1",
+	svc.runToolLoop(ctx, &testutil.FakeProvider{HonourCtx: true}, ai.Request{}, "user-1",
 		&ai.ToolContext{Ctx: ctx, Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
 
 	evs := events()
@@ -231,70 +186,6 @@ func TestRunToolLoop_StopDuringBudgetCheckReportsTheStop(t *testing.T) {
 	}
 	if n := sink.count(); n != 0 {
 		t.Errorf("a user stop was forwarded to the exception sink %d time(s)", n)
-	}
-}
-
-// The budget really running out mid-loop IS reported, once, and the message
-// carries a single "response stopped" prefix.
-func TestRunToolLoop_BudgetExceededMidLoopIsPrefixedAndReported(t *testing.T) {
-	sink := installReportSink(t)
-	svc := &ChatService{
-		analysisCache: &AnalysisService{},
-		backend:       &testutil.FakeBackend{DailyUsage: 12},
-		settings:      &staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 10}}},
-	}
-	ctl := &streamCtl{}
-	ctx := context.Background()
-	emit, events := captureEvents()
-
-	svc.runToolLoop(ctx, &testutil.FakeProvider{}, ai.Request{}, "user-1",
-		&ai.ToolContext{Ctx: ctx, Doc: toolLoopDoc()}, ctl, func() bool { return true }, emit, func() int { return 0 })
-
-	evs := events()
-	if len(evs) != 1 || evs[0].typ != "error" {
-		t.Fatalf("expected one error event, got %+v", evs)
-	}
-	msg, _ := evs[0].data["message"].(string)
-	if evs[0].data["code"] != ChatErrBudgetExceeded || !strings.HasPrefix(msg, "response stopped: daily AI budget exceeded") {
-		t.Errorf("got %+v, want a prefixed budget-exceeded error", evs[0].data)
-	}
-	if strings.Count(msg, "response stopped") != 1 {
-		t.Errorf("prefix applied more than once: %q", msg)
-	}
-	if n := sink.count(); n != 1 {
-		t.Errorf("budget stop forwarded to the exception sink %d time(s), want 1", n)
-	}
-}
-
-// The stream's 10-minute cap expiring during a tool or approval wait makes the
-// next spend read fail with DeadlineExceeded: that is the timeout, worded once,
-// not a budget fault to report.
-func TestLoopBudgetFailure(t *testing.T) {
-	stopped, cancelStop := context.WithCancel(context.Background())
-	cancelStop()
-	timedOut, cancelTimeout := context.WithTimeout(context.Background(), -time.Second)
-	defer cancelTimeout()
-	cases := []struct {
-		name       string
-		ctx        context.Context
-		ctl        *streamCtl
-		err        error
-		wantCode   string
-		wantMsg    string
-		wantReport bool
-	}{
-		{"user stop", stopped, &streamCtl{cancelReason: "response stopped"}, budgetUnavailable("user-1", context.Canceled), ChatErrStopped, "response stopped", false},
-		{"response-time cap", timedOut, &streamCtl{}, budgetUnavailable("user-1", context.DeadlineExceeded), ChatErrTimeout, "response stopped: maximum response time reached", false},
-		{"budget exceeded", context.Background(), &streamCtl{}, &budgetError{kind: ErrAIBudgetExceeded, msg: "daily AI budget exceeded ($2.00 / $1.00)"}, ChatErrBudgetExceeded, "response stopped: daily AI budget exceeded ($2.00 / $1.00)", true},
-		{"budget unreadable", context.Background(), &streamCtl{}, budgetUnavailable("user-1", errors.New("pq: connection refused")), ChatErrBudgetUnavailable, "response stopped: couldn't verify today's AI budget — try again in a moment", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			code, msg, report := loopBudgetFailure(tc.ctx, tc.ctl, tc.err)
-			if code != tc.wantCode || msg != tc.wantMsg || report != tc.wantReport {
-				t.Errorf("got (%q, %q, %v), want (%q, %q, %v)", code, msg, report, tc.wantCode, tc.wantMsg, tc.wantReport)
-			}
-		})
 	}
 }
 
@@ -325,19 +216,19 @@ func TestProviderSetupError_HidesKeystoreFailures(t *testing.T) {
 func TestResumeAndBegin_CarryTheErrorCode(t *testing.T) {
 	svc := &ChatService{}
 	ctl := &streamCtl{ownerID: "user-1", streamID: "s1", started: make(chan struct{})}
-	ctl.setFailure(ChatErrBudgetExceeded, "daily AI budget exceeded ($2.00 / $1.00)", false)
+	ctl.setFailure(ChatErrProviderRateLimited, "the AI provider is rate-limiting requests — wait a moment and try again", false)
 	svc.activeStreams.Store("s1", ctl)
 
 	res, err := svc.ResumeStream(context.Background(), "s1", 0)
 	if err != nil {
 		t.Fatalf("ResumeStream: %v", err)
 	}
-	if res.ErrorCode != ChatErrBudgetExceeded || res.Error == "" {
+	if res.ErrorCode != ChatErrProviderRateLimited || res.Error == "" {
 		t.Errorf("resume: got (%q, %q), want the stored code and message", res.ErrorCode, res.Error)
 	}
 	begin := svc.BeginStream(context.Background(), "s1")
-	if begin == nil || begin.ErrorCode != ChatErrBudgetExceeded {
-		t.Errorf("begin: got %+v, want ErrorCode %s", begin, ChatErrBudgetExceeded)
+	if begin == nil || begin.ErrorCode != ChatErrProviderRateLimited {
+		t.Errorf("begin: got %+v, want ErrorCode %s", begin, ChatErrProviderRateLimited)
 	}
 }
 

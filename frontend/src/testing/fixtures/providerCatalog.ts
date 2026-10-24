@@ -20,7 +20,6 @@ export interface CatalogSpecFixture {
   configured: boolean
   color?: string
   icon?: string
-  pricing: string
 }
 
 export const API_KEY_FIELD: CatalogFieldFixture = {
@@ -40,7 +39,6 @@ export function providerSpec(over: Partial<CatalogSpecFixture> & {id: string}): 
     credential: {kind: 'api_key', fields: [API_KEY_FIELD]},
     endpoints: {save: '/api/keys/save', test: '/api/providers/test'},
     configured: false,
-    pricing: 'catalog',
     ...over,
   }
 }

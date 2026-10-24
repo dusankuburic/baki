@@ -130,14 +130,8 @@ func (e *azChatEnv) scriptProviders(p ai.Provider) func() []ai.AzureConnectionRe
 }
 
 // pricedSpy is a scripted registry provider (itemsProvider: it records every request
-// and lists only what the test gives it) priced under a non-alias id at one dollar
-// per output token, so the stream's in-flight reservation reads as the tokens it
-// reserved.
+// and lists only what the test gives it) under a non-alias id.
 type pricedSpy struct{ *itemsProvider }
-
-func (p *pricedSpy) PricePerMillionTokens() ai.Pricing {
-	return ai.Pricing{OutputCostPerM: 1_000_000}
-}
 
 // azChatFoundry is a fake Foundry resource the real registry provider talks to (the
 // ai.AzureFoundryOptions.Transport seam): a chat completion streams "Hello from
@@ -259,8 +253,8 @@ func TestChatAzureRegistry_TurnRunsOnTheResolvedEntry(t *testing.T) {
 	}
 }
 
-// Every reader of the model takes the resolved id: the reservation, the generation
-// params, the stream request's Model, the window its history is trimmed to — none of
+// Every reader of the model takes the resolved id: the generation params, the stream
+// request's Model, the window its history is trimmed to — none of
 // them the request's "m/<entryId>", which the request (passed by value) still carries.
 func TestChatAzureRegistry_EveryReaderTakesTheResolvedID(t *testing.T) {
 	ctx := context.Background()
@@ -288,11 +282,6 @@ func TestChatAzureRegistry_EveryReaderTakesTheResolvedID(t *testing.T) {
 	want := turnModel{resolved: "gpt-5-mini", requested: m.ModelID, label: "Docs writer", kind: "chat", maxOutput: 3000}
 	if ts.model != want {
 		t.Errorf("turn model = %+v, want %+v", ts.model, want)
-	}
-	// Reserved: the gpt-5 floor capped at the entry's 3000 (the request's own id
-	// would give 1000).
-	if got, wantCost := ctl.inflight(), inFlightCost(spy.PricePerMillionTokens(), 0, 3000); got != wantCost {
-		t.Errorf("reservation = %v, want %v (3000 tokens)", got, wantCost)
 	}
 	if req.Model != m.ModelID {
 		t.Errorf("the request's model changed to %q", req.Model)

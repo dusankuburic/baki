@@ -2,7 +2,7 @@ analysis.shared-runs | keys: tenant, resource, content | tenant | replica-local:
 analyzer.reports | keys: tenant, resource, version, rule-profile, content | tenant | replica-local: a function of the document, rule profile and analyzer version; another replica recomputes on a miss, and the desktop session analytics it backs live in one process
 analyzer.suppression-inventory | keys: tenant, version, rule-profile, content | tenant | replica-local: a function of the document, rule profile and analyzer version; another replica recomputes on a miss
 azure.owner-memos | keys: tenant, param | tenant | replica-local: a 60 s memo of a durable marker and two rate limits; another replica reads the marker and keeps its own limits
-chat.context | keys: tenant, resource, version, param, param, param, param, param, param, param, param | tenant | replica-local: a turn is served by the replica its stream runs on; another rebuilds the context on a miss
+chat.context | keys: tenant, resource, version, param, param, param, param, param, param, param, param, param | tenant | replica-local: a turn is served by the replica its stream runs on; another rebuilds the context on a miss
 chat.history-scrubs | keys: tenant, content | tenant | replica-local: a pure function of the caller's text; another replica scrubs it again
 chat.scrubbed-docs | keys: tenant, resource, version | tenant | replica-local: a turn is served by the replica its stream runs on; another re-scrubs the flow on a miss
 chat.token-counts | keys: param, content | global: a token count is a function of the provider's tokenizer and the text alone, shared across users like the system prompts it mostly counts | replica-local: a pure function of the text; another replica counts it again

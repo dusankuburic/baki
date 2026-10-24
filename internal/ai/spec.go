@@ -24,8 +24,8 @@ var ErrUnknownProvider = errors.New("unknown provider")
 
 // A ProviderSpec is the one description of an AI provider: its identity, what it can do, where it may run, how
 // its credential is entered and stored, and how it is built. Every provider list the backend keeps —
-// AvailableProviders, the embedding fallback order, the keystore key names, the alias providers, the pricing
-// fallback, KnownProvider — is derived from the registered specs (one spec_<id>.go per provider), so adding a
+// AvailableProviders, the embedding fallback order, the keystore key names, the alias providers,
+// KnownProvider — is derived from the registered specs (one spec_<id>.go per provider), so adding a
 // provider is one file plus a catalogue entry, and the golden in testdata/providers.golden shows the change.
 
 // AuthType is the provider's auth type on the wire (ProviderInfo.authType): a stored key or an OAuth flow. The
@@ -145,16 +145,6 @@ const (
 	WireResponses WireFamily = "responses"
 )
 
-// PricingMode says where a provider's prices come from: the catalogue (the DefaultModel row is the fallback for
-// uncatalogued models), nowhere because it is free, or nowhere because the vendor's portal is the source.
-type PricingMode string
-
-const (
-	PricingCatalog  PricingMode = "catalog"
-	PricingFree     PricingMode = "free"
-	PricingUnpriced PricingMode = "unpriced"
-)
-
 // EgressKind is where a provider's requests go.
 type EgressKind string
 
@@ -224,9 +214,8 @@ type ProviderSpec struct {
 	Keys       KeySchema
 	// Catalog is the modelCatalog key ("" = no catalogue: the models are whatever the user's server serves).
 	Catalog string
-	// DefaultModel is the model offered first; its catalogue row is the pricing fallback.
+	// DefaultModel is the model offered first.
 	DefaultModel string
-	Pricing      PricingMode
 	Wire         WireFamily
 	// Resolver, when set, reads the credential itself (Copilot's OAuth-token-then-PAT rule); nil reads
 	// Keys.Primary under the builder's member/org rule.
@@ -409,28 +398,6 @@ func (s ProviderSpec) WireCredential() models.CredentialSchema {
 	return out
 }
 
-// specDefaultPricing is a provider's provider-wide rate: the catalogue row of its DefaultModel for a catalogue-
-// priced provider, nothing for a free or unpriced one.
-func specDefaultPricing(spec ProviderSpec) Pricing {
-	if spec.Pricing != PricingCatalog {
-		return Pricing{}
-	}
-	for _, m := range modelCatalog[spec.Catalog] {
-		if m.ID == spec.DefaultModel {
-			return m.Pricing
-		}
-	}
-	return Pricing{}
-}
-
-// wireOf is the wire family of a provider id ("" when unknown).
-func wireOf(id string) WireFamily {
-	if s, ok := lookupSpec(id); ok {
-		return s.Wire
-	}
-	return ""
-}
-
 // RegisterProvider replaces a provider's constructor, or adds a stub provider, for the duration of a test; it is
 // not a plugin API (production code never calls it: internal/archtest pins that). A stub gets the capabilities
 // the factory tests exercise — chat, embeddings, tools and the org fallback — and is built, never listed.
@@ -444,7 +411,6 @@ func RegisterProvider(id string, ctor func(key string) Provider) {
 		Egress:     EgressPolicy{Kind: EgressFixedHost},
 		Credential: CredentialSchema{Kind: CredentialAPIKey},
 		Keys:       KeySchema{Primary: id},
-		Pricing:    PricingFree,
 		Wire:       WireOpenAI,
 		Order:      1 << 30,
 	}

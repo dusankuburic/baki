@@ -102,12 +102,11 @@ const geminiEmbedModelDefault = "gemini-embedding-001"
 
 func (g *GeminiProvider) SupportsTools() bool { return true }
 
-func (g *GeminiProvider) ID() string                     { return geminiSpec.ID }
-func (g *GeminiProvider) Name() string                   { return geminiSpec.Name }
-func (g *GeminiProvider) ContextLimit() int              { return 1048576 }
-func (g *GeminiProvider) DefaultModel() string           { return geminiSpec.DefaultModel }
-func (g *GeminiProvider) FreeModel() string              { return "" }
-func (g *GeminiProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(geminiSpec) }
+func (g *GeminiProvider) ID() string           { return geminiSpec.ID }
+func (g *GeminiProvider) Name() string         { return geminiSpec.Name }
+func (g *GeminiProvider) ContextLimit() int    { return 1048576 }
+func (g *GeminiProvider) DefaultModel() string { return geminiSpec.DefaultModel }
+func (g *GeminiProvider) FreeModel() string    { return "" }
 
 // geminiEmbedBatchSize caps one batchEmbedContents request: Gemini rejects
 // oversized batches (~100 documented) and callers embed up to

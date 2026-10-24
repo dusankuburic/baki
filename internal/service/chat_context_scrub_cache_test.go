@@ -11,6 +11,7 @@ import (
 	"testing"
 	"weak"
 
+	"pad-analyzer/internal/ai"
 	"pad-core/ai/scrubber"
 	"pad-core/models"
 )
@@ -136,7 +137,7 @@ func TestCachedContextCore_HugeCloneIsNotPinned(t *testing.T) {
 	if _, held := cc.docs.Get(scrubbedDocKey("s", "huge", 0)); held {
 		t.Fatal("the doc cache holds a clone above the ceiling")
 	}
-	key := svc.chatContextKeyAt("s", "huge", 0, req, provider.ID(), req.Model, nil, "", defaultContextTokenBudget)
+	key := svc.chatContextKeyAt("s", "huge", 0, req, provider.ID(), req.Model, nil, "", svc.contextTokenBudget(context.Background(), provider, req.Model), ai.ToolAccessNone)
 	if _, ok := cc.texts.Get(key); !ok {
 		t.Fatal("the text entry was not cached")
 	}
@@ -169,7 +170,7 @@ func TestCachedContextCore_TextEntriesDoNotPinClones(t *testing.T) {
 	}
 	cc := svc.chatCtxCache
 	for g := 0; g < generations; g++ {
-		if _, ok := cc.texts.Get(svc.chatContextKeyAt("s", doc.ID, uint64(g), req, provider.ID(), req.Model, nil, "", defaultContextTokenBudget)); !ok {
+		if _, ok := cc.texts.Get(svc.chatContextKeyAt("s", doc.ID, uint64(g), req, provider.ID(), req.Model, nil, "", svc.contextTokenBudget(context.Background(), provider, req.Model), ai.ToolAccessNone)); !ok {
 			t.Fatalf("generation %d: its text entry was evicted; the texts LRU no longer covers every generation", g)
 		}
 	}
@@ -224,7 +225,11 @@ func TestComputeContextCore_BoundsSourceFilesBeforeScrubbing(t *testing.T) {
 	}
 	t.Cleanup(func() { scrubSourceText = orig })
 
-	svc := &ChatService{chatCtxCache: newChatContextCache(), flowCache: &FlowService{}}
+	// The budget pinned at the old default: the bound is budget × 16 bytes, 64 KB here.
+	pinned := &staticSettings{s: models.AppSettings{AI: models.AISettings{Providers: map[string]models.AIProviderConfig{
+		ctxCacheStubProvider2{}.ID(): {ContextTokenBudget: defaultContextTokenBudget},
+	}}}}
+	svc := &ChatService{chatCtxCache: newChatContextCache(), flowCache: &FlowService{}, settings: pinned}
 	req := models.ChatRequest{Model: "m1", UserMessage: "q", SelectedSourceFiles: []string{"Main.txt"}}
 	cv := svc.contextCoreForTest(context.Background(), "scope", ctxCacheStubProvider2{}, doc, nil, req)
 	if n := seen.Load(); n == 0 || n >= 128<<10 {

@@ -47,10 +47,10 @@ func TestFactory_PolicyRefusesEveryBuilderBeforeTheKeyRead(t *testing.T) {
 			return f.ForAzureConnectionEmbedding(ctx, "u1", AzureConnectionRef{ConnID: AzureDefaultConnectionID}, entry)
 		}, "u1||" + AzureFoundryProviderID},
 		{"For on an org flow", func() (Provider, error) {
-			return f.For(WithBudgetScope(ctx, "u1", "org-9"), "u1", "org-stub")
+			return f.For(WithUsageScope(ctx, "u1", "org-9"), "u1", "org-stub")
 		}, "u1|org-9|org-stub"},
 		{"ForAzureConnection on an org flow", func() (Provider, error) {
-			return f.ForAzureConnection(WithBudgetScope(ctx, "u1", "org-9"), "u1", AzureConnectionRef{ConnID: AzureDefaultConnectionID}, nil)
+			return f.ForAzureConnection(WithUsageScope(ctx, "u1", "org-9"), "u1", AzureConnectionRef{ConnID: AzureDefaultConnectionID}, nil)
 		}, "u1|org-9|" + AzureFoundryProviderID},
 	}
 	for i, b := range builders {

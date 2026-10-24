@@ -66,8 +66,8 @@ func TestToolSpecs_Complete(t *testing.T) {
 			if s.PreviewKind == "" || s.RequiredScope == "" {
 				t.Errorf("tool %q requires approval but has previewKind=%q requiredScope=%q", name, s.PreviewKind, s.RequiredScope)
 			}
-			if s.Timeout <= FixDecisionTimeout {
-				t.Errorf("tool %q: timeout %s must cover the %s decision wait", name, s.Timeout, FixDecisionTimeout)
+			if s.Timeout != 0 {
+				t.Errorf("tool %q: timeout %s is ignored for an approval tool — its applier bounds its own phases", name, s.Timeout)
 			}
 		} else if s.PreviewKind != "" || s.RequiredScope != "" {
 			t.Errorf("read-only tool %q must not carry previewKind/requiredScope (%q/%q)", name, s.PreviewKind, s.RequiredScope)
@@ -87,15 +87,24 @@ func TestToolSpecs_Complete(t *testing.T) {
 	}
 }
 
-// TestToolSpecsGolden pins one line per tool with its flags: the frontend's ApprovalCard renders by previewKind,
-// and the authz matrix assumes which scope each mutating tool needs. Refresh for an intended change only:
+// TestToolSpecsGolden pins one line per tool with its flags — the frontend's ApprovalCard renders by previewKind,
+// and the authz matrix assumes which scope each mutating tool needs — then every tool's description and canonical
+// input schema, the text the model reads (R-testing-4). Refresh for an intended change only:
 // go test ./internal/ai/ -run TestToolSpecsGolden -update-tools
 func TestToolSpecsGolden(t *testing.T) {
+	checkGolden(t, filepath.Join("testdata", "tools.golden"), renderToolsGolden(t), *updateTools, "-update-tools")
+}
+
+// renderToolsGolden renders the registry as tools.golden holds it.
+func renderToolsGolden(t *testing.T) string {
+	t.Helper()
 	var b strings.Builder
 	b.WriteString("# name | label | timeout | approval | scope | previewKind\n")
 	for _, s := range ToolSpecs() {
 		timeout := "default"
-		if s.Timeout > 0 {
+		if s.RequiresApproval {
+			timeout = "applier"
+		} else if s.Timeout > 0 {
 			timeout = s.Timeout.String()
 		}
 		scope, kind := s.RequiredScope, s.PreviewKind
@@ -107,9 +116,34 @@ func TestToolSpecsGolden(t *testing.T) {
 		}
 		fmt.Fprintf(&b, "%s | %s | %s | %t | %s | %s\n", s.Def.Name, s.Label, timeout, s.RequiresApproval, scope, kind)
 	}
-	got := b.String()
-	path := filepath.Join("testdata", "tools.golden")
-	if *updateTools {
+	for _, s := range ToolSpecs() {
+		fmt.Fprintf(&b, "\n## %s\n%s\nschema: %s\n", s.Def.Name, s.Def.Description, canonicalJSON(t, s.Def.InputSchema))
+	}
+	return b.String()
+}
+
+// canonicalJSON re-encodes raw compact with sorted keys, so the golden pins content rather than formatting.
+func canonicalJSON(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("invalid JSON %s: %v", raw, err)
+	}
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// checkGolden compares got with the golden at path, CR stripped from the file the way every golden here compares
+// (R-testing-19: an editor or copy that re-ends the file must not produce a whole-file diff), and rewrites it when
+// update is set.
+func checkGolden(t *testing.T, path, got string, update bool, flagName string) {
+	t.Helper()
+	if update {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -117,12 +151,12 @@ func TestToolSpecsGolden(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read golden: %v (run with -update-tools to create it)", err)
+		t.Fatalf("read golden: %v (run with %s to create it)", err, flagName)
 	}
-	if string(want) != got {
-		t.Errorf("tools.golden differs from the registry; review and refresh with -update-tools\n--- want\n%s--- got\n%s", want, got)
+	if want := strings.ReplaceAll(string(raw), "\r\n", "\n"); want != got {
+		t.Errorf("%s differs; review and refresh with %s\n--- want\n%s--- got\n%s", filepath.Base(path), flagName, want, got)
 	}
 }
 
@@ -149,7 +183,7 @@ func TestToolDefinitionsFor_ReadOnlyTokenIsNotOfferedApplyFix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gate := NewToolGate(tc.actor, tc.wired)
+			gate := NewToolGate(tc.actor, tc.wired, true)
 			defs := ToolDefinitionsFor(gate)
 			names := strings.Join(toolNames(defs), ",")
 			if len(defs) != tc.want {
@@ -160,10 +194,10 @@ func TestToolDefinitionsFor_ReadOnlyTokenIsNotOfferedApplyFix(t *testing.T) {
 				t.Errorf("apply_fix offered=%v, want %v (%s)", hasFix, !tc.noFix, names)
 			}
 			spec, _ := ToolSpecOf("apply_fix")
-			if got := ToolRefusal(spec, tc.actor, tc.wired); got != tc.reason {
+			if got := ToolRefusal(spec, tc.actor, tc.wired, true); got != tc.reason {
 				t.Errorf("ToolRefusal(apply_fix) = %q, want %q", got, tc.reason)
 			}
-			if got := ToolRefusal(must(ToolSpecOf("search_flow")), tc.actor, tc.wired); got != "" {
+			if got := ToolRefusal(must(ToolSpecOf("search_flow")), tc.actor, tc.wired, true); got != "" {
 				t.Errorf("search_flow refused with %q", got)
 			}
 			// The prompt-loop instructions list the same set.
@@ -196,7 +230,12 @@ func TestExecuteTool_GatedToolRefusedBeforeHandler(t *testing.T) {
 		Ctx:   context.Background(),
 		Doc:   toolFixtureDoc(),
 		Fixes: failingFixApplier{t},
-		Allow: func(s ToolSpec) bool { return !s.RequiresApproval },
+		Allow: func(s ToolSpec) string {
+			if s.RequiresApproval {
+				return ToolRefusedScope
+			}
+			return ""
+		},
 	}
 	for _, name := range []string{"apply_fix", "apply_fixes"} {
 		out := ExecuteTool(name, []byte(`{"blockId":"b1","ruleId":"r","targets":[{"blockId":"b1","ruleId":"r"}]}`), tctx)
@@ -213,7 +252,7 @@ func TestExecuteTool_GatedToolRefusedBeforeHandler(t *testing.T) {
 		t.Errorf("unknown tool: %q", out)
 	}
 	// The real gate from a chat-only token refuses the same way.
-	tctx.Allow = NewToolGate(scopedTokenActor(auth.ScopeChat), true)
+	tctx.Allow = NewToolGate(scopedTokenActor(auth.ScopeChat), true, true)
 	if out := ExecuteTool("apply_fix", []byte(`{"blockId":"b1","ruleId":"r"}`), tctx); !strings.Contains(out, "not available in this session") {
 		t.Errorf("chat-only token: %q", out)
 	}

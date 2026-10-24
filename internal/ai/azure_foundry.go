@@ -280,11 +280,6 @@ func (p *AzureFoundryProvider) FreeModel() string { return "" }
 // SupportsTools: every Foundry chat model family exposes native function calling; models that don't reject the request and the loop degrades.
 func (p *AzureFoundryProvider) SupportsTools() bool { return true }
 
-// PricePerMillionTokens is zero on purpose (PricingUnpriced): Foundry is not priced by baki (auditedProvider.pricingFor); the cost is read in the Azure portal.
-func (p *AzureFoundryProvider) PricePerMillionTokens() Pricing {
-	return specDefaultPricing(azureFoundrySpec)
-}
-
 // DefaultModel is the configured chat deployment, else the first additional one, else the first Claude one;
 // "" (a document naming none, or a registry provider) lets the picker decide — never the first in sort order.
 func (p *AzureFoundryProvider) DefaultModel() string {
@@ -728,7 +723,6 @@ func (p *AzureFoundryProvider) configuredDeployments() []ModelInfo {
 func (p *AzureFoundryProvider) deploymentEntry(name string, embedding bool) ModelInfo {
 	m := ModelInfo{ID: name, DisplayName: name, ContextLimit: p.ContextLimit(), Embedding: embedding}
 	if entry, ok := catalogEntryFor(azureFoundryProviderID, name); ok {
-		m.Pricing = entry.Pricing
 		if !isModelRouterAlias(name) {
 			if entry.ContextLimit > 0 {
 				m.ContextLimit = entry.ContextLimit

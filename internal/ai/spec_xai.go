@@ -12,7 +12,6 @@ var xaiSpec = ProviderSpec{
 	Keys:         KeySchema{Primary: "xai"},
 	Catalog:      "xai",
 	DefaultModel: "grok-3-mini",
-	Pricing:      PricingCatalog,
 	Wire:         WireOpenAI,
 	Ctor:         func(c Credential) Provider { return NewXAIProvider(c.Key) },
 	Color:        "#f43f5e",

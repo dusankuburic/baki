@@ -24,12 +24,11 @@ func NewXAIProvider(apiKey string) *XAIProvider {
 
 func (x *XAIProvider) SupportsTools() bool { return true }
 
-func (x *XAIProvider) ID() string                     { return xaiSpec.ID }
-func (x *XAIProvider) Name() string                   { return xaiSpec.Name }
-func (x *XAIProvider) ContextLimit() int              { return 131072 }
-func (x *XAIProvider) DefaultModel() string           { return xaiSpec.DefaultModel }
-func (x *XAIProvider) FreeModel() string              { return "" }
-func (x *XAIProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(xaiSpec) }
+func (x *XAIProvider) ID() string           { return xaiSpec.ID }
+func (x *XAIProvider) Name() string         { return xaiSpec.Name }
+func (x *XAIProvider) ContextLimit() int    { return 131072 }
+func (x *XAIProvider) DefaultModel() string { return xaiSpec.DefaultModel }
+func (x *XAIProvider) FreeModel() string    { return "" }
 
 func (x *XAIProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	return nil, fmt.Errorf("embeddings not supported by xAI provider")

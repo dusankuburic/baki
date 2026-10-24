@@ -8,7 +8,6 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/testutil"
-	"pad-core/models"
 )
 
 // Phase 4b review T2: an org settings document the policy cannot read is its own class of failure
@@ -33,7 +32,7 @@ func TestProviderPolicy_UnreadableOrgSettingsIsItsOwnSentinel(t *testing.T) {
 	secrets := testutil.NewFakeSecretStore()
 	orgKeys := testutil.NewFakeOrgSecretStore()
 	_ = orgKeys.SaveOrg("org-1", stub.id, "org-k", "u-admin")
-	svc, _ := budgetedProviderService(t, NewAIBudget(&staticSettings{s: models.AppSettings{AI: models.AISettings{DailyBudget: 100}}}, spendByOrg{}), secrets, orgKeys)
+	svc, _ := recordingProviderService(t, secrets, orgKeys)
 	svc.factory = ai.NewProviderFactory(func(string, string) (string, error) {
 		t.Error("key read while the policy is unreadable")
 		return "", nil

@@ -65,8 +65,6 @@ export const asItemStatus = (s: string): ApprovalItem['status'] =>
 export function applyDoneMeta(msg: ChatMessage, meta: DoneMeta | undefined): void {
   if (!meta) return
   if (meta.servedModel) msg.servedModel = meta.servedModel
-  if (meta.inputCostPerM !== undefined) msg.inputCostPerM = meta.inputCostPerM
-  if (meta.outputCostPerM !== undefined) msg.outputCostPerM = meta.outputCostPerM
 }
 
 export function resumedTurn(thread: ChatThread, streamId: string): {meta: StreamMeta; messageId?: string} | null {

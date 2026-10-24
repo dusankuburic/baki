@@ -31,7 +31,6 @@ var azureFoundrySpec = ProviderSpec{
 	Keys:         KeySchema{Primary: azureFoundryProviderID, Family: true},
 	Catalog:      azureFoundryProviderID,
 	DefaultModel: "gpt-4.1",
-	Pricing:      PricingUnpriced,
 	Wire:         WireOpenAI,
 	Ctor:         func(c Credential) Provider { return NewAzureFoundryProvider(c.Key) },
 	Color:        "#0078d4",

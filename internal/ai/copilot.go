@@ -94,12 +94,11 @@ func NewCopilotProviderWithAuth(auth *CopilotAuth, githubToken string) *CopilotP
 
 func (p *CopilotProvider) SupportsTools() bool { return false }
 
-func (p *CopilotProvider) ID() string                     { return copilotSpec.ID }
-func (p *CopilotProvider) Name() string                   { return copilotSpec.Name }
-func (p *CopilotProvider) ContextLimit() int              { return 128000 }
-func (p *CopilotProvider) DefaultModel() string           { return copilotSpec.DefaultModel }
-func (p *CopilotProvider) FreeModel() string              { return "" }
-func (p *CopilotProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(copilotSpec) }
+func (p *CopilotProvider) ID() string           { return copilotSpec.ID }
+func (p *CopilotProvider) Name() string         { return copilotSpec.Name }
+func (p *CopilotProvider) ContextLimit() int    { return 128000 }
+func (p *CopilotProvider) DefaultModel() string { return copilotSpec.DefaultModel }
+func (p *CopilotProvider) FreeModel() string    { return "" }
 
 func (c *CopilotProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	return nil, fmt.Errorf("embeddings not supported by Copilot provider")
@@ -171,7 +170,6 @@ func (p *CopilotProvider) fetchModels(ctx context.Context) (models []ModelInfo, 
 			ID:           m.ID,
 			DisplayName:  m.Name,
 			ContextLimit: limit,
-			Pricing:      Pricing{InputCostPerM: 0, OutputCostPerM: 0},
 		})
 	}
 

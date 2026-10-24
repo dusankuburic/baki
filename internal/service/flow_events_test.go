@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/platform/txhook"
@@ -313,7 +314,7 @@ func TestChatContextFill_StaleDocumentAndOverlappedBuildAreNotServed(t *testing.
 	chat.contextCoreForTest(context.Background(), "s", ctxCacheStubProvider{}, other, nil, req)
 	scrubDocument = orig
 	cc := chat.chatCtxCache
-	key := chat.chatContextKeyAt("s", other.ID, gen, req, ctxCacheStubProvider{}.ID(), req.Model, nil, "", defaultContextTokenBudget)
+	key := chat.chatContextKeyAt("s", other.ID, gen, req, ctxCacheStubProvider{}.ID(), req.Model, nil, "", defaultContextTokenBudget, ai.ToolAccessNone)
 	if _, ok := cc.texts.Get(key); ok {
 		t.Error("an overlapped build stored its texts")
 	}

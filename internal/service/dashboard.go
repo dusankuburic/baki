@@ -329,11 +329,6 @@ func (s *DashboardService) buildCloud(ctx context.Context, userID string) *model
 			Date: h.Date, AvgHealth: h.AvgHealth, FlowCount: h.FlowCount,
 		})
 	}
-	for _, c := range adv.CostByProv {
-		out.CostByProv = append(out.CostByProv, models.ProviderCostStub{
-			Provider: c.Provider, Cost: c.Cost, TokensIn: c.TokensIn, TokensOut: c.TokensOut,
-		})
-	}
 	// Severity tint comes from the rule catalog, not the DB: the by_rule rollup
 	// stores only counts, and severity is a per-rule property anyway.
 	sev := s.ruleSeverities()
@@ -466,7 +461,6 @@ func emptyHome() *models.DashboardHomeData {
 			ByCategory: []models.FindingCategory{},
 		},
 		HealthTrend:    []models.DailyHealthPoint{},
-		CostByProv:     []models.ProviderCostStub{},
 		RuleFreq:       []models.RuleFrequencyStub{},
 		Activity:       []models.ActivityStub{},
 		Complexity:     []models.FlowComplexityStub{},

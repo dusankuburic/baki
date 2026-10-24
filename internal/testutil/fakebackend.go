@@ -109,10 +109,6 @@ type FakeBackend struct {
 	// FlowHealth is the persisted per-flow analysis summary (flowID -> snapshot) SaveFlowAnalysis writes; tests
 	// may seed it.
 	FlowHealth map[string]*interfaces.HealthSnapshot
-	// DailyUsage / UsageErr let tests drive GetDailyUsage (e.g. to verify the
-	// AI budget check fails closed on a store error).
-	DailyUsage float64
-	UsageErr   error
 	// UsageMetrics collects every SaveUsageMetric row in arrival order (the
 	// audited provider records asynchronously, hence the mutex); read via
 	// SavedUsageMetrics.
@@ -1484,9 +1480,6 @@ func (m *FakeBackend) SavedUsageMetrics() []*interfaces.UsageMetric {
 	m.usageMu.Lock()
 	defer m.usageMu.Unlock()
 	return append([]*interfaces.UsageMetric(nil), m.UsageMetrics...)
-}
-func (m *FakeBackend) GetDailyUsage(_ context.Context, _, _ string) (float64, error) {
-	return m.DailyUsage, m.UsageErr
 }
 
 // ---- Dashboard ----

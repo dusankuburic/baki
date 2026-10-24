@@ -60,6 +60,9 @@ func (ctxCacheStubProvider2) ID() string                  { return "stub" }
 func (ctxCacheStubProvider2) EstimateTokens(s string) int { return len(s) / 4 }
 func (ctxCacheStubProvider2) ContextLimit() int           { return 100000 }
 
+// Models answers no per-model window, so the context budget derives from ContextLimit.
+func (ctxCacheStubProvider2) Models(context.Context) ([]ai.ModelInfo, error) { return nil, nil }
+
 // TestComputeContextCore_SourceFilesWired verifies C-10: a request carrying
 // SelectedSourceFiles now has those files read and injected into the built
 // context (previously the field was collected then silently dropped).

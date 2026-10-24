@@ -498,8 +498,8 @@ func TestBuildAnalytics_PartialSections(t *testing.T) {
 	if strings.Join(out.Partial, ",") != "trend,ai" {
 		t.Errorf("Partial = %v, want [trend ai]", out.Partial)
 	}
-	if out.Trend.Points == nil || len(out.Trend.Points) != 0 || out.Summary.AnalysesRun.Available || out.Summary.AISpend.Available {
-		t.Errorf("failed sections must be empty and unavailable: points=%v runs=%+v ai=%+v", out.Trend.Points, out.Summary.AnalysesRun, out.Summary.AISpend)
+	if out.Trend.Points == nil || len(out.Trend.Points) != 0 || out.Summary.AnalysesRun.Available || len(out.AI.Daily) != 0 {
+		t.Errorf("failed sections must be empty and unavailable: points=%v runs=%+v ai=%+v", out.Trend.Points, out.Summary.AnalysesRun, out.AI)
 	}
 }
 
@@ -572,9 +572,9 @@ func TestBuildAnalytics_SectionsAndScoping(t *testing.T) {
 		MttrHours:     5, ResolvedCount: 2, StaleCount: 1,
 	}
 	be.usage = &storageif.UsageRows{
-		Daily:      []storageif.UsageDailyRow{{Date: dayOf(q, 0), TokensIn: 100, TokensOut: 50, Calls: 2, Cost: 0.5}, {Date: prevDay, TokensIn: 10, TokensOut: 5, Calls: 1, Cost: 0.1}},
-		ByProvider: []storageif.ProviderCost{{Provider: "openai", Cost: 0.5, TokensIn: 100, TokensOut: 50}},
-		ByModel:    []storageif.UsageModelRow{{Provider: "openai", Model: "gpt", ServedModel: "gpt-4o-2024-11-20", TokensIn: 100, TokensOut: 50, Calls: 2, Cost: 0.5}},
+		Daily:      []storageif.UsageDailyRow{{Date: dayOf(q, 0), TokensIn: 100, TokensOut: 50, Calls: 2}, {Date: prevDay, TokensIn: 10, TokensOut: 5, Calls: 1}},
+		ByProvider: []storageif.ProviderUsage{{Provider: "openai", TokensIn: 100, TokensOut: 50}},
+		ByModel:    []storageif.UsageModelRow{{Provider: "openai", Model: "gpt", ServedModel: "gpt-4o-2024-11-20", TokensIn: 100, TokensOut: 50, Calls: 2}},
 	}
 	be.activity = &storageif.ActivityRows{
 		Events:   []storageif.ActivityEventRow{{Action: "flow.upload", UserID: "user-1", ActorName: "Me", ResourceType: "flow", ResourceID: "A", Label: "Flow A", CreatedAt: time.Now()}, {Action: "flow.share", UserID: "user-9", ActorName: "Ada", ResourceType: "flow", ResourceID: "A", Label: "Flow A", CreatedAt: time.Now()}},
@@ -601,14 +601,11 @@ func TestBuildAnalytics_SectionsAndScoping(t *testing.T) {
 		t.Errorf("Resolved tile = %+v, want 2 vs 1", out.Summary.Resolved)
 	}
 	ai := out.AI
-	if ai.Scoped != "user" || ai.FlowScoped || ai.TotalCost != 0.5 || ai.PrevCost == nil || *ai.PrevCost != 0.1 || ai.TotalTokens != 150 || len(ai.Daily) != 7 || len(ai.ByProvider) != 1 || len(ai.ByModel) != 1 {
+	if ai.Scoped != "user" || ai.FlowScoped || ai.TotalTokens != 150 || len(ai.Daily) != 7 || len(ai.ByProvider) != 1 || len(ai.ByModel) != 1 {
 		t.Errorf("ai = %+v", ai)
 	}
 	if len(ai.ByModel) == 1 && (ai.ByModel[0].Model != "gpt" || ai.ByModel[0].ServedModel != "gpt-4o-2024-11-20") {
 		t.Errorf("ByModel row must carry the served model next to the requested one (D-42): %+v", ai.ByModel[0])
-	}
-	if out.Summary.AISpend.Value != 0.5 || out.Summary.AISpend.Prev == nil || *out.Summary.AISpend.Prev != 0.1 {
-		t.Errorf("AISpend tile = %+v", out.Summary.AISpend)
 	}
 	act := out.Activity
 	if len(act.Events) != 2 || !act.Events[0].Actor.IsMe || act.Events[1].Actor.IsMe || act.Events[1].Actor.Name != "Ada" || act.Events[0].Label != "Flow A" {

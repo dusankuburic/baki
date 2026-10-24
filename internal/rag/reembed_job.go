@@ -39,22 +39,18 @@ type reembedRequest struct {
 // started with, so it is refused unless that credential is the organisation's shared one
 // (ErrEmbeddingOrgCredentialRequired): a member's personal key must not be spent after they left, and the org
 // owns its corpus. ErrKnowledgeBusy while a run is in flight on any replica; ErrReembedUnavailable when the
-// job's lock could not be asked for or the server is stopping. The budget is checked at the start and again by
-// every page's request.
+// job's lock could not be asked for or the server is stopping.
 func (s *KnowledgeService) ReindexInBackground(ctx context.Context, scope, orgID string, force bool) (string, error) {
 	if s.store == nil {
 		return "", fmt.Errorf("knowledge service has no storage backend (cloud mode required)")
 	}
-	ctx = ai.WithBudgetScope(ctx, scope, orgID) // the org's policy applies to the start as to every page
+	ctx = ai.WithUsageScope(ctx, scope, orgID) // the org's policy applies to the start as to every page
 	provider, err := s.embedderFor(ctx, scope, orgID)
 	if err != nil {
 		return "", fmt.Errorf("embedding provider unavailable: %w", err)
 	}
 	if !s.onOrgCredential(provider) {
 		return "", ErrEmbeddingOrgCredentialRequired
-	}
-	if err := s.checkBudget(ctx, provider, scope, orgID); err != nil {
-		return "", err
 	}
 	req := &reembedRequest{scope: scope, orgID: orgID, force: force}
 	if claims := auth.ClaimsFromContext(ctx); claims != nil {

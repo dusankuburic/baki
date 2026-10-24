@@ -787,12 +787,10 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 		modelDetails := make([]models.ModelDetail, 0, len(modelInfos))
 		for _, m := range modelInfos {
 			modelDetails = append(modelDetails, models.ModelDetail{
-				ID:             m.ID,
-				DisplayName:    m.DisplayName,
-				ContextLimit:   m.ContextLimit,
-				InputCostPerM:  m.Pricing.InputCostPerM,
-				OutputCostPerM: m.Pricing.OutputCostPerM,
-				SupportsTools:  p.SupportsTools(),
+				ID:            m.ID,
+				DisplayName:   m.DisplayName,
+				ContextLimit:  m.ContextLimit,
+				SupportsTools: p.SupportsTools(),
 			})
 		}
 
@@ -843,7 +841,6 @@ func specFields(info models.ProviderInfo, spec ai.ProviderSpec) models.ProviderI
 	info.Caps = spec.Caps.Names()
 	info.Modes = spec.WireModes()
 	info.Credential = &cred
-	info.Pricing = string(spec.Pricing)
 	info.Color = spec.Color
 	info.Icon = spec.Icon
 	if endpoints := providerEndpoints(spec); endpoints != (models.ProviderEndpoints{}) {
@@ -910,7 +907,6 @@ func (s *ProviderService) ProviderCatalog(ctx context.Context, scope, orgID stri
 			Configured:   s.isConfigured(scope, spec.ID) || s.isOrgConfigured(orgID, spec.ID),
 			Color:        spec.Color,
 			Icon:         spec.Icon,
-			Pricing:      string(spec.Pricing),
 			Configurable: endpoints != (models.ProviderEndpoints{}),
 		})
 	}
@@ -1050,14 +1046,10 @@ func (s *ProviderService) runConnectionTest(ctx context.Context, provider ai.Pro
 	return &models.ProviderTestResult{Ok: false, Latency: latency, Error: connectionTestError(providerID, "", firstErr)}
 }
 
-// connectionTestCode is the coded class of a connection-test failure the client branches on: the pre-call
-// gates' refusals (the daily budget, the provider policy). "" for every other failure, which keeps its text.
+// connectionTestCode is the coded class of a connection-test failure the client branches on: the provider
+// policy's refusals. "" for every other failure, which keeps its text.
 func connectionTestCode(err error) string {
 	switch {
-	case errors.Is(err, ErrAIBudgetExceeded):
-		return ChatErrBudgetExceeded
-	case errors.Is(err, ErrAIBudgetUnavailable):
-		return ChatErrBudgetUnavailable
 	case errors.Is(err, ai.ErrProviderNotAllowed):
 		return ProviderCodeNotAllowed
 	case errors.Is(err, ai.ErrProviderPolicyUnavailable):

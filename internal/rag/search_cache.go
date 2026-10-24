@@ -177,7 +177,7 @@ func (s *KnowledgeService) embedQuery(ctx context.Context, provider ai.Provider,
 	}
 	// Charged to the caller in the org (the wrapper's hook and usage row read it from ctx), as Search set it;
 	// marked as a query so a provider that embeds the two sides of a retrieval pair differently (Gemini) can.
-	emb, err := provider.Embed(ai.WithQueryEmbedding(ai.WithBudgetScope(ctx, scope, orgID)), []string{query})
+	emb, err := provider.Embed(ai.WithQueryEmbedding(ai.WithUsageScope(ctx, scope, orgID)), []string{query})
 	if err != nil || len(emb) == 0 {
 		return nil, false, err
 	}

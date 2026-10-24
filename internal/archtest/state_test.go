@@ -63,7 +63,6 @@ type stateEntry struct {
 var stateRegistry = []stateEntry{
 	// --- internal/ai: provider-side memos and registries
 	{"internal/ai/audited.go", "estimateRequestTokensMemo", stateReplicaLocal, "a BPE estimate memoised by request fingerprint (16 entries); another replica computes it again", ""},
-	{"internal/ai/budget.go", "BudgetMemo", stateRequestScoped, "one request's daily-usage reads", ""},
 	{"internal/ai/circuitbreaker.go", "breakerRegistry", stateReplicaLocal, "a breaker per provider and model, opened by this replica's own failures; a breaker per replica is arguably right (SURVEY_STATE row 18)", ""},
 	{"internal/ai/copilot_auth.go", "CopilotAuth", stateReplicaLocal, "Copilot session tokens exchanged per replica; one extra exchange per replica per token lifetime (row 19)", ""},
 	{"internal/ai/learned_window.go", "learnedWindows", stateReplicaLocal, "context windows learned from a provider's rejection, 24 h; one wasted rejected call per replica (row 18)", ""},
@@ -128,8 +127,6 @@ var stateRegistry = []stateEntry{
 	{"internal/scanner/scanner.go", "Scanner.notices", stateRequestScoped, "one sweep's \"new rules\" notices; the database's primary key decides which notice is new, across replicas", ""},
 
 	// --- internal/service
-	{"internal/service/ai_budget_redis.go", "redisLedger", stateReplicaLocal, "this replica's own held reservations, mirrored into the baki:ai:inflight:* hashes every second; other replicas read the hashes, never this map", ""},
-	{"internal/service/ai_budget.go", "memLedger", stateReplicaLocal, "the in-flight spend of this replica's streams, used when there is no Redis. With Redis the spend lives in the baki:ai:inflight:* hashes (internal/redisx/inflight.go, ai_budget_redis.go), which fail closed (ADR 0028 addendum, ai-providers.md)", ""},
 	{"internal/service/analysis.go", "recordClaims", stateShared, "analysis.claim (baki:analysis:claim:{tenant}:{flow}, 7 d; ADR 0032 addendum): the claimed run is swapped in with SET ... GET when PAD_MAX_REPLICAS > 1, so a run is recorded (trend row, analysis webhook) once wherever it is analyzed; the LRU is the fallback while Redis is down", "TestSharedAnalysis_ARunRecordedOnOneReplicaIsNotFreshOnAnother"},
 	{"internal/service/analysis.go", "reportLRU", stateShared, "analysis.pair (baki:analysis:pair:{tenant}:{flow}, 24 h; ADR 0032 addendum): the flow's last two runs and their reports (gzip, at most 512 KiB each; none for a sweep's run) when PAD_MAX_REPLICAS > 1, so the export and the diff on any replica answer with the deployment's runs; the LRU serves the runs this replica holds and is the fallback (Redis down, past the TTL, a report over the cap)", "TestSharedAnalysis_AnotherReplicaServesTheCurrentRunAndDiffsAgainstThePrevious"},
 	{"internal/service/authz.go", "flowAuthzMemo", stateRequestScoped, "one handler's authorization decisions about one flow", ""},
@@ -416,7 +413,7 @@ func TestArch_StateRegistryCoversTheSurveyedState(t *testing.T) {
 	for _, want := range []string{
 		"ChatService.activeStreams", "ChatService.finishedStreams", "ChatService.pendingFixDecisions", "ChatService.convMutexes",
 		"Router.usedTickets", "EventManager.sseConnCount", "Hub.connsPerUser", "EventManager.revokers", "Hub.rooms", "EventManager.bufBytes",
-		"KnowledgeService.orgLocks", "Scanner", "memLedger", "spillStore", "snapshotStore", "recordClaims", "reportLRU",
+		"KnowledgeService.orgLocks", "Scanner", "spillStore", "snapshotStore", "recordClaims", "reportLRU",
 		"MigrationRunner", "FlowService.uploadIDs", "inMemoryStore", "breakerRegistry", "learnedWindows", "CachedBlacklist",
 	} {
 		if !have[want] {

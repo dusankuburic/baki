@@ -2,7 +2,6 @@ package service
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,7 +16,6 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
-	"pad-analyzer/internal/errreport"
 	"pad-analyzer/internal/platform/apperr"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/rag"
@@ -35,72 +33,13 @@ import (
 // maxChatStreamDuration is the hard wall-clock backstop on a stream; the watchdog/idle timeout normally catches hangs first.
 const maxChatStreamDuration = 10 * time.Minute
 
-// maxConcurrentStreamsPerScope caps streams per caller, bounding one user's spend and goroutines.
+// maxConcurrentStreamsPerScope caps streams per caller, bounding one user's provider calls and goroutines.
 const maxConcurrentStreamsPerScope = 3
 
 // maxToolIterations bounds the read-only tool loop against a model that never stops requesting tools.
 const maxToolIterations = 6
 
-// inFlightCost prices not-yet-persisted spend; double-counting is the safe direction.
-func inFlightCost(price ai.Pricing, tokensIn, tokensOut int) float64 {
-	// Negative counts must not lower the ledger entry other streams read.
-	tokensIn, tokensOut = max(tokensIn, 0), max(tokensOut, 0)
-	if tokensIn == 0 && tokensOut == 0 {
-		return 0
-	}
-	return float64(tokensIn)/1e6*price.InputCostPerM + float64(tokensOut)/1e6*price.OutputCostPerM
-}
-
-// inFlightPricing is the in-flight rate; alias providers (Foundry) are unpriced and reserve nothing.
-func inFlightPricing(_ context.Context, p ai.Provider, _ string) ai.Pricing {
-	if p == nil || ai.UsesModelAliases(p.ID()) {
-		return ai.Pricing{}
-	}
-	return p.PricePerMillionTokens()
-}
-
-// self is the calling stream (nil before registration); its own ledger entry is excluded. Reads through the
-// turn's usage memo when the worker seeded one (ai.WithBudgetMemo), so the wrapper's hook costs no second read.
-func (s *ChatService) enforceBudget(ctx context.Context, scope, orgID string, inflight float64, self *streamCtl) error {
-	return s.enforceBudgetMemo(ctx, ai.BudgetMemoFrom(ctx), scope, orgID, inflight, self)
-}
-
-// enforceBudgetMemo is enforceBudget with a per-turn usage memo; the in-flight ledger covers its staleness gap.
-func (s *ChatService) enforceBudgetMemo(ctx context.Context, memo *ai.BudgetMemo, scope, orgID string, inflight float64, self *streamCtl) error {
-	var spend inFlightSpend
-	if self != nil {
-		spend = self
-	}
-	return s.aiBudget().check(ctx, memo, scope, orgID, inflight, spend)
-}
-
-// aiBudget is the budget gate: the one DI shares with the knowledge base, else (a bare struct in tests) one over
-// the service's own settings and store.
-func (s *ChatService) aiBudget() *AIBudget {
-	s.budgetOnce.Do(func() {
-		if s.budget == nil {
-			s.budget = NewAIBudget(s.settings, s.backend)
-		}
-	})
-	return s.budget
-}
-
-// enforceTurnBudget: an alias (Foundry) turn is never budget-refused — baki does not price Azure usage.
-func (s *ChatService) enforceTurnBudget(ctx context.Context, provider ai.Provider, scope, orgID string, inflight float64, self *streamCtl) error {
-	if provider != nil && ai.UsesModelAliases(provider.ID()) {
-		return nil
-	}
-	return s.enforceBudget(ctx, scope, orgID, inflight, self)
-}
-
-func (s *ChatService) enforceTurnBudgetMemo(ctx context.Context, provider ai.Provider, memo *ai.BudgetMemo, scope, orgID string, inflight float64, self *streamCtl) error {
-	if provider != nil && ai.UsesModelAliases(provider.ID()) {
-		return nil
-	}
-	return s.enforceBudgetMemo(ctx, memo, scope, orgID, inflight, self)
-}
-
-// maxOutputTokens is the reservation basis: the request's cap or the 4096 default.
+// maxOutputTokens is the request's output cap or the 4096 default.
 func maxOutputTokens(req ai.Request) int {
 	if req.MaxTokens > 0 {
 		return req.MaxTokens
@@ -228,8 +167,7 @@ func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bo
 	}
 	s.streamCapMu.Unlock()
 
-	// The same two checks across the replicas (chat_replicas.go; a no-op with one replica), outside the lock like the
-	// ledger write below.
+	// The same two checks across the replicas (chat_replicas.go; a no-op with one replica), outside the lock.
 	hold, dup, full := s.share.reserve(ctl)
 	if dup || full {
 		s.activeStreams.Delete(streamID)
@@ -240,21 +178,12 @@ func (s *ChatService) tryStartStream(streamID, scope string, ctl *streamCtl) (bo
 	}
 	ctl.shareHold = hold
 
-	// The budget's in-flight ledger holds exactly the active streams (released where activeStreams drops it). The write
-	// can be a Redis round trip, so it runs with the slot reserved but the lock free: a slow Redis delays this start
-	// alone, not every other start and the server's stop.
-	if err := s.aiBudget().hold(ctl); err != nil { // the shared ledger cannot answer: fail closed
-		s.activeStreams.Delete(streamID)
-		s.share.abort(ctl, hold)
-		return false, err
-	}
 	// The worker is counted under the lock that Shutdown sets closing under, so Shutdown's Wait cannot miss it; a stop
-	// that began during the write refuses the start and gives the entry back.
+	// that began during the cross-replica reservation refuses the start and gives the entry back.
 	s.streamCapMu.Lock()
 	if s.closing {
 		s.streamCapMu.Unlock()
 		s.activeStreams.Delete(streamID)
-		s.aiBudget().release(ctl)
 		s.share.abort(ctl, hold)
 		return false, ErrServerRestarting
 	}
@@ -301,11 +230,10 @@ type ChatService struct {
 	// mode: ModeLocal persists on disk (desktop); cloud via Postgres + RLS.
 	mode      config.DeploymentMode
 	knowledge *rag.KnowledgeService
-	// budget is the daily AI budget gate and in-flight ledger, shared with the knowledge base; nil (a bare
-	// struct in tests) builds one over settings and backend on first use (aiBudget).
-	budget     *AIBudget
-	budgetOnce sync.Once
 	// watchdogInterval / idleTimeout / hostedIdleTimeout: test overrides; 0 ⇒ defaults.
+	// flowEditCheck decides whether the stream's caller may edit its flow (the fix tools' gate); nil asks the flow
+	// service (canEditFlow). A test override.
+	flowEditCheck     func(ctx context.Context, flowID string) error
 	watchdogInterval  time.Duration
 	idleTimeout       time.Duration
 	hostedIdleTimeout time.Duration
@@ -351,12 +279,10 @@ type ChatService struct {
 }
 
 // ChatOptions are ChatService's optional collaborators; the zero value chats without the knowledge base, the
-// Azure AI Foundry model registry or the Redis resume backplane, on a budget gate of its own.
+// Azure AI Foundry model registry or the Redis resume backplane.
 type ChatOptions struct {
 	// Knowledge answers retrieval for org-scoped turns; nil = no RAG.
 	Knowledge *rag.KnowledgeService
-	// Budget is the daily AI budget gate the knowledge base consults too; nil builds a private one.
-	Budget *AIBudget
 	// Azure resolves azure-foundry model ids on the model registry before the stream starts; nil keeps the
 	// single-document behaviour.
 	Azure *AzureModelService
@@ -398,7 +324,6 @@ func NewChatService(
 		backend:       backend,
 		mode:          mode,
 		knowledge:     opts.Knowledge,
-		budget:        opts.Budget,
 		azure:         opts.Azure,
 		resume:        noopResumeStore{},
 		chatCtxCache:  newChatContextCache(),
@@ -423,6 +348,26 @@ func (s *ChatService) resumeBackplane() resumeStore {
 // GetAuthorizedFlow resolves a flow the stream's actor (carried by ctx) may perform action on: FlowService.GetAuthorized.
 func (s *ChatService) GetAuthorizedFlow(ctx context.Context, flowID string, action Action) (*models.FlowDocument, error) {
 	return s.flowCache.GetAuthorized(ctx, flowID, action)
+}
+
+// canEditFlow reports whether the stream's caller may edit doc (FlowEdit, without loading its content): the fix
+// tools are offered only then. The apply step checks FlowEdit again on a fresh document (applyApprovedFix).
+func (s *ChatService) canEditFlow(ctx context.Context, doc *models.FlowDocument) bool {
+	if doc == nil {
+		return false
+	}
+	if s.flowEditCheck != nil {
+		return s.flowEditCheck(ctx, doc.ID) == nil
+	}
+	if s.flowCache == nil {
+		return false
+	}
+	err := s.flowCache.CheckFlowPermission(ctx, doc.ID, FlowEdit)
+	if err != nil && !errors.Is(err, ErrPermissionDenied) {
+		// Not a denial but a failed check (a store error): the turn still runs, without the fix tools.
+		logger.Warn("chat: the flow edit permission could not be checked; the fix tools are not offered", "flow_id", doc.ID, "error", err)
+	}
+	return err == nil
 }
 
 // turnSetup is the resolved provider + model + attribution + RAG lookup for one turn; ragDone nil when RAG isn't wired.
@@ -517,9 +462,9 @@ func (s *ChatService) turnProvider(ctx context.Context, scope, orgID string, req
 }
 
 // prepareTurn resolves the provider (the factory's policy refuses a provider the deployment or the org does
-// not allow), enforces the budget (one response reserved first) and starts RAG after the gates — no spend on refusal.
+// not allow) and starts RAG after that gate — no provider call on refusal.
 func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models.FlowDocument, req models.ChatRequest, azure *AzureChatResolution, ctl *streamCtl) (turnSetup, error) {
-	// Org flows bill the org even for outsiders; the shared credential is for its admins and members.
+	// Org flows record the org's usage even for outsiders; the shared credential is for its admins and members.
 	orgID := ""
 	if doc != nil {
 		orgID = doc.OrganizationID
@@ -541,16 +486,6 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 		ctl.sharedCredential.Store(shared)
 	}
 	model := newTurnModel(req, azure)
-
-	// Reserve one max response pre-check so overlapping starts see each other; pre-clamp MaxTokens makes over-reserving safe.
-	if ctl != nil {
-		maxOutput, served := modelOutputInfo(ctx, provider, model.resolved)
-		reserveTokens := maxOutputTokens(ai.Request{MaxTokens: reasoningFloorTokens(req.MaxTokens, model.resolved, served, maxOutput)})
-		ctl.setInflight(inFlightCost(inFlightPricing(ctx, provider, model.resolved), 0, reserveTokens))
-	}
-	if err := s.enforceTurnBudget(ctx, provider, scope, orgID, 0, ctl); err != nil {
-		return turnSetup{}, err
-	}
 
 	var ragDone chan string
 	if s.knowledge != nil && doc != nil && doc.OrganizationID != "" {
@@ -592,48 +527,37 @@ func (s *ChatService) persistInitialUserTurn(ctx context.Context, doc *models.Fl
 	return stored
 }
 
-// buildStreamRequest assembles the ai.Request (scrubbed context, RAG to deadline, clamped params); RAG-wait ctx.Done() → ok=false.
-func (s *ChatService) buildStreamRequest(ctx context.Context, ts turnSetup, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest) (aiReq ai.Request, scrubbedDoc *models.FlowDocument, ok bool, err error) {
-	core, err := s.cachedContextCore(ctx, scope, ts.provider, doc, report, req)
-	if err != nil {
-		return ai.Request{}, nil, false, err
-	}
-
-	// RAG timeout → "". Guidelines go in the final user message, never the system prompt — Azure/OpenAI cache prefixes.
-	guidelines := ""
-	if ts.ragDone != nil {
+// buildStreamRequest assembles the ai.Request (the shared assembly: scrubbed context, RAG to deadline, clamped
+// params, the gate's tools) and enforces the window; dropped is how many history messages went to fit it.
+// RAG-wait ctx.Done() → ok=false.
+func (s *ChatService) buildStreamRequest(ctx context.Context, ts turnSetup, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest, gate ai.ToolGate, useTools bool) (aiReq ai.Request, scrubbedDoc *models.FlowDocument, dropped int, ok bool, err error) {
+	// RAG timeout → "". Guidelines go in the final user message, never the system prompt — Azure/OpenAI cache
+	// prefixes. Awaited after the context build, which runs while the lookup does.
+	guidelines := func() (string, bool) {
+		if ts.ragDone == nil {
+			return "", true
+		}
 		select {
-		case guidelines = <-ts.ragDone:
+		case g := <-ts.ragDone:
+			return g, true
 		case <-ctx.Done():
-			return ai.Request{}, nil, false, nil
+			return "", false
 		}
 	}
-	scrubbedDoc = core.scrubbedDoc
-	// Scrubbed once when the cached context was built (computeContextCore).
-	sysPrompt := core.sysPrompt
-	contextText := core.contextText
-
-	// The provider-level id (ts.model.resolved) — a registry "m/<entryId>" answers to no deployment.
-	temperature, maxTokens := turnGenerationParams(ctx, ts.provider, req, ts.model)
-	aiReq = ai.Request{
-		SystemPrompt: sysPrompt,
-		Messages:     buildScopedMessages(scope, req, contextText, scrubber.ScrubText(guidelines)),
-		Model:        ts.model.resolved,
-		Temperature:  temperature,
-		// An explicit temperature (0 included) is sent as chosen; unset keeps "provider default".
-		TemperatureSet: req.TemperatureSet,
-		MaxTokens:      maxTokens,
-		// Per-provider reasoning depth; "" keeps the provider default.
-		ReasoningEffort: req.ReasoningEffort,
-		OrgID:           ts.orgID,
+	a, ok, err := s.assembleTurnRequest(ctx, scope, ts, doc, report, req, guidelines, gate, useTools)
+	if err != nil || !ok {
+		return ai.Request{}, nil, 0, false, err
 	}
+	aiReq = a.req
 
-	// Enforce the window before sending: truncate or fail with ErrContextLimit, never a raw provider 400.
-	if _, err := truncateForContextWindow(ctx, ts.provider, &aiReq, ai.ContextLimitFor(ctx, ts.provider, ts.model.resolved), len(aiReq.Messages)-1); err != nil {
-		return ai.Request{}, nil, false, err
+	// Enforce the window before sending: truncate or fail with ErrContextLimit, never a raw provider 400. The pin
+	// is the current turn's index; where it moved to is how many history messages were dropped (R-streaming-7).
+	pin := len(aiReq.Messages) - 1
+	newPin, err := truncateForContextWindow(ctx, ts.provider, &aiReq, ai.ContextLimitFor(ctx, ts.provider, ts.model.resolved), pin)
+	if err != nil {
+		return ai.Request{}, nil, 0, false, err
 	}
-
-	return aiReq, scrubbedDoc, true, nil
+	return aiReq, a.scrubbedDoc, pin - newPin, true, nil
 }
 
 // resolveStreamID assigns the stream identity: a client UUID (SSE subscribes before creating the stream) or a backend id (legacy begin).
@@ -681,11 +605,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	ctx = withTurnMemo(ctx)
 
 	// Ground the chat in cached findings without re-analyzing per turn; nil when no analysis has run.
-	if report == nil && s.analysisCache != nil && doc != nil {
-		if cached, ok := s.analysisCache.CurrentReport(doc); ok {
-			report = cached
-		}
-	}
+	report = s.currentReport(doc, report)
 
 	streamID, clientProvided, err := s.resolveStreamID(req)
 	if err != nil {
@@ -711,11 +631,10 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		orgID = doc.OrganizationID
 		flowID = doc.ID
 	}
-	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}), settled: make(chan struct{}), ownerID: scope, orgID: orgID, streamID: streamID, flowID: flowID, convKey: req.ConversationKey()}
-	// The turn's budget checks (the start check, the loop re-checks, the wrapper's pre-call hook on every call
-	// and on the RAG query embed) share one usage read, exclude this stream's own ledger entry and charge the
-	// flow's organisation.
-	ctx = ai.WithBudgetScope(ai.WithBudgetMemo(withStreamSpend(ctx, ctl)), scope, orgID)
+	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}), settled: make(chan struct{}), ownerID: scope, streamID: streamID, flowID: flowID, convKey: req.ConversationKey()}
+	// Every provider call of the turn (the RAG query embed included) is recorded for the flow's organisation, and
+	// the provider policy sees it.
+	ctx = ai.WithUsageScope(ctx, scope, orgID)
 	ctl.touch() // pre-first-chunk work (context build, provider dial) counts as activity
 	ctl.lastEmit.Store(time.Now().UnixNano())
 	// Per-caller cap + stream-ID reservation, atomically (tryStartStream).
@@ -760,10 +679,6 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			return
 		}
 		if eventType == "done" && storeAnswer != nil {
-			// The stored answer carries the billed rates this event names: record them before the write reads them.
-			ctl.mu.Lock()
-			ctl.noteDoneRates(data)
-			ctl.mu.Unlock()
 			storeAnswer()
 		}
 		if eventType == "done" || eventType == "error" {
@@ -828,7 +743,6 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			// Finished set first: a conversation GET between the two calls must still find the stream.
 			s.finishedStreams.Store(streamID, ctl)
 			s.activeStreams.Delete(streamID)
-			s.aiBudget().release(ctl)
 			s.share.finish(ctl, ctl.shareHold)
 			time.AfterFunc(resumeRetention, func() { s.finishedStreams.Delete(streamID) })
 			if persistAnswer && !answerAttempted {
@@ -891,7 +805,14 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		if blockStatus == contextBlockMissing {
 			emit("tool", contextBlockMissingNotice())
 		}
-		aiReq, scrubbedDoc, ok, err := s.buildStreamRequest(ctx, ts, scope, doc, report, ctxReq)
+		// The session's gate: what this actor may run decides what the model is offered — the request carries
+		// the tools, or the marker-mode instructions, from its assembly — and ExecuteTool asks it again before
+		// any handler (ADR 0026). Approvals are wired whenever a fix applier can be (newFixApplier); the fix tools
+		// need the caller's edit permission, resolved here once, before anything is offered; a Foundry agent
+		// always runs the loop.
+		useTools := req.UseTools || ts.model.agent()
+		gate := ai.NewToolGate(auth.ActorFromContext(ctx), s.flowCache != nil, s.canEditFlow(ctx, doc))
+		aiReq, scrubbedDoc, dropped, ok, err := s.buildStreamRequest(ctx, ts, scope, doc, report, ctxReq, gate, useTools)
 		if err != nil {
 			if errors.Is(err, errContextScrub) {
 				// Fail closed: nothing was sent, and the document itself never stands in for its clone.
@@ -906,11 +827,16 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		if !ok {
 			return // ctx cancelled while waiting on RAG
 		}
+		if dropped > 0 {
+			// Said once, before the first chunk, and journaled: the user sees that earlier turns were left out.
+			ctl.setDroppedHistory(dropped)
+			emit("notice", historyTruncatedNotice(dropped, dropped))
+		}
 		// The loops below refresh the reservation per iteration with actual
 		// spend plus one more response.
 
-		// Tools: tctx by POINTER so an approved apply_fix swaps the fresh doc mid-stream; a Foundry agent always runs the loop.
-		if req.UseTools || ts.model.agent() {
+		// Tools: tctx by POINTER so an approved apply_fix swaps the fresh doc mid-stream.
+		if useTools {
 			tctx := ai.ToolContext{
 				Ctx:      ctx,
 				Doc:      scrubbedDoc,
@@ -923,9 +849,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				}
 				tctx.Fixes = ap
 			}
-			// The session's gate: what this actor may run decides what the model is offered, and ExecuteTool
-			// asks it again before any handler (ADR 0026).
-			tctx.Allow = ai.NewToolGate(auth.ActorFromContext(ctx), tctx.Fixes != nil)
+			tctx.Allow = gate
 			if ts.provider.SupportsTools() {
 				s.runToolLoop(ctx, ts.provider, aiReq, scope, &tctx, ctl, awaitStart, emit, coalesce.flushAndCount)
 			} else {
@@ -942,7 +866,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		lastServed := ""
 		ctl.beginProviderTurn()
 		failUsage := func(code, msg string, shared bool, tokensIn, tokensOut int, served string) {
-			failUsageStream(ctx, ctl, emit, nil, ts.provider, aiReq.Model, code, msg, shared, tokensIn, tokensOut, served)
+			failUsageStream(ctl, emit, nil, code, msg, shared, tokensIn, tokensOut, served)
 		}
 		err = ts.provider.Stream(ctx, aiReq, func(chunk ai.Chunk) {
 			ctl.touch()
@@ -988,7 +912,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 					return
 				}
 				ctl.markDone(chunk.TokensIn, chunk.TokensOut, lastServed)
-				emit("done", doneEventData(ctx, ts.provider, aiReq.Model, lastServed, chunk.TokensIn, chunk.TokensOut, coalesce.flushAndCount()))
+				emit("done", doneEventData(lastServed, chunk.TokensIn, chunk.TokensOut, coalesce.flushAndCount()))
 				return
 			}
 
@@ -1016,14 +940,13 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	return streamID, nil
 }
 
-// toolLoopState is the machinery both tool-loop drivers share: begin gate, per-iteration budget re-check/context re-trim, token/cost ledger.
+// toolLoopState is the machinery both tool-loop drivers share: begin gate, per-iteration context re-trim, token totals.
 type toolLoopState struct {
 	s        *ChatService
 	ctx      context.Context
 	provider ai.Provider
-	// model is the loop's provider-level id; orgID the attribution its budget re-check enforces against.
+	// model is the loop's provider-level id.
 	model string
-	orgID string
 	scope string
 	ctl   *streamCtl
 	emit  func(string, map[string]interface{})
@@ -1034,28 +957,20 @@ type toolLoopState struct {
 	// started is the consumed-once record of the begin gate (ctl.started holds one token).
 	started bool
 
-	// budgetUsage memoizes the loop's daily-usage reads across iterations: the turn's (ai.WithBudgetMemo), else its own.
-	budgetUsage *ai.BudgetMemo
-
 	// tokens memoises truncation estimates; ctxLimit is the model-aware window (catalog overrides provider default).
 	tokens   *tokenMemo
 	ctxLimit int
+	// dropped is how many history messages the turn has left out so far (the request build's, then each
+	// iteration's): the keptFrom of the next history_truncated notice.
+	dropped int
 
-	// The spend ledger: done rates blend per-iteration price × tokens (a router may serve each iteration differently).
-	price      ai.Pricing
-	reserve    float64
-	pricer     ai.UsagePricer
-	canPrice   bool
+	// The turn's token totals across iterations and the model that answered last.
 	totalIn    int
 	totalOut   int
-	costIn     float64
-	costOut    float64
-	unpriced   bool
-	lastPrice  ai.Pricing
 	lastServed string
 }
 
-// newToolLoopState snapshots the loop's fixed wiring and opens the ledger; only base's Model, OrgID and MaxTokens are read.
+// newToolLoopState snapshots the loop's fixed wiring; only base's Model is read.
 func newToolLoopState(
 	s *ChatService,
 	ctx context.Context,
@@ -1067,14 +982,11 @@ func newToolLoopState(
 	emit func(string, map[string]interface{}),
 	doneChunks func() int,
 ) *toolLoopState {
-	price := inFlightPricing(ctx, provider, base.Model)
-	pricer, canPrice := provider.(ai.UsagePricer)
 	return &toolLoopState{
 		s:          s,
 		ctx:        ctx,
 		provider:   provider,
 		model:      base.Model,
-		orgID:      base.OrgID,
 		scope:      scope,
 		ctl:        ctl,
 		emit:       emit,
@@ -1082,10 +994,7 @@ func newToolLoopState(
 		doneChunks: doneChunks,
 		tokens:     newTokenMemo(),
 		ctxLimit:   ai.ContextLimitFor(ctx, provider, base.Model),
-		price:      price,
-		reserve:    inFlightCost(price, 0, maxOutputTokens(base)),
-		pricer:     pricer,
-		canPrice:   canPrice,
+		dropped:    ctl.droppedHistoryCount(),
 	}
 }
 
@@ -1104,26 +1013,7 @@ func (st *toolLoopState) fail(code, msg string, shared bool) {
 
 // failUsage is failUsageStream through the begin gate, for a billed failure with totals in hand.
 func (st *toolLoopState) failUsage(code, msg string, shared bool, tokensIn, tokensOut int, served string) {
-	failUsageStream(st.ctx, st.ctl, st.emit, st.ensureStarted, st.provider, st.model, code, msg, shared, tokensIn, tokensOut, served)
-}
-
-// recheckBudget re-checks the daily budget every iteration (the loop multiplies spend up to maxToolIterations×); false = stop, already reported.
-func (st *toolLoopState) recheckBudget() bool {
-	own := inFlightCost(st.price, st.totalIn, st.totalOut)
-	st.ctl.setInflight(own + st.reserve)
-	if st.budgetUsage == nil {
-		st.budgetUsage = cmp.Or(ai.BudgetMemoFrom(st.ctx), ai.NewBudgetMemo())
-	}
-	if err := st.s.enforceTurnBudgetMemo(st.ctx, st.provider, st.budgetUsage, st.scope, st.orgID, own, st.ctl); err != nil {
-		code, msg, report := loopBudgetFailure(st.ctx, st.ctl, err)
-		if report {
-			// A mid-loop budget stop is the kind operators need aggregated: the turn already burned budget.
-			errreport.CaptureError(st.ctx, "chat.tool_loop.budget", err, errreport.Attrs{"scope": st.scope, "provider": st.provider.ID()})
-		}
-		st.fail(code, msg, false) // a budget stop is never a shared-credential failure
-		return false
-	}
-	return true
+	failUsageStream(st.ctl, st.emit, st.ensureStarted, code, msg, shared, tokensIn, tokensOut, served)
 }
 
 // trimmedTurn builds the iteration's request and re-enforces the window (tool results can overflow it by iteration 4-6).
@@ -1135,31 +1025,25 @@ func (st *toolLoopState) trimmedTurn(base ai.Request, msgs []ai.Message, pin int
 		st.fail(ChatErrContextLimit, "conversation is too long for this model's context window — too many tool results, try a simpler question", false)
 		return turn, pin, false
 	}
+	if dropped := pin - newPin; dropped > 0 && st.ensureStarted() {
+		// Tool results grew the prompt past the window: more of the history went, and the user is told again.
+		st.dropped += dropped
+		st.ctl.setDroppedHistory(st.dropped)
+		st.emit("notice", historyTruncatedNotice(dropped, st.dropped))
+	}
 	return turn, newPin, true
 }
 
-// addTurnUsage folds one iteration's usage into the ledger, priced per served model; unpriceable marks the turn unpriced.
-func (st *toolLoopState) addTurnUsage(turnIn, turnOut int, turnServed string) {
+// addTurnUsage folds one iteration's tokens into the turn's totals.
+func (st *toolLoopState) addTurnUsage(turnIn, turnOut int) {
 	st.totalIn += turnIn
 	st.totalOut += turnOut
-	if st.canPrice {
-		if p, ok := st.pricer.UsagePricing(st.ctx, st.model, turnServed); ok {
-			st.lastPrice = p
-			st.costIn += float64(turnIn) * p.InputCostPerM
-			st.costOut += float64(turnOut) * p.OutputCostPerM
-		} else {
-			st.unpriced = true
-		}
-	} else {
-		st.unpriced = true
-	}
 }
 
-// emitDone is the success exit: mark done and emit the ledger's blended rates.
+// emitDone is the success exit: mark done and emit the turn's totals.
 func (st *toolLoopState) emitDone() {
 	st.ctl.markDone(st.totalIn, st.totalOut, st.lastServed)
-	price, priced := blendedRates(st.lastPrice, st.costIn, st.totalIn, st.costOut, st.totalOut, st.unpriced)
-	st.emit("done", doneEventDataRated(st.ctx, st.provider, st.model, st.lastServed, st.totalIn, st.totalOut, st.doneChunks(), price, priced))
+	st.emit("done", doneEventData(st.lastServed, st.totalIn, st.totalOut, st.doneChunks()))
 }
 
 // runToolLoop drives the native function-calling tool loop; self-contained — emits tool/chunk/done/error and updates ctl itself.
@@ -1174,7 +1058,11 @@ func (s *ChatService) runToolLoop(
 	emit func(string, map[string]interface{}),
 	doneChunks func() int,
 ) {
-	base.Tools = ai.ToolDefinitionsFor(tctx.Allow)
+	// A stream's request carries the gate's tools from its assembly (assembleTurnRequest, so the first window
+	// check counted them); a caller that built its own request gets them here.
+	if base.Tools == nil {
+		base.Tools = ai.ToolDefinitionsFor(tctx.Allow)
+	}
 	msgs := base.Messages
 	st := newToolLoopState(s, ctx, provider, base, scope, ctl, awaitStart, emit, doneChunks)
 
@@ -1206,9 +1094,6 @@ func (s *ChatService) runToolLoop(
 			stepBase.SystemPrompt = withStepLimitNote(base.SystemPrompt)
 		}
 		recordChatToolIteration()
-		if !st.recheckBudget() {
-			return
-		}
 		turn, newPin, ok := st.trimmedTurn(stepBase, msgs, pin)
 		if !ok {
 			return
@@ -1230,8 +1115,6 @@ func (s *ChatService) runToolLoop(
 			turnIn     int
 			turnOut    int
 			turnFinish string
-			// turnServed is the model that answered THIS iteration — the unit the blended rates price.
-			turnServed string
 			chunkErr   error
 		)
 		ctl.beginProviderTurn()
@@ -1244,7 +1127,6 @@ func (s *ChatService) runToolLoop(
 			}
 			if c.ServedModel != "" {
 				st.lastServed = c.ServedModel
-				turnServed = c.ServedModel
 			}
 			switch {
 			case c.Error != nil:
@@ -1314,7 +1196,7 @@ func (s *ChatService) runToolLoop(
 			st.fail(ctl.classifyFailureShared(ctx, chunkErr))
 			return
 		}
-		st.addTurnUsage(turnIn, turnOut, turnServed)
+		st.addTurnUsage(turnIn, turnOut)
 
 		// No tool calls → this turn is the final answer (its text already streamed; only the done event remains).
 		if len(turnCalls) == 0 {
@@ -1460,14 +1342,11 @@ func (s *ChatService) runPromptToolLoop(
 	doneChunks func() int,
 ) {
 	msgs := base.Messages
-	// APPEND to the system prompt, never inject a leading system message: truncation pins Messages[:1].
-	toolInstr := ai.ToolPromptInstructionsFor(tctx.Allow)
-	if base.SystemPrompt != "" {
-		turn := base
-		turn.SystemPrompt = base.SystemPrompt + "\n\n" + toolInstr
-		base = turn
-	} else {
-		base.SystemPrompt = toolInstr
+	// The tool instructions are APPENDED to the system prompt, never injected as a leading system message
+	// (truncation pins Messages[:1]); a stream's request carries them from its assembly (assembleTurnRequest), a
+	// caller that built its own request gets them here.
+	if toolInstr := ai.ToolPromptInstructionsFor(tctx.Allow); !strings.Contains(base.SystemPrompt, toolInstr) {
+		base.SystemPrompt = withSuffix(base.SystemPrompt, toolInstr)
 	}
 	st := newToolLoopState(s, ctx, provider, base, scope, ctl, awaitStart, emit, doneChunks)
 	out := newScrubbedEmitter(ctl, emit)
@@ -1481,9 +1360,6 @@ func (s *ChatService) runPromptToolLoop(
 			stepBase.SystemPrompt = withStepLimitNote(base.SystemPrompt)
 		}
 		recordChatToolIteration()
-		if !st.recheckBudget() {
-			return
-		}
 		turn, newPin, ok := st.trimmedTurn(stepBase, msgs, pin)
 		if !ok {
 			return
@@ -1497,9 +1373,6 @@ func (s *ChatService) runPromptToolLoop(
 			turnIn     int
 			turnOut    int
 			turnFinish string
-			// turnServed is the model that answered THIS iteration — the unit
-			// the blended rates price.
-			turnServed string
 			chunkErr   error
 		)
 		ctl.beginProviderTurn()
@@ -1508,7 +1381,6 @@ func (s *ChatService) runPromptToolLoop(
 			ctl.sawOutput(c.Text != "", len(c.ToolCalls) > 0, c.Done)
 			if c.ServedModel != "" {
 				st.lastServed = c.ServedModel
-				turnServed = c.ServedModel
 			}
 			switch {
 			case c.Error != nil:
@@ -1537,11 +1409,17 @@ func (s *ChatService) runPromptToolLoop(
 			st.fail(ctl.classifyFailureShared(ctx, chunkErr))
 			return
 		}
-		st.addTurnUsage(turnIn, turnOut, turnServed)
+		st.addTurnUsage(turnIn, turnOut)
 
 		full := turnText.String()
 		calls := ai.ParsePromptToolCalls(full)
 		cleanText := ai.StripPromptToolCalls(full)
+		if isOutputLimitFinish(turnFinish) && (len(calls) > 0 || ai.HasUnterminatedToolCall(full)) {
+			// Cut at the output cap with a call in it: the call may be incomplete and must not run, nor its JSON
+			// reach the client — the native loop's truncatedToolTurn rule.
+			st.failUsage(ChatErrOutputLimit, outputLimitMsg, false, st.totalIn, st.totalOut, st.lastServed)
+			return
+		}
 
 		// No tool calls → this turn is the final answer. Emit the cleaned text
 		// (preamble the model wrote around the absent marker) and finish.
@@ -1600,10 +1478,13 @@ func (s *ChatService) runPromptToolLoop(
 			// Keep the idle watchdog aware of in-flight tool execution.
 			ctl.touch()
 			started := time.Now()
-			result := mem.exec(tc.Name, tc.Input, tctx)
+			result := guardedToolRun(ai.ToolCall{Name: tc.Name}, func() toolExecResult {
+				return toolExecResult{name: tc.Name, result: mem.exec(tc.Name, tc.Input, tctx)}
+			}).result
 			ctl.touch()
 			emitToolResult(emit, tc.Name, result, time.Since(started))
-			fmt.Fprintf(&results, "<tool_result name=%q>\n%s\n</tool_result>\n", tc.Name, result)
+			// In its data frame, escaped: a block name holding </tool_result> cannot close it (ADR 0036).
+			fmt.Fprintf(&results, "%s\n", ai.ToolResultFrame(tc.Name, result))
 		}
 		msgs = append(msgs, ai.Message{Role: "user", Content: results.String()})
 		if currentDoc(tctx) != docBefore && refunds < maxAppliedStepRefunds {
@@ -1633,17 +1514,11 @@ func toolSummary(result string) string {
 	return line
 }
 
-// usageEventFields is the usage half of a done/error payload, so a billed FAILED turn carries the same keys.
-func usageEventFields(ctx context.Context, p ai.Provider, model, served string, tokensIn, tokensOut int) map[string]interface{} {
+// usageEventFields is the usage half of a done/error payload, so a FAILED turn that used tokens carries the same keys.
+func usageEventFields(served string, tokensIn, tokensOut int) map[string]interface{} {
 	data := map[string]interface{}{"tokensIn": tokensIn, "tokensOut": tokensOut}
 	if served != "" {
 		data["servedModel"] = served
-	}
-	if pr, ok := p.(ai.UsagePricer); ok {
-		if price, ok := pr.UsagePricing(ctx, model, served); ok {
-			data["inputCostPerM"] = price.InputCostPerM
-			data["outputCostPerM"] = price.OutputCostPerM
-		}
 	}
 	return data
 }
@@ -1657,13 +1532,13 @@ func failStream(ctl *streamCtl, emit func(string, map[string]interface{}), gate 
 	}
 }
 
-// failUsageStream is failStream for a billed failure: the error carries the usage keys so the meter reports it.
-func failUsageStream(ctx context.Context, ctl *streamCtl, emit func(string, map[string]interface{}), gate func() bool, p ai.Provider, model, code, msg string, shared bool, tokensIn, tokensOut int, served string) {
+// failUsageStream is failStream for a failure that used tokens: the error carries the usage keys so the meter reports it.
+func failUsageStream(ctl *streamCtl, emit func(string, map[string]interface{}), gate func() bool, code, msg string, shared bool, tokensIn, tokensOut int, served string) {
 	msg = scrubber.ScrubText(msg)
 	ctl.setFailureUsage(code, msg, shared, tokensIn, tokensOut, served)
 	if gate == nil || gate() {
 		data := errorEventData(code, msg, shared)
-		for k, v := range usageEventFields(ctx, p, model, served, tokensIn, tokensOut) {
+		for k, v := range usageEventFields(served, tokensIn, tokensOut) {
 			data[k] = v
 		}
 		emit("error", data)
@@ -1671,39 +1546,10 @@ func failUsageStream(ctx context.Context, ctl *streamCtl, emit func(string, map[
 }
 
 // doneEventData is the done payload: usageEventFields plus the chunk count the client uses to detect SSE gaps.
-func doneEventData(ctx context.Context, p ai.Provider, model, served string, tokensIn, tokensOut, chunks int) map[string]interface{} {
-	data := usageEventFields(ctx, p, model, served, tokensIn, tokensOut)
+func doneEventData(served string, tokensIn, tokensOut, chunks int) map[string]interface{} {
+	data := usageEventFields(served, tokensIn, tokensOut)
 	data["chunks"] = chunks
 	return data
-}
-
-// doneEventDataRated is doneEventData with explicit blended rates; priced=false falls back to the plain payload.
-func doneEventDataRated(ctx context.Context, p ai.Provider, model, served string, tokensIn, tokensOut, chunks int, price ai.Pricing, priced bool) map[string]interface{} {
-	if !priced {
-		return doneEventData(ctx, p, model, served, tokensIn, tokensOut, chunks)
-	}
-	data := map[string]interface{}{"tokensIn": tokensIn, "tokensOut": tokensOut, "chunks": chunks}
-	if served != "" {
-		data["servedModel"] = served
-	}
-	data["inputCostPerM"] = price.InputCostPerM
-	data["outputCostPerM"] = price.OutputCostPerM
-	return data
-}
-
-// blendedRates derives a multi-iteration turn's effective rates (sum charged / total tokens); zero tokens keep the last rate.
-func blendedRates(last ai.Pricing, costIn float64, tokensIn int, costOut float64, tokensOut int, unpriced bool) (ai.Pricing, bool) {
-	if unpriced {
-		return ai.Pricing{}, false
-	}
-	p := last
-	if tokensIn > 0 {
-		p.InputCostPerM = costIn / float64(tokensIn)
-	}
-	if tokensOut > 0 {
-		p.OutputCostPerM = costOut / float64(tokensOut)
-	}
-	return p, true
 }
 
 // invalidToolInput reports a tool call whose arguments are non-empty but not valid JSON (empty = "no arguments").
@@ -1733,6 +1579,15 @@ func emitToolEvent(emit func(string, map[string]interface{}), ev *ai.ToolEvent) 
 // noticeEventData is the payload of a provider status line: a trail row, not a hosted step.
 func noticeEventData(n *ai.Notice) map[string]interface{} {
 	return map[string]interface{}{"name": n.Name, "label": n.Label}
+}
+
+// noticeHistoryTruncated is the kind of the journaled notice event a turn emits when it leaves earlier history
+// out to fit the window (R-streaming-7): dropped is how many messages went this time, keptFrom how many have
+// gone in all — the index in the stored history of the first message the model still sees.
+const noticeHistoryTruncated = "history_truncated"
+
+func historyTruncatedNotice(dropped, keptFrom int) map[string]interface{} {
+	return map[string]interface{}{"kind": noticeHistoryTruncated, "dropped": dropped, "keptFrom": keptFrom}
 }
 
 // emitToolResult reports a finished tool execution; ok follows ExecuteTool's "error: …" prefix.

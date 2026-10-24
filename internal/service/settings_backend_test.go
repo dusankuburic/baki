@@ -55,12 +55,12 @@ func (b *countingBackend) setLoadErr(err error) {
 	b.mu.Unlock()
 }
 
-// storedWithBudget seeds the backend with settings carrying a distinctive
+// storedWithMarker seeds the backend with settings carrying a distinctive
 // daily budget, so a read that returns the DEFAULT value is unmistakable.
-func storedWithBudget(t *testing.T, b *countingBackend, budget float64) {
+func storedWithMarker(t *testing.T, b *countingBackend, marker int) {
 	t.Helper()
 	s := models.DefaultSettings()
-	s.AI.DailyBudget = budget
+	s.Parser.MaxFileSizeMB = marker
 	if err := b.FakeBackend.SaveSettings(context.Background(), settingsFromModel(s)); err != nil {
 		t.Fatalf("seed settings: %v", err)
 	}
@@ -70,13 +70,13 @@ func TestBackendSettingsProvider_ReadsFromBackend(t *testing.T) {
 	t.Parallel()
 
 	b := &countingBackend{}
-	storedWithBudget(t, b, 100)
+	storedWithMarker(t, b, 100)
 
 	p := NewBackendSettingsProvider(context.Background(), b)
 	got := p.Get()
-	if got.AI.DailyBudget != 100 {
-		t.Fatalf("DailyBudget = %v, want 100 (the stored value, not the %v default)",
-			got.AI.DailyBudget, models.DefaultSettings().AI.DailyBudget)
+	if got.Parser.MaxFileSizeMB != 100 {
+		t.Fatalf("MaxFileSizeMB = %v, want 100 (the stored value, not the %v default)",
+			got.Parser.MaxFileSizeMB, models.DefaultSettings().Parser.MaxFileSizeMB)
 	}
 }
 
@@ -84,7 +84,7 @@ func TestBackendSettingsProvider_CachesReads(t *testing.T) {
 	t.Parallel()
 
 	b := &countingBackend{}
-	storedWithBudget(t, b, 100)
+	storedWithMarker(t, b, 100)
 
 	p := NewBackendSettingsProvider(context.Background(), b)
 	before := b.loads.Load() // the constructor primes the cache
@@ -100,7 +100,7 @@ func TestBackendSettingsProvider_ReloadsAfterTTL(t *testing.T) {
 	t.Parallel()
 
 	b := &countingBackend{}
-	storedWithBudget(t, b, 100)
+	storedWithMarker(t, b, 100)
 
 	now := time.Now()
 	p := NewBackendSettingsProvider(context.Background(), b)
@@ -111,11 +111,11 @@ func TestBackendSettingsProvider_ReloadsAfterTTL(t *testing.T) {
 
 	// Something else changes the row; the cache must not hold the old value
 	// forever.
-	storedWithBudget(t, b, 250)
+	storedWithMarker(t, b, 250)
 	now = now.Add(backendSettingsTTL + time.Second)
 
-	if got := p.Get().AI.DailyBudget; got != 250 {
-		t.Errorf("after TTL expiry DailyBudget = %v, want 250", got)
+	if got := p.Get().Parser.MaxFileSizeMB; got != 250 {
+		t.Errorf("after TTL expiry MaxFileSizeMB = %v, want 250", got)
 	}
 	if b.loads.Load() <= loadsAfterFirst {
 		t.Error("expected a reload after the TTL expired")
@@ -126,11 +126,11 @@ func TestBackendSettingsProvider_UpdatePersistsAndIsVisible(t *testing.T) {
 	t.Parallel()
 
 	b := &countingBackend{}
-	storedWithBudget(t, b, 5)
+	storedWithMarker(t, b, 5)
 	p := NewBackendSettingsProvider(context.Background(), b)
 
 	updated := *p.Get()
-	updated.AI.DailyBudget = 100
+	updated.Parser.MaxFileSizeMB = 100
 	if err := p.Update(context.Background(), updated); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -141,8 +141,8 @@ func TestBackendSettingsProvider_UpdatePersistsAndIsVisible(t *testing.T) {
 	// This is the bug in one assertion: an administrator raises the budget and
 	// the value the analysis path reads back must be the new one, not the
 	// default it used to serve from a local file.
-	if got := p.Get().AI.DailyBudget; got != 100 {
-		t.Errorf("DailyBudget after Update = %v, want 100", got)
+	if got := p.Get().Parser.MaxFileSizeMB; got != 100 {
+		t.Errorf("MaxFileSizeMB after Update = %v, want 100", got)
 	}
 }
 
@@ -173,12 +173,12 @@ func TestBackendSettingsProvider_UpdateInvalidatesRatherThanCaching(t *testing.T
 	t.Parallel()
 
 	b := &countingBackend{}
-	storedWithBudget(t, b, 5)
+	storedWithMarker(t, b, 5)
 	p := NewBackendSettingsProvider(context.Background(), b)
 
 	loadsBefore := b.loads.Load()
 	updated := *p.Get()
-	updated.AI.DailyBudget = 100
+	updated.Parser.MaxFileSizeMB = 100
 	if err := p.Update(context.Background(), updated); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestBackendSettingsProvider_ServesStaleOnBackendFailure(t *testing.T) {
 	t.Parallel()
 
 	b := &countingBackend{}
-	storedWithBudget(t, b, 100)
+	storedWithMarker(t, b, 100)
 
 	now := time.Now()
 	p := NewBackendSettingsProvider(context.Background(), b)
@@ -220,7 +220,7 @@ func TestBackendSettingsProvider_ServesStaleOnBackendFailure(t *testing.T) {
 	// Every caller is on a path where no settings at all is worse than
 	// slightly stale ones — analysis must not start failing because the
 	// settings row was briefly unreadable.
-	if got := p.Get().AI.DailyBudget; got != 100 {
+	if got := p.Get().Parser.MaxFileSizeMB; got != 100 {
 		t.Errorf("DailyBudget during backend outage = %v, want the last known 100", got)
 	}
 }
@@ -265,7 +265,7 @@ func TestBackendSettingsProvider_ConcurrentGetRefreshesOnce(t *testing.T) {
 	t.Parallel()
 
 	b := &countingBackend{}
-	storedWithBudget(t, b, 100)
+	storedWithMarker(t, b, 100)
 
 	now := time.Now()
 	p := NewBackendSettingsProvider(context.Background(), b)
@@ -306,7 +306,7 @@ func TestSystemServiceAndAnalysisAgreeOnDeploymentSettings(t *testing.T) {
 	sys := NewSystemService(provider, nil, NilNotifier{}, b, "cloud", nil, nil)
 
 	updated := *models.DefaultSettings()
-	updated.AI.DailyBudget = 100
+	updated.Parser.MaxFileSizeMB = 100
 	if updated.Analysis.Rules == nil {
 		updated.Analysis.Rules = map[string]models.RuleConfig{}
 	}
@@ -319,8 +319,8 @@ func TestSystemServiceAndAnalysisAgreeOnDeploymentSettings(t *testing.T) {
 	// The reader used by AnalysisService, RuleProfileResolver, ChatService and
 	// the knowledge base.
 	got := provider.Get()
-	if got.AI.DailyBudget != 100 {
-		t.Errorf("analysis path sees DailyBudget %v, admin saved 100", got.AI.DailyBudget)
+	if got.Parser.MaxFileSizeMB != 100 {
+		t.Errorf("analysis path sees MaxFileSizeMB %v, admin saved 100", got.Parser.MaxFileSizeMB)
 	}
 	if rc, ok := got.Analysis.Rules["hardcoded-credential"]; !ok || rc.Enabled {
 		t.Errorf("analysis path does not see the disabled rule the admin saved: %+v", got.Analysis.Rules)
@@ -331,7 +331,7 @@ func TestSystemServiceAndAnalysisAgreeOnDeploymentSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSettings: %v", err)
 	}
-	if readBack.AI.DailyBudget != 100 {
-		t.Errorf("GetSettings returned DailyBudget %v, want 100", readBack.AI.DailyBudget)
+	if readBack.Parser.MaxFileSizeMB != 100 {
+		t.Errorf("GetSettings returned MaxFileSizeMB %v, want 100", readBack.Parser.MaxFileSizeMB)
 	}
 }

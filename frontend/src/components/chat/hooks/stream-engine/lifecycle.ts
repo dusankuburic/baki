@@ -12,7 +12,6 @@ import {uuid} from '@/lib/uuid'
 import {
   CHAT_ERROR_CODES,
   classifyChatFailure,
-  budgetDetail,
   providerErrorInfo,
   retryAfterHint,
   serverRestartDelayMs,
@@ -37,7 +36,6 @@ interface LifecycleDeps {
   dropAcc: (streamId: string) => void
   beginAcc: (streamId: string, threadId: string, meta: AccMeta) => void
   commitAssistantMessage: ReturnType<typeof useCommit>['commitAssistantMessage']
-  notifyBudget: (detail: string) => void
   startStream: ChatStoreState['startStream']
   endStream: ChatStoreState['endStream']
   updateStream: ChatStoreState['updateStream']
@@ -57,7 +55,6 @@ export function useTurnLifecycle({
   dropAcc,
   beginAcc,
   commitAssistantMessage,
-  notifyBudget,
   startStream,
   endStream,
   updateStream,
@@ -282,10 +279,6 @@ export function useTurnLifecycle({
                 opts.restore ? 'chat:errors.modelNotAvailableResend' : 'chat:errors.modelNotAvailableSend',
               ),
             })
-          } else if (kind === 'budget') {
-            const detail = budgetDetail(errMsg)
-            notifyBudget(detail)
-            appendErrorBubble(i18n.t('chat:errors.budgetBubble', {detail}))
           } else if (kind === 'serverRestarting') {
             appendErrorBubble(i18n.t('chat:errors.generic', {message: i18n.t('chat:errors.serverRestarted')}))
           } else if (e instanceof ApiError && providerErrorInfo(e.code)) {
@@ -310,8 +303,7 @@ export function useTurnLifecycle({
       dropAcc,
       endStreamIfOwn,
       isCurrentGen,
-      notifyBudget,
-      registerStream,
+          registerStream,
       resumeInto,
       startStream,
       streamAccRef,

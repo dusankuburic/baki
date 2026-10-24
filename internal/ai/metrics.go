@@ -44,36 +44,14 @@ var (
 		},
 		[]string{"reason"},
 	)
-	// aiBudgetRefusalsTotal counts the calls the pre-call hooks refused: the budget checker in the audited
-	// wrapper (call chat/stream/embed, reason exceeded/unavailable) and the provider policy at the factory
-	// (call build, reason not_allowed). Every label is a closed set; the provider is the registry id.
-	aiBudgetRefusalsTotal = prometheus.NewCounterVec(
+	// aiPolicyRefusalsTotal counts the providers the provider policy refused to build: the deployment's or the
+	// organisation's allowed-provider list. The provider label is the registry id, a closed set.
+	aiPolicyRefusalsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "pad_ai_budget_refusals_total",
-			Help: "AI provider calls refused before they were made, by provider, call (chat, stream, embed; build for a provider the policy refused at the factory) and reason (exceeded, unavailable: the daily AI budget; not_allowed: the deployment or the organisation's allowed-provider list).",
+			Name: "pad_ai_policy_refusals_total",
+			Help: "AI providers the provider policy refused to build (the deployment's or the organisation's allowed-provider list), by provider.",
 		},
-		[]string{"provider", "call", "reason"},
-	)
-	aiPricingFallbackTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "pad_ai_pricing_fallback_total",
-			Help: "AI usage priced from provider-default pricing because the model wasn't in the pricing catalog, by provider and model. The model label is a closed set: alias deployments collapse to \"deployment\" and unknown names to \"uncatalogued\" (see pricingMetricModel) — raw request models are client-chosen and would mint a series per name.",
-		},
-		[]string{"provider", "model"},
-	)
-	// Total AI spend. GLOBAL — deliberately unlabelled.
-	//
-	// A {user_id, org_id} label would mint one permanent series per (user,
-	// org) pair that ever made an AI call (counters are never deleted): at a
-	// few thousand users the scrape crosses its timeout and EVERY metric from
-	// the process disappears, and it publishes the customer roster to anyone
-	// with scrape access. Per-tenant attribution lives in usage_metrics
-	// (audited.go writes UserID, OrgID and EstimatedCost per call).
-	aiUsageCostTotal = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "pad_ai_usage_estimated_cost_total",
-			Help: "Estimated USD cost of AI usage across the deployment. Per-tenant attribution lives in the usage_metrics table (see UsageMetric), which is queryable and does not cost a time series per user.",
-		},
+		[]string{"provider"},
 	)
 	// aiRetryAttemptsTotal counts RETRIED provider attempts (second and later
 	// tries), by provider and trigger condition — otherwise a retry storm and
@@ -89,13 +67,13 @@ var (
 	)
 	// aiHostedToolStepsTotal counts the provider-hosted agent tool steps an
 	// Azure AI Foundry agent run completed (Bing grounding, code interpreter,
-	// file search, MCP, …) — Azure bills these outside the token usage the
-	// daily budget meters, so the gap becomes visible. The tool label is a
-	// closed set (hostedToolLabels), never caller-supplied.
+	// file search, MCP, …) — Azure bills these outside the token usage, so
+	// they are counted here. The tool label is a closed set
+	// (hostedToolLabels), never caller-supplied.
 	aiHostedToolStepsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_ai_hosted_tool_steps_total",
-			Help: "Provider-hosted agent tool steps completed (web search, MCP, code interpreter, …), by provider and tool type. Not priced: Azure bills these outside the token usage the daily budget meters.",
+			Help: "Provider-hosted agent tool steps completed (web search, MCP, code interpreter, …), by provider and tool type. Azure bills these outside the token usage.",
 		},
 		[]string{"provider", "tool"},
 	)
@@ -103,8 +81,7 @@ var (
 
 func init() {
 	metrics.MustRegister(circuitBreakerTransitionsTotal, aiTokensTotal, aiRequestDuration, aiRequestErrorsTotal,
-		usageDroppedTotal, aiPricingFallbackTotal, aiUsageCostTotal, aiRetryAttemptsTotal, aiHostedToolStepsTotal,
-		aiBudgetRefusalsTotal)
+		usageDroppedTotal, aiRetryAttemptsTotal, aiHostedToolStepsTotal, aiPolicyRefusalsTotal)
 }
 
 // recordCircuitBreakerTransition bumps the transition counter for an AI provider
@@ -137,13 +114,6 @@ func recordAIError(provider string) {
 	aiRequestErrorsTotal.WithLabelValues(provider).Inc()
 }
 
-// recordAIUsageCost adds estimated AI spend (USD) to the global cost counter;
-// empty user/org (local/unauth) aggregates under the empty label. Per-tenant
-// attribution is a usage_metrics query.
-func recordAIUsageCost(cost float64) {
-	aiUsageCostTotal.Add(cost)
-}
-
 // recordUsageDropped bumps the usage_dropped_total counter for an AI usage
 // metric that could not be recorded (recorder saturated): dropping bounds
 // in-flight recording goroutines so a stalled DB recorder can't exhaust
@@ -152,18 +122,9 @@ func recordUsageDropped(reason string) {
 	usageDroppedTotal.WithLabelValues(reason).Inc()
 }
 
-// recordBudgetRefusal counts one call a pre-call hook refused. call and reason must be closed-set strings
-// (see aiBudgetRefusalsTotal), never error text.
-func recordBudgetRefusal(provider, call, reason string) {
-	aiBudgetRefusalsTotal.WithLabelValues(provider, call, reason).Inc()
-}
-
-// recordPricingFallback bumps ai_pricing_fallback_total when a model isn't in
-// the pricing catalog and usage was costed from the provider's default pricing
-// instead; a sustained count for a provider means the catalog has drifted
-// behind its model lineup.
-func recordPricingFallback(provider, model string) {
-	aiPricingFallbackTotal.WithLabelValues(provider, model).Inc()
+// recordPolicyRefusal counts one provider the provider policy refused to build.
+func recordPolicyRefusal(provider string) {
+	aiPolicyRefusalsTotal.WithLabelValues(provider).Inc()
 }
 
 // recordAIRetryAttempt counts one retried provider attempt. reason must be a

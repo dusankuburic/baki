@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-core/ai/scrubber"
 	"pad-core/logger"
 )
 
@@ -24,11 +25,12 @@ type toolExecResult struct {
 // capacity one.
 const maxParallelTools = 4
 
-// guardedToolRun runs one PARALLEL tool call, converting a panic in the tool —
-// model-controlled input reaching a bug in the tool implementation — into the
-// error-shaped result tool failures already surface to the model, so the turn continues.
-// The parallel goroutines run outside the stream worker's recover, so without this guard
-// a panicking tool kills the whole process; the sequential path needs none.
+// guardedToolRun runs one tool call, converting a panic in the tool — model-controlled
+// input reaching a bug in the tool implementation — into the error-shaped result tool
+// failures already surface to the model, so the turn continues. Every path runs under it:
+// a parallel goroutine runs outside the stream worker's recover (a panic there would kill
+// the process), and on the sequential and prompt-loop paths the worker's recover would end
+// the stream as interrupted instead of letting the model read the failure (R-tool-loop-7).
 func guardedToolRun(call ai.ToolCall, run func() toolExecResult) (res toolExecResult) {
 	start := time.Now()
 	defer func() {
@@ -36,9 +38,10 @@ func guardedToolRun(call ai.ToolCall, run func() toolExecResult) (res toolExecRe
 			logger.Warn("chat tool panicked", "tool", call.Name, "panic", r)
 			recordChatToolResult(metricToolLabel(call.Name), false)
 			res = toolExecResult{
-				id:     call.ID,
-				name:   call.Name,
-				result: fmt.Sprintf("error: tool %s failed unexpectedly (%v) — try a different tool or answer without it", call.Name, r),
+				id:   call.ID,
+				name: call.Name,
+				// The panic value is model-visible text: it passes the scrubber like every tool result.
+				result: scrubber.ScrubText(fmt.Sprintf("error: tool %s failed unexpectedly (%v) — try a different tool or answer without it", call.Name, r)),
 				took:   time.Since(start),
 			}
 		}
@@ -92,7 +95,7 @@ func (s *ChatService) execTurnTools(
 				return nil
 			}
 			emitTool(i)
-			results[i] = run(i)
+			results[i] = guardedToolRun(calls[i], func() toolExecResult { return run(i) })
 			emitToolResult(emit, calls[i].Name, results[i].result, results[i].took)
 		}
 		return results

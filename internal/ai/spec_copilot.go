@@ -26,7 +26,6 @@ var copilotSpec = ProviderSpec{
 	Keys:         KeySchema{Primary: copilotProviderID, OAuthToken: copilotOAuthTokenKey},
 	Catalog:      "copilot",
 	DefaultModel: "gpt-4o",
-	Pricing:      PricingFree,
 	Wire:         WireOpenAI,
 	Resolver:     copilotResolver,
 	Ctor: func(c Credential) Provider {

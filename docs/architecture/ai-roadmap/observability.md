@@ -333,38 +333,6 @@ Separately, once `AddDocument` holds the org lease it publishes `KnowledgeDocCha
   - A member calling it gets 403.
 - The route-policy and authz-matrix goldens are refreshed for any new admin routes.
 
-### R-observability-12
-
-**No soft threshold, notification or velocity limit: the only cost control is a hard daily refusal that every other user then shares** · tier 3
-
-**Problem.** `check()` returns an error or nil. Nothing publishes an event when a scope or org crosses 50, 80 or 100 % of its cap. The mid-loop stop reaches the user as a budget error (`chat.go:1113`) and goes to error reporting (`chat.go:1111`), but raises no operator or admin event. The HTTP limiters count requests per IP or per user, and the per-scope concurrency cap is 3; none of them is cost-aware. `PerUserDailyBudget` caps one member's share of an org's day when it is set (`ai_budget.go:228-238`). When it is not set, one caller such as a harness can burn an org's whole day in minutes, and every member is then refused for the rest of the day with no warning. Operators learn about it afterwards from `pad_ai_budget_refusals_total`. The notify package already has a channel-kind registry that org alerts could use.
-
-**Evidence.**
-- `internal/service/ai_budget.go:199` — `check()` returns an error or nil and publishes no event (199-241)
-- `internal/service/ai_budget.go:228` — the per-user sub-limit applies only when `PerUserDailyBudget > 0` (228-238); no file under `frontend/src` references it
-- `internal/service/chat.go:1108` — mid-loop stop: `errreport.CaptureError` (1111) and the user-facing failure (1113); no event
-- `internal/ai/metrics.go:50` — the refusals counter is the only signal (47-56)
-- `internal/notify/kinds.go:164` — the channel-kind registry (ADR 0021) exists for org notifications; `Kind()` at 201
-- `internal/config/config.go:422` — chat 3 rps, burst 10 per IP; per-user 10 rps, burst 20 (422-437). These count requests, not cost; `maxConcurrentStreamsPerScope = 3` at `chat.go:39`
-
-**Change.** `PerUserDailyBudget` is the existing mitigation for one user draining the org; name it and make it reachable. Do the cheaper parts first:
-- Expose `PerUserDailyBudget` in the settings UI.
-- Put `usedRatio` on the done payload, so clients can warn before the last turn.
-
-As follow-ups:
-- Publish `events.BudgetThreshold{Scope, OrgID, Ratio}` from `check()` when a crossing is first observed, deduplicated per day in Postgres or Redis. Deliver it to org admins through a notify kind (ADR 0021, with its golden) and the in-app notifier.
-- Add an optional hourly velocity cap (`AI.HourlyBudget`) with the same check.
-
-Tier 3.
-
-**Touches.** `internal/service/ai_budget.go`, `internal/events/`, `internal/notify/`, `internal/service/chat.go`, `frontend/src/components/chat/`
-
-**Done when.**
-- The settings UI edits `PerUserDailyBudget`, and the done payload carries `usedRatio`.
-- Crossing 80 % of an org cap publishes exactly one `BudgetThreshold` event per org per day across replicas.
-- The org admins' configured channel receives the payload, and the notify golden is updated.
-- With `HourlyBudget` at $1 and $1 spent in the last hour, the next call is refused with a distinct code and `Retry-After`.
-
 ### R-observability-13
 
 **Alert runbook names no AI-provider health metric; no procedure for an open circuit or a retry storm** · tier 3

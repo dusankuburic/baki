@@ -309,10 +309,6 @@ func (p *LocalProvider) FreeModel() string { return "" }
 // does not rejects the request and the tool loop degrades.
 func (p *LocalProvider) SupportsTools() bool { return true }
 
-// PricePerMillionTokens is zero on purpose (PricingFree): local models cost
-// nothing to run, so the budget meter stays at $0 (Pricing{}).
-func (p *LocalProvider) PricePerMillionTokens() Pricing { return specDefaultPricing(localSpec) }
-
 // DefaultModel is empty: the document names no model, and the listing's
 // first chat model is the default (chooseDefaultModel).
 func (p *LocalProvider) DefaultModel() string { return localSpec.DefaultModel }
