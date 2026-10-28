@@ -403,6 +403,14 @@ func runLifecycleScenarios(ctx context.Context, b interfaces.StorageBackend, run
 		saveOrg(t, &interfaces.Organisation{ID: orgID, Name: "Team", OwnerID: v, Members: []interfaces.OrgMember{
 			{UserID: v, Role: auth.RoleAdmin}, {UserID: u, Role: auth.RoleMember},
 		}})
+		usedAt := time.Now().UTC().Truncate(time.Second)
+		ownUsage := interfaces.UsageMetric{ID: "contract-lc-export-usage-u-" + runID, UserID: u, OrgID: orgID, Provider: "openai", Model: "m",
+			PromptTokens: 5, CompletionTokens: 2, CreatedAt: usedAt}
+		for _, m := range []interfaces.UsageMetric{ownUsage, {ID: "contract-lc-export-usage-v-" + runID, UserID: v, Provider: "openai", Model: "m", CreatedAt: usedAt}} {
+			if err := b.SaveUsageMetric(ctx, &m); err != nil {
+				t.Fatalf("SaveUsageMetric: %v", err)
+			}
+		}
 
 		export, err := b.ExportUserData(ctx, u)
 		if err != nil {
@@ -422,6 +430,9 @@ func runLifecycleScenarios(ctx context.Context, b interfaces.StorageBackend, run
 		}
 		if len(export.Organisations) != 1 || export.Organisations[0].ID != orgID || !slices.Equal(memberIDs(export.Organisations[0]), []string{u}) {
 			t.Errorf("exported organisations = %+v, want the team with the user's own membership only", export.Organisations)
+		}
+		if len(export.AIUsage) != 1 || export.AIUsage[0].ID != ownUsage.ID || export.AIUsage[0].OrgID != orgID || !export.AIUsage[0].CreatedAt.Equal(usedAt) {
+			t.Errorf("exported aiUsage = %+v, want the user's own (organisation-billed) row only", export.AIUsage)
 		}
 
 		// Both paths write the same bundle.
@@ -447,7 +458,7 @@ func runLifecycleScenarios(ctx context.Context, b interfaces.StorageBackend, run
 		if err := json.Unmarshal(none.Bytes(), &sections); err != nil {
 			t.Fatal(err)
 		}
-		for _, key := range []string{"flows", "auditEvents", "apiTokens", "conversations", "comments", "triageDecisions", "organisations", "sessions"} {
+		for _, key := range []string{"flows", "auditEvents", "apiTokens", "conversations", "comments", "triageDecisions", "organisations", "sessions", "aiUsage"} {
 			if string(sections[key]) != "[]" {
 				t.Errorf("%s = %s, want []", key, sections[key])
 			}

@@ -1,0 +1,19 @@
+{
+  "why": "Grounds a variable question with search_flow and get_variable_lineage and links the block the search returned.",
+  "flow": "nested_flow",
+  "question": "Where is SubItemList used, and is it ever set?",
+  "expect": {
+    "toolsSubset": [
+      "search_flow",
+      "get_variable_lineage"
+    ],
+    "mustMention": [
+      "B4",
+      "SubItemList"
+    ],
+    "mustLink": [
+      "block:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

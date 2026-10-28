@@ -1,0 +1,9 @@
+# responses/content-filter.sse through parseResponsesSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="gpt-4o-2024-11-20"
+02 keepalive served="gpt-4o-2024-11-20"
+03 text="Here is how to" served="gpt-4o-2024-11-20"
+04 keepalive served="gpt-4o-2024-11-20"
+05 error=content_filtered msg=none in=88 out=6 served="gpt-4o-2024-11-20"
+return nil
+summary chunks=5 keepalives=3 text="Here is how to"

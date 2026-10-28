@@ -588,3 +588,31 @@ describe('parseChatEvent notice', () => {
     ])
   })
 })
+
+// The knowledge notice (R-knowledge-1): the guidelines of the org's knowledge base were not consulted, and why.
+describe('parseChatEvent knowledge notice', () => {
+  it.each(['identity_mismatch', 'no_embedder', 'deadline'])('keeps the %s status', status => {
+    expect(parseChatEvent({streamId: 's1', type: 'notice', data: {kind: 'knowledge', status}})).toEqual({
+      kind: 'notice',
+      notice: 'knowledge',
+      status,
+    })
+  })
+
+  it('drops a status it does not know, keeping a harmless notice', () => {
+    expect(parseChatEvent({streamId: 's1', type: 'notice', data: {kind: 'knowledge', status: 'melted'}})).toEqual({
+      kind: 'notice',
+      notice: 'knowledge',
+    })
+    expect(parseChatEvent({streamId: 's1', type: 'notice', data: {kind: 'knowledge', status: 7}})).toEqual({
+      kind: 'notice',
+      notice: 'knowledge',
+    })
+  })
+
+  it('replays it from the journal on resume', () => {
+    expect(parseResumeEvents([{type: 'notice', data: {kind: 'knowledge', status: 'deadline'}}])).toEqual([
+      {kind: 'notice', notice: 'knowledge', status: 'deadline'},
+    ])
+  })
+})

@@ -87,7 +87,8 @@ func TestKnowledgeLock_LeaseIsOnTheOrgsKey(t *testing.T) {
 }
 
 // TestKnowledgeLock_LostLeaseStopsTheOperation: when the lease reports lost (its session died, another replica may
-// hold the org now) the upload stops at once and writes nothing; busy, because the org is being updated elsewhere.
+// hold the org now) the upload stops at once and embeds nothing more; busy, because the org is being updated
+// elsewhere. The upload it stored stays pending, out of the corpus (R-knowledge-2).
 func TestKnowledgeLock_LostLeaseStopsTheOperation(t *testing.T) {
 	store := &testutil.FakeBackend{EmbeddingDim: 1}
 	store.SeedOrgs("org-1", "org-2", "org-3") // the knowledge base needs its organisation
@@ -103,8 +104,11 @@ func TestKnowledgeLock_LostLeaseStopsTheOperation(t *testing.T) {
 	if !errors.Is(err, ErrKnowledgeBusy) {
 		t.Fatalf("upload after the lease was lost: %v, want ErrKnowledgeBusy", err)
 	}
-	if docs, _ := store.ListKnowledgeDocuments(context.Background(), "org-1", 0, 0); len(docs) != 0 {
-		t.Errorf("%d document(s) written after the lease was lost", len(docs))
+	if docs, _ := store.ListKnowledgeDocuments(context.Background(), "org-1", 0, 0); len(docs) != 1 || docs[0].State != interfaces.KnowledgeDocumentPending || docs[0].PendingChunks != docs[0].ChunkCount {
+		t.Errorf("documents after the lease was lost = %+v; want the upload pending with nothing embedded", docs)
+	}
+	if total, _, _ := store.CountKnowledgeChunks(context.Background(), "org-1"); total != 0 {
+		t.Errorf("%d chunk(s) entered the corpus after the lease was lost", total)
 	}
 	if leaser.heldCount() != 0 {
 		t.Error("lease not released after it was lost")

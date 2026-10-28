@@ -25,7 +25,7 @@ func runConversationVersionScenarios(ctx context.Context, b interfaces.StorageBa
 	}
 	mustLoad := func(t *testing.T, flowID string) ([]interfaces.ChatMessage, int64) {
 		t.Helper()
-		msgs, v, err := b.LoadConversationVersioned(ctx, flowID, "scope")
+		msgs, v, err := b.LoadConversationVersioned(ctx, flowID, "scope", "")
 		if err != nil {
 			t.Fatalf("LoadConversationVersioned: %v", err)
 		}
@@ -33,7 +33,7 @@ func runConversationVersionScenarios(ctx context.Context, b interfaces.StorageBa
 	}
 	mustSaveIf := func(t *testing.T, flowID string, expected int64, msgs ...interfaces.ChatMessage) int64 {
 		t.Helper()
-		v, err := b.SaveConversationIf(ctx, flowID, "scope", expected, msgs)
+		v, err := b.SaveConversationIf(ctx, flowID, "scope", "", expected, msgs)
 		if err != nil {
 			t.Fatalf("SaveConversationIf(expected %d): %v", expected, err)
 		}
@@ -56,7 +56,7 @@ func runConversationVersionScenarios(ctx context.Context, b interfaces.StorageBa
 	run("SaveConversationIf_create_expects_zero", func(t *testing.T) {
 		flowID := "contract-cv-create-" + runID
 		// Nothing to compare against: a version the caller could only have read from a conversation that is gone.
-		_, err := b.SaveConversationIf(ctx, flowID, "scope", 7, []interfaces.ChatMessage{msg("m0", "x")})
+		_, err := b.SaveConversationIf(ctx, flowID, "scope", "", 7, []interfaces.ChatMessage{msg("m0", "x")})
 		wantConflict(t, "create expecting 7", err)
 		if got, v := mustLoad(t, flowID); len(got) != 0 || v != 0 {
 			t.Fatalf("a refused create stored something: (%v, %d)", ids(got), v)
@@ -71,7 +71,7 @@ func runConversationVersionScenarios(ctx context.Context, b interfaces.StorageBa
 			t.Errorf("after create: (%v, %d), want (m1, %d)", ids(got), v, v1)
 		}
 		// A second create from the same empty read lost the race.
-		_, err = b.SaveConversationIf(ctx, flowID, "scope", 0, []interfaces.ChatMessage{msg("m2", "second")})
+		_, err = b.SaveConversationIf(ctx, flowID, "scope", "", 0, []interfaces.ChatMessage{msg("m2", "second")})
 		wantConflict(t, "second create with expected 0", err)
 		if got, v := mustLoad(t, flowID); v != v1 || len(got) != 1 || got[0].ID != "m1" {
 			t.Errorf("a refused create changed the conversation: (%v, %d)", ids(got), v)
@@ -85,7 +85,7 @@ func runConversationVersionScenarios(ctx context.Context, b interfaces.StorageBa
 		if v2 <= v1 {
 			t.Fatalf("version after a change = %d, want more than %d", v2, v1)
 		}
-		current, err := b.SaveConversationIf(ctx, flowID, "scope", v1, []interfaces.ChatMessage{msg("m1", "one"), msg("m3", "stale")})
+		current, err := b.SaveConversationIf(ctx, flowID, "scope", "", v1, []interfaces.ChatMessage{msg("m1", "one"), msg("m3", "stale")})
 		wantConflict(t, "save at the old version", err)
 		if current != v2 {
 			t.Errorf("the conflict reported version %d, want the current %d", current, v2)
@@ -118,7 +118,7 @@ func runConversationVersionScenarios(ctx context.Context, b interfaces.StorageBa
 				defer wg.Done()
 				id := "w" + string(rune('a'+i))
 				<-start
-				_, err := b.SaveConversationIf(ctx, flowID, "scope", base, []interfaces.ChatMessage{msg("m0", "base"), msg(id, "from "+id)})
+				_, err := b.SaveConversationIf(ctx, flowID, "scope", "", base, []interfaces.ChatMessage{msg("m0", "base"), msg(id, "from "+id)})
 				mu.Lock()
 				defer mu.Unlock()
 				switch {
@@ -162,7 +162,7 @@ func runConversationVersionScenarios(ctx context.Context, b interfaces.StorageBa
 			t.Errorf("version of the re-created conversation = %d, want more than %d", v3, v2)
 		}
 		for _, stale := range []int64{v1, v2} {
-			_, err := b.SaveConversationIf(ctx, flowID, "scope", stale, []interfaces.ChatMessage{msg("m9", "ghost")})
+			_, err := b.SaveConversationIf(ctx, flowID, "scope", "", stale, []interfaces.ChatMessage{msg("m9", "ghost")})
 			wantConflict(t, "write at a version of the deleted conversation", err)
 		}
 		if got, v := mustLoad(t, flowID); v != v3 || len(got) != 1 || got[0].ID != "n1" {
@@ -183,7 +183,7 @@ func runConversationVersionScenarios(ctx context.Context, b interfaces.StorageBa
 		if len(got) != 2 {
 			t.Fatalf("blind save stored %v", ids(got))
 		}
-		_, err := b.SaveConversationIf(ctx, flowID, "scope", held, []interfaces.ChatMessage{msg("m1", "one"), msg("m3", "late")})
+		_, err := b.SaveConversationIf(ctx, flowID, "scope", "", held, []interfaces.ChatMessage{msg("m1", "one"), msg("m3", "late")})
 		wantConflict(t, "save at the version read before the blind save", err)
 	})
 
@@ -215,11 +215,11 @@ func runConversationVersionScenarios(ctx context.Context, b interfaces.StorageBa
 		flowID := "contract-cv-del-" + runID
 		v1 := mustSaveIf(t, flowID, 0, msg("m1", "one"))
 		v2 := mustSaveIf(t, flowID, v1, msg("m1", "one"), msg("m2", "two"))
-		wantConflict(t, "delete at the old version", b.DeleteConversationIf(ctx, flowID, "scope", v1))
+		wantConflict(t, "delete at the old version", b.DeleteConversationIf(ctx, flowID, "scope", "", v1, false))
 		if got, v := mustLoad(t, flowID); v != v2 || len(got) != 2 {
 			t.Fatalf("a refused delete changed the conversation: (%v, %d)", ids(got), v)
 		}
-		if err := b.DeleteConversationIf(ctx, flowID, "scope", v2); err != nil {
+		if err := b.DeleteConversationIf(ctx, flowID, "scope", "", v2, false); err != nil {
 			t.Fatalf("DeleteConversationIf at the current version: %v", err)
 		}
 		if got, v := mustLoad(t, flowID); len(got) != 0 || v != 0 {
@@ -227,16 +227,16 @@ func runConversationVersionScenarios(ctx context.Context, b interfaces.StorageBa
 		}
 		// Gone already: clearing from nothing is the idempotent no-op; clearing a version that was held is a
 		// conflict, because the conversation changed since the caller read it.
-		if err := b.DeleteConversationIf(ctx, flowID, "scope", 0); err != nil {
+		if err := b.DeleteConversationIf(ctx, flowID, "scope", "", 0, false); err != nil {
 			t.Errorf("DeleteConversationIf(0) of a missing conversation = %v, want nil", err)
 		}
-		wantConflict(t, "delete of a missing conversation at a held version", b.DeleteConversationIf(ctx, flowID, "scope", v2))
+		wantConflict(t, "delete of a missing conversation at a held version", b.DeleteConversationIf(ctx, flowID, "scope", "", v2, false))
 	})
 
 	run("Conflict_matches_ErrVersionConflict", func(t *testing.T) {
 		flowID := "contract-cv-is-" + runID
 		v := mustSaveIf(t, flowID, 0, msg("m1", "one"))
-		_, err := b.SaveConversationIf(ctx, flowID, "scope", v+1000, nil)
+		_, err := b.SaveConversationIf(ctx, flowID, "scope", "", v+1000, nil)
 		if !errors.Is(err, interfaces.ErrConversationConflict) || !errors.Is(err, interfaces.ErrVersionConflict) {
 			t.Errorf("err = %v, want it to match ErrConversationConflict and ErrVersionConflict", err)
 		}

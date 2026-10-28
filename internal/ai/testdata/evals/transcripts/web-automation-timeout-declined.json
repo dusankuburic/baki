@@ -1,0 +1,24 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "apply_fix",
+          "input": {
+            "blockId": "B9",
+            "ruleId": "missing-timeout"
+          }
+        }
+      ],
+      "tokensIn": 2275,
+      "tokensOut": 26
+    },
+    {
+      "text": "You declined the change, so nothing was changed in the flow.\n\nTo add the timeout by hand, open [Get Details Of Element](block:B9) (line 10), and in its advanced settings set **Timeout** to e.g. 30 seconds. That resolves the [missing-timeout finding](finding:missing-timeout:14d481cfc809e708). The action also has no error handling and no retry; consider wrapping it in `On block error`.",
+      "tokensIn": 2390,
+      "tokensOut": 104
+    }
+  ]
+}

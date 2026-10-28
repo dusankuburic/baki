@@ -17,7 +17,7 @@ import (
 	tu "pad-analyzer/internal/testutil"
 )
 
-var updateChunkerGolden = flag.Bool("update-chunker-golden", false, "rewrite testdata/chunker_v1.golden (only with a chunkerVersion bump)")
+var updateChunkerGolden = flag.Bool("update-chunker-golden", false, "rewrite testdata/chunker_v<N>.golden (only for a new chunkerVersion: a stored document keeps the split of its version)")
 
 // namedEmbedder answers every input with vec and names an embedding identity — "the model whose vectors point
 // this way", distinguishable from another model by identity, and by direction when the identity is unknown.
@@ -61,14 +61,11 @@ func identitiesOf(store *tu.FakeBackend) map[string]string {
 	return out
 }
 
-// TestChunkText_GoldenGeometry pins the chunker: a fixed text splits into exactly the chunks in
-// testdata/chunker_v1.golden under chunkerVersion 1. A geometry change (size, overlap, boundaries) changes the
-// split of every document uploaded from then on while the stored ones keep the old one, so it must come with a
-// chunkerVersion bump and a new golden — stripOverlapPrefix assumes the version's overlap at retrieval time.
+// TestChunkText_GoldenGeometry pins chunker version 1: a fixed text splits into exactly the chunks in
+// testdata/chunker_v1.golden. The documents stored at version 1 keep that split (a plain re-index re-embeds their
+// chunks as they are), so chunkText must not change; a geometry change is a new version with its own golden
+// (chunker_v2.golden, TestChunkTextV2_GoldenGeometry) — stripOverlapPrefix reads the version at retrieval time.
 func TestChunkText_GoldenGeometry(t *testing.T) {
-	if chunkerVersion != 1 {
-		t.Fatalf("chunkerVersion = %d; this golden pins version 1 — add chunker_v%d.golden and keep this test for the stored documents", chunkerVersion, chunkerVersion)
-	}
 	var sb strings.Builder
 	for p := range 9 {
 		for s := range 7 {
@@ -78,9 +75,9 @@ func TestChunkText_GoldenGeometry(t *testing.T) {
 	}
 	sb.WriteString(strings.Repeat("x", 2300))
 	sb.WriteString("\n\nA short closing paragraph.")
-	chunks := chunkText(sb.String(), knowledgeChunkRunes)
+	chunks := chunkDocument(1, sb.String(), "guide.md")
 	var got strings.Builder
-	fmt.Fprintf(&got, "chunkerVersion %d\n", chunkerVersion)
+	fmt.Fprintf(&got, "chunkerVersion %d\n", 1)
 	for i, c := range chunks {
 		fmt.Fprintf(&got, "===== chunk %d =====\n%s\n", i, c)
 	}
@@ -99,7 +96,7 @@ func TestChunkText_GoldenGeometry(t *testing.T) {
 		t.Fatalf("read golden: %v (create it with -update-chunker-golden)", err)
 	}
 	if want := strings.ReplaceAll(string(raw), "\r\n", "\n"); got.String() != want {
-		t.Errorf("chunkText output changed under chunkerVersion %d: bump the version and refresh with -update-chunker-golden.\n--- golden\n%s--- now\n%s", chunkerVersion, want, got.String())
+		t.Errorf("chunker version 1 changed its split: the stored version-1 documents keep theirs — revert it, and put a geometry change in a new version.\n--- golden\n%s--- now\n%s", want, got.String())
 	}
 }
 
@@ -125,7 +122,8 @@ func TestAddDocument_StampsIdentityAndChunkerVersion(t *testing.T) {
 }
 
 // TestSearch_OtherIdentityChunksNotReturned (R1): a corpus embedded under another identity at the same width is
-// not searched — the search answers nothing and counts a stranded search, not a width mismatch.
+// not searched — the search answers ErrEmbedderMismatch before embedding (R-knowledge-1) and counts a stranded
+// search, not a width mismatch.
 func TestSearch_OtherIdentityChunksNotReturned(t *testing.T) {
 	store := &tu.FakeBackend{EmbeddingDim: 1}
 	store.SeedOrgs("org-1") // the knowledge base needs its organisation
@@ -134,8 +132,11 @@ func TestSearch_OtherIdentityChunksNotReturned(t *testing.T) {
 	svc := guardService(store, emb)
 	stranded, dim := testutil.ToFloat64(ragStrandedSearchTotal), testutil.ToFloat64(ragDimMismatchTotal)
 	got, err := svc.Search(context.Background(), "u1", "org-1", "retries?")
-	if err != nil || got != "" {
-		t.Fatalf("Search = %q, %v; want nothing from a corpus of another identity", got, err)
+	if !errors.Is(err, ErrEmbedderMismatch) || got != "" {
+		t.Fatalf("Search = %q, %v; want ErrEmbedderMismatch for a corpus of another identity", got, err)
+	}
+	if emb.calls != 0 {
+		t.Errorf("the query was embedded %d times for a corpus the caller cannot see, want 0", emb.calls)
 	}
 	if d := testutil.ToFloat64(ragStrandedSearchTotal) - stranded; d != 1 {
 		t.Errorf("pad_rag_stranded_search_total rose by %v, want 1", d)

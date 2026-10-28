@@ -241,9 +241,11 @@ func TestParseOpenAISSE_HeldBytesFlushedBeforeTruncationError(t *testing.T) {
 
 // isKeepalive reports an empty chunk (Chunk holds a slice, so it is not
 // comparable with ==).
+// isKeepalive reports a chunk that carries nothing but, at most, the served model (every parser stamps it on
+// keepalives once known, R-provider-33).
 func isKeepalive(c Chunk) bool {
 	return c.Text == "" && c.Reasoning == "" && !c.Done && c.Error == nil && len(c.ToolCalls) == 0 &&
-		c.ToolEvent == nil && !c.ServerStep && c.TokensIn == 0 && c.TokensOut == 0 && c.FinishReason == "" && c.ServedModel == ""
+		c.ToolEvent == nil && !c.ServerStep && c.TokensIn == 0 && c.TokensOut == 0 && c.FinishReason == ""
 }
 
 func reasoningContentEvent(s string) string {

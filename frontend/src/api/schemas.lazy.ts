@@ -7,6 +7,7 @@ import {
   AZURE_STATUSES,
   CREDENTIAL_FIELD_TYPES,
   CREDENTIAL_KINDS,
+  CREDENTIAL_STATUSES,
   PROVIDER_IDS,
   PROVIDER_MODES,
   RULE_STAGES,
@@ -471,6 +472,7 @@ export function buildSchemas() {
       models: nilAsEmpty(ModelDetailSchema),
       defaultModel: z.string(),
       configured: z.boolean(),
+      credentialStatus: tolerantEnum(CREDENTIAL_STATUSES).optional(),
       shared: z.boolean().optional(),
       suggestDiscovery: z.boolean().optional(),
       modes: providerDescription.modes.optional(),
@@ -490,6 +492,8 @@ export function buildSchemas() {
       name: z.string(),
       authType: tolerantEnum(AUTH_TYPES),
       configured: z.boolean(),
+      credentialStatus: tolerantEnum(CREDENTIAL_STATUSES).optional(),
+      orgCredentialStatus: tolerantEnum(CREDENTIAL_STATUSES).optional(),
       ...providerDescription,
     })
     .passthrough() as unknown as z.ZodType<ProviderSpec>

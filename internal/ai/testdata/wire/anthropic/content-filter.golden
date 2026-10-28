@@ -1,0 +1,9 @@
+# anthropic/content-filter.sse through parseClaudeSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 in=96 served="claude-sonnet-4-5-20250929"
+02 keepalive served="claude-sonnet-4-5-20250929"
+03 text="Here is how to" served="claude-sonnet-4-5-20250929"
+04 keepalive served="claude-sonnet-4-5-20250929"
+05 error=content_filtered msg=none in=96 out=5 served="claude-sonnet-4-5-20250929"
+return nil
+summary chunks=5 keepalives=2 text="Here is how to"

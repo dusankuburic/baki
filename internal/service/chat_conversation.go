@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,17 @@ import (
 // ClampModelLabel clamps a client-sent ModelLabel for storage: NFC, control/bidi/zero-width runes dropped,
 // whitespace collapsed, 64 chars max — clamped (a refusal fails the save); it removes what impersonates another model.
 func ClampModelLabel(label string) string {
+	return clampLabel(label, storageif.AzureNameMaxLen)
+}
+
+// ClampConversationTitle clamps a thread title for storage as ClampModelLabel does a label, to
+// storageif.ConversationTitleMaxRunes (R-frontend-c26 (c)).
+func ClampConversationTitle(title string) string {
+	return clampLabel(title, storageif.ConversationTitleMaxRunes)
+}
+
+// clampLabel is NFC, control/bidi/zero-width runes dropped, whitespace collapsed, at most maxRunes runes.
+func clampLabel(label string, maxRunes int) string {
 	if label == "" {
 		return ""
 	}
@@ -38,7 +50,7 @@ func ClampModelLabel(label string) string {
 		return r
 	}, strings.ToValidUTF8(label, ""))
 	label = strings.Join(strings.Fields(norm.NFC.String(label)), " ")
-	return strings.TrimSpace(truncateRunes(label, storageif.AzureNameMaxLen))
+	return strings.TrimSpace(truncateRunes(label, maxRunes))
 }
 
 // reconstructHistory loads the stored conversation for the request's key so a
@@ -80,7 +92,8 @@ func (s *ChatService) GetConversation(ctx context.Context, flowID, provider stri
 		return nil, fmt.Errorf("no flow loaded")
 	}
 	if s.useBackendConversations() {
-		stored, err := s.backend.LoadConversation(ctx, flowID, provider)
+		// The caller's view (R-security-3): another user's conversation under the key reads as none.
+		stored, _, err := s.backend.LoadConversationVersioned(ctx, flowID, provider, callerScope(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +177,7 @@ func (s *ChatService) saveConversation(ctx context.Context, flowID, provider str
 	trimmed := normalizeConversation(callerScope(ctx), messages)
 
 	if s.useBackendConversations() {
-		if err := s.backend.SaveConversation(ctx, flowID, provider, toStorageMessages(trimmed)); err != nil {
+		if err := s.replaceConversation(ctx, flowID, provider, toStorageMessages(trimmed)); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -200,20 +213,85 @@ func (s *ChatService) saveConversation(ctx context.Context, flowID, provider str
 	return true, nil
 }
 
-func (s *ChatService) ClearConversation(ctx context.Context, flowID, provider string) error {
+// replaceConversation is the blind full replace of the caller's conversation in the store (a client save without a
+// base version): a compare-and-swap at whatever version it reads, again while other writers win, so it replaces
+// only the caller's own (or an unowned) conversation (R-security-3); another user's under the key is
+// ErrConversationKeyTaken.
+func (s *ChatService) replaceConversation(ctx context.Context, flowID, key string, messages []storageif.ChatMessage) error {
+	owner := callerScope(ctx)
+	for attempt := 1; ; attempt++ {
+		_, version, err := s.backend.LoadConversationVersioned(ctx, flowID, key, owner)
+		if err != nil {
+			return err
+		}
+		_, err = s.backend.SaveConversationIf(ctx, flowID, key, owner, version, messages)
+		if !errors.Is(err, storageif.ErrConversationConflict) || attempt >= mutateConversationAttempts {
+			return err
+		}
+	}
+}
+
+// ClearConversation deletes the caller's conversation whatever its version (a client clear without a base version).
+// In the store that is a delete at the version it reads, again while other writers win: the caller's own
+// conversation only (another user's under the key is a missing one), an unowned one only with mayDeleteUnowned, else
+// 403 CONVERSATION_UNOWNED (R-security-3). Files have one user and no owners.
+func (s *ChatService) ClearConversation(ctx context.Context, flowID, provider string, mayDeleteUnowned bool) error {
 	if flowID == "" {
 		return fmt.Errorf("no flow loaded")
 	}
-	if s.useBackendConversations() {
-		return s.backend.DeleteConversation(ctx, flowID, provider)
-	}
-	path, err := convFilePath(s.configDir, provider, flowID)
-	if err != nil {
+	err := s.clearingConversation(ctx, flowID, provider, func() error {
+		if s.useBackendConversations() {
+			owner := callerScope(ctx)
+			for attempt := 1; ; attempt++ {
+				_, version, err := s.backend.LoadConversationVersioned(ctx, flowID, provider, owner)
+				if err != nil {
+					return err
+				}
+				err = s.backend.DeleteConversationIf(ctx, flowID, provider, owner, version, mayDeleteUnowned)
+				if !errors.Is(err, storageif.ErrConversationConflict) || attempt >= mutateConversationAttempts {
+					return err
+				}
+			}
+		}
+		path, err := convFilePath(s.configDir, provider, flowID)
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to delete conversation file: %w", err)
+		}
+		return nil
+	})
+	return conversationOwnerError(err)
+}
+
+// clearingConversation runs a conversation's delete under its stripe lock and, when it succeeds, tells this
+// replica's streams on the conversation not to write it again: the stopped turn of a thread closed mid-stream would
+// otherwise bring the deleted conversation back (R-frontend-c26). An answer write holds the same lock and checks the
+// mark after taking it, so it lands either before the delete (and is deleted) or not at all. Only the caller's own
+// streams are marked (all of them without accounts): a clear deletes only the caller's conversation, so another
+// user's stream on the same key is writing their own (R-security-3).
+func (s *ChatService) clearingConversation(ctx context.Context, flowID, convKey string, del func() error) error {
+	mu := s.convMutexFor(flowID, convKey)
+	if err := s.lockConversation(ctx, mu); err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to delete conversation file: %w", err)
+	defer mu.Unlock()
+	if err := del(); err != nil {
+		return err
 	}
+	caller := callerScope(ctx)
+	if caller != "" {
+		s.markCleared(flowID, convKey, caller)
+	}
+	mark := func(_, v interface{}) bool {
+		if c, ok := v.(*streamCtl); ok && c.flowID == flowID && c.convKey == convKey && (caller == "" || c.ownerID == caller) {
+			c.conversationCleared.Store(true)
+		}
+		return true
+	}
+	s.activeStreams.Range(mark)
+	s.finishedStreams.Range(mark)
 	return nil
 }
 
@@ -226,23 +304,39 @@ var persistAnswerTimeout = 15 * time.Second
 type answerWrite struct {
 	Written         bool
 	Loaded, Version int64
+	// Failed: the write was due and failed after its retries (counted in pad_chat_answer_write_failures_total).
+	Failed bool
 }
+
+// answerWriteAttempts bounds the retries of an answer write that failed for a reason other than a lost round (a
+// database hiccup); all of them stay within persistAnswerTimeout.
+const answerWriteAttempts = 3
+
+// answerWriteRetryDelay is the pause before retry n of an answer write (times n). A test variable.
+var answerWriteRetryDelay = 200 * time.Millisecond
 
 // persistAssistantTurn appends the finished answer server-side (a closed tab used to leave a stored
 // question with no answer); best-effort, idempotent, bounded by persistAnswerTimeout. model/modelLabel persist the requested id and send-time label.
+//
+// A turn that ended without an answer is stored too when it left something behind (R-approvals-4): a fix card (the
+// flow may have changed), a tool trail, or partial text — as the client shows it, finish reason "error" with the
+// code and the error line, or "interrupted" for a stopped one. A turn the server's stop ended is stored only for
+// its fix cards: the client re-sends it.
 func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.FlowDocument, req models.ChatRequest, ctl *streamCtl, model, modelLabel string) answerWrite {
 	if doc == nil || ctl == nil {
 		return answerWrite{}
 	}
 	ctl.mu.Lock()
 	answer := ctl.buffer.String()
-	done, errMsg := ctl.done, ctl.errMsg
+	done, errMsg, errCode, errShared := ctl.done, ctl.errMsg, ctl.errCode, ctl.errShared
 	tokensIn, tokensOut := ctl.tokensIn, ctl.tokensOut
 	served := ctl.servedModel
 	events := ctl.snapshotEvents()
 	truncated := ctl.droppedHistory
+	knowledge := ctl.knowledgeStatus
 	ctl.mu.Unlock()
-	if !done || errMsg != "" {
+	failed := errMsg != ""
+	if !done && !failed {
 		return answerWrite{}
 	}
 	// The tool trail and fix records come from the stream's journal, as the
@@ -251,17 +345,45 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	if strings.TrimSpace(answer) == "" && len(toolCalls) == 0 && len(fixes) == 0 {
 		return answerWrite{}
 	}
+	if failed && errCode == ChatErrServerRestarting && len(fixes) == 0 {
+		return answerWrite{}
+	}
+	finish, content := "stop", answer
+	if failed {
+		finish, content = failedTurnRecord(answer, errCode, errMsg)
+	}
 
 	convKey := req.ConversationKey()
 	// The stream's context is cancelled as the worker unwinds; this write must
 	// still land — within a bound (see persistAnswerTimeout).
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistAnswerTimeout)
 	defer cancel()
+	// The server's stop, once out of budget, cuts the write: the done (answerStored false, the client saves the
+	// turn) must leave before the connections close (R-streaming-c16).
+	watched := make(chan struct{})
+	defer close(watched)
+	go func() {
+		select {
+		case <-s.stopped():
+			cancel()
+		case <-watched:
+		}
+	}()
 	// The next turn may be reading the history this write replaces. The lock queues this replica's writers; the
 	// compare-and-swap in mutateConversation settles the other replicas'.
 	mu := s.convMutexFor(doc.ID, convKey)
-	mu.Lock()
+	if err := s.lockConversation(writeCtx, mu); err != nil {
+		chatAnswerWriteFailuresTotal.WithLabelValues("timeout").Inc()
+		logger.FromContext(ctx).Warn("chat: gave up waiting to store the finished answer; the client is told to save it", "error", err,
+			"conversation", conversationLogID(doc.ID, convKey))
+		return answerWrite{Failed: true}
+	}
 	defer mu.Unlock()
+	if ctl.conversationCleared.Load() {
+		// The thread was deleted while this stream ran (closed, or evicted): writing now would bring it back, with
+		// no client left to show it.
+		return answerWrite{}
+	}
 	answerID := clientMessageID(req.AssistantMessageID)
 	// The answer as the store holds it, for the content match below: the client's save of the same answer holds
 	// the write's scrubbed copy, and the buffer is only as masked as the stream scrubber left it.
@@ -271,7 +393,7 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 	msg := models.ChatMessage{
 		ID:           answerID,
 		Role:         "assistant",
-		Content:      answer,
+		Content:      content,
 		Timestamp:    time.Now(),
 		Provider:     req.Provider,
 		Model:        model,
@@ -279,19 +401,28 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 		TokensIn:     tokensIn,
 		TokensOut:    tokensOut,
 		ServedModel:  served,
-		FinishReason: "stop",
+		FinishReason: finish,
 		ToolCalls:    toolCalls,
 		FixProposals: fixes,
 		Truncated:    truncated,
+		Knowledge:    knowledge,
 	}
-	res, err := s.mutateConversationAt(writeCtx, doc.ID, convKey, func(history []models.ChatMessage) ([]models.ChatMessage, bool, error) {
+	if failed && finish == "error" {
+		msg.ErrorCode, msg.ErrorShared = errCode, errShared
+	}
+	// pairWritten: the last round stored the question with the answer (its write at the start had failed).
+	pairWritten := false
+	mutate := func(history []models.ChatMessage) ([]models.ChatMessage, bool, error) {
+		pairWritten = false // per compare-and-swap round: only the round that lands counts
 		// Already stored: a retry, or the client got there first; an id match
 		// anywhere also covers its interrupted partial (else the reply shows twice).
-		if slices.ContainsFunc(history, func(m models.ChatMessage) bool { return m.ID == answerID }) {
-			return history, false, nil
+		// The client's copy may hold a card it stored mid-apply (a stop, a closed thread): the journal knows the outcome,
+		// and the card takes it (R-approvals-5).
+		if i := slices.IndexFunc(history, func(m models.ChatMessage) bool { return m.ID == answerID }); i >= 0 {
+			return settleStoredCards(history, i, fixes)
 		}
 		if n := len(history); n > 0 && history[n-1].Role == "assistant" && history[n-1].Content == stored {
-			return history, false, nil
+			return settleStoredCards(history, n-1, fixes)
 		}
 		// Right after its own question when stored under the client's id (a queued
 		// follow-up's question can land in between) — else at the end.
@@ -299,22 +430,133 @@ func (s *ChatService) persistAssistantTurn(ctx context.Context, doc *models.Flow
 		if id := req.UserMessageID; id != "" && clientMessageID(id) == id {
 			if i := slices.IndexFunc(history, func(m models.ChatMessage) bool { return m.ID == id && m.Role == "user" }); i >= 0 {
 				at = i + 1
+			} else if req.UserMessage != "" && !ctl.userTurnStored.Load() {
+				// The question's write failed at the start (every round lost, or the store failed): it is stored
+				// here with its answer, so the thread holds both or neither — never an answer with no question
+				// (R-replicas-12).
+				pairWritten = true
+				return append(slices.Clone(history), newUserTurn(req, history), msg), true, nil
 			}
 		}
 		return slices.Insert(history, at, msg), true, nil
-	})
+	}
+	var res mutation
+	var err error
+	for attempt := 1; ; attempt++ {
+		pairWritten = false
+		res, err = s.mutateConversationAt(writeCtx, doc.ID, convKey, mutate)
+		// A key that holds another user's conversation (R-security-3) refuses every retry as well.
+		if err == nil || errors.Is(err, storageif.ErrConversationConflict) || errors.Is(err, storageif.ErrConversationKeyTaken) ||
+			writeCtx.Err() != nil || attempt >= answerWriteAttempts {
+			break
+		}
+		select {
+		case <-time.After(time.Duration(attempt) * answerWriteRetryDelay):
+		case <-writeCtx.Done():
+		}
+	}
 	if err != nil {
-		logger.Warn("chat: failed to store the finished answer", "error", err)
-		return answerWrite{}
+		cause := "error"
+		switch {
+		case errors.Is(err, storageif.ErrConversationConflict):
+			cause = "conflict"
+		case writeCtx.Err() != nil:
+			cause = "timeout"
+		}
+		chatAnswerWriteFailuresTotal.WithLabelValues(cause).Inc()
+		logger.FromContext(ctx).Warn("chat: failed to store the finished answer; the client is told to save it", "cause", cause, "error", err,
+			"conversation", conversationLogID(doc.ID, convKey))
+		return answerWrite{Failed: true}
+	}
+	if pairWritten && res.Changed {
+		chatConversationConflictsTotal.WithLabelValues("answer_with_question").Inc()
+		ctl.userTurnStored.Store(true)
+		logger.FromContext(ctx).Warn("chat: stored a turn's question with its answer: the question's write at the start had failed",
+			"source", "answer_with_question", "conversation", conversationLogID(doc.ID, convKey))
 	}
 	return answerWrite{Written: res.Changed && res.Versioned, Loaded: res.Loaded, Version: res.Version}
+}
+
+// settleStoredCards gives the cards of history[i] that are still undecided (pending, applying) the terminal outcome the
+// journal recorded for them; nothing else of the message changes. The history is copied only when a card changed.
+func settleStoredCards(history []models.ChatMessage, i int, journal []models.FixProposalSnapshot) ([]models.ChatMessage, bool, error) {
+	open := func(status string) bool { return status == "pending" || status == "applying" }
+	byID := make(map[string]models.FixProposalSnapshot, len(journal))
+	for _, fp := range journal {
+		if !open(fp.Status) {
+			byID[fp.ProposalID] = fp
+		}
+	}
+	msg := history[i]
+	var cards []models.FixProposalSnapshot
+	for j, fp := range msg.FixProposals {
+		done, ok := byID[fp.ProposalID]
+		if !ok || !open(fp.Status) {
+			continue
+		}
+		if cards == nil {
+			cards = slices.Clone(msg.FixProposals)
+		}
+		fp.Status, fp.Message = done.Status, done.Message
+		fp.Items = slices.Clone(fp.Items)
+		for k := range fp.Items {
+			for _, it := range done.Items {
+				same := it.ID != "" && fp.Items[k].ID == it.ID || it.ID == "" && fp.Items[k].RuleID == it.RuleID
+				if same && open(fp.Items[k].Status) {
+					fp.Items[k].Status, fp.Items[k].Message = it.Status, it.Message
+				}
+			}
+		}
+		cards[j] = fp
+	}
+	if cards == nil {
+		return history, false, nil
+	}
+	out := slices.Clone(history)
+	msg.FixProposals = cards
+	out[i] = msg
+	return out, true, nil
+}
+
+// failedTurnRecord is a failed turn's stored finish reason and content, in the shape the client gives the message: a
+// stopped turn is "interrupted" with its text as it was; any other failure is "error", the text followed by the
+// error line (the client's chat:errors.generic).
+func failedTurnRecord(answer, code, msg string) (finish, content string) {
+	if code == ChatErrStopped {
+		return "interrupted", answer
+	}
+	line := failedTurnLinePrefix + msg + "*"
+	if strings.TrimSpace(answer) == "" {
+		return "error", line
+	}
+	return "error", answer + failedTurnSeparator + line
+}
+
+// The error line a failed turn's stored content ends with (failedTurnRecord), after the separator when text streamed.
+const (
+	failedTurnSeparator  = "\n\n---\n"
+	failedTurnLinePrefix = "*Error: "
+)
+
+// historyContent is what the model reads of a stored message: a failed turn's partial text without its error line
+// (the report of the failure, not something the assistant said); "" when the turn left no text. The client and the
+// server word that line differently (a provider's title, the restart copy), but both put it after the last
+// separator, and a failed message without one is the error line alone.
+func historyContent(m models.ChatMessage) string {
+	if m.FinishReason != "error" {
+		return m.Content
+	}
+	if i := strings.LastIndex(m.Content, failedTurnSeparator); i >= 0 {
+		return m.Content[:i]
+	}
+	return ""
 }
 
 // Card and item statuses the stored fix records may carry — the client's own
 // vocabulary (chatStore), to which fix_decision statuses are clamped.
 var (
-	fixCardStatuses = map[string]bool{"applying": true, "applied": true, "applied-unresolved": true, "declined": true, "timeout": true, "cancelled": true, "error": true}
-	fixItemStatuses = map[string]bool{"applied": true, "applied-unresolved": true, "error": true, "already-resolved": true}
+	fixCardStatuses = map[string]bool{"applying": true, "applied": true, "applied-unresolved": true, "already-resolved": true, "declined": true, "timeout": true, "cancelled": true, "error": true}
+	fixItemStatuses = map[string]bool{"applied": true, "applied-unresolved": true, "error": true, "already-resolved": true, "skipped": true}
 )
 
 // journalTurnRecord derives the turn's tool trail and fix records from the

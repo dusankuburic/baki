@@ -154,7 +154,7 @@ func TestSaveGetConversation_RoundTripAndPerms(t *testing.T) {
 	}
 
 	// Clearing removes it; a subsequent read returns an empty slice, not an error.
-	if err := svc.ClearConversation(context.Background(), doc.ID, "flow"); err != nil {
+	if err := svc.ClearConversation(context.Background(), doc.ID, "flow", true); err != nil {
 		t.Fatalf("ClearConversation: %v", err)
 	}
 	if got, err := svc.GetConversation(context.Background(), doc.ID, "flow"); err != nil || len(got) != 0 {

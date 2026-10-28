@@ -1,0 +1,6 @@
+# gemini/content-filter.sse through parseGeminiSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 text="Here is how to" served="gemini-2.5-flash"
+02 error=content_filtered msg=none in=88 out=6 served="gemini-2.5-flash"
+return nil
+summary chunks=2 keepalives=0 text="Here is how to"

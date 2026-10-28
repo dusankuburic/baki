@@ -1,0 +1,40 @@
+chunkerVersion 2
+===== chunk 0 =====
+Intro before any heading: this SOP covers retries.
+===== chunk 1 =====
+Retry policy
+
+Every flow retries a failed web call 3 times.
+===== chunk 2 =====
+Retry policy > Backoff
+
+Step 0 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 1 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 2 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 3 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 4 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 5 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! 
+===== chunk 3 =====
+Retry policy > Backoff
+
+utes! Step 5 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 6 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 7 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 8 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 9 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 10 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! 
+===== chunk 4 =====
+Retry policy > Backoff
+
+tes! Step 10 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 11 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 12 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes! Step 13 waits 3.5 s, e.g. after a timeout in flow.pad as J. Smith wrote at https://example.com/docs/v1.2/retry.html for approx. two minutes!
+
+```robin
+# not a heading: a PAD comment
+SET Retries TO 3
+```
+===== chunk 5 =====
+Retry policy > Backoff > Ünïcödé limits
+
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+===== chunk 6 =====
+Retry policy > Backoff > Ünïcödé limits
+
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+===== chunk 7 =====
+Retry policy > Backoff > Ünïcödé limits
+
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+===== chunk 8 =====
+Logging
+
+Log the error code (no. 42) and the %FlowName% variable.

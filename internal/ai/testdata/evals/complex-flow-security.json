@@ -1,0 +1,22 @@
+{
+  "why": "Security question: list_findings by category, get_block for detail, the error-severity credential first; the redacted value is not repeated.",
+  "flow": "complex_flow",
+  "question": "Are there any security problems in this flow?",
+  "expect": {
+    "toolsSubset": [
+      "list_findings",
+      "get_block"
+    ],
+    "mustMention": [
+      "hardcoded-credential",
+      "B4",
+      "path-traversal-risk"
+    ],
+    "mentionOrder": true,
+    "mustLink": [
+      "block:",
+      "finding:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

@@ -1,6 +1,8 @@
 package di
 
 import (
+	"path/filepath"
+
 	"github.com/redis/go-redis/v9"
 
 	"pad-analyzer/internal/capability"
@@ -13,11 +15,16 @@ import (
 
 // ProvideFlowService builds the FlowService announcing its flow changes on the bus and dropping the process
 // analyzer's reports they make stale (options, not parameters: NewFlowService has about 55 test call sites).
-func ProvideFlowService(cfg *config.Config, notifier service.EventNotifier, settings service.SettingsProvider, docs service.DocumentProvider, backend storageif.StorageBackend, authz *service.AuthzService, astCache *service.ASTCache, bus *eventbus.Bus, a *analyzer.CachedAnalyzer, redisClient *redis.Client) *service.FlowService {
+func ProvideFlowService(cfg *config.Config, configDir string, notifier service.EventNotifier, settings service.SettingsProvider, docs service.DocumentProvider, backend storageif.StorageBackend, authz *service.AuthzService, astCache *service.ASTCache, bus *eventbus.Bus, a *analyzer.CachedAnalyzer, redisClient *redis.Client) *service.FlowService {
 	opts := []service.FlowOption{service.WithFlowEvents(bus), service.WithAnalyzer(a)}
 	// nil when PAD_REDIS_URL is unset: each replica remembers the flow ids of its own uploads.
 	opts = append(opts, service.WithUploadIDs(redisClient))
 	opts = append(opts, snapshotStoreOptions(capability.Of(cfg), backend)...)
+	// A desktop flow's ring (a file or folder on this machine) is kept under the config directory, so the undo of a
+	// fix outlives the process (R-approvals-c9); only desktop flows use it.
+	if configDir != "" {
+		opts = append(opts, service.WithDesktopSnapshotDir(filepath.Join(configDir, "snapshots")))
+	}
 	return service.NewFlowService(notifier, settings, docs, backend, authz, astCache, opts...)
 }
 

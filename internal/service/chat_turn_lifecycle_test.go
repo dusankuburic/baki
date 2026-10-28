@@ -238,7 +238,7 @@ func (h *hangingConversationStore) LoadConversation(ctx context.Context, _, _ st
 	return nil, ctx.Err()
 }
 
-func (h *hangingConversationStore) LoadConversationVersioned(ctx context.Context, _, _ string) ([]storageif.ChatMessage, int64, error) {
+func (h *hangingConversationStore) LoadConversationVersioned(ctx context.Context, _, _, _ string) ([]storageif.ChatMessage, int64, error) {
 	<-ctx.Done()
 	return nil, 0, ctx.Err()
 }

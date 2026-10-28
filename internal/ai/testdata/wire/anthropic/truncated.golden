@@ -1,0 +1,8 @@
+# anthropic/truncated.sse through parseClaudeSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 in=205 served="claude-sonnet-4-5-20250929"
+02 keepalive served="claude-sonnet-4-5-20250929"
+03 text="The subflow " served="claude-sonnet-4-5-20250929"
+04 text="Process_Invoices calls" served="claude-sonnet-4-5-20250929"
+return error=truncated msg=none
+summary chunks=4 keepalives=1 text="The subflow Process_Invoices calls"

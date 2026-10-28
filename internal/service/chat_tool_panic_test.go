@@ -80,7 +80,7 @@ func TestRunPromptToolLoop_PanickingToolIsAToolResult(t *testing.T) {
 // Review of step 3: a recovered panic value is model-visible text and must pass the scrubber like every other
 // tool result.
 func TestGuardedToolRun_ScrubsThePanicValue(t *testing.T) {
-	res := guardedToolRun(lineageCall(), func() toolExecResult { panic("bad input password=supersecret123") })
+	res := guardedToolRun(context.Background(), lineageCall(), func() toolExecResult { panic("bad input password=supersecret123") })
 	if !strings.HasPrefix(res.result, "error: tool get_variable_lineage failed unexpectedly") || strings.Contains(res.result, "supersecret123") {
 		t.Errorf("result = %q, want the error shape with the secret scrubbed", res.result)
 	}

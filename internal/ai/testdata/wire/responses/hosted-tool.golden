@@ -1,0 +1,14 @@
+# responses/hosted-tool.sse through parseResponsesSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="gpt-4.1-2025-04-14"
+02 toolEvent{name="web_search_call" label="Agent · web search" done=false ok=false summary=""} served="gpt-4.1-2025-04-14"
+03 keepalive served="gpt-4.1-2025-04-14"
+04 keepalive served="gpt-4.1-2025-04-14"
+05 keepalive served="gpt-4.1-2025-04-14"
+06 toolEvent{name="web_search_call" label="Agent · web search" done=true ok=true summary="Power Automate Desktop Launch Excel action"} served="gpt-4.1-2025-04-14"
+07 keepalive served="gpt-4.1-2025-04-14"
+08 text="Launch Excel opens the workbook and returns an instance." served="gpt-4.1-2025-04-14"
+09 keepalive served="gpt-4.1-2025-04-14"
+10 done finish="stop" in=1800 out=12 items=[{"action":{"type":"search","query":"Power Automate Desktop Launch Excel action"},"id":"ws_WIRE0000000000000000000000000008","status":"completed","type":"web_search_call"},{"content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"Launch Excel opens the workbook and returns an instance."}],"id":"msg_WIRE0000000000000000000000000008","role":"assistant","status":"completed","type":"message"}] served="gpt-4.1-2025-04-14"
+return nil
+summary chunks=10 keepalives=6 text="Launch Excel opens the workbook and returns an instance."

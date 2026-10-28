@@ -1,6 +1,7 @@
 package interfaces
 
 import (
+	"context"
 	"strings"
 	"time"
 )
@@ -84,6 +85,43 @@ type SecretFamilyLister interface {
 type SecretFamilyEntry struct {
 	Provider  string
 	UpdatedAt time.Time
+}
+
+// SecretState is what a stored secret row holds, told without its value: the provider catalogue and listing read
+// the state of every key of a scope in one keystore read (R-provider-19) where they read each key on its own.
+type SecretState int
+
+const (
+	// SecretUsable is a row that opens to a non-empty value.
+	SecretUsable SecretState = iota + 1
+	// SecretUnreadable is a row no configured key opens (Get: storage.ErrSecretDecryptFailed).
+	SecretUnreadable
+	// SecretEmpty is a legacy empty row, which no request can use.
+	SecretEmpty
+)
+
+// SecretStateLister reads one owner's provider keys in one read, under the caller's context (the store's own
+// timeout stays the ceiling). keys names the rows wanted; a key the owner holds no row for has no entry.
+type SecretStateLister interface {
+	KeyStates(ctx context.Context, scope string, keys []string) (map[string]SecretState, error)
+}
+
+// OrgSecretStateLister is SecretStateLister for an organisation's shared credentials.
+type OrgSecretStateLister interface {
+	OrgKeyStates(ctx context.Context, orgID string, keys []string) (map[string]SecretState, error)
+}
+
+// SecretContextReader reads one provider key under the caller's context: a request that ends aborts the read.
+// Get and Has are their context-free counterparts.
+type SecretContextReader interface {
+	GetCtx(ctx context.Context, scope, provider string) (string, error)
+	HasCtx(ctx context.Context, scope, provider string) (bool, error)
+}
+
+// OrgSecretContextReader is SecretContextReader for an organisation's shared credentials.
+type OrgSecretContextReader interface {
+	GetOrgCtx(ctx context.Context, orgID, provider string) (string, error)
+	HasOrgCtx(ctx context.Context, orgID, provider string) (bool, error)
 }
 
 // OrgSecretFamilyStore is the org keystore's family counterpart. The lender rule is OrgsWithKeySavedBy's:

@@ -3,11 +3,14 @@ package ai
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -20,7 +23,8 @@ type pendingToolCall struct {
 }
 
 // assembleToolCalls flattens an index-keyed map of partial tool calls into []ToolCall, ordered by block index.
-// Empty argument buffers become "{}" so providers always receive valid JSON input.
+// Blank (empty or whitespace-only) argument buffers become "{}", as in the Responses parser: whitespace is not JSON,
+// yet the chat service and ExecuteTool read it as "no arguments", so it was recorded verbatim and broke the replay.
 func assembleToolCalls(byIndex map[int]*pendingToolCall) []ToolCall {
 	if len(byIndex) == 0 {
 		return nil
@@ -34,7 +38,7 @@ func assembleToolCalls(byIndex map[int]*pendingToolCall) []ToolCall {
 	for _, i := range idxs {
 		p := byIndex[i]
 		input := p.args.String()
-		if input == "" {
+		if strings.TrimSpace(input) == "" {
 			input = "{}"
 		}
 		out = append(out, ToolCall{ID: p.id, Name: p.name, Input: json.RawMessage(input)})
@@ -46,6 +50,19 @@ func assembleToolCalls(byIndex map[int]*pendingToolCall) []ToolCall {
 // terminal marker — a Done chunk synthesised there made a truncated response look complete.
 func errStreamTruncated(provider string) error {
 	return fmt.Errorf("%s stream truncated before terminal marker: %w", provider, io.ErrUnexpectedEOF)
+}
+
+// sseField returns the value of the SSE field line "<name>:<value>" and whether line is that field. The one space
+// after the colon is optional (the SSE format drops a single leading space): "data:{…}" reads like "data: {…}".
+func sseField(line []byte, name string) ([]byte, bool) {
+	if len(line) <= len(name) || line[len(name)] != ':' || string(line[:len(name)]) != name {
+		return nil, false
+	}
+	v := line[len(name)+1:]
+	if len(v) > 0 && v[0] == ' ' {
+		v = v[1:]
+	}
+	return v, true
 }
 
 // errStreamMalformed reports a stream that ended without a terminal marker AND had undecodable `data:`
@@ -114,7 +131,9 @@ func (b *claudeStreamBlock) record(tool *pendingToolCall) (json.RawMessage, bool
 			return nil, false
 		}
 		input := tool.args.String()
-		if input == "" {
+		if strings.TrimSpace(input) == "" {
+			// Blank, as assembleToolCalls reads it: the call went out as {}, and the record must agree or the
+			// whole record (and the thinking before the tool_use) is dropped from the replay.
 			input = "{}"
 			if start, ok := b.fields["input"]; ok && len(start) > 0 && string(start) != "null" {
 				input = string(start)
@@ -335,6 +354,11 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 
 	// handle processes one data line of eventType; true ends the stream (a mid-stream error or a refusal, whose chunk was delivered).
 	handle := func(data []byte) bool {
+		// The stream ends once: after its Done, a second stop_reason, a refusal or an error event would be a second
+		// terminal chunk (usage recorded twice, a delivered answer failed), so it is ignored like a read error is below.
+		if doneSent && (eventType == "message_delta" || eventType == "error") {
+			return false
+		}
 		switch eventType {
 		case "message_start":
 			var parsed struct {
@@ -477,20 +501,19 @@ func parseClaudeSSE(body io.Reader, onChunk func(Chunk)) error {
 
 	// The line is read zero-copy, as parseResponsesSSE does: scanner.Bytes() aliases the scan buffer, valid
 	// only until the next Scan; the eventType conversion is the one deliberate copy.
-	eventPrefix, dataPrefix, doneMarker := []byte("event: "), []byte("data: "), []byte("[DONE]")
+	doneMarker := []byte("[DONE]")
 	for scanner.Scan() {
 		line := scanner.Bytes()
 
-		if bytes.HasPrefix(line, eventPrefix) {
-			eventType = string(line[len(eventPrefix):])
+		if ev, ok := sseField(line, "event"); ok {
+			eventType = string(ev)
 			continue
 		}
 
-		if !bytes.HasPrefix(line, dataPrefix) {
+		data, ok := sseField(line, "data")
+		if !ok {
 			continue
 		}
-
-		data := line[len(dataPrefix):]
 		if bytes.Equal(data, doneMarker) {
 			if !doneSent {
 				onChunk(Chunk{Done: true, TokensIn: tokensIn, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite, ToolCalls: assembleToolCalls(toolBlocks), ServedModel: servedModel, ProviderItems: record()})
@@ -596,15 +619,12 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 	}
 
 	// Zero-copy lines as parseResponsesSSE reads them; json.Unmarshal or WriteString copies everything kept.
-	dataPrefix, doneMarker := []byte("data: "), []byte("[DONE]")
+	doneMarker := []byte("[DONE]")
 	for scanner.Scan() {
-		line := scanner.Bytes()
-
-		if !bytes.HasPrefix(line, dataPrefix) {
+		data, ok := sseField(scanner.Bytes(), "data")
+		if !ok {
 			continue
 		}
-
-		data := line[len(dataPrefix):]
 		if bytes.Equal(data, doneMarker) {
 			if filtered {
 				emitFiltered()
@@ -641,8 +661,14 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 					CachedTokens int `json:"cached_tokens"`
 				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
-			// A server error after the 200 arrives as its own event.
-			Error *responsesError `json:"error"`
+			// A server error after the 200 arrives as its own event. Code and type stay raw: vLLM sends the
+			// HTTP status as a number ("code":400), which a string field failed to decode — the event was then
+			// skipped as undecodable and the [DONE] after it closed the stream as a clean, empty completion.
+			Error *struct {
+				Code    json.RawMessage `json:"code"`
+				Type    json.RawMessage `json:"type"`
+				Message string          `json:"message"`
+			} `json:"error"`
 		}
 
 		if err := json.Unmarshal(data, &parsed); err != nil {
@@ -661,12 +687,18 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 		if parsed.Model != "" {
 			servedModel = parsed.Model
 		}
-		if parsed.Error != nil && (parsed.Error.Message != "" || parsed.Error.Code != "") {
+		if parsed.Error != nil && (parsed.Error.Message != "" || rawText(parsed.Error.Code) != "") {
+			if sawTerminal || filtered {
+				// After the terminal finish_reason the answer is complete (or the filter verdict stands): an error
+				// event before [DONE] would fail a delivered answer, so it is ignored, as the Claude and Gemini
+				// parsers ignore events after their terminal chunk. A usage chunk after it still counts.
+				continue
+			}
 			// `data: {"error":{…}}` mid-stream used to decode as an empty event and end "truncated" with the
 			// message lost; classified, a failure before any content is retried and the breaker counts an outage.
 			flushThink()
 			onChunk(Chunk{
-				Error:           classifyOpenAIStreamError(parsed.Error.Code, parsed.Error.Type, parsed.Error.Message),
+				Error:           classifyOpenAIStreamError(rawText(parsed.Error.Code), rawText(parsed.Error.Type), parsed.Error.Message),
 				TokensIn:        tokensIn,
 				TokensOut:       tokensOut,
 				CacheReadTokens: cacheRead,
@@ -733,6 +765,11 @@ func parseOpenAISSE(body io.Reader, onChunk func(Chunk)) error {
 			emitFiltered() // the verdict is known; usage may be missing
 			return nil
 		}
+		if sawTerminal {
+			// The answer was complete: a read error before the usage chunk or [DONE] loses only the usage.
+			emitDone()
+			return nil
+		}
 		flushThink()
 		return fmt.Errorf("reading openai SSE stream: %w", err)
 	}
@@ -783,7 +820,8 @@ func toolCallSlot(index *int, id string, byID map[string]int, blocks map[int]*pe
 }
 
 // classifyOpenAIStreamError maps a mid-stream `error` event onto the shared sentinels via
-// classifyResponsesError's table, with chat-completions wording for the rest.
+// classifyResponsesError's table, then a numeric code as the HTTP status it is (vLLM), with chat-completions
+// wording for the rest.
 func classifyOpenAIStreamError(code, typ, msg string) error {
 	err := classifyResponsesError(code, typ, msg)
 	if errors.Is(err, ErrRateLimited) || errors.Is(err, ErrProviderDown) || errors.Is(err, ErrContentFiltered) {
@@ -791,6 +829,25 @@ func classifyOpenAIStreamError(code, typ, msg string) error {
 	}
 	if msg == "" {
 		msg = code
+	}
+	if status, convErr := strconv.Atoi(code); convErr == nil {
+		// Routed as handleStreamError routes the same HTTP status (without the provider's 401/403 hooks).
+		switch {
+		case status == http.StatusUnauthorized:
+			return fmt.Errorf("%w: openai stream error: %s", ErrApiKeyInvalid, msg)
+		case status == http.StatusForbidden:
+			return NewAccessDeniedError(cmp.Or(vendorMessage(msg), "the provider answered 403"))
+		case status == http.StatusTooManyRequests:
+			return fmt.Errorf("%w: openai stream error: %s", ErrRateLimited, msg)
+		case status >= http.StatusInternalServerError:
+			return fmt.Errorf("%w: openai stream error: %s", ErrProviderDown, msg)
+		}
+		if err := detectContextLimitError(status, msg); err != nil {
+			return err
+		}
+		if err := detectToolsUnsupportedError(status, msg); err != nil {
+			return err
+		}
 	}
 	return fmt.Errorf("openai stream error: %s", msg)
 }
@@ -802,28 +859,35 @@ var geminiFilteredFinish = map[string]bool{
 	"RECITATION":         true,
 	"BLOCKLIST":          true,
 	"PROHIBITED_CONTENT": true,
+	// SPII: "the content potentially contains Sensitive Personally Identifiable Information".
+	"SPII": true,
 }
 
+// parseGeminiSSE reads Gemini's streamGenerateContent SSE. Like the Claude and OpenAI parsers it emits a
+// keepalive for an event that delivers nothing (usage only, safety ratings, a functionCall collected for Done),
+// so the idle watchdog sees the stream alive; carries the served model (modelVersion) on its chunks; keeps the
+// reported usage on a filtered finish; and turns an error event after the 200 into a classified error chunk
+// with the usage seen so far, ending the stream with nil like the other parsers (R-streaming-1).
 func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var (
-		doneSent    bool
-		parseErrors int
-		toolCalls   []ToolCall
+		doneSent            bool
+		parseErrors         int
+		servedModel         string
+		tokensIn, tokensOut int
+		cacheRead           int
+		// turn collects the function calls and the replay record (thought signatures, issued call ids).
+		turn geminiTurn
 	)
 
 	// Zero-copy lines as parseResponsesSSE reads them; json.Unmarshal copies what is retained.
-	dataPrefix := []byte("data: ")
 	for scanner.Scan() {
-		line := scanner.Bytes()
-
-		if !bytes.HasPrefix(line, dataPrefix) {
+		data, ok := sseField(scanner.Bytes(), "data")
+		if !ok {
 			continue
 		}
-
-		data := line[len(dataPrefix):]
 
 		var parsed struct {
 			Candidates []struct {
@@ -838,60 +902,104 @@ func parseGeminiSSE(body io.Reader, onChunk func(Chunk)) error {
 				// ThoughtsTokenCount is Gemini's billing for thinking tokens; candidatesTokenCount EXCLUDES it,
 				// so 2.5-series models systematically undercounted output without it.
 				ThoughtsTokenCount int `json:"thoughtsTokenCount"`
+				// CachedContentTokenCount is the cached slice OF promptTokenCount (implicit or explicit caching).
+				CachedContentTokenCount int `json:"cachedContentTokenCount"`
 			} `json:"usageMetadata"`
+			ModelVersion string `json:"modelVersion"`
+			// Error is an error event the server sends after the 200 (overload, quota).
+			Error *geminiAPIError `json:"error"`
+			// PromptFeedback.BlockReason set: the prompt was blocked and no candidates come — a 200 whose only
+			// event carries it. Read as an empty event, it ended the stream "truncated" (transient, retried).
+			PromptFeedback *struct {
+				BlockReason string `json:"blockReason"`
+			} `json:"promptFeedback"`
 		}
 
 		if err := json.Unmarshal(data, &parsed); err != nil {
 			parseErrors++
 			continue
 		}
+		if parsed.ModelVersion != "" {
+			servedModel = parsed.ModelVersion
+		}
+		if u := parsed.UsageMetadata; u != nil {
+			tokensIn = u.PromptTokenCount
+			tokensOut = u.CandidatesTokenCount + u.ThoughtsTokenCount
+			// A slice of the prompt, never more: the upstream's numbers are not trusted to be consistent.
+			cacheRead = min(u.CachedContentTokenCount, u.PromptTokenCount)
+		}
+		// After the finish the stream has ended: a later error event would be a second terminal chunk.
+		if parsed.Error != nil && !doneSent {
+			err := classifyGeminiAPIError(parsed.Error.Code, *parsed.Error, 0)
+			onChunk(Chunk{Error: err, TokensIn: tokensIn, TokensOut: tokensOut, ServedModel: servedModel})
+			return nil
+		}
+		if pf := parsed.PromptFeedback; pf != nil && pf.BlockReason != "" && !doneSent {
+			onChunk(Chunk{
+				Error:       fmt.Errorf("%w: gemini blocked the prompt (blockReason=%s)", ErrContentFiltered, pf.BlockReason),
+				TokensIn:    tokensIn,
+				TokensOut:   tokensOut,
+				ServedModel: servedModel,
+			})
+			return nil
+		}
 
+		emitted := false
 		for _, cand := range parsed.Candidates {
 			for _, part := range cand.Content.Parts {
-				if part.Text != "" {
-					onChunk(Chunk{Text: part.Text})
-				}
-				if part.FunctionCall != nil {
-					// A nil Args map marshals to the literal `null`; send `{}` like the OpenAI provider.
-					args := []byte("{}")
-					if part.FunctionCall.Args != nil {
-						args, _ = json.Marshal(part.FunctionCall.Args)
-					}
-					// Process-unique ID (see geminiCallSeq): a per-stream counter collides across tool-loop iterations.
-					toolCalls = append(toolCalls, ToolCall{
-						ID:    nextGeminiCallID(),
-						Name:  part.FunctionCall.Name,
-						Input: json.RawMessage(args),
-					})
+				if text := turn.part(part); text != "" {
+					onChunk(Chunk{Text: text, ServedModel: servedModel})
+					emitted = true
 				}
 			}
-			if cand.FinishReason != "" {
-				if !doneSent {
-					doneSent = true
-					tokensOut, tokensIn := 0, 0
-					if parsed.UsageMetadata != nil {
-						tokensOut = parsed.UsageMetadata.CandidatesTokenCount + parsed.UsageMetadata.ThoughtsTokenCount
-						tokensIn = parsed.UsageMetadata.PromptTokenCount
-					}
-					if geminiFilteredFinish[cand.FinishReason] {
-						// Terminal (no truncation error — the stream ended deliberately) but an error chunk,
-						// so the client sees the block instead of an empty answer.
-						onChunk(Chunk{Error: fmt.Errorf("gemini stopped the response (finishReason=%s): the response was blocked by a content filter", cand.FinishReason)})
-						return nil
-					}
+			if cand.FinishReason != "" && !doneSent {
+				doneSent = true
+				emitted = true
+				if cand.FinishReason == geminiMissingSignatureFinish {
+					// The history lacks a thought signature (documented finish reason, not a captured one): a
+					// deterministic refusal, not an empty answer.
 					onChunk(Chunk{
-						Done:         true,
-						TokensOut:    tokensOut,
-						TokensIn:     tokensIn,
-						ToolCalls:    toolCalls,
-						FinishReason: cand.FinishReason,
+						Error:       fmt.Errorf("%w (finishReason %s)", ErrThoughtSignatureMissing, cand.FinishReason),
+						TokensIn:    tokensIn,
+						TokensOut:   tokensOut,
+						ServedModel: servedModel,
 					})
+					return nil
 				}
+				if geminiFilteredFinish[cand.FinishReason] {
+					// Terminal (no truncation error — the stream ended deliberately) but an error chunk, so the
+					// client sees the block instead of an empty answer; the usage Gemini priced rides along.
+					onChunk(Chunk{
+						Error:       fmt.Errorf("%w: gemini stopped the response (finishReason=%s)", ErrContentFiltered, cand.FinishReason),
+						TokensIn:    tokensIn,
+						TokensOut:   tokensOut,
+						ServedModel: servedModel,
+					})
+					return nil
+				}
+				onChunk(Chunk{
+					Done:            true,
+					TokensOut:       tokensOut,
+					TokensIn:        tokensIn,
+					CacheReadTokens: cacheRead,
+					ToolCalls:       turn.calls,
+					FinishReason:    cand.FinishReason,
+					ServedModel:     servedModel,
+					ProviderItems:   turn.items(),
+				})
 			}
+		}
+		if !emitted {
+			// Nothing to deliver, but the upstream is alive: feed the idle watchdog.
+			onChunk(Chunk{ServedModel: servedModel})
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
+		if doneSent {
+			// The answer and its usage were delivered, as in the Claude parser: a read error after the finish loses nothing.
+			return nil
+		}
 		return fmt.Errorf("reading gemini SSE stream: %w", err)
 	}
 

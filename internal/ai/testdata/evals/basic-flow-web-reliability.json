@@ -1,0 +1,21 @@
+{
+  "why": "Ranks list_findings output by severity (warnings before info) and links findings by the keys the tool returned.",
+  "flow": "basic_flow",
+  "question": "Which reliability problems does the browser automation at the end of the flow have? Most important first.",
+  "expect": {
+    "toolsSubset": [
+      "list_findings"
+    ],
+    "mustMention": [
+      "missing-timeout",
+      "unhandled-error",
+      "missing-retry"
+    ],
+    "mentionOrder": true,
+    "mustLink": [
+      "block:",
+      "finding:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

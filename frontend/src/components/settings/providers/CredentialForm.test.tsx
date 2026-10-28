@@ -6,6 +6,7 @@ import {ApiError} from '@/api/client'
 import {useSystemStore} from '@/stores/systemStore'
 import {API_KEY_FIELD, deviceFlowSpec, providerSpec} from '@/testing/fixtures/providerCatalog'
 import type {ProviderSpec} from '@/types'
+import {API_KEY_MAX_LENGTH} from '@/lib/constraints'
 
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({openURL: vi.fn().mockResolvedValue(undefined)}),
@@ -17,7 +18,7 @@ vi.mock('@/api', async importOriginal => {
     ...actual,
     providersApi: {
       saveApiKey: vi.fn(),
-      hasApiKey: vi.fn(),
+      keyStatus: vi.fn(),
       deleteApiKey: vi.fn(),
       testProviderConnection: vi.fn(),
       getDeviceAuthUser: vi.fn(),
@@ -34,7 +35,7 @@ const spec = (over: Parameters<typeof providerSpec>[0]) => providerSpec(over) as
 beforeEach(() => {
   vi.resetAllMocks()
   useSystemStore.setState({info: null, isLoaded: false})
-  api.hasApiKey.mockResolvedValue(false)
+  api.keyStatus.mockResolvedValue({has: false, unreadable: false})
   api.saveApiKey.mockResolvedValue(undefined)
   api.deleteApiKey.mockResolvedValue(undefined)
   api.getDeviceAuthUser.mockResolvedValue(null)
@@ -105,7 +106,7 @@ describe('CredentialForm: api_key', () => {
   })
 
   it('keeps a blank secret on a configured provider as "unchanged": Replace key posts nothing until a key is typed', async () => {
-    api.hasApiKey.mockResolvedValue(true)
+    api.keyStatus.mockResolvedValue({has: true, unreadable: false})
     render(<CredentialForm spec={spec({id: 'mistral', configured: true})} onConfigured={vi.fn()} />)
     fireEvent.click(await screen.findByRole('button', {name: 'Replace key'}))
     const key = screen.getByLabelText('API key')
@@ -143,7 +144,7 @@ describe('CredentialForm: api_key', () => {
   })
 
   it('reports the test outcome with the latency, or the server error and code', async () => {
-    api.hasApiKey.mockResolvedValue(true)
+    api.keyStatus.mockResolvedValue({has: true, unreadable: false})
     api.testProviderConnection.mockResolvedValueOnce({ok: true, latencyMs: 12})
     render(<CredentialForm spec={spec({id: 'mistral', configured: true})} onConfigured={vi.fn()} />)
     fireEvent.click(await screen.findByRole('button', {name: 'Test'}))
@@ -159,7 +160,7 @@ describe('CredentialForm: api_key', () => {
   })
 
   it('removes the key and says where it was stored', async () => {
-    api.hasApiKey.mockResolvedValue(true)
+    api.keyStatus.mockResolvedValue({has: true, unreadable: false})
     const onConfigured = vi.fn()
     render(<CredentialForm spec={spec({id: 'mistral', configured: true})} onConfigured={onConfigured} />)
     expect(await screen.findByText('API key configured (stored encrypted on this server)')).toBeInTheDocument()
@@ -170,9 +171,9 @@ describe('CredentialForm: api_key', () => {
   })
 
   it('offers Remove only once the key store has answered, and falls back to the catalogue when it cannot', async () => {
-    let answer!: (has: boolean) => void
-    api.hasApiKey.mockReturnValue(
-      new Promise<boolean>(resolve => {
+    let answer!: (status: {has: boolean; unreadable: boolean}) => void
+    api.keyStatus.mockReturnValue(
+      new Promise<{has: boolean; unreadable: boolean}>(resolve => {
         answer = resolve
       }),
     )
@@ -181,19 +182,19 @@ describe('CredentialForm: api_key', () => {
     expect(screen.queryByRole('button', {name: 'Remove'})).toBeNull()
     expect(screen.queryByText(/API key configured/)).toBeNull()
     expect(screen.queryByLabelText('API key')).toBeNull()
-    await act(async () => answer(false))
+    await act(async () => answer({has: false, unreadable: false}))
     expect(await screen.findByLabelText('API key')).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: 'Remove'})).toBeNull()
     pending.unmount()
 
-    api.hasApiKey.mockRejectedValue(new Error('offline'))
+    api.keyStatus.mockRejectedValue(new Error('offline'))
     render(<CredentialForm spec={spec({id: 'claude', configured: true})} onConfigured={vi.fn()} />)
     expect(await screen.findByText(/API key configured/)).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Remove'})).toBeInTheDocument()
   })
 
   it('shows the key form for a catalogue-configured provider whose key store answers false', async () => {
-    api.hasApiKey.mockResolvedValue(false)
+    api.keyStatus.mockResolvedValue({has: false, unreadable: false})
     render(<CredentialForm spec={spec({id: 'openai', configured: true})} onConfigured={vi.fn()} />)
     expect(await screen.findByLabelText('API key')).toBeInTheDocument()
     expect(screen.queryByText(/API key configured/)).toBeNull()
@@ -243,6 +244,76 @@ describe('CredentialForm: api_key', () => {
     expect(save).toBeEnabled()
     fireEvent.click(save)
     await waitFor(() => expect(api.saveApiKey).toHaveBeenCalledWith('acme', 'sk-1', {constructor: 'c1'}))
+  })
+})
+
+describe('CredentialForm: keys the server cannot use or store (step 5)', () => {
+  // R-provider-18: a key the server holds but cannot decrypt is neither "configured" nor absent.
+  it('asks for an unreadable key to be entered again', async () => {
+    api.keyStatus.mockResolvedValue({has: true, unreadable: true})
+    const onConfigured = vi.fn()
+    render(<CredentialForm spec={spec({id: 'mistral', configured: false})} onConfigured={onConfigured} />)
+    expect(await screen.findByText(/stored key can.t be read/i)).toBeInTheDocument()
+    expect(screen.queryByText(/API key configured/)).toBeNull()
+    expect(screen.queryByRole('button', {name: 'Test'})).toBeNull()
+    expect(screen.getByRole('button', {name: 'Remove'})).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Enter the key again'}))
+    fireEvent.change(screen.getByLabelText('API key'), {target: {value: 'sk-new'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+    await waitFor(() => expect(api.saveApiKey).toHaveBeenCalledWith('mistral', 'sk-new'))
+    expect(await screen.findByText(/API key configured/)).toBeInTheDocument()
+    expect(screen.queryByText(/stored key can.t be read/i)).toBeNull()
+  })
+
+  // The key's own status, not the catalogue's, which combines a provider's keys: a readable key under an
+  // "unreadable" catalogue entry is shown as configured; without an answer the catalogue decides.
+  it('trusts the key store over the catalogue, and the catalogue when the key store cannot answer', async () => {
+    api.keyStatus.mockResolvedValue({has: true, unreadable: false})
+    const first = render(
+      <CredentialForm
+        spec={spec({id: 'mistral', configured: false, credentialStatus: 'unreadable'})}
+        onConfigured={vi.fn()}
+      />,
+    )
+    expect(await screen.findByText(/API key configured/)).toBeInTheDocument()
+    first.unmount()
+
+    api.keyStatus.mockRejectedValue(new Error('offline'))
+    render(
+      <CredentialForm
+        spec={spec({id: 'mistral', configured: false, credentialStatus: 'unreadable'})}
+        onConfigured={vi.fn()}
+      />,
+    )
+    expect(await screen.findByText(/stored key can.t be read/i)).toBeInTheDocument()
+  })
+
+  // R-provider-2: a removal the secret store could not make keeps the key shown, and says why.
+  it('keeps the key when secret storage is unavailable, and says so', async () => {
+    api.keyStatus.mockResolvedValue({has: true, unreadable: false})
+    api.deleteApiKey.mockRejectedValueOnce(new ApiError('internal server error', 503, 'SECRET_STORAGE_UNAVAILABLE'))
+    render(<CredentialForm spec={spec({id: 'mistral', configured: true})} onConfigured={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', {name: 'Remove'}))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/secret storage is unavailable/i)
+    expect(screen.getByText(/API key configured/)).toBeInTheDocument()
+    expect(screen.queryByText(/internal server error/)).toBeNull()
+  })
+
+  // R-config-3: the key field stops at the server's cap.
+  it('stops the key at the server cap', async () => {
+    render(<CredentialForm spec={spec({id: 'mistral'})} onConfigured={vi.fn()} />)
+    expect(await screen.findByLabelText('API key')).toHaveAttribute('maxLength', String(API_KEY_MAX_LENGTH))
+  })
+
+  // R-provider-18: a device-flow token the server cannot decrypt is not "not connected".
+  it('says a device-flow sign-in must be made again when its token cannot be read', async () => {
+    api.getDeviceAuthUser.mockRejectedValue(
+      new ApiError('the stored credential could not be read', 422, 'KEY_UNREADABLE'),
+    )
+    render(<CredentialForm spec={spec(deviceFlowSpec('copilot', {name: 'Copilot'}))} onConfigured={vi.fn()} />)
+    expect(await screen.findByText(/sign in again/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Retry'})).toBeInTheDocument()
   })
 })
 

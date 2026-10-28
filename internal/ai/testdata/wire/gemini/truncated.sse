@@ -1,0 +1,5 @@
+: hand-built from the Gemini API streamGenerateContent?alt=sse reference, cut mid-answer (no finishReason), NOT a live capture; see ../README.md
+data: {"candidates": [{"content": {"parts": [{"text": "The subflow "}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 205,"candidatesTokenCount": 3,"totalTokenCount": 208},"modelVersion": "gemini-2.5-flash","responseId": "WIREgeminiTrunc0001"}
+
+data: {"candidates": [{"content": {"parts": [{"text": "Process_Invoices calls"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 205,"candidatesTokenCount": 7,"totalTokenCount": 212},"modelVersion": "gemini-2.5-flash","responseId": "WIREgeminiTrunc0001"}
+

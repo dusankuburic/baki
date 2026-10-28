@@ -242,7 +242,7 @@ func TestKnowledgeUpload_ModelChanged409(t *testing.T) {
 
 	// Same model: the upload goes through.
 	same, _, sameOrg := newKnowledgeGuardRouter(t, []float32{1, 0})
-	if rr := postJSON(t, same, "/api/orgs/"+sameOrg+"/knowledge/upload", `{"filename":"new.md","content":"a new guideline"}`); rr.Code != http.StatusOK {
+	if rr := postJSON(t, same, "/api/orgs/"+sameOrg+"/knowledge/upload", `{"filename":"new.md","content":"a new guideline"}`); rr.Code != http.StatusCreated {
 		t.Errorf("same-model upload: status = %d, body = %s", rr.Code, rr.Body.String())
 	}
 }

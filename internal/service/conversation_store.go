@@ -39,6 +39,10 @@ func toStorageMessages(msgs []models.ChatMessage) []storageif.ChatMessage {
 			ModelLabel:       m.ModelLabel,
 			ServedModel:      m.ServedModel,
 			FinishReason:     m.FinishReason,
+			ErrorCode:        m.ErrorCode,
+			ErrorShared:      m.ErrorShared,
+			Truncated:        m.Truncated,
+			Knowledge:        m.Knowledge,
 		}
 		if len(m.ToolCalls) > 0 {
 			calls := make([]storageif.ToolCallRecord, len(m.ToolCalls))
@@ -54,39 +58,52 @@ func toStorageMessages(msgs []models.ChatMessage) []storageif.ChatMessage {
 			out[i].ToolCalls = calls
 		}
 		if m.FixProposal != nil {
-			out[i].FixProposal = &storageif.FixProposalSnapshot{
-				ProposalID: m.FixProposal.ProposalID,
-				RuleID:     m.FixProposal.RuleID,
-				FixType:    m.FixProposal.FixType,
-				BlockLabel: m.FixProposal.BlockLabel,
-				Line:       m.FixProposal.Line,
-				Summary:    m.FixProposal.Summary,
-				Status:     m.FixProposal.Status,
-				Message:    m.FixProposal.Message,
-			}
-			out[i].FixProposal.Items = convertItemsToStorage(m.FixProposal.Items)
+			fp := fixSnapshotToStorage(*m.FixProposal)
+			out[i].FixProposal = &fp
 		}
 		if len(m.FixProposals) > 0 {
 			proposals := make([]storageif.FixProposalSnapshot, len(m.FixProposals))
 			for j, fp := range m.FixProposals {
-				proposals[j] = storageif.FixProposalSnapshot{
-					ProposalID:  fp.ProposalID,
-					Tool:        fp.Tool,
-					PreviewKind: fp.PreviewKind,
-					RuleID:      fp.RuleID,
-					FixType:     fp.FixType,
-					BlockLabel:  fp.BlockLabel,
-					Line:        fp.Line,
-					Summary:     fp.Summary,
-					Status:      fp.Status,
-					Message:     fp.Message,
-				}
-				proposals[j].Items = convertItemsToStorage(fp.Items)
+				proposals[j] = fixSnapshotToStorage(fp)
 			}
 			out[i].FixProposals = proposals
 		}
 	}
 	return out
+}
+
+// fixSnapshotToStorage converts one approval record, the legacy singular and the list alike.
+func fixSnapshotToStorage(fp models.FixProposalSnapshot) storageif.FixProposalSnapshot {
+	return storageif.FixProposalSnapshot{
+		ProposalID:  fp.ProposalID,
+		Tool:        fp.Tool,
+		PreviewKind: fp.PreviewKind,
+		RuleID:      fp.RuleID,
+		FixType:     fp.FixType,
+		BlockLabel:  fp.BlockLabel,
+		Line:        fp.Line,
+		Summary:     fp.Summary,
+		Status:      fp.Status,
+		Message:     fp.Message,
+		Items:       convertItemsToStorage(fp.Items),
+	}
+}
+
+// fixSnapshotToModel is the inverse of fixSnapshotToStorage.
+func fixSnapshotToModel(fp storageif.FixProposalSnapshot) models.FixProposalSnapshot {
+	return models.FixProposalSnapshot{
+		ProposalID:  fp.ProposalID,
+		Tool:        fp.Tool,
+		PreviewKind: fp.PreviewKind,
+		RuleID:      fp.RuleID,
+		FixType:     fp.FixType,
+		BlockLabel:  fp.BlockLabel,
+		Line:        fp.Line,
+		Summary:     fp.Summary,
+		Status:      fp.Status,
+		Message:     fp.Message,
+		Items:       convertItemsToModel(fp.Items),
+	}
 }
 
 func convertItemsToStorage(items []models.FixItemSnapshot) []storageif.FixItemSnapshot {
@@ -96,6 +113,7 @@ func convertItemsToStorage(items []models.FixItemSnapshot) []storageif.FixItemSn
 	out := make([]storageif.FixItemSnapshot, len(items))
 	for k, it := range items {
 		out[k] = storageif.FixItemSnapshot{
+			ID:         it.ID,
 			RuleID:     it.RuleID,
 			FixType:    it.FixType,
 			BlockLabel: it.BlockLabel,
@@ -115,6 +133,7 @@ func convertItemsToModel(items []storageif.FixItemSnapshot) []models.FixItemSnap
 	out := make([]models.FixItemSnapshot, len(items))
 	for k, it := range items {
 		out[k] = models.FixItemSnapshot{
+			ID:         it.ID,
 			RuleID:     it.RuleID,
 			FixType:    it.FixType,
 			BlockLabel: it.BlockLabel,
@@ -152,6 +171,10 @@ func toModelMessages(msgs []storageif.ChatMessage) []models.ChatMessage {
 			ModelLabel:       m.ModelLabel,
 			ServedModel:      m.ServedModel,
 			FinishReason:     m.FinishReason,
+			ErrorCode:        m.ErrorCode,
+			ErrorShared:      m.ErrorShared,
+			Truncated:        m.Truncated,
+			Knowledge:        m.Knowledge,
 		}
 		if len(m.ToolCalls) > 0 {
 			calls := make([]models.ToolCallRecord, len(m.ToolCalls))
@@ -167,34 +190,13 @@ func toModelMessages(msgs []storageif.ChatMessage) []models.ChatMessage {
 			out[i].ToolCalls = calls
 		}
 		if m.FixProposal != nil {
-			out[i].FixProposal = &models.FixProposalSnapshot{
-				ProposalID: m.FixProposal.ProposalID,
-				RuleID:     m.FixProposal.RuleID,
-				FixType:    m.FixProposal.FixType,
-				BlockLabel: m.FixProposal.BlockLabel,
-				Line:       m.FixProposal.Line,
-				Summary:    m.FixProposal.Summary,
-				Status:     m.FixProposal.Status,
-				Message:    m.FixProposal.Message,
-			}
-			out[i].FixProposal.Items = convertItemsToModel(m.FixProposal.Items)
+			fp := fixSnapshotToModel(*m.FixProposal)
+			out[i].FixProposal = &fp
 		}
 		if len(m.FixProposals) > 0 {
 			proposals := make([]models.FixProposalSnapshot, len(m.FixProposals))
 			for j, fp := range m.FixProposals {
-				proposals[j] = models.FixProposalSnapshot{
-					ProposalID:  fp.ProposalID,
-					Tool:        fp.Tool,
-					PreviewKind: fp.PreviewKind,
-					RuleID:      fp.RuleID,
-					FixType:     fp.FixType,
-					BlockLabel:  fp.BlockLabel,
-					Line:        fp.Line,
-					Summary:     fp.Summary,
-					Status:      fp.Status,
-					Message:     fp.Message,
-				}
-				proposals[j].Items = convertItemsToModel(fp.Items)
+				proposals[j] = fixSnapshotToModel(fp)
 			}
 			out[i].FixProposals = proposals
 		}

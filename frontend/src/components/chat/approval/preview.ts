@@ -14,4 +14,5 @@ export const ITEM_STATUS_TONE: Record<string, string> = {
   'applied-unresolved': 'text-semantic-warning',
   error: 'text-semantic-error',
   'already-resolved': 'text-text-tertiary',
+  skipped: 'text-text-tertiary',
 }

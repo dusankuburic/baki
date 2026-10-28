@@ -151,6 +151,30 @@ func TestFinishRoutes_SelfTestRefusesAnUnreachableRoute(t *testing.T) {
 	}
 }
 
+// finishRoutes refuses a billed route (route.Billed) on a bucket that is not a cost bucket: billed spend charged to
+// the general bucket shares it with every free request (R-security-c22).
+func TestFinishRoutes_SelfTestRefusesABilledRouteOffTheCostBuckets(t *testing.T) {
+	mux := chi.NewRouter()
+	rt := &Router{mux: mux}
+	rb := route.NewBuilder(mux)
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+	rb.Post("/api/general", ok, route.Billed(), route.RateLimit(route.RateGeneral))
+	rb.Post("/api/analysis", ok, route.Billed(), route.RateLimit(route.RateAnalysis))
+	rb.Post("/api/chat", ok, route.Billed())
+	rb.Post("/api/embed", ok, route.Billed(), route.RateLimit(route.RateEmbed))
+	tbl, err := rb.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.routes = tbl
+	err = rt.finishRoutes(rb)
+	if err == nil || !strings.Contains(err.Error(), `POST /api/general: billed on the "general" bucket`) ||
+		!strings.Contains(err.Error(), `POST /api/analysis: billed on the "analysis" bucket`) ||
+		strings.Contains(err.Error(), "/api/chat") || strings.Contains(err.Error(), "/api/embed") {
+		t.Fatalf("finishRoutes = %v, want errors naming the general and analysis billed routes only", err)
+	}
+}
+
 // The endpoint guard: when chi dispatches to a route other than the one whose policy the middleware applied, the
 // mismatch is counted and logged; declarative mode refuses the request before the handler, the other modes let it
 // through (the legacy tables decided).

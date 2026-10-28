@@ -1,0 +1,7 @@
+# openai/error.sse through parseOpenAISSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="gpt-4.1-2025-04-14"
+02 text="Looking at the" served="gpt-4.1-2025-04-14"
+03 error=provider_down msg="The server had an error while processing your request. Sorry about that!" served="gpt-4.1-2025-04-14"
+return nil
+summary chunks=3 keepalives=1 text="Looking at the"

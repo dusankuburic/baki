@@ -14,13 +14,15 @@ import {
   ListFilter,
   ExternalLink as ExternalLinkIcon,
   Scissors,
+  BookX,
 } from 'lucide-react'
 import {useCallback, useId, memo, useState} from 'react'
 import ReactMarkdown, {defaultUrlTransform} from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type {ChatMessage as ChatMessageType} from '@/types'
+import type {KnowledgeStatus} from '@/lib/chatEvent'
 import {useCopy} from '@/hooks/useCopy'
-import {providerErrorInfo} from '@/lib/chatErrors'
+import {chatErrorGuidance, providerErrorInfo} from '@/lib/chatErrors'
 import {formatTimeOfDay} from '@/lib/format'
 import {isRegistryModelId, storableModelLabel} from '@/lib/modelIds'
 import {useChatStore} from '@/stores/chatStore'
@@ -30,6 +32,7 @@ import {useAnalysisStore} from '@/stores/analysisStore'
 import CodeBlock from './CodeBlock'
 import ThinkingIndicator from './ThinkingIndicator'
 import {ToolTrail, FixOutcomeStrip, ApprovalOutcomeStrip} from './ToolTrail'
+import {settledCard} from './settledCard'
 
 interface Props {
   message: ChatMessageType
@@ -146,6 +149,13 @@ interface MarkdownCodeProps {
   className?: string
   children?: React.ReactNode
 }
+
+// The knowledge notice's copy per status (R-knowledge-1).
+const KNOWLEDGE_NOTICE = {
+  identity_mismatch: 'message.knowledge.identityMismatch',
+  no_embedder: 'message.knowledge.noEmbedder',
+  deadline: 'message.knowledge.deadline',
+} as const satisfies Record<KnowledgeStatus, string>
 
 const MENTION_PATTERN = String.raw`@[a-zA-Z0-9_./\\-]+`
 
@@ -403,6 +413,8 @@ function MessageBubble({
   const isError = message.finishReason === 'error'
   const isInterrupted = message.finishReason === 'interrupted'
   const providerError = isError ? providerErrorInfo(message.errorCode) : null
+  const guidance = isError ? chatErrorGuidance(message.errorCode) : null
+  const offersRetry = isError && !!onRetry && !guidance?.hideRetry
   const openSettings = useUIStore(s => s.openSettings)
   const {copied, copy} = useCopy()
   const resendReasonId = useId()
@@ -420,7 +432,7 @@ function MessageBubble({
   const resendProps = resendDisabledReason
     ? {'aria-disabled': true, 'aria-describedby': resendReasonId, title: resendDisabledReason}
     : {}
-  const showsResend = (isError && !!onRetry) || (isLastAssistant && !isError && !!onRegenerate)
+  const showsResend = offersRetry || (isLastAssistant && !isError && !!onRegenerate)
 
   if (isThinking) return <ThinkingIndicator />
 
@@ -492,6 +504,21 @@ function MessageBubble({
           </button>
         )}
 
+      {guidance?.action === 'compact' && onCompact && (
+        <button
+          type="button"
+          className="flex items-center gap-1 px-1 text-2xs text-brand-400 hover:text-brand-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={onCompact}
+          disabled={!!resendDisabledReason}
+          title={resendDisabledReason}
+        >
+          <Scissors size={11} aria-hidden="true" />
+          <span>{t('message.compact')}</span>
+        </button>
+      )}
+
+      {guidance?.hintKey && <p className="px-1 text-2xs text-text-tertiary">{t(guidance.hintKey)}</p>}
+
       {isError && message.errorShared && (
         <button
           type="button"
@@ -505,18 +532,12 @@ function MessageBubble({
 
       {!isUser &&
         (message.fixProposals ?? (message.fixProposal ? [message.fixProposal] : [])).map(snap => (
-          <FixOutcomeStrip
-            key={snap.proposalId}
-            snapshot={isInterrupted && snap.status === 'pending' ? {...snap, status: 'cancelled'} : snap}
-          />
+          <FixOutcomeStrip key={snap.proposalId} snapshot={settledCard(snap, isInterrupted)} />
         ))}
 
       {!isUser &&
         (message.approvals ?? []).map(snap => (
-          <ApprovalOutcomeStrip
-            key={snap.proposalId}
-            snapshot={isInterrupted && snap.status === 'pending' ? {...snap, status: 'cancelled'} : snap}
-          />
+          <ApprovalOutcomeStrip key={snap.proposalId} snapshot={settledCard(snap, isInterrupted)} />
         ))}
 
       {!isUser && !isStreaming && message.toolCalls && message.toolCalls.length > 0 && (
@@ -539,6 +560,13 @@ function MessageBubble({
         </div>
       )}
 
+      {!isUser && message.knowledge && (
+        <div className="flex items-start gap-1.5 px-1 text-2xs text-text-tertiary" data-testid="knowledge-notice">
+          <BookX size={10} aria-hidden="true" className="mt-0.5 shrink-0" />
+          <span>{t(KNOWLEDGE_NOTICE[message.knowledge])}</span>
+        </div>
+      )}
+
       {isInterrupted && (
         <div className="flex items-center gap-1 px-1 text-2xs text-text-tertiary">
           <CircleSlash size={10} />
@@ -557,7 +585,7 @@ function MessageBubble({
           >
             {copied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
           </button>
-          {isError && onRetry && (
+          {offersRetry && (
             <button
               className={clsx(
                 'flex items-center gap-1 p-1 rounded text-text-tertiary transition-colors text-2xs',
@@ -611,6 +639,7 @@ export default memo(MessageBubble, (prevProps, nextProps) => {
     prevProps.message.fixProposals === nextProps.message.fixProposals &&
     prevProps.message.approvals === nextProps.message.approvals &&
     prevProps.message.truncated === nextProps.message.truncated &&
+    prevProps.message.knowledge === nextProps.message.knowledge &&
     prevProps.onCompact === nextProps.onCompact &&
     prevProps.isStreaming === nextProps.isStreaming &&
     prevProps.isThinking === nextProps.isThinking &&

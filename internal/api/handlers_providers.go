@@ -165,6 +165,7 @@ func (h *ProviderHandler) handlePollGitHubAuth(w http.ResponseWriter, r *http.Re
 // @Tags         providers
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
+// @Failure      503 {object} render.ErrorResponse "SECRET_STORAGE_UNAVAILABLE: the secret store cannot be reached (an OS keychain that is down); the token was not removed"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/providers/github/revoke [post]
 func (h *ProviderHandler) handleRevokeGitHubAuth(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +181,7 @@ func (h *ProviderHandler) handleRevokeGitHubAuth(w http.ResponseWriter, r *http.
 // @Tags         providers
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "OK"
+// @Failure      422 {object} render.ErrorResponse "KEY_UNREADABLE: a token is stored but the server cannot decrypt it (its encryption key changed); sign in again"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/providers/github/user [get]
 func (h *ProviderHandler) handleGetGitHubUser(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +240,7 @@ func (h *ProviderHandler) handlePollCopilotAuth(w http.ResponseWriter, r *http.R
 // @Tags         providers
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
+// @Failure      503 {object} render.ErrorResponse "SECRET_STORAGE_UNAVAILABLE: the secret store cannot be reached (an OS keychain that is down); the token was not removed"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/providers/copilot/revoke [post]
 func (h *ProviderHandler) handleRevokeCopilotAuth(w http.ResponseWriter, r *http.Request) {
@@ -253,6 +256,7 @@ func (h *ProviderHandler) handleRevokeCopilotAuth(w http.ResponseWriter, r *http
 // @Tags         providers
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "OK"
+// @Failure      422 {object} render.ErrorResponse "KEY_UNREADABLE: a token is stored but the server cannot decrypt it (its encryption key changed); sign in again"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/providers/copilot/user [get]
 func (h *ProviderHandler) handleGetCopilotUser(w http.ResponseWriter, r *http.Request) {
@@ -364,6 +368,7 @@ type localConfigSaveRequest struct {
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
 // @Failure      400 {object} map[string]string "LOCAL_MODELS_UNAVAILABLE, INVALID_BASE_URL or INVALID_CONTEXT_WINDOW"
+// @Failure      503 {object} render.ErrorResponse "SECRET_STORAGE_UNAVAILABLE: the secret store cannot be reached (an OS keychain that is down); nothing changed"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/providers/local/config [post]
 func (h *ProviderHandler) handleSaveLocalConfig(w http.ResponseWriter, r *http.Request) {
@@ -459,7 +464,7 @@ func (h *ProviderHandler) Mount(rb *route.Builder) {
 		// The catalogue reads the keystore only (no live listing): the same policy as /list.
 		rb.Get("/catalog", Query(h.providerCatalog), route.NoTx())
 		// Up to three billed completions per call: the chat bucket.
-		rb.Post("/test", h.handleTestProviderConnection, route.RateLimit(route.RateChat), route.NoTx())
+		rb.Post("/test", h.handleTestProviderConnection, route.RateLimit(route.RateChat), route.Billed(), route.NoTx())
 		rb.Route("/github", func(rb *route.Builder) {
 			rb.Post("/start", h.handleStartGitHubAuth, route.NoTx())
 			rb.Post("/poll", h.handlePollGitHubAuth, route.NoTx())

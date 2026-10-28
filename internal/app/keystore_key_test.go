@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"pad-analyzer/internal/config"
@@ -70,6 +71,37 @@ func TestKeystorePreviousKeys(t *testing.T) {
 	}
 }
 
+// builtKeyStores is a database whose encrypted keystore builds (a zero store: nothing here reads it).
+type builtKeyStores struct{ ks *storagedb.EncryptedKeyStore }
+
+func (b builtKeyStores) NewEncryptedKeyStore([]byte, ...[]byte) (*storagedb.EncryptedKeyStore, error) {
+	return b.ks, nil
+}
+
+// TestProvideKeyStore_RequestScopedReads (R-provider-19): the keystore's request-scoped reads — a scope's keys in
+// one read, a key under the request's context — are fx values of their own, so no service type-asserts the store
+// for them. The database keystore is both its own and the organisation's; the OS keyring reads personal keys only.
+func TestProvideKeyStore_RequestScopedReads(t *testing.T) {
+	cfg := config.Default()
+	res, err := provideKeyStore(cfg, nil)
+	if err != nil || res.KeyReads == nil || res.OrgKeyReads != nil {
+		t.Errorf("keyring: key reads %v, org key reads %v, err %v; want the keyring's reads and no org reads", res.KeyReads, res.OrgKeyReads, err)
+	}
+
+	ks := new(storagedb.EncryptedKeyStore)
+	cfg.Auth.EncryptionKey = secret.New("enc")
+	res, err = provideKeyStore(cfg, builtKeyStores{ks: ks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if any(res.KeyReads) != any(ks) {
+		t.Errorf("database: key reads %T, want the database keystore", res.KeyReads)
+	}
+	if any(res.OrgKeyReads) != any(ks) {
+		t.Errorf("database: org key reads %T, want the database keystore", res.OrgKeyReads)
+	}
+}
+
 // recordingKeyStores records the keys the keystore is built with.
 type recordingKeyStores struct {
 	current  string
@@ -95,4 +127,37 @@ func TestProvideKeyStore_OpensWithThePreviousKeys(t *testing.T) {
 	if rec.current != "enc" || len(rec.previous) != 2 || rec.previous[0] != "old-1" || rec.previous[1] != "old-2" {
 		t.Errorf("keystore built with current %q previous %q, want enc and old-1, old-2", rec.current, rec.previous)
 	}
+}
+
+// TestProvideKeyStore_CloudFallbackLogsTheDatedDeprecation (R-security-7): a cloud boot whose keystore falls back to
+// PAD_AUTH_SECRET logs the dated deprecation with what to set, never the secret; one with PAD_ENCRYPTION_KEY does not.
+func TestProvideKeyStore_CloudFallbackLogsTheDatedDeprecation(t *testing.T) {
+	logs := captureLogs(t)
+	cfg := config.Default()
+	cfg.Mode = config.ModeCloud
+	cfg.Auth.Enabled = true
+	cfg.Auth.Secret = secret.New("the-operators-jwt-secret-0123456789abcdef")
+	_, _ = provideKeyStore(cfg, &recordingKeyStores{})
+	out := logText(logs)
+	if !strings.Contains(out, "DEPRECATED: PAD_ENCRYPTION_KEY is unset") || !strings.Contains(out, config.EncryptionKeyFallbackRemoval) ||
+		!strings.Contains(out, "PAD_ENCRYPTION_KEY_PREVIOUS=") {
+		t.Errorf("the cloud fallback boot logged no dated deprecation with what to set: %s", out)
+	}
+	if strings.Contains(out, cfg.Auth.Secret.Reveal()) {
+		t.Error("the boot log carries the auth secret")
+	}
+
+	logs = captureLogs(t)
+	cfg.Auth.EncryptionKey = secret.New("a-dedicated-encryption-key-0123456789abcdef")
+	_, _ = provideKeyStore(cfg, &recordingKeyStores{})
+	if out := logText(logs); strings.Contains(out, "DEPRECATED") {
+		t.Errorf("a boot with PAD_ENCRYPTION_KEY logged the deprecation: %s", out)
+	}
+}
+
+// logText is everything the capture holds.
+func logText(l *logCapture) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }

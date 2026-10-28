@@ -1,0 +1,7 @@
+: hand-built from the OpenAI chat-completions streaming docs, cut mid-answer (no finish_reason, no [DONE]), NOT a live capture; see ../README.md
+data: {"id":"chatcmpl-WIRE0000000000000000000000006","object":"chat.completion.chunk","created":1761523205,"model":"gpt-4.1-2025-04-14","system_fingerprint":"fp_wire00001","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000006","object":"chat.completion.chunk","created":1761523205,"model":"gpt-4.1-2025-04-14","system_fingerprint":"fp_wire00001","choices":[{"index":0,"delta":{"content":"The subflow "},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000006","object":"chat.completion.chunk","created":1761523205,"model":"gpt-4.1-2025-04-14","system_fingerprint":"fp_wire00001","choices":[{"index":0,"delta":{"content":"Process_Invoices calls"},"logprobs":null,"finish_reason":null}],"usage":null}
+

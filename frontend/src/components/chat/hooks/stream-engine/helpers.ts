@@ -51,12 +51,13 @@ const CARD_STATUSES: readonly string[] = [
   'applying',
   'applied',
   'applied-unresolved',
+  'already-resolved',
   'declined',
   'timeout',
   'error',
   'cancelled',
 ]
-const ITEM_STATUSES: readonly string[] = ['applied', 'applied-unresolved', 'error', 'already-resolved']
+const ITEM_STATUSES: readonly string[] = ['applied', 'applied-unresolved', 'error', 'already-resolved', 'skipped']
 export const asCardStatus = (s: string): ApprovalCard['status'] =>
   CARD_STATUSES.includes(s) ? (s as ApprovalCard['status']) : 'error'
 export const asItemStatus = (s: string): ApprovalItem['status'] =>

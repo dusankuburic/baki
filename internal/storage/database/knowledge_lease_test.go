@@ -317,9 +317,8 @@ func TestKnowledgeLease_ReleasedOnErrorAndCancel(t *testing.T) {
 		t.Fatal("the org was free while an upload was embedding")
 	}
 	cancel()
-	if err := awaitDone(t, "the cancelled upload", done); err == nil {
-		t.Fatal("cancelled upload succeeded")
-	}
+	// The upload ends with its request: what it stored stays pending, resumable (R-knowledge-2) — the lease goes.
+	_ = awaitDone(t, "the cancelled upload", done)
 	free("a cancelled request")
 }
 

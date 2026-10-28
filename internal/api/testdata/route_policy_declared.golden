@@ -402,30 +402,30 @@ POST /api/v1/chat/begin | kind=endpoint pattern=/api/chat/begin auth=jwt scopes=
 POST /api/./chat/begin | kind=endpoint pattern=/api/chat/begin auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/begin
 POST /api/chat/begin/ | kind=endpoint pattern=/api/chat/begin auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/begin
 OPTIONS /api/chat/begin | kind=method-not-allowed pattern=/api/chat/begin auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/begin allow=POST
-POST /api/chat/cancel | kind=endpoint pattern=/api/chat/cancel auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/cancel
-POST /api/v1/chat/cancel | kind=endpoint pattern=/api/chat/cancel auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/cancel
-POST /api/./chat/cancel | kind=endpoint pattern=/api/chat/cancel auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/cancel
-POST /api/chat/cancel/ | kind=endpoint pattern=/api/chat/cancel auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/cancel
+POST /api/chat/cancel | kind=endpoint pattern=/api/chat/cancel auth=jwt scopes=chat ratelimit=control tx=none deadline=default label=/api/chat/cancel
+POST /api/v1/chat/cancel | kind=endpoint pattern=/api/chat/cancel auth=jwt scopes=chat ratelimit=control tx=none deadline=default label=/api/chat/cancel
+POST /api/./chat/cancel | kind=endpoint pattern=/api/chat/cancel auth=jwt scopes=chat ratelimit=control tx=none deadline=default label=/api/chat/cancel
+POST /api/chat/cancel/ | kind=endpoint pattern=/api/chat/cancel auth=jwt scopes=chat ratelimit=control tx=none deadline=default label=/api/chat/cancel
 OPTIONS /api/chat/cancel | kind=method-not-allowed pattern=/api/chat/cancel auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/cancel allow=POST
 POST /api/chat/clear | kind=endpoint pattern=/api/chat/clear auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/clear
 POST /api/v1/chat/clear | kind=endpoint pattern=/api/chat/clear auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/clear
 POST /api/./chat/clear | kind=endpoint pattern=/api/chat/clear auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/clear
 POST /api/chat/clear/ | kind=endpoint pattern=/api/chat/clear auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/clear
 OPTIONS /api/chat/clear | kind=method-not-allowed pattern=/api/chat/clear auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/clear allow=POST
-POST /api/chat/fix-decision | kind=endpoint pattern=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=general tx=none deadline=default label=/api/chat/fix-decision
-POST /api/v1/chat/fix-decision | kind=endpoint pattern=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=general tx=none deadline=default label=/api/chat/fix-decision
-POST /api/./chat/fix-decision | kind=endpoint pattern=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=general tx=none deadline=default label=/api/chat/fix-decision
-POST /api/chat/fix-decision/ | kind=endpoint pattern=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=general tx=none deadline=default label=/api/chat/fix-decision
+POST /api/chat/fix-decision | kind=endpoint pattern=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=control tx=none deadline=default label=/api/chat/fix-decision
+POST /api/v1/chat/fix-decision | kind=endpoint pattern=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=control tx=none deadline=default label=/api/chat/fix-decision
+POST /api/./chat/fix-decision | kind=endpoint pattern=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=control tx=none deadline=default label=/api/chat/fix-decision
+POST /api/chat/fix-decision/ | kind=endpoint pattern=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=control tx=none deadline=default label=/api/chat/fix-decision
 OPTIONS /api/chat/fix-decision | kind=method-not-allowed pattern=/api/chat/fix-decision auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/fix-decision allow=POST
 POST /api/chat/get | kind=endpoint pattern=/api/chat/get auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/get
 POST /api/v1/chat/get | kind=endpoint pattern=/api/chat/get auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/get
 POST /api/./chat/get | kind=endpoint pattern=/api/chat/get auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/get
 POST /api/chat/get/ | kind=endpoint pattern=/api/chat/get auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/get
 OPTIONS /api/chat/get | kind=method-not-allowed pattern=/api/chat/get auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/get allow=POST
-POST /api/chat/preview-context | kind=endpoint pattern=/api/chat/preview-context auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/preview-context
-POST /api/v1/chat/preview-context | kind=endpoint pattern=/api/chat/preview-context auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/preview-context
-POST /api/./chat/preview-context | kind=endpoint pattern=/api/chat/preview-context auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/preview-context
-POST /api/chat/preview-context/ | kind=endpoint pattern=/api/chat/preview-context auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/preview-context
+POST /api/chat/preview-context | kind=endpoint pattern=/api/chat/preview-context auth=jwt scopes=chat ratelimit=chat tx=none deadline=default label=/api/chat/preview-context billed=yes
+POST /api/v1/chat/preview-context | kind=endpoint pattern=/api/chat/preview-context auth=jwt scopes=chat ratelimit=chat tx=none deadline=default label=/api/chat/preview-context billed=yes
+POST /api/./chat/preview-context | kind=endpoint pattern=/api/chat/preview-context auth=jwt scopes=chat ratelimit=chat tx=none deadline=default label=/api/chat/preview-context billed=yes
+POST /api/chat/preview-context/ | kind=endpoint pattern=/api/chat/preview-context auth=jwt scopes=chat ratelimit=chat tx=none deadline=default label=/api/chat/preview-context billed=yes
 OPTIONS /api/chat/preview-context | kind=method-not-allowed pattern=/api/chat/preview-context auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/preview-context allow=POST
 POST /api/chat/resume | kind=endpoint pattern=/api/chat/resume auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/resume
 POST /api/v1/chat/resume | kind=endpoint pattern=/api/chat/resume auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/resume
@@ -437,16 +437,26 @@ POST /api/v1/chat/save | kind=endpoint pattern=/api/chat/save auth=jwt scopes=ch
 POST /api/./chat/save | kind=endpoint pattern=/api/chat/save auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/save
 POST /api/chat/save/ | kind=endpoint pattern=/api/chat/save auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/save
 OPTIONS /api/chat/save | kind=method-not-allowed pattern=/api/chat/save auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/save allow=POST
-POST /api/chat/stream | kind=endpoint pattern=/api/chat/stream auth=jwt scopes=chat ratelimit=chat tx=none deadline=stream label=/api/chat/stream
-POST /api/v1/chat/stream | kind=endpoint pattern=/api/chat/stream auth=jwt scopes=chat ratelimit=chat tx=none deadline=stream label=/api/chat/stream
-POST /api/./chat/stream | kind=endpoint pattern=/api/chat/stream auth=jwt scopes=chat ratelimit=chat tx=none deadline=stream label=/api/chat/stream
-POST /api/chat/stream/ | kind=endpoint pattern=/api/chat/stream auth=jwt scopes=chat ratelimit=chat tx=none deadline=stream label=/api/chat/stream
+POST /api/chat/stream | kind=endpoint pattern=/api/chat/stream auth=jwt scopes=chat ratelimit=chat tx=none deadline=stream label=/api/chat/stream billed=yes
+POST /api/v1/chat/stream | kind=endpoint pattern=/api/chat/stream auth=jwt scopes=chat ratelimit=chat tx=none deadline=stream label=/api/chat/stream billed=yes
+POST /api/./chat/stream | kind=endpoint pattern=/api/chat/stream auth=jwt scopes=chat ratelimit=chat tx=none deadline=stream label=/api/chat/stream billed=yes
+POST /api/chat/stream/ | kind=endpoint pattern=/api/chat/stream auth=jwt scopes=chat ratelimit=chat tx=none deadline=stream label=/api/chat/stream billed=yes
 OPTIONS /api/chat/stream | kind=method-not-allowed pattern=/api/chat/stream auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/stream allow=POST
 POST /api/chat/suggested-prompts | kind=endpoint pattern=/api/chat/suggested-prompts auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/suggested-prompts
 POST /api/v1/chat/suggested-prompts | kind=endpoint pattern=/api/chat/suggested-prompts auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/suggested-prompts
 POST /api/./chat/suggested-prompts | kind=endpoint pattern=/api/chat/suggested-prompts auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/suggested-prompts
 POST /api/chat/suggested-prompts/ | kind=endpoint pattern=/api/chat/suggested-prompts auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/suggested-prompts
 OPTIONS /api/chat/suggested-prompts | kind=method-not-allowed pattern=/api/chat/suggested-prompts auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/suggested-prompts allow=POST
+POST /api/chat/threads | kind=endpoint pattern=/api/chat/threads auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/threads
+POST /api/v1/chat/threads | kind=endpoint pattern=/api/chat/threads auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/threads
+POST /api/./chat/threads | kind=endpoint pattern=/api/chat/threads auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/threads
+POST /api/chat/threads/ | kind=endpoint pattern=/api/chat/threads auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/threads
+OPTIONS /api/chat/threads | kind=method-not-allowed pattern=/api/chat/threads auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/threads allow=POST
+POST /api/chat/title | kind=endpoint pattern=/api/chat/title auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/title
+POST /api/v1/chat/title | kind=endpoint pattern=/api/chat/title auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/title
+POST /api/./chat/title | kind=endpoint pattern=/api/chat/title auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/title
+POST /api/chat/title/ | kind=endpoint pattern=/api/chat/title auth=jwt scopes=chat ratelimit=general tx=none deadline=default label=/api/chat/title
+OPTIONS /api/chat/title | kind=method-not-allowed pattern=/api/chat/title auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/chat/title allow=POST
 GET /api/dashboard/analytics | kind=endpoint pattern=/api/dashboard/analytics auth=jwt scopes=read ratelimit=general tx=none deadline=default label=/api/dashboard/analytics
 GET /api/v1/dashboard/analytics | kind=endpoint pattern=/api/dashboard/analytics auth=jwt scopes=read ratelimit=general tx=none deadline=default label=/api/dashboard/analytics
 GET /api/./dashboard/analytics | kind=endpoint pattern=/api/dashboard/analytics auth=jwt scopes=read ratelimit=general tx=none deadline=default label=/api/dashboard/analytics
@@ -882,17 +892,17 @@ GET /api/./orgs/id1/knowledge/ | kind=endpoint pattern=/api/orgs/{id}/knowledge 
 GET /api/orgs/a%2Fb/knowledge/ | kind=endpoint pattern=/api/orgs/{id}/knowledge auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/knowledge
 HEAD /api/orgs/id1/knowledge/ | kind=method-not-allowed pattern=/api/orgs/{id}/knowledge auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/knowledge allow=GET
 OPTIONS /api/orgs/id1/knowledge/ | kind=method-not-allowed pattern=/api/orgs/{id}/knowledge auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/knowledge allow=GET
-POST /api/orgs/id1/knowledge/reindex | kind=endpoint pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=general tx=none deadline=bulk label=/api/orgs/{id}/knowledge/reindex
-POST /api/v1/orgs/id1/knowledge/reindex | kind=endpoint pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=general tx=none deadline=bulk label=/api/orgs/{id}/knowledge/reindex
-POST /api/./orgs/id1/knowledge/reindex | kind=endpoint pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=general tx=none deadline=bulk label=/api/orgs/{id}/knowledge/reindex
-POST /api/orgs/id1/knowledge/reindex/ | kind=endpoint pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=general tx=none deadline=bulk label=/api/orgs/{id}/knowledge/reindex
-POST /api/orgs/a%2Fb/knowledge/reindex | kind=endpoint pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=general tx=none deadline=bulk label=/api/orgs/{id}/knowledge/reindex
+POST /api/orgs/id1/knowledge/reindex | kind=endpoint pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=embed tx=none deadline=bulk label=/api/orgs/{id}/knowledge/reindex billed=yes
+POST /api/v1/orgs/id1/knowledge/reindex | kind=endpoint pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=embed tx=none deadline=bulk label=/api/orgs/{id}/knowledge/reindex billed=yes
+POST /api/./orgs/id1/knowledge/reindex | kind=endpoint pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=embed tx=none deadline=bulk label=/api/orgs/{id}/knowledge/reindex billed=yes
+POST /api/orgs/id1/knowledge/reindex/ | kind=endpoint pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=embed tx=none deadline=bulk label=/api/orgs/{id}/knowledge/reindex billed=yes
+POST /api/orgs/a%2Fb/knowledge/reindex | kind=endpoint pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=embed tx=none deadline=bulk label=/api/orgs/{id}/knowledge/reindex billed=yes
 OPTIONS /api/orgs/id1/knowledge/reindex | kind=method-not-allowed pattern=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/knowledge/reindex allow=POST,DELETE
-POST /api/orgs/id1/knowledge/upload | kind=endpoint pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=general tx=none deadline=bulk label=/api/orgs/{id}/knowledge/upload
-POST /api/v1/orgs/id1/knowledge/upload | kind=endpoint pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=general tx=none deadline=bulk label=/api/orgs/{id}/knowledge/upload
-POST /api/./orgs/id1/knowledge/upload | kind=endpoint pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=general tx=none deadline=bulk label=/api/orgs/{id}/knowledge/upload
-POST /api/orgs/id1/knowledge/upload/ | kind=endpoint pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=general tx=none deadline=bulk label=/api/orgs/{id}/knowledge/upload
-POST /api/orgs/a%2Fb/knowledge/upload | kind=endpoint pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=general tx=none deadline=bulk label=/api/orgs/{id}/knowledge/upload
+POST /api/orgs/id1/knowledge/upload | kind=endpoint pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=embed tx=none deadline=bulk label=/api/orgs/{id}/knowledge/upload billed=yes
+POST /api/v1/orgs/id1/knowledge/upload | kind=endpoint pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=embed tx=none deadline=bulk label=/api/orgs/{id}/knowledge/upload billed=yes
+POST /api/./orgs/id1/knowledge/upload | kind=endpoint pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=embed tx=none deadline=bulk label=/api/orgs/{id}/knowledge/upload billed=yes
+POST /api/orgs/id1/knowledge/upload/ | kind=endpoint pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=embed tx=none deadline=bulk label=/api/orgs/{id}/knowledge/upload billed=yes
+POST /api/orgs/a%2Fb/knowledge/upload | kind=endpoint pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=embed tx=none deadline=bulk label=/api/orgs/{id}/knowledge/upload billed=yes
 OPTIONS /api/orgs/id1/knowledge/upload | kind=method-not-allowed pattern=/api/orgs/{id}/knowledge/upload auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/knowledge/upload allow=POST,DELETE
 DELETE /api/orgs/id1/knowledge/docId1 | kind=endpoint pattern=/api/orgs/{id}/knowledge/{docId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/knowledge/{docId}
 DELETE /api/v1/orgs/id1/knowledge/docId1 | kind=endpoint pattern=/api/orgs/{id}/knowledge/{docId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/knowledge/{docId}
@@ -998,11 +1008,11 @@ PUT /api/v1/orgs/id1/providers/azure-foundry/models/modelId1 | kind=endpoint pat
 PUT /api/./orgs/id1/providers/azure-foundry/models/modelId1 | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/providers/azure-foundry/models/{modelId}
 PUT /api/orgs/id1/providers/azure-foundry/models/modelId1/ | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/providers/azure-foundry/models/{modelId}
 PUT /api/orgs/a%2Fb/providers/azure-foundry/models/modelId1 | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/providers/azure-foundry/models/{modelId}
-POST /api/orgs/id1/providers/azure-foundry/test | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test
-POST /api/v1/orgs/id1/providers/azure-foundry/test | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test
-POST /api/./orgs/id1/providers/azure-foundry/test | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test
-POST /api/orgs/id1/providers/azure-foundry/test/ | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test
-POST /api/orgs/a%2Fb/providers/azure-foundry/test | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test
+POST /api/orgs/id1/providers/azure-foundry/test | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test billed=yes
+POST /api/v1/orgs/id1/providers/azure-foundry/test | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test billed=yes
+POST /api/./orgs/id1/providers/azure-foundry/test | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test billed=yes
+POST /api/orgs/id1/providers/azure-foundry/test/ | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test billed=yes
+POST /api/orgs/a%2Fb/providers/azure-foundry/test | kind=endpoint pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test billed=yes
 OPTIONS /api/orgs/id1/providers/azure-foundry/test | kind=method-not-allowed pattern=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/orgs/{id}/providers/azure-foundry/test allow=POST
 GET /api/orgs/id1/rules/ | kind=endpoint pattern=/api/orgs/{id}/rules auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/rules
 GET /api/v1/orgs/id1/rules/ | kind=endpoint pattern=/api/orgs/{id}/rules auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/orgs/{id}/rules
@@ -1097,10 +1107,10 @@ PUT /api/v1/providers/azure-foundry/models/modelId1 | kind=endpoint pattern=/api
 PUT /api/./providers/azure-foundry/models/modelId1 | kind=endpoint pattern=/api/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/providers/azure-foundry/models/{modelId}
 PUT /api/providers/azure-foundry/models/modelId1/ | kind=endpoint pattern=/api/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/providers/azure-foundry/models/{modelId}
 PUT /api/providers/azure-foundry/models/a%2Fb | kind=endpoint pattern=/api/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/providers/azure-foundry/models/{modelId}
-POST /api/providers/azure-foundry/test | kind=endpoint pattern=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/azure-foundry/test
-POST /api/v1/providers/azure-foundry/test | kind=endpoint pattern=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/azure-foundry/test
-POST /api/./providers/azure-foundry/test | kind=endpoint pattern=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/azure-foundry/test
-POST /api/providers/azure-foundry/test/ | kind=endpoint pattern=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/azure-foundry/test
+POST /api/providers/azure-foundry/test | kind=endpoint pattern=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/azure-foundry/test billed=yes
+POST /api/v1/providers/azure-foundry/test | kind=endpoint pattern=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/azure-foundry/test billed=yes
+POST /api/./providers/azure-foundry/test | kind=endpoint pattern=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/azure-foundry/test billed=yes
+POST /api/providers/azure-foundry/test/ | kind=endpoint pattern=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/azure-foundry/test billed=yes
 OPTIONS /api/providers/azure-foundry/test | kind=method-not-allowed pattern=/api/providers/azure-foundry/test auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/providers/azure-foundry/test allow=POST
 GET /api/providers/catalog | kind=endpoint pattern=/api/providers/catalog auth=jwt scopes=read ratelimit=general tx=none deadline=default label=/api/providers/catalog
 GET /api/v1/providers/catalog | kind=endpoint pattern=/api/providers/catalog auth=jwt scopes=read ratelimit=general tx=none deadline=default label=/api/providers/catalog
@@ -1166,10 +1176,10 @@ POST /api/providers/local/config | kind=endpoint pattern=/api/providers/local/co
 POST /api/v1/providers/local/config | kind=endpoint pattern=/api/providers/local/config auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/providers/local/config
 POST /api/./providers/local/config | kind=endpoint pattern=/api/providers/local/config auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/providers/local/config
 POST /api/providers/local/config/ | kind=endpoint pattern=/api/providers/local/config auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/providers/local/config
-POST /api/providers/test | kind=endpoint pattern=/api/providers/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/test
-POST /api/v1/providers/test | kind=endpoint pattern=/api/providers/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/test
-POST /api/./providers/test | kind=endpoint pattern=/api/providers/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/test
-POST /api/providers/test/ | kind=endpoint pattern=/api/providers/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/test
+POST /api/providers/test | kind=endpoint pattern=/api/providers/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/test billed=yes
+POST /api/v1/providers/test | kind=endpoint pattern=/api/providers/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/test billed=yes
+POST /api/./providers/test | kind=endpoint pattern=/api/providers/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/test billed=yes
+POST /api/providers/test/ | kind=endpoint pattern=/api/providers/test auth=jwt scopes=write ratelimit=chat tx=none deadline=default label=/api/providers/test billed=yes
 OPTIONS /api/providers/test | kind=method-not-allowed pattern=/api/providers/test auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/providers/test allow=POST
 GET /api/shared | kind=endpoint pattern=/api/shared auth=none scopes=- ratelimit=analysis tx=none deadline=default label=/api/shared
 GET /api/v1/shared | kind=endpoint pattern=/api/shared auth=none scopes=- ratelimit=analysis tx=none deadline=default label=/api/shared
@@ -1216,6 +1226,18 @@ POST /api/v1/system/settings/org/id1 | kind=endpoint pattern=/api/system/setting
 POST /api/./system/settings/org/id1 | kind=endpoint pattern=/api/system/settings/org/{id} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}
 POST /api/system/settings/org/id1/ | kind=endpoint pattern=/api/system/settings/org/{id} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}
 POST /api/system/settings/org/a%2Fb | kind=endpoint pattern=/api/system/settings/org/{id} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}
+GET /api/system/settings/org/id1/sections/section1 | kind=endpoint pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}/sections/{section}
+GET /api/v1/system/settings/org/id1/sections/section1 | kind=endpoint pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}/sections/{section}
+GET /api/./system/settings/org/id1/sections/section1 | kind=endpoint pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}/sections/{section}
+GET /api/system/settings/org/id1/sections/section1/ | kind=endpoint pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}/sections/{section}
+GET /api/system/settings/org/a%2Fb/sections/section1 | kind=endpoint pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}/sections/{section}
+HEAD /api/system/settings/org/id1/sections/section1 | kind=method-not-allowed pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/system/settings/org/{id}/sections/{section} allow=GET,PATCH
+OPTIONS /api/system/settings/org/id1/sections/section1 | kind=method-not-allowed pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=any ratelimit=general tx=none deadline=default label=/api/system/settings/org/{id}/sections/{section} allow=GET,PATCH
+PATCH /api/system/settings/org/id1/sections/section1 | kind=endpoint pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}/sections/{section}
+PATCH /api/v1/system/settings/org/id1/sections/section1 | kind=endpoint pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}/sections/{section}
+PATCH /api/./system/settings/org/id1/sections/section1 | kind=endpoint pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}/sections/{section}
+PATCH /api/system/settings/org/id1/sections/section1/ | kind=endpoint pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}/sections/{section}
+PATCH /api/system/settings/org/a%2Fb/sections/section1 | kind=endpoint pattern=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=write ratelimit=general tx=tx deadline=default label=/api/system/settings/org/{id}/sections/{section}
 GET /api/users/id1/avatar | kind=endpoint pattern=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/users/{id}/avatar
 GET /api/v1/users/id1/avatar | kind=endpoint pattern=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/users/{id}/avatar
 GET /api/./users/id1/avatar | kind=endpoint pattern=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general tx=tx deadline=default label=/api/users/{id}/avatar

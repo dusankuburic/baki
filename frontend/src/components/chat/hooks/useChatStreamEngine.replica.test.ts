@@ -8,6 +8,7 @@ import type {StreamHandler} from '@/hooks/useStreamingMessage'
 // REPLICA_UNREACHABLE): the card stays answerable and the user is told, with a retry.
 
 let capturedHandler: StreamHandler | null = null
+const hookCancel = vi.hoisted(() => vi.fn())
 
 vi.mock('@/hooks/useStreamingMessage', () => ({
   useStreamingMessage: (handler: StreamHandler) => {
@@ -15,7 +16,7 @@ vi.mock('@/hooks/useStreamingMessage', () => ({
     return {
       registerStream: async () => true,
       confirmStream: vi.fn(),
-      cancel: vi.fn(),
+      cancel: hookCancel,
       teardownStream: vi.fn(),
       resumeInto: vi.fn(),
     }
@@ -142,27 +143,22 @@ describe('a decision the stream-running server could not be reached for', () => 
 })
 
 describe('a stop the stream-running server could not be reached for', () => {
-  it('tells the user the response is still running and offers the stop again', async () => {
+  // The stop is offered again through the hook's own stop, which keeps the stopping subscription and ends it when the
+  // stop gets through, and offers itself again (onStopUnreachable) when it does not.
+  it('tells the user the response is still running and offers the stop again through the same stop', async () => {
     setup()
     act(() => {
-      capturedHandler!.onStopUnreachable!('streamA')
+      capturedHandler!.onStopUnreachable!('streamA', unreachable())
     })
     expect(toast.warning).toHaveBeenCalledTimes(1)
-    const opts = toast.warning.mock.calls[0]![1] as {action: {onClick: () => void}}
+    const opts = toast.warning.mock.calls[0]![1] as {description: string; action: {onClick: () => void}}
+    expect(opts.description).toMatch(/runs on another server/)
 
-    vi.mocked(chatApi.cancelStream).mockRejectedValueOnce(unreachable())
+    hookCancel.mockClear()
     await act(async () => {
       opts.action.onClick()
     })
-    expect(chatApi.cancelStream).toHaveBeenCalledWith('streamA')
-    // Still out of reach: offered again.
-    expect(toast.warning).toHaveBeenCalledTimes(2)
-
-    vi.mocked(chatApi.cancelStream).mockResolvedValueOnce(undefined)
-    const again = toast.warning.mock.calls[1]![1] as {action: {onClick: () => void}}
-    await act(async () => {
-      again.action.onClick()
-    })
-    expect(toast.warning).toHaveBeenCalledTimes(2)
+    expect(hookCancel).toHaveBeenCalledWith('streamA')
+    expect(chatApi.cancelStream).not.toHaveBeenCalled()
   })
 })

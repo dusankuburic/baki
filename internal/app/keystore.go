@@ -43,11 +43,15 @@ func keystorePreviousKeys(a config.AuthConfig) [][]byte {
 
 // KeyStoreResult is the provider-key keystore and what only the encrypted database keystore offers beyond it, each an
 // fx value that is nil with the OS keyring: the organisations' shared credentials, the listing of a user's key
-// families and the re-seal pass of a key rotation.
+// families and the re-seal pass of a key rotation. KeyReads and OrgKeyReads are the stores' request-scoped reads
+// (R-provider-19: a scope's keys in one read, under the request's context): the keyring's own, the database
+// keystore's both, OrgKeyReads nil with the keyring.
 type KeyStoreResult struct {
 	fx.Out
 	Keys        service.KeyStore
+	KeyReads    service.KeyReads
 	OrgKeys     service.OrgKeyStore
+	OrgKeyReads service.OrgKeyReads
 	KeyFamilies storageif.SecretFamilyLister
 	KeyReseal   storagedb.KeyResealer
 }
@@ -60,7 +64,8 @@ type KeyStoreResult struct {
 // consumers get the same DAG-resolved value and failures surface as provider
 // errors.
 func provideKeyStore(cfg *config.Config, keyStores storagedb.KeyStoreProvider) (KeyStoreResult, error) {
-	keyring := KeyStoreResult{Keys: storage.NewKeyringSecretStore()}
+	kr := storage.NewKeyringStore()
+	keyring := KeyStoreResult{Keys: kr, KeyReads: kr}
 	if keyStores == nil {
 		return keyring, nil
 	}
@@ -73,6 +78,12 @@ func provideKeyStore(cfg *config.Config, keyStores storagedb.KeyStoreProvider) (
 	case !encKey.IsSet():
 		return keyring, nil
 	case !cfg.Auth.EncryptionKey.IsSet():
+		// In the cloud the fallback is deprecated with a date (R-security-7): the warning says exactly what to set.
+		// It is not refused yet, because a deployment on it has its stored values sealed under the auth secret.
+		if msg := config.EncryptionKeyFallbackDeprecation(cfg); msg != "" {
+			logger.Warn(msg, "removal", config.EncryptionKeyFallbackRemoval)
+			break
+		}
 		logger.Warn("PAD_ENCRYPTION_KEY unset — falling back to PAD_AUTH_SECRET for keystore. " +
 			"Set a dedicated PAD_ENCRYPTION_KEY so rotating the JWT secret doesn't brick stored provider keys.")
 	}
@@ -82,7 +93,7 @@ func provideKeyStore(cfg *config.Config, keyStores storagedb.KeyStoreProvider) (
 		return KeyStoreResult{}, fmt.Errorf("failed to init encrypted keystore: %w", err)
 	}
 	logger.Info("encrypted database keystore enabled", "previous_keys", len(previous))
-	return KeyStoreResult{Keys: ks, OrgKeys: ks, KeyFamilies: ks, KeyReseal: ks}, nil
+	return KeyStoreResult{Keys: ks, KeyReads: ks, OrgKeys: ks, OrgKeyReads: ks, KeyFamilies: ks, KeyReseal: ks}, nil
 }
 
 // initFieldEncryption encrypts secret columns at rest (org notification channel URLs and signing secrets) with the

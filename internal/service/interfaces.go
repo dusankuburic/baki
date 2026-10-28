@@ -33,6 +33,21 @@ type KeyStore interface {
 	Delete(scope, provider string) error
 }
 
+// KeyReads is the keystore's request-scoped reads (R-provider-19): a scope's keys in one read, and one key, under the
+// request's context — so a client that goes away ends the read, the store's own timeout only its ceiling. An fx value
+// of its own beside KeyStore (the same store: the database keystore, or the OS keyring); nil reads key by key through
+// KeyStore, as a test double's wrapper overriding Get then still answers.
+type KeyReads interface {
+	storageif.SecretStateLister
+	storageif.SecretContextReader
+}
+
+// OrgKeyReads is KeyReads for organisations' shared credentials: the database keystore's, nil without it.
+type OrgKeyReads interface {
+	storageif.OrgSecretStateLister
+	storageif.OrgSecretContextReader
+}
+
 // OrgKeyStore is the part of storage/interfaces.OrgSecretStore the services use: an
 // organisation's shared provider credential (G7), written by org admins and run on by
 // members with no credential of their own; nil without the encrypted database keystore

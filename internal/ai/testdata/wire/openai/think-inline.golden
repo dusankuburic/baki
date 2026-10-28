@@ -1,0 +1,11 @@
+# openai/think-inline.sse through parseOpenAISSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="deepseek-r1-distill-qwen-32b"
+02 keepalive served="deepseek-r1-distill-qwen-32b"
+03 reasoning="\nBlock 14 compares LoopIndex." served="deepseek-r1-distill-qwen-32b"
+04 reasoning="\n" served="deepseek-r1-distill-qwen-32b"
+05 text="Yes, it exits." served="deepseek-r1-distill-qwen-32b"
+06 keepalive served="deepseek-r1-distill-qwen-32b"
+07 done finish="stop" in=120 out=40 served="deepseek-r1-distill-qwen-32b"
+return nil
+summary chunks=7 keepalives=3 text="Yes, it exits." reasoning="\nBlock 14 compares LoopIndex.\n"

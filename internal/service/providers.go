@@ -82,6 +82,9 @@ type ProviderService struct {
 	secrets         KeyStore
 	// orgKeys holds organisations' shared credentials; nil on the desktop and in local mode.
 	orgKeys OrgKeyStore
+	// keyReads and orgKeyReads are the keystores' request-scoped reads (WithKeyReads); nil reads key by key.
+	keyReads    KeyReads
+	orgKeyReads OrgKeyReads
 	// azure is the Azure AI Foundry model registry; nil (tests) keeps the single-document behaviour.
 	azure *AzureModelService
 	// profile is the running deployment profile (WithProfile): a provider is offered when its spec's Modes name
@@ -132,6 +135,12 @@ func WithDeviceTokenExchange(github, copilot DeviceTokenExchange) ProviderOption
 // disabled as a side effect of an admin's demotion) to the other replicas on bus. nil announces nothing.
 func WithProviderEvents(bus *eventbus.Bus) ProviderOption {
 	return func(s *ProviderService) { s.bus = bus }
+}
+
+// WithKeyReads gives the catalogue and the listing the keystores' request-scoped reads (R-provider-19): the
+// caller's keys and the organisation's each in one read, under the request's context. Either may be nil.
+func WithKeyReads(own KeyReads, org OrgKeyReads) ProviderOption {
+	return func(s *ProviderService) { s.keyReads, s.orgKeyReads = own, org }
 }
 
 // NewProviderService builds the provider service. orgKeys holds organisations' shared credentials (nil leaves
@@ -193,17 +202,20 @@ func deviceTokenNotStored(saveErr error) error {
 // install and tests without one keep the single-document behaviour.
 type azureListing struct {
 	registry *AzureModelService
-	// orgKeys answers for an organisation where organisations cannot hold registries (its shared document).
-	orgKeys OrgKeyStore
+	// orgKeys answers for an organisation where organisations cannot hold registries (its shared document);
+	// orgReads, when set, reads it under the request's context.
+	orgKeys  OrgKeyStore
+	orgReads OrgKeyReads
 }
 
 // AzureListing is the registry as the azure-foundry spec's ListingHook (nil without a registry); orgKeys is
-// the organisation keystore the shared document lives in where organisations hold no registry.
-func AzureListing(a *AzureModelService, orgKeys OrgKeyStore) ai.ListingHook {
+// the organisation keystore the shared document lives in where organisations hold no registry, orgReads its
+// request-scoped reads (nil: context-free).
+func AzureListing(a *AzureModelService, orgKeys OrgKeyStore, orgReads OrgKeyReads) ai.ListingHook {
 	if a == nil {
 		return nil
 	}
-	return azureListing{registry: a, orgKeys: orgKeys}
+	return azureListing{registry: a, orgKeys: orgKeys, orgReads: orgReads}
 }
 
 func (l azureListing) Configured(ctx context.Context, scope string) (bool, error) {
@@ -217,6 +229,12 @@ func (l azureListing) OrgConfigured(ctx context.Context, orgID string) (bool, er
 	}
 	if l.orgKeys == nil {
 		return false, nil
+	}
+	if l.orgReads != nil {
+		return l.orgReads.HasOrgCtx(ctx, orgID, ai.AzureFoundryProviderID)
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
 	return l.orgKeys.HasOrg(orgID, ai.AzureFoundryProviderID)
 }
@@ -259,7 +277,7 @@ func registryFamily(a *AzureModelService, providerID string) bool {
 // on the spec (DI), else nil — the keystore keys and the catalogue or a live listing answer for it.
 func (s *ProviderService) listingHook(providerID string) ai.ListingHook {
 	if registryFamily(s.azure, providerID) {
-		return azureListing{registry: s.azure, orgKeys: s.orgKeys}
+		return azureListing{registry: s.azure, orgKeys: s.orgKeys, orgReads: s.orgKeyReads}
 	}
 	if spec, ok := ai.SpecOf(providerID); ok {
 		return spec.Listing
@@ -282,6 +300,17 @@ func (s *ProviderService) runningProfile() capability.Profile {
 // offered reports whether spec is offered in this deployment: its Modes name the running profile.
 func (s *ProviderService) offered(spec ai.ProviderSpec) bool {
 	return slices.Contains(spec.Modes, s.runningProfile())
+}
+
+// offeredSpecs is specs filtered to the ones offered in this deployment.
+func (s *ProviderService) offeredSpecs(specs []ai.ProviderSpec) []ai.ProviderSpec {
+	out := make([]ai.ProviderSpec, 0, len(specs))
+	for _, spec := range specs {
+		if s.offered(spec) {
+			out = append(out, spec)
+		}
+	}
+	return out
 }
 
 // OrgKeysAvailable reports whether this deployment can hold organisation credentials (cloud mode).
@@ -505,19 +534,31 @@ func SubscribeModelCache(bus *eventbus.Bus, s *ProviderService) {
 	})
 }
 
-// invalidateScopeEverywhere drops scope's listings here and tells the other replicas to drop theirs, for a change no
-// CredentialChanged announces.
+// invalidateScopeEverywhere drops scope's listings here and announces the change of every credential of scope
+// (announceCredentialChange), so the other replicas drop theirs and every other cache derived from the scope's
+// credentials (the knowledge base's memoised embedders, rag.embedders) drops its own.
 func (s *ProviderService) invalidateScopeEverywhere(scope string) {
 	s.InvalidateScope(scope)
-	s.bus.Invalidate(context.Background(), "providers.model-listings", eventbus.NewScope("scope", scope))
+	s.announceCredentialChange(scope, "")
 }
 
 // invalidateModelsEverywhere is invalidateScopeEverywhere for one provider's listing: a key saved, replaced or
-// revoked through a method of this service (the GitHub and Copilot sign-ins, the local and Azure configurations),
-// which no CredentialChanged announces.
+// revoked through a method of this service (the GitHub and Copilot sign-ins, the local and Azure configurations).
 func (s *ProviderService) invalidateModelsEverywhere(scope, providerID string) {
 	s.InvalidateModels(scope, providerID)
-	s.bus.Invalidate(context.Background(), "providers.model-listings", eventbus.NewScope("scope", scope, "provider", providerID))
+	s.announceCredentialChange(scope, providerID)
+}
+
+// announceCredentialChange publishes a credential change this service made itself, which the key store's own
+// writers do not announce: the subscribers derived from credentials hear it here and, replicated, on the other
+// replicas. Its Kind is CredentialSaved whether the credential was saved, replaced or revoked: the subscribers read
+// the scope and the provider only.
+func (s *ProviderService) announceCredentialChange(scope, providerID string) {
+	orgID, ok := strings.CutPrefix(scope, ai.OrgScope(""))
+	if !ok {
+		orgID = ""
+	}
+	s.bus.Publish(context.Background(), events.CredentialChanged{Scope: scope, ProviderID: providerID, OrgID: orgID, Kind: events.CredentialSaved})
 }
 
 // chatModels drops non-chat entries (embedding deployments): kept in Models() for pricing, never in the chat picker.
@@ -662,59 +703,218 @@ func awaitLiveListing(wait context.Context, ch <-chan liveListing) liveListing {
 	}
 }
 
-// isConfigured reports whether the caller has credentials for a provider: the family's hook answers for a
-// family (the registry's resources), else the spec's keystore rows — the device-flow token or the stored key.
-func (s *ProviderService) isConfigured(scope, providerID string) bool {
-	if hook := s.listingHook(providerID); hook != nil {
-		ok, err := hook.Configured(context.Background(), scope)
+// CredentialStatus is what the keystore holds for a credential, on the catalogue and listing entries: configured
+// (a credential a request can use), unreadable (stored, but the keystore cannot decrypt it: the server's
+// encryption key changed, and only entering it again repairs it) or missing.
+type CredentialStatus string
+
+const (
+	CredentialConfigured CredentialStatus = "configured"
+	CredentialUnreadable CredentialStatus = "unreadable"
+	CredentialMissing    CredentialStatus = "missing"
+)
+
+// keyStatus is the status a keystore read answers: an empty value is a legacy empty row, which no request can use.
+// Any other read failure (a database error) reads as missing, as the row-existence check it replaces did.
+func keyStatus(v string, err error) CredentialStatus {
+	switch {
+	case errors.Is(err, storage.ErrSecretDecryptFailed):
+		return CredentialUnreadable
+	case err != nil || v == "":
+		return CredentialMissing
+	}
+	return CredentialConfigured
+}
+
+// credentialReads answers the credential statuses of one request: the caller's keystore rows and the
+// organisation's, each read once under the request's context for every spec the request covers (R-provider-19),
+// where each spec's keys were read on their own on context.Background. A store that cannot list its rows (a test
+// double's wrapper) is read key by key, each read checking the request's context first.
+type credentialReads struct {
+	s     *ProviderService
+	ctx   context.Context
+	scope string
+	orgID string
+	// own and org are the caller's and the organisation's rows by key; nil: read key by key.
+	own, org map[string]storageif.SecretState
+}
+
+// readCredentials reads the caller's and the organisation's keys of specs (nil: none, every key is read on its
+// own). A request that ended is its context's error; any other read failure reads as no rows, as a database error
+// read as a missing key on each key's own read.
+func (s *ProviderService) readCredentials(ctx context.Context, scope, orgID string, specs []ai.ProviderSpec) (*credentialReads, error) {
+	r := &credentialReads{s: s, ctx: ctx, scope: scope, orgID: orgID}
+	var ownKeys, orgKeys []string
+	for _, spec := range specs {
+		if s.listingHook(spec.ID) != nil {
+			continue // the family's hook answers
+		}
+		for _, key := range []string{spec.Keys.OAuthToken, spec.Keys.Primary} {
+			if key != "" {
+				ownKeys = append(ownKeys, key)
+			}
+		}
+		if s.orgKeys != nil && orgID != "" && spec.Caps.Has(ai.CapOrgShared) && spec.Keys.Primary != "" {
+			orgKeys = append(orgKeys, spec.Keys.Primary)
+		}
+	}
+	if s.keyReads != nil && len(ownKeys) > 0 {
+		states, err := s.keyReads.KeyStates(ctx, scope, ownKeys)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			logger.Warn("provider listing: reading the caller's keys failed", "error", err)
+			states = map[string]storageif.SecretState{}
+		}
+		r.own = states
+	}
+	if s.orgKeyReads != nil && s.orgKeys != nil && len(orgKeys) > 0 {
+		states, err := s.orgKeyReads.OrgKeyStates(ctx, orgID, orgKeys)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			logger.Warn("provider listing: reading the organisation's keys failed", "org", orgID, "error", err)
+			states = map[string]storageif.SecretState{}
+		}
+		r.org = states
+	}
+	return r, nil
+}
+
+// stateStatus is the credential status of a row's state (held: the scope has the row; none is missing).
+func stateStatus(state storageif.SecretState, held bool) CredentialStatus {
+	switch {
+	case !held:
+		return CredentialMissing
+	case state == storageif.SecretUsable:
+		return CredentialConfigured
+	case state == storageif.SecretUnreadable:
+		return CredentialUnreadable
+	}
+	return CredentialMissing
+}
+
+// ownKey is the status of one of the caller's keys: from the caller's read, else read on its own.
+func (r *credentialReads) ownKey(key string) CredentialStatus {
+	if r.own != nil {
+		state, held := r.own[key]
+		return stateStatus(state, held)
+	}
+	return keyStatus(getKeyCtx(r.ctx, r.s.secrets, r.s.keyReads, r.scope, key))
+}
+
+// orgKey is ownKey for the organisation's keys.
+func (r *credentialReads) orgKey(key string) CredentialStatus {
+	if r.org != nil {
+		state, held := r.org[key]
+		return stateStatus(state, held)
+	}
+	return keyStatus(getOrgKeyCtx(r.ctx, r.s.orgKeys, r.s.orgKeyReads, r.orgID, key))
+}
+
+// credentialStatus is the caller's own credential for a provider: the family's hook answers for a family (the
+// registry's resources, whose unreadable state is the registry's own), else the spec's keystore rows, the
+// device-flow token or the stored key, read rather than checked for a row, so an unreadable one is told apart.
+func (r *credentialReads) credentialStatus(providerID string) CredentialStatus {
+	if hook := r.s.listingHook(providerID); hook != nil {
+		ok, err := hook.Configured(r.ctx, r.scope)
 		if err != nil {
 			logger.Warn("provider listing: reading the caller's configuration failed", "provider", providerID, "error", err)
 		}
-		return ok
+		if ok {
+			return CredentialConfigured
+		}
+		return CredentialMissing
 	}
 	spec, known := ai.SpecOf(providerID)
 	if !known {
-		return false
+		return CredentialMissing
 	}
-	if spec.Keys.OAuthToken != "" {
-		if ok, _ := s.secrets.Has(scope, spec.Keys.OAuthToken); ok {
-			return true
+	status := CredentialMissing
+	for _, key := range []string{spec.Keys.OAuthToken, spec.Keys.Primary} {
+		if key == "" {
+			continue
+		}
+		switch r.ownKey(key) {
+		case CredentialConfigured:
+			return CredentialConfigured
+		case CredentialUnreadable:
+			status = CredentialUnreadable
 		}
 	}
-	ok, _ := s.secrets.Has(scope, spec.Keys.Primary)
-	return ok
+	return status
 }
 
-// isOrgConfigured reports whether the organisation holds a shared credential: never for a provider that is
-// not org-shareable (Copilot, a person's subscription), the family's hook for a family, else the spec's key.
-func (s *ProviderService) isOrgConfigured(orgID, providerID string) bool {
-	if s.orgKeys == nil || orgID == "" {
-		return false
+// isConfigured reports whether the caller has a usable credential of their own for a provider.
+func (r *credentialReads) isConfigured(providerID string) bool {
+	return r.credentialStatus(providerID) == CredentialConfigured
+}
+
+// orgCredentialStatus is the organisation's shared credential for a provider: "" when none can apply (no org, no
+// org keystore, a provider that is not org-shareable: Copilot, a person's subscription), the family's hook for a
+// family, else the spec's key.
+func (r *credentialReads) orgCredentialStatus(providerID string) CredentialStatus {
+	if r.s.orgKeys == nil || r.orgID == "" {
+		return ""
 	}
 	spec, known := ai.SpecOf(providerID)
 	if !known || !spec.Caps.Has(ai.CapOrgShared) {
-		return false
+		return ""
 	}
-	if hook := s.listingHook(providerID); hook != nil {
-		ok, err := hook.OrgConfigured(context.Background(), orgID)
+	if hook := r.s.listingHook(providerID); hook != nil {
+		ok, err := hook.OrgConfigured(r.ctx, r.orgID)
 		if err != nil {
-			logger.Warn("provider listing: reading the organisation's configuration failed", "provider", providerID, "org", orgID, "error", err)
+			logger.Warn("provider listing: reading the organisation's configuration failed", "provider", providerID, "org", r.orgID, "error", err)
 		}
-		return ok
+		if ok {
+			return CredentialConfigured
+		}
+		return CredentialMissing
 	}
-	ok, _ := s.orgKeys.HasOrg(orgID, spec.Keys.Primary)
-	return ok
+	return r.orgKey(spec.Keys.Primary)
 }
 
-// resolveListing decides whose credential a provider is listed on (G7, member-first): the caller's own, else the org's.
-func (s *ProviderService) resolveListing(scope, orgID, providerID string) (ls listingScope, configured bool) {
-	if s.isConfigured(scope, providerID) {
-		return personalScope(scope), true
+// isOrgConfigured reports whether the organisation holds a usable shared credential for a provider.
+func (r *credentialReads) isOrgConfigured(providerID string) bool {
+	return r.orgCredentialStatus(providerID) == CredentialConfigured
+}
+
+// resolveListing decides whose credential a provider is listed on (G7, member-first): the caller's own, else the
+// org's. An unreadable credential of the caller's own is not passed over for the org's: a turn reports the
+// keystore failure rather than fall through (ProviderFactory.resolveKey), so the listing says what the turn will.
+func (r *credentialReads) resolveListing(providerID string) (ls listingScope, own CredentialStatus, configured bool) {
+	own = r.credentialStatus(providerID)
+	switch {
+	case own == CredentialConfigured:
+		return personalScope(r.scope), own, true
+	case own == CredentialMissing && r.isOrgConfigured(providerID):
+		return listingScope{scope: r.scope, orgID: r.orgID, cacheScope: ai.OrgScope(r.orgID), shared: true}, own, true
 	}
-	if s.isOrgConfigured(orgID, providerID) {
-		return listingScope{scope: scope, orgID: orgID, cacheScope: ai.OrgScope(orgID), shared: true}, true
+	return personalScope(r.scope), own, false
+}
+
+// getKeyCtx is ks.Get under ctx: the request-scoped read when there are reads, else Get while ctx is still live.
+func getKeyCtx(ctx context.Context, ks KeyStore, reads KeyReads, scope, provider string) (string, error) {
+	if reads != nil {
+		return reads.GetCtx(ctx, scope, provider)
 	}
-	return personalScope(scope), false
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return ks.Get(scope, provider)
+}
+
+// getOrgKeyCtx is getKeyCtx for the organisation keystore.
+func getOrgKeyCtx(ctx context.Context, ks OrgKeyStore, reads OrgKeyReads, orgID, provider string) (string, error) {
+	if reads != nil {
+		return reads.GetOrgCtx(ctx, orgID, provider)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return ks.GetOrg(orgID, provider)
 }
 
 // ListProviders lists every provider of the running profile with models and default; live listings run
@@ -724,12 +924,17 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 	defer logger.Guard("App.ListProviders", &err)
 
 	specs := ai.Specs()
+	creds, err := s.readCredentials(ctx, scope, orgID, s.offeredSpecs(specs))
+	if err != nil {
+		return nil, err
+	}
 	metaProviders := make([]ai.MetadataProvider, len(specs))
 	configured := make([]bool, len(specs))
+	status := make([]CredentialStatus, len(specs))
 	shared := make([]bool, len(specs))
 	live := make([]<-chan liveListing, len(specs))
 	for i, spec := range specs {
-		if !s.offered(spec) || (spec.Egress.Kind == ai.EgressLoopback && !s.isConfigured(scope, spec.ID)) {
+		if !s.offered(spec) || (spec.Egress.Kind == ai.EgressLoopback && !creds.isConfigured(spec.ID)) {
 			continue
 		}
 		metaProviders[i] = ai.GetMetadataProvider(spec.ID)
@@ -740,7 +945,7 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 			continue // listed from the family's hook below: no live listing
 		}
 		var ls listingScope
-		ls, configured[i] = s.resolveListing(scope, orgID, spec.ID)
+		ls, status[i], configured[i] = creds.resolveListing(spec.ID)
 		shared[i] = ls.shared
 		if configured[i] {
 			live[i] = s.startLiveListing(ctx, ls, spec.ID)
@@ -802,14 +1007,15 @@ func (s *ProviderService) ListProviders(ctx context.Context, scope, orgID string
 		}
 
 		providers = append(providers, specFields(models.ProviderInfo{
-			ID:           spec.ID,
-			Name:         spec.Name,
-			Configured:   configured[i],
-			Shared:       shared[i],
-			Models:       modelDetails,
-			DefaultModel: defaultModel,
-			ContextLimit: contextLimit,
-			AuthType:     string(spec.AuthType),
+			ID:               spec.ID,
+			Name:             spec.Name,
+			Configured:       configured[i],
+			CredentialStatus: string(status[i]),
+			Shared:           shared[i],
+			Models:           modelDetails,
+			DefaultModel:     defaultModel,
+			ContextLimit:     contextLimit,
+			AuthType:         string(spec.AuthType),
 		}, spec))
 	}
 
@@ -891,24 +1097,33 @@ func providerEndpoints(spec ai.ProviderSpec) models.ProviderEndpoints {
 // configured state is the keystore's (or the family hook's), never a live listing.
 func (s *ProviderService) ProviderCatalog(ctx context.Context, scope, orgID string) (entries []models.ProviderCatalogEntry, err error) {
 	defer logger.Guard("App.ProviderCatalog", &err)
-	for _, spec := range ai.Specs() {
-		if !s.offered(spec) {
-			continue
-		}
+	specs := s.offeredSpecs(ai.Specs())
+	creds, err := s.readCredentials(ctx, scope, orgID, specs)
+	if err != nil {
+		return nil, err
+	}
+	for _, spec := range specs {
 		endpoints := providerEndpoints(spec)
+		own, org := creds.credentialStatus(spec.ID), creds.orgCredentialStatus(spec.ID)
 		entries = append(entries, models.ProviderCatalogEntry{
-			ID:           spec.ID,
-			Name:         spec.Name,
-			AuthType:     string(spec.AuthType),
-			Modes:        spec.WireModes(),
-			Caps:         spec.Caps.Names(),
-			Credential:   spec.WireCredential(),
-			Endpoints:    endpoints,
-			Configured:   s.isConfigured(scope, spec.ID) || s.isOrgConfigured(orgID, spec.ID),
-			Color:        spec.Color,
-			Icon:         spec.Icon,
-			Configurable: endpoints != (models.ProviderEndpoints{}),
+			ID:                  spec.ID,
+			Name:                spec.Name,
+			AuthType:            string(spec.AuthType),
+			Modes:               spec.WireModes(),
+			Caps:                spec.Caps.Names(),
+			Credential:          spec.WireCredential(),
+			Endpoints:           endpoints,
+			Configured:          own == CredentialConfigured || (own == CredentialMissing && org == CredentialConfigured),
+			CredentialStatus:    string(own),
+			OrgCredentialStatus: string(org),
+			Color:               spec.Color,
+			Icon:                spec.Icon,
+			Configurable:        endpoints != (models.ProviderEndpoints{}),
 		})
+	}
+	if err := ctx.Err(); err != nil {
+		// The request ended while a family's hook was read: what it answered would be a guess.
+		return nil, err
 	}
 	return entries, nil
 }
@@ -1123,7 +1338,11 @@ func (s *ProviderService) GetGitHubUser(ctx context.Context, scope string) (user
 	defer logger.Guard("App.GetGitHubUser", &err)
 
 	token, err := s.secrets.Get(scope, primaryKey(ai.GitHubModelsProviderID))
-	if err != nil {
+	if errors.Is(err, storage.ErrSecretDecryptFailed) {
+		// Stored, but unreadable: "not connected" would contradict the catalogue (KEY_UNREADABLE, sign in again).
+		return nil, err
+	}
+	if err != nil || token == "" {
 		// No stored token (or no secret storage) → not connected, not an error.
 		return nil, nil
 	}
@@ -1201,7 +1420,11 @@ func (s *ProviderService) GetCopilotUser(ctx context.Context, scope string) (use
 	defer logger.Guard("App.GetCopilotUser", &err)
 
 	token, err := s.secrets.Get(scope, oauthTokenKey(ai.CopilotProviderID))
-	if err != nil {
+	if errors.Is(err, storage.ErrSecretDecryptFailed) {
+		// Stored, but unreadable: "not connected" would contradict the catalogue (KEY_UNREADABLE, sign in again).
+		return nil, err
+	}
+	if err != nil || token == "" {
 		// No stored token (or no secret storage) → not connected, not an error.
 		return nil, nil
 	}
@@ -1210,13 +1433,17 @@ func (s *ProviderService) GetCopilotUser(ctx context.Context, scope string) (use
 
 // --- Local models configuration ---
 
-// GetLocalConfig returns the caller's stored local models configuration; absent or unreadable is unconfigured.
+// GetLocalConfig returns the caller's stored local models configuration; absent or unparsable is unconfigured, and
+// one the keystore cannot decrypt is ErrSecretDecryptFailed (KEY_UNREADABLE).
 func (s *ProviderService) GetLocalConfig(scope string) (cfg ai.LocalPublicConfig, err error) {
 	defer logger.Guard("App.GetLocalConfig", &err)
 	if err := ai.CheckLocalModelsAvailable(); err != nil {
 		return ai.LocalPublicConfig{}, err
 	}
 	raw, getErr := s.secrets.Get(scope, ai.LocalProviderID)
+	if errors.Is(getErr, storage.ErrSecretDecryptFailed) {
+		return ai.LocalPublicConfig{}, getErr // KEY_UNREADABLE: save it again
+	}
 	if getErr != nil || raw == "" {
 		return ai.LocalPublicConfig{}, nil
 	}

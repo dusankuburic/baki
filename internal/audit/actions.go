@@ -48,12 +48,16 @@ const (
 	ActionKnowledgeUpload  = "org.knowledge_upload"
 	ActionKnowledgeDelete  = "org.knowledge_delete"
 	ActionKnowledgeReindex = "org.knowledge_reindex"
-	ActionOrgCreate        = "org.create"
-	ActionOrgUpdate        = "org.update"
-	ActionOrgDelete        = "org.delete"
-	ActionScanNow          = "admin.scan_now"
-	ActionAlertDismiss     = "governance.alert_dismiss"
-	ActionAlertClear       = "governance.alert_clear"
+	// ActionKnowledgeIdentityStamp: the knowledge service proved that the caller's embedding model reproduces some
+	// legacy documents' vectors and stamped its identity on their chunks (R-knowledge-3; Meta: identity, documents —
+	// the proven document ids, comma-separated — and chunks, the rows stamped). Recorded by the service, not a handler.
+	ActionKnowledgeIdentityStamp = "org.knowledge_identity_stamp"
+	ActionOrgCreate              = "org.create"
+	ActionOrgUpdate              = "org.update"
+	ActionOrgDelete              = "org.delete"
+	ActionScanNow                = "admin.scan_now"
+	ActionAlertDismiss           = "governance.alert_dismiss"
+	ActionAlertClear             = "governance.alert_clear"
 	// These four were emitted as raw strings before; the values are kept so existing rows stay filterable.
 	ActionOrgChannelSave   = "org_channel_save"
 	ActionOrgChannelDelete = "org_channel_delete"
@@ -76,6 +80,18 @@ const (
 	ActionOrgCICredentialCreate = "org.ci_credential_create" // #nosec G101 -- an audit action name, not a credential
 	ActionOrgCICredentialRevoke = "org.ci_credential_revoke" // #nosec G101 -- an audit action name, not a credential
 	ActionCIWebhookRun          = "ci.webhook_run"
+	// AI-made and HTTP auto-fixes (R-security-4): a fix written to a flow (Meta: source http|chat, ruleId, fixType,
+	// blockId, unsafe, outcome, and for a batch the applied count; from chat also streamId and proposalId), and the
+	// user's decision on a chat approval card (Meta: streamId, proposalId, status approved|declined|timeout|cancelled,
+	// excludedCount for a batch).
+	ActionFlowFixApply    = "flow.fix_apply"
+	ActionChatFixDecision = "chat.fix_decision"
+	// ActionChatAgentTools: a chat turn in which the provider ran tools of its own (an Azure AI Foundry agent's
+	// hosted web search, file search, code interpreter, MCP, …), outside baki's function-tool approvals; recorded
+	// when the turn ends, since the chat.stream row is written on accept, before any tool runs (R-provider-29).
+	// Meta: streamId, provider, model, tools (the hosted output item types that ran, sorted, comma-separated) and
+	// calls (how many started).
+	ActionChatAgentTools = "chat.agent_tools"
 )
 
 // AllActions is the closed set of audit action strings the server emits; the admin audit UI builds its filter
@@ -94,12 +110,13 @@ func AllActions() []string {
 		ActionMigrationStart, ActionCommentAdd, ActionCommentDelete,
 		ActionShareLinkCreate, ActionShareLinkRevoke, ActionPolicySave,
 		ActionPolicyDelete, ActionKnowledgeUpload, ActionKnowledgeDelete,
-		ActionKnowledgeReindex, ActionOrgCreate, ActionOrgUpdate, ActionOrgDelete,
+		ActionKnowledgeReindex, ActionKnowledgeIdentityStamp, ActionOrgCreate, ActionOrgUpdate, ActionOrgDelete,
 		ActionScanNow, ActionAlertDismiss, ActionAlertClear, ActionOrgChannelSave,
 		ActionOrgChannelDelete, ActionOrgRuleSave, ActionOrgRuleDelete,
 		ActionSSOLink, ActionSSOUnlink, ActionProvidersTest,
 		ActionAzureConnectionSave, ActionAzureConnectionDelete,
 		ActionAzureModelSave, ActionAzureModelDelete,
 		ActionOrgCICredentialCreate, ActionOrgCICredentialRevoke, ActionCIWebhookRun,
+		ActionFlowFixApply, ActionChatFixDecision, ActionChatAgentTools,
 	}
 }

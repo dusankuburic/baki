@@ -10,6 +10,7 @@ import {useFormValidation, type FieldErrors} from '@/hooks/useFormValidation'
 import {useSystemStore} from '@/stores/systemStore'
 import {isTauri} from '@/platform/guards'
 import {CREDENTIAL_FIELD_TYPES, CREDENTIAL_KINDS, isKnown} from '@/types'
+import {API_KEY_MAX_LENGTH} from '@/lib/constraints'
 import type {CredentialField, GitHubUser, ProviderSpec, ProviderTestResult} from '@/types'
 import GenericProviderCard, {credentialErrorText, testResultText} from './GenericProviderCard'
 
@@ -66,6 +67,8 @@ function ApiKeyCredential({spec, onConfigured}: {spec: ProviderSpec; onConfigure
   const [values, setValues] = useState<Record<string, string>>({})
   const [hasKey, setHasKey] = useState<boolean | null>(null)
   const [replacing, setReplacing] = useState(false)
+  // Stored, but the server cannot decrypt it (its encryption key changed): only entering it again repairs it.
+  const [unreadable, setUnreadable] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
@@ -76,18 +79,23 @@ function ApiKeyCredential({spec, onConfigured}: {spec: ProviderSpec; onConfigure
   useEffect(() => {
     let cancelled = false
     providersApi
-      .hasApiKey(spec.id)
-      .then(has => {
-        if (!cancelled) setHasKey(has)
+      .keyStatus(spec.id)
+      .then(status => {
+        if (cancelled) return
+        setHasKey(status.has)
+        setUnreadable(status.has && status.unreadable)
       })
       .catch(err => {
         logger.warn('Failed to check the stored key', err)
-        if (!cancelled) setHasKey(spec.configured)
+        if (cancelled) return
+        const unreadableInCatalog = spec.credentialStatus === 'unreadable'
+        setHasKey(spec.configured || unreadableInCatalog)
+        setUnreadable(unreadableInCatalog)
       })
     return () => {
       cancelled = true
     }
-  }, [spec.id, spec.configured])
+  }, [spec.id, spec.configured, spec.credentialStatus])
 
   const key = trimmed(values, keyField.name)
   const canSave = key !== '' && fields.every(f => !f.required || f === keyField || trimmed(values, f.name) !== '')
@@ -120,6 +128,7 @@ function ApiKeyCredential({spec, onConfigured}: {spec: ProviderSpec; onConfigure
       setValues({})
       v.reset()
       setHasKey(true)
+      setUnreadable(false)
       setReplacing(false)
       setTestResult(null)
       onConfigured()
@@ -135,6 +144,7 @@ function ApiKeyCredential({spec, onConfigured}: {spec: ProviderSpec; onConfigure
     try {
       await providersApi.deleteApiKey(spec.id)
       setHasKey(false)
+      setUnreadable(false)
       setReplacing(false)
       setTestResult(null)
       onConfigured()
@@ -170,6 +180,23 @@ function ApiKeyCredential({spec, onConfigured}: {spec: ProviderSpec; onConfigure
   )
 
   if (hasKey === null) return null
+
+  if (hasKey && unreadable && !replacing) {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-semantic-warning">{t('keys.unreadable')}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => setReplacing(true)}>
+            {t('keys.enterAgain')}
+          </Button>
+          <Button size="sm" variant="secondary" onClick={handleRemove}>
+            {t('keys.remove')}
+          </Button>
+        </div>
+        {errorLine}
+      </div>
+    )
+  }
 
   if (hasKey && !replacing) {
     return (
@@ -210,6 +237,7 @@ function ApiKeyCredential({spec, onConfigured}: {spec: ProviderSpec; onConfigure
           onBlur={() => v.touch(field.name)}
           error={v.errorFor(field.name)}
           placeholder={field === keyField && hasKey ? t('providers.replaceKeyPlaceholder') : field.placeholder}
+          maxLength={field === keyField ? API_KEY_MAX_LENGTH : undefined}
         />
       ))}
       <div className="flex items-center gap-2">
@@ -235,6 +263,7 @@ function FieldInput({
   onBlur,
   error,
   placeholder,
+  maxLength,
 }: {
   id: string
   field: CredentialField
@@ -243,6 +272,7 @@ function FieldInput({
   onBlur?: () => void
   error?: string
   placeholder?: string
+  maxLength?: number
 }) {
   switch (field.type) {
     case 'secret':
@@ -256,6 +286,7 @@ function FieldInput({
           placeholder={placeholder}
           hint={field.help}
           error={error}
+          maxLength={maxLength}
         />
       )
     case 'text':

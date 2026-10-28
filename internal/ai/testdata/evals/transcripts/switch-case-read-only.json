@@ -1,0 +1,24 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "propose_fix",
+          "input": {
+            "blockId": "B10",
+            "ruleId": "uninitialized-variable"
+          }
+        }
+      ],
+      "tokensIn": 1890,
+      "tokensOut": 30
+    },
+    {
+      "text": "I can't change the flow from this conversation, but here is the fix for the [uninitialized-variable finding](finding:uninitialized-variable:9251751c7376471f):\n\n[SWITCH %ErrorCode%](block:B10) on line 11 reads `ErrorCode`, which nothing sets. Insert this line before it:\n\n```\nSET ErrorCode TO \"\"\n```\n\nBetter still, set `ErrorCode` from the step that actually produces the code, so the `CASE '404'`/`'500'` branches can match.",
+      "tokensIn": 1990,
+      "tokensOut": 117
+    }
+  ]
+}

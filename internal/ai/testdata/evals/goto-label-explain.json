@@ -1,0 +1,21 @@
+{
+  "why": "Explains a finding on the selected block and uses get_subflow_blocks for the ids of blocks the context names without ids.",
+  "flow": "goto_label",
+  "selectedBlock": "B5",
+  "question": "Why is this GOTO flagged?",
+  "expect": {
+    "toolsSubset": [
+      "get_subflow_blocks"
+    ],
+    "mustMention": [
+      "B5",
+      "B2",
+      "goto-antipattern"
+    ],
+    "mustLink": [
+      "block:",
+      "finding:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

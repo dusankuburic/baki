@@ -95,7 +95,7 @@ func TestRagGuidelines_MembershipGated(t *testing.T) {
 	t.Run("non-member never searches", func(t *testing.T) {
 		calls := 0
 		svc := newSvc(&calls)
-		if got := svc.ragGuidelines(context.Background(), "user-2", orgDoc, "question"); got != "" {
+		if got := svc.ragGuidelines(context.Background(), "user-2", orgDoc, nil, models.ChatRequest{UserMessage: "what is the retry policy?"}).guidelines; got != "" {
 			t.Errorf("guidelines = %q, want empty for non-member", got)
 		}
 		if calls != 0 {
@@ -106,7 +106,7 @@ func TestRagGuidelines_MembershipGated(t *testing.T) {
 	t.Run("member reaches the search", func(t *testing.T) {
 		calls := 0
 		svc := newSvc(&calls)
-		if got := svc.ragGuidelines(context.Background(), "user-1", orgDoc, "question"); got != "" {
+		if got := svc.ragGuidelines(context.Background(), "user-1", orgDoc, nil, models.ChatRequest{UserMessage: "what is the retry policy?"}).guidelines; got != "" {
 			t.Errorf("guidelines = %q, want empty (nil store returns no hits)", got)
 		}
 		if calls == 0 {

@@ -1,0 +1,73 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`MessageBubble — knowledge notice > renders the deadline notice 1`] = `
+<div
+  class="flex items-start gap-1.5 px-1 text-2xs text-text-tertiary"
+  data-testid="knowledge-notice"
+>
+  <svg
+    aria-hidden="true"
+    class="lucide lucide-book-x mt-0.5 shrink-0"
+    fill="none"
+    height="10"
+    stroke="currentColor"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="2"
+    viewBox="0 0 24 24"
+    width="10"
+    xmlns="http://www.w3.org/2000/svg"
+  />
+  <span>
+    Your organisation's guidelines were not used: the knowledge base did not answer in time.
+  </span>
+</div>
+`;
+
+exports[`MessageBubble — knowledge notice > renders the identity_mismatch notice 1`] = `
+<div
+  class="flex items-start gap-1.5 px-1 text-2xs text-text-tertiary"
+  data-testid="knowledge-notice"
+>
+  <svg
+    aria-hidden="true"
+    class="lucide lucide-book-x mt-0.5 shrink-0"
+    fill="none"
+    height="10"
+    stroke="currentColor"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="2"
+    viewBox="0 0 24 24"
+    width="10"
+    xmlns="http://www.w3.org/2000/svg"
+  />
+  <span>
+    Your organisation's guidelines were not used: its knowledge base was indexed with a different embedding model than yours. An org admin can re-index it, or the operator can set PAD_EMBEDDING_PROVIDER so everyone embeds with the org's key.
+  </span>
+</div>
+`;
+
+exports[`MessageBubble — knowledge notice > renders the no_embedder notice 1`] = `
+<div
+  class="flex items-start gap-1.5 px-1 text-2xs text-text-tertiary"
+  data-testid="knowledge-notice"
+>
+  <svg
+    aria-hidden="true"
+    class="lucide lucide-book-x mt-0.5 shrink-0"
+    fill="none"
+    height="10"
+    stroke="currentColor"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="2"
+    viewBox="0 0 24 24"
+    width="10"
+    xmlns="http://www.w3.org/2000/svg"
+  />
+  <span>
+    Your organisation's guidelines were not used: no embedding provider is available to you. Add a key for the org's embedding provider, or ask the operator to set PAD_EMBEDDING_PROVIDER.
+  </span>
+</div>
+`;

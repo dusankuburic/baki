@@ -192,26 +192,26 @@ func TestIsConfigured_DerivedFromKeySchema(t *testing.T) {
 	ai.RegisterProvider("keyed-stub", func(string) ai.Provider { return &testutil.FakeProvider{} })
 	secrets := testutil.NewFakeSecretStore()
 	svc := newProviderServiceForProfile(t, secrets, capability.Cloud)
-	if svc.isConfigured("u1", "keyed-stub") {
+	if keyByKey(svc, "u1", "").isConfigured("keyed-stub") {
 		t.Error("nothing stored: configured")
 	}
 	if err := secrets.Save("u1", "keyed-stub", "k"); err != nil {
 		t.Fatal(err)
 	}
-	if !svc.isConfigured("u1", "keyed-stub") {
+	if !keyByKey(svc, "u1", "").isConfigured("keyed-stub") {
 		t.Error("Keys.Primary stored: not configured")
 	}
-	if svc.isConfigured("u1", "nope") {
+	if keyByKey(svc, "u1", "").isConfigured("nope") {
 		t.Error("an unknown id reads as configured")
 	}
 	cp, _ := ai.SpecOf("copilot")
 	if err := secrets.Save("u2", cp.Keys.Primary, "ghp_pat"); err != nil {
 		t.Fatal(err)
 	}
-	if !svc.isConfigured("u2", "copilot") {
+	if !keyByKey(svc, "u2", "").isConfigured("copilot") {
 		t.Error("copilot: the PAT row alone must count")
 	}
-	if svc.isOrgConfigured("org-1", "copilot") {
+	if keyByKey(svc, "", "org-1").isOrgConfigured("copilot") {
 		t.Error("copilot: never org-shared")
 	}
 }

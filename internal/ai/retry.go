@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -146,24 +147,69 @@ func NewRetryingProviderWithConfig(p Provider, maxAttempts int, baseDelay time.D
 	}
 }
 
+// Chat retries a retryable failure. A failed attempt the provider billed (its error carries usage,
+// heldUsageError) is not lost to the attempt after it: its usage is added to the call's — onto the response
+// when a later attempt succeeds, onto the error otherwise (R-budget-1).
 func (rp *RetryingProvider) Chat(ctx context.Context, req Request) (*Response, error) {
 	var lastErr error
+	// discarded is the usage of the attempts already retried; the last failed attempt's usage stays on lastErr
+	// and joins it only once its retry starts, so no path counts an attempt twice.
+	var discarded attemptUsage
 	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
 			recordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
 			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
-				return nil, err
+				return nil, discarded.onto(err)
+			}
+			if in, out, served, ok := usageOf(lastErr); ok {
+				discarded.add(in, out, served)
 			}
 		}
 		resp, err := rp.Provider.Chat(ctx, req)
-		if err == nil || !isRetryable(err) {
-			return resp, err
+		if err == nil {
+			if resp != nil && (discarded.in > 0 || discarded.out > 0) {
+				billed := *resp
+				billed.TokensIn += discarded.in
+				billed.TokensOut += discarded.out
+				resp = &billed
+			}
+			return resp, nil
+		}
+		if !isRetryable(err) || replayForbidden(err) {
+			return resp, discarded.onto(err)
 		}
 		lastErr = err
 	}
 	// A transport failure (connection refused, DNS) only reaches this point
 	// after exhausting the budget: hand it on with provider-down semantics.
-	return nil, asProviderDown(lastErr)
+	return nil, discarded.onto(asProviderDown(lastErr))
+}
+
+// attemptUsage is the usage of the attempts a retry discarded.
+type attemptUsage struct {
+	in, out int
+	served  string
+}
+
+func (u *attemptUsage) add(in, out int, served string) {
+	u.in += in
+	u.out += out
+	if served != "" {
+		u.served = served
+	}
+}
+
+// onto returns err carrying the discarded attempts' usage on top of its own (heldUsageError); err unchanged when
+// none was discarded. The last attempt's usage was not added, so nothing is counted twice.
+func (u attemptUsage) onto(err error) error {
+	if err == nil || (u.in == 0 && u.out == 0) {
+		return err
+	}
+	in, out, served, _ := usageOf(err)
+	if served == "" {
+		served = u.served
+	}
+	return &heldUsageError{err: err, tokensIn: in + u.in, tokensOut: out + u.out, servedModel: served}
 }
 
 // retryReason maps a retryable error onto a CLOSED-SET metric label — raw error text is never used: it
@@ -191,7 +237,7 @@ func (rp *RetryingProvider) Embed(ctx context.Context, text []string) ([][]float
 			}
 		}
 		res, err := rp.Provider.Embed(ctx, text)
-		if err == nil || !isRetryable(err) {
+		if err == nil || !isRetryable(err) || replayForbidden(err) {
 			return res, err
 		}
 		lastErr = err
@@ -227,14 +273,32 @@ func usageOf(err error) (tokensIn, tokensOut int, servedModel string, ok bool) {
 // usage rides on the final error via heldUsageError.
 func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	var lastErr error
+	// discarded is the usage of the attempt being retried: reported as an attemptDiscarded chunk once the next
+	// attempt starts, so the audited wrapper records it as its own row instead of letting the next attempt's
+	// counts overwrite it (R-budget-1). The last attempt's usage stays on its chunks and its error, as before.
+	var discarded attemptUsage
 	for attempt := range rp.maxAttempts {
 		if attempt > 0 {
 			recordAIRetryAttempt(rp.metricID(), retryReason(lastErr))
 			if err := backoff(ctx, attempt-1, lastErr, rp.baseDelay); err != nil {
+				// The retry will not run (a Stop, a deadline, a long Retry-After): the error carries the
+				// attempt's usage, a held error's included, unless it already does.
+				if _, _, _, ok := usageOf(err); !ok && (discarded.in > 0 || discarded.out > 0) {
+					return &heldUsageError{err: err, tokensIn: discarded.in, tokensOut: discarded.out, servedModel: discarded.served}
+				}
 				return err
 			}
+			if discarded.in > 0 || discarded.out > 0 || discarded.served != "" {
+				onChunk(Chunk{attemptDiscarded: true, TokensIn: discarded.in, TokensOut: discarded.out, ServedModel: discarded.served})
+			}
+			discarded = attemptUsage{}
 		}
+		// The usage this attempt reported on its forwarded chunks (a message_start before the error).
+		var seen attemptUsage
 		delivered := false
+		// silentOpen is this attempt's net SilentStep: a failed attempt's open phase is closed before the next
+		// one starts, or the chat's idle watchdog keeps the hosted-step limit for the rest of the call (R-provider-7).
+		silentOpen := 0
 		var heldErr error
 		var heldTokensIn, heldTokensOut int
 		var heldServedModel string
@@ -249,6 +313,11 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 			if c.Text != "" || c.Done || len(c.ToolCalls) > 0 || c.ToolEvent != nil || c.ServerStep {
 				delivered = true
 			}
+			silentOpen += int(c.SilentStep)
+			seen.in, seen.out = max(seen.in, c.TokensIn), max(seen.out, c.TokensOut)
+			if c.ServedModel != "" {
+				seen.served = c.ServedModel
+			}
 			onChunk(c)
 		})
 		if err == nil {
@@ -257,9 +326,13 @@ func (rp *RetryingProvider) Stream(ctx context.Context, req Request, onChunk fun
 				err = &heldUsageError{err: err, tokensIn: heldTokensIn, tokensOut: heldTokensOut, servedModel: heldServedModel}
 			}
 		}
-		if err == nil || !isRetryable(err) || delivered {
+		if err == nil || !isRetryable(err) || replayForbidden(err) || delivered {
 			return err
 		}
+		for ; silentOpen > 0; silentOpen-- {
+			onChunk(Chunk{SilentStep: -1})
+		}
+		discarded = attemptUsage{in: max(seen.in, heldTokensIn), out: max(seen.out, heldTokensOut), served: cmp.Or(heldServedModel, seen.served)}
 		lastErr = err
 	}
 	return asProviderDown(lastErr)

@@ -171,12 +171,21 @@ func policyRequests(t *testing.T, rt *Router) []policyRequest {
 	return out
 }
 
-// legacyDecisions is what the legacy classifiers decide for one request, as route_policy.golden records it.
-type legacyDecisions struct{ route, auth, scopes, ratelimit, rls, timeout, metric string }
+// legacyDecisions is what the legacy classifiers decide for one request, as route_policy.golden records it; billed,
+// like the metrics label, is the resolved policy's (route.Billed: the route can reach a billed provider call), marked
+// billed=yes so a billed route's bucket is reviewed beside it (R-security-c22).
+type legacyDecisions struct {
+	route, auth, scopes, ratelimit, rls, timeout, metric string
+	billed                                               bool
+}
 
 func (d legacyDecisions) String() string {
-	return fmt.Sprintf("route=%s auth=%s scopes=%s ratelimit=%s rls=%s timeout=%s metric=%s",
+	s := fmt.Sprintf("route=%s auth=%s scopes=%s ratelimit=%s rls=%s timeout=%s metric=%s",
 		d.route, d.auth, d.scopes, d.ratelimit, d.rls, d.timeout, d.metric)
+	if d.billed {
+		s += " billed=yes"
+	}
+	return s
 }
 
 // legacyDecisionsOf runs the legacy classifiers on method + target.
@@ -189,7 +198,8 @@ func legacyDecisionsOf(rt *Router, method, target string) legacyDecisions {
 		bucket = "none"
 	}
 	deadline := middleware.TimeoutClass(r)
-	label := rt.resolver.Resolve(method, r.URL).Label // what Metrics records, in every mode
+	resolved := rt.resolver.Resolve(method, r.URL)
+	label := resolved.Label // what Metrics records, in every mode
 
 	// Inside the mux: Router.ServeHTTP cleans Path, the alias middleware rewrites the URL, then jwtAuth and
 	// rlsMiddleware judge routePath.
@@ -211,17 +221,23 @@ func legacyDecisionsOf(rt *Router, method, target string) legacyDecisions {
 	if dispatched == "" {
 		dispatched = "-"
 	}
-	return legacyDecisions{dispatched, authn, scopes, bucket, rls, deadline, label}
+	return legacyDecisions{dispatched, authn, scopes, bucket, rls, deadline, label, resolved.Billed}
 }
 
 // declaredDecisions is the policy the resolver gives one request, as route_policy_declared.golden records it.
-type declaredDecisions struct{ kind, pattern, auth, scopes, ratelimit, tx, deadline, label, allow string }
+type declaredDecisions struct {
+	kind, pattern, auth, scopes, ratelimit, tx, deadline, label, allow string
+	billed                                                             bool
+}
 
 func (d declaredDecisions) String() string {
 	s := fmt.Sprintf("kind=%s pattern=%s auth=%s scopes=%s ratelimit=%s tx=%s deadline=%s label=%s",
 		d.kind, d.pattern, d.auth, d.scopes, d.ratelimit, d.tx, d.deadline, d.label)
 	if d.allow != "" {
 		s += " allow=" + d.allow
+	}
+	if d.billed {
+		s += " billed=yes"
 	}
 	return s
 }
@@ -231,7 +247,7 @@ func declaredDecisionsOf(rt *Router, method, target string) declaredDecisions {
 	p := rt.resolver.Resolve(method, httptest.NewRequest(method, target, nil).URL)
 	d := declaredDecisions{
 		kind: p.Kind.String(), pattern: p.Pattern, auth: p.Access.String(), scopes: "-", ratelimit: p.RateLimit,
-		tx: p.Tx.String(), deadline: p.Deadline.String(), label: p.Label,
+		tx: p.Tx.String(), deadline: p.Deadline.String(), label: p.Label, billed: p.Billed,
 	}
 	if d.pattern == "" {
 		d.pattern = "-"

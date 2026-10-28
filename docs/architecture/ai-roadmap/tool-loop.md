@@ -2,53 +2,6 @@
 
 Items of category `tool-loop` from the [AI assistant roadmap](../ai-roadmap.md), ordered by tier. Evidence is `file:line` as of the roadmap's byline; re-read the cited lines before starting an item.
 
-### R-tool-loop-19
-
-**History load/save failure at stream start answers without context and stores an orphan answer** · tier 1
-
-**Problem.** In cloud mode the turn's question and history are read and written in one compare-and-swap at stream start. When Postgres fails at that point, `reconstructAndPersistUserTurn` sets `req.Messages = nil` on a load failure and only logs a save failure. The stream goes on in both cases. On a load failure the model then answers a follow-up with no prior conversation. That answer is silently wrong ("fix the second one" has no referent), the client is told nothing, and `persistAnswer` stays true. In both cases, at done `persistAssistantTurn` cannot find the question's id in the stored history, so it appends the answer at the end of the previous turns. The store then ends with an answer directly after the previous assistant message. The client never saves a server-owned turn, so the orphan is permanent.
-
-**Evidence.**
-- `internal/service/chat_conversation_version.go:339` — load failure: `req.Messages = nil`, returns `stored=false`, `write=nil`; the stream continues (339-343)
-- `internal/service/chat_conversation_version.go:346` — the save error is only logged (346-348); `!res.Versioned` gives a nil write
-- `internal/service/chat.go:862` — `persistAnswer = true` is set before the user turn is stored (865); `userTurnStored` is set only when stored (868-870)
-- `internal/service/chat_conversation.go:268` — the answer is inserted at `len(history)` when the question's id is absent (270-276); `userTurnStored` is not checked
-- `internal/service/chat_context.go:377` — with `req.Messages` nil, `buildScopedMessages` sends only the new user turn
-- `frontend/src/components/chat/hooks/stream-engine/events.ts:51` — "The server stored this turn … nothing left to save": the client never saves a server-owned turn (`save: !acc.serverOwned && !adopted`, 58)
-
-**Change.** Fail the turn instead of guessing. A history load failure ends the stream with a retryable code before any provider call, so no tokens are spent on an answer without context. The code could be `HISTORY_UNAVAILABLE`, with the same copy pattern as `AI_BUDGET_UNAVAILABLE` (`internal/service/chat_errors.go:17`). When history loaded but the question could not be stored, `persistAssistantTurn` inserts the missing user turn immediately before the answer, in the same CAS round: `req.UserMessage` under `clientMessageID(req.UserMessageID)`. Answering without history on a load failure was a deliberate choice in the fix for the history-wipe bug (`internal/service/chat_history_loss_test.go:91-126`, mirrored in the file path at `internal/service/chat.go:188-194`). The change must keep `TestChatHistory_FailedLoadDoesNotWipeTheStoredConversation` green. The orphan-answer fix covers both triggers: the load failed at start, or the load succeeded but the save failed. The fix for answering without context applies only to the load failure.
-
-**Touches.** `internal/service/chat_conversation_version.go`, `internal/service/chat_conversation.go`, `internal/service/chat.go`, `internal/service/chat_errors.go`, `frontend/src/components/chat/hooks/stream-engine/events.ts`, `frontend/src/lib/chatEvent.ts`
-
-**Done when.**
-- A FakeBackend whose `LoadConversationVersioned` fails once makes the stream end with the retryable error, and the provider is never called.
-- A backend that fails `SaveConversationIf` at start but works at done leaves the stored conversation ending with [question, answer] in that order, with the question under the client's id.
-- A test asserts that the server's own writes never append an assistant message directly after another assistant message.
-- `TestChatHistory_FailedLoadDoesNotWipeTheStoredConversation` still passes.
-
-### R-tool-loop-20
-
-**A failed server-side answer write at done is silent: no client fallback, no metric, done looks normal** · tier 1
-
-**Problem.** On a server-owned turn the answer is written inside `emit("done")` (`storeAnswer`). Any store error other than a CAS conflict makes `persistAssistantTurn` return `answerWrite{}` with only a Warn log; examples are a Postgres hiccup or hitting `persistAnswerTimeout`. `mutateConversationAt` returns non-conflict errors at once without touching any counter; the give-up counter fires only when CAS retries run out. `convWrite` is set to nil and the done event goes out without `conversationVersion`. The client has the full text and tool trail but does not save, because the turn is server-owned, and it has no toast for this path. The user sees a completed answer; a reload shows the question with no answer.
-
-**Evidence.**
-- `internal/service/chat_conversation.go:278` — a store error gives a Warn and `answerWrite{}`, not Written (278-281)
-- `internal/service/chat_conversation_version.go:154` — non-conflict errors return at once with no counter (154-156); the `retry_exhausted` and give-up counters are only at 157-162
-- `internal/service/chat.go:872` — `storeAnswer`: `ans.Written` false leads to `convWrite.Store(nil)` (877-881)
-- `internal/service/chat_conversation_version.go:178` — `stampConversationVersion` adds nothing when `convWrite` is nil (178-181)
-- `frontend/src/components/chat/hooks/stream-engine/events.ts:51` — server-owned done: `adoptStreamVersion` and commit, with no fallback save and no toast (51-58)
-- `frontend/src/components/chat/hooks/stream-engine/commit.ts:34` — the client's own save path toasts on failure (34-39); the server-owned path has no equivalent signal
-
-**Change.** Carry `answerStored` (true/false) on done and error for server-owned turns. When it is false, the client runs its existing CAS save (`saveThreadConversation`) and shows the `saveFailed` toast if that save fails too. On the server, retry transient errors (not conflicts, not context errors) once or twice within `persistAnswerTimeout`. Count failures in `pad_chat_answer_write_failures_total{cause=error|timeout|conflict}`. The counter also covers the two other exits of `mutateConversationAt`, the load error and the cancelled backoff (`internal/service/chat_conversation_version.go:136-139`, `168-169`), not only save errors. Keep the write before done so the version stamp stays correct when the write succeeds. Update ADR 0031 as well. Its Consequences paragraph says the client saves after a server-owned turn it cannot adopt (`docs/adr/0031-conversation-versioning.md:19`), but the code never does (`events.ts:58`).
-
-**Touches.** `internal/service/chat_conversation.go`, `internal/service/chat_conversation_version.go`, `internal/service/chat.go`, `frontend/src/components/chat/hooks/stream-engine/events.ts`, `frontend/src/lib/chatEvent.ts`, `internal/api/handlers_chat.go`, `docs/adr/0031-conversation-versioning.md`
-
-**Done when.**
-- Go test: a backend whose `SaveConversationIf` fails with a non-conflict error at done emits done with `answerStored=false` and increments the new counter.
-- Go test: a backend that fails once and then succeeds stores the answer and emits `conversationVersion`.
-- Stream-engine test: done with `answerStored=false` on a server-owned turn calls `saveThreadConversation`, and a failed fallback save shows a toast.
-
 ### R-tool-loop-8
 
 **Subflow IDs are undiscoverable and nested or large structures cannot be walked or paged by tools** · tier 2

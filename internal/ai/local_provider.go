@@ -285,6 +285,7 @@ func NewLocalProvider(raw string) *LocalProvider {
 		client:         localModelsClient(),
 		baseURL:        &base,
 		providerLabel:  "local models",
+		providerID:     localProviderID,
 		maxTokensParam: maxTokensParamLegacy,
 	}
 	return p
@@ -352,7 +353,7 @@ func (p *LocalProvider) fetchModels(ctx context.Context) ([]ModelInfo, bool, err
 	if err != nil {
 		return nil, false, err
 	}
-	resp, err := p.client.Do(req)
+	resp, err := doProviderRequest(p.client, req)
 	if err != nil {
 		return nil, false, fmt.Errorf("local models: %w", err)
 	}

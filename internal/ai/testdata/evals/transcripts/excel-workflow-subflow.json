@@ -1,0 +1,36 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "get_subflow_blocks",
+          "input": {
+            "subflowId": "S2"
+          }
+        }
+      ],
+      "tokensIn": 1980,
+      "tokensOut": 24
+    },
+    {
+      "toolCalls": [
+        {
+          "id": "call_2",
+          "name": "list_findings",
+          "input": {
+            "subflowId": "S2"
+          }
+        }
+      ],
+      "tokensIn": 2075,
+      "tokensOut": 26
+    },
+    {
+      "text": "`FormatReport` opens Excel, formats two cell ranges, writes a header and closes Excel again.\n\nMost important: **it is never called** — `uncalled-subflow` ([finding](finding:uncalled-subflow:83677b8261993fd4)), so none of this runs. Either call it from `Main` after the save, or delete it.\n\nIf you keep it: every Excel action has `unhandled-error`, from [Launch Excel](block:B18) (line 21, the formatting steps nested under it) to [Close Excel](block:B23) (line 26) — e.g. [finding](finding:unhandled-error:83677b8261993fd4) — and the header file path on line 25 is hard-coded.",
+      "tokensIn": 2390,
+      "tokensOut": 152
+    }
+  ]
+}

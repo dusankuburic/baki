@@ -1,5 +1,5 @@
 import {useTranslation} from 'react-i18next'
-import {useEffect, useState} from 'react'
+import {useState} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {formatCompact} from '@/lib/format'
 
@@ -8,36 +8,83 @@ interface Props {
   completionTokens: number
 }
 
-const TOKEN_REFRESH_MS = 250
+interface Seen {
+  threadId: string | null
+  /** The streaming reply's message id and live count, while one streams. */
+  messageId: string | null
+  tokens: number
+  /** The reply that just ended, until its committed message shows how it ended. */
+  awaiting: {messageId: string; tokens: number} | null
+  /** The output tokens announced for the reply that last finished on this thread; null for none. */
+  ended: number | null
+}
 
+// R-frontend-4: the count comes from a store selector (no polling), and it stays out of the live region. The one
+// role=status says "Generating answer" while a reply streams, and the reply's output tokens once when it finishes
+// with an answer (done's tokensOut, else the live count); a Stop or an error announces no count (the error bubble
+// speaks for itself). Its text changes only on start and finish, so assistive tech hears no stream of numbers.
 export default function ChatUsageMeter({promptTokens, completionTokens}: Props) {
   const {t} = useTranslation('chat')
-  const isStreaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
-  const [live, setLive] = useState(0)
+  const threadId = useChatStore(s => s.activeThreadId)
+  const live = useChatStore(s => (s.activeThreadId ? s.streams[s.activeThreadId]?.tokens : undefined))
+  const messageId = useChatStore(s => (s.activeThreadId ? s.streams[s.activeThreadId]?.messageId : undefined)) ?? null
+  const isStreaming = live !== undefined
+  const tokens = live || 0
 
-  useEffect(() => {
-    if (!isStreaming) return
-    const read = () => {
-      const st = useChatStore.getState()
-      setLive(st.activeThreadId ? st.streams[st.activeThreadId]?.tokens || 0 : 0)
-    }
-    read()
-    const id = setInterval(read, TOKEN_REFRESH_MS)
-    return () => clearInterval(id)
-  }, [isStreaming])
+  const [seen, setSeen] = useState<Seen>({threadId, messageId, tokens, awaiting: null, ended: null})
+  const awaitedId = seen.awaiting?.messageId
+  const committed = useChatStore(s =>
+    awaitedId && s.activeThreadId ? s.conversations.get(s.activeThreadId)?.find(m => m.id === awaitedId) : undefined,
+  )
+  if (seen.threadId !== threadId) {
+    setSeen({threadId, messageId, tokens, awaiting: null, ended: null})
+  } else if (seen.messageId !== messageId) {
+    // A reply started or ended: an ended one waits for its committed message; a new one drops the last count.
+    const awaiting = seen.messageId ? {messageId: seen.messageId, tokens: seen.tokens} : null
+    setSeen({threadId, messageId, tokens, awaiting: messageId ? null : awaiting, ended: null})
+  } else if (isStreaming && seen.tokens !== tokens) {
+    setSeen({...seen, tokens})
+  } else if (seen.awaiting && committed) {
+    const answered = committed.finishReason !== 'error' && committed.finishReason !== 'interrupted'
+    setSeen({...seen, awaiting: null, ended: answered ? (committed.tokensOut ?? seen.awaiting.tokens) : null})
+  }
 
-  if (isStreaming) {
+  const statusText = isStreaming
+    ? t('tokens.generating')
+    : seen.ended !== null
+      ? t('tokens.replyEnded', {count: seen.ended})
+      : ''
+  return (
+    <>
+      {/* Always mounted, so its first text is announced as a change of an existing live region. */}
+      <span role="status" className="sr-only">
+        {statusText}
+      </span>
+      <MeterFigure
+        streaming={isStreaming}
+        tokens={tokens}
+        promptTokens={promptTokens}
+        completionTokens={completionTokens}
+      />
+    </>
+  )
+}
+
+function MeterFigure({
+  streaming,
+  tokens,
+  promptTokens,
+  completionTokens,
+}: Props & {streaming: boolean; tokens: number}) {
+  const {t} = useTranslation('chat')
+  if (streaming) {
     return (
-      <div
-        className="flex items-center gap-2 min-w-0"
-        role="status"
-        aria-label={t('tokens.streamingAria', {count: live})}
-      >
-        <span className="w-10 h-0.5 rounded-full bg-surface-4 overflow-hidden shrink-0" aria-hidden="true">
+      <div className="flex items-center gap-2 min-w-0" aria-hidden="true">
+        <span className="w-10 h-0.5 rounded-full bg-surface-4 overflow-hidden shrink-0">
           <span className="block w-1/3 h-full rounded-full bg-brand-400 animate-indeterminate" />
         </span>
         <span className="text-2xs text-text-tertiary tabular-nums truncate" title={t('tokens.streamingTitle')}>
-          {t('tokens.streamingSoFar', {count: live, formatted: formatCompact(live)})}
+          {t('tokens.streamingSoFar', {count: tokens, formatted: formatCompact(tokens)})}
         </span>
       </div>
     )

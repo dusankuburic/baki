@@ -241,8 +241,10 @@ func TestKnowledgeLock_LeaseReleasedOnEveryExit(t *testing.T) {
 			t.Fatalf("held %d leases mid-upload, want 1", leaser.heldCount())
 		}
 		cancel()
-		if err := awaitErr(t, "the cancelled upload", done); err == nil {
-			t.Fatal("cancelled upload succeeded")
+		// The upload ends with the request: what it stored stays pending, resumable (R-knowledge-2).
+		_ = awaitErr(t, "the cancelled upload", done)
+		if docs, _ := store.ListKnowledgeDocuments(ctx, "org-1", 0, 0); len(docs) != 1 || docs[0].State != interfaces.KnowledgeDocumentPending {
+			t.Fatalf("documents after the cancelled upload = %+v; want it pending", docs)
 		}
 		if leaser.heldCount() != 0 {
 			t.Error("lease still held after the context was cancelled")

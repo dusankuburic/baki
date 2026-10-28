@@ -1,0 +1,11 @@
+# openai/no-space.sse through parseOpenAISSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="gpt-4.1-2025-04-14"
+02 text="The flow reads " served="gpt-4.1-2025-04-14"
+03 text="the workbook, then loops " served="gpt-4.1-2025-04-14"
+04 text="over each row — café names included." served="gpt-4.1-2025-04-14"
+05 keepalive served="gpt-4.1-2025-04-14"
+06 keepalive served="gpt-4.1-2025-04-14"
+07 done finish="stop" in=1290 out=18 cacheRead=1024 served="gpt-4.1-2025-04-14"
+return nil
+summary chunks=7 keepalives=3 text="The flow reads the workbook, then loops over each row — café names included."

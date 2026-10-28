@@ -84,6 +84,9 @@ export interface AISettings {
   providers: AIProvidersConfig
   saveConversationHistory: boolean
   systemPromptSuffix?: string
+  /** Chats start with tools off (R-frontend-6): a thread that never switched tools on or off sends useTools false.
+   *  Absent or false keeps tools on. */
+  toolsOffByDefault?: boolean
   /** An organisation's allowed providers (ADR 0028): absent or empty allows every provider. The org settings
    * route keeps the stored list when a write leaves this out, and clears it on an explicit []. */
   allowedProviders?: ProviderID[]

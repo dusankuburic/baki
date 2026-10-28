@@ -18,10 +18,19 @@ export interface PromptTemplate {
   label: string
   prompt: string
   category: 'analysis' | 'debug' | 'refactor' | 'explain'
+  /** The answer needs lookups beyond the context the request carries (search_flow, get_subflow_blocks…). */
+  needsTools: boolean
 }
 
-const builtInTemplates: {id: TemplateId; category: PromptTemplate['category']; requiresBlock?: boolean}[] = [
-  {id: 't-explain-block', category: 'explain', requiresBlock: true},
+// Every flow-wide template needs the tool loop to look at blocks outside the context budget (R-frontend-6); the
+// block template is answered from the context block the request carries.
+const builtInTemplates: {
+  id: TemplateId
+  category: PromptTemplate['category']
+  requiresBlock?: boolean
+  noLookups?: boolean
+}[] = [
+  {id: 't-explain-block', category: 'explain', requiresBlock: true, noLookups: true},
   {id: 't-explain-flow', category: 'explain'},
   {id: 't-find-bugs', category: 'debug'},
   {id: 't-error-handling', category: 'debug'},
@@ -32,7 +41,8 @@ const builtInTemplates: {id: TemplateId; category: PromptTemplate['category']; r
 ]
 
 interface Props {
-  onSelect: (prompt: string) => void
+  /** needsTools: the template needs lookups, so the caller turns the thread's tools on before sending. */
+  onSelect: (prompt: string, needsTools: boolean) => void
   hasBlock: boolean
   flowName?: string
   blockName?: string
@@ -58,7 +68,11 @@ export default function PromptTemplates({onSelect, hasBlock, flowName, blockName
         const resolved: PromptTemplate = {
           id: tpl.id,
           category: tpl.category,
-          label: t(`templates.labels.${tpl.id}`),
+          needsTools: !tpl.noLookups,
+          label:
+            tpl.requiresBlock && blockName
+              ? t('templates.ui.explainNamedBlock', {name: blockName})
+              : t(`templates.labels.${tpl.id}`),
           prompt: t(`templates.prompts.${tpl.id}`),
         }
         if (!acc[tpl.category]) acc[tpl.category] = []
@@ -103,7 +117,7 @@ export default function PromptTemplates({onSelect, hasBlock, flowName, blockName
                       disabledReason ? 'opacity-50 cursor-not-allowed' : 'hover:bg-surface-3',
                     )}
                     onClick={() => {
-                      if (!disabledReason) onSelect(interpolate(tpl.prompt))
+                      if (!disabledReason) onSelect(interpolate(tpl.prompt), tpl.needsTools)
                     }}
                     title={disabledReason ?? tpl.prompt}
                   >

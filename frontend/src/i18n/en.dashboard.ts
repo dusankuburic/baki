@@ -143,6 +143,7 @@ export const enDashboard = {
     org_knowledge_upload: 'Uploaded a knowledge document',
     org_knowledge_delete: 'Deleted a knowledge document',
     org_knowledge_reindex: 'Re-indexed knowledge',
+    org_knowledge_identity_stamp: 'Confirmed the embedding model of knowledge documents',
     policy_save: 'Saved a policy',
     policy_delete: 'Deleted a policy',
     token_create: 'Created an API token',
@@ -159,6 +160,9 @@ export const enDashboard = {
     org_ci_credential_create: 'Created a CI credential',
     org_ci_credential_revoke: 'Revoked a CI credential',
     ci_webhook_run: 'Recorded a CI run',
+    flow_fix_apply: 'Applied a fix',
+    chat_fix_decision: 'Decided on a proposed fix',
+    chat_agent_tools: 'An AI agent ran its own tools',
   },
   batchLibrary: {
     title: 'Across flows',

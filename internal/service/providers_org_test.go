@@ -85,7 +85,7 @@ func TestDynamicModels_SharedListingCachedUnderOrgScope(t *testing.T) {
 	_ = orgKeys.SaveOrg("org-1", "glm", "org-glm-key", "admin")
 	svc := newOrgProviderService(t, secrets, orgKeys)
 
-	ls, configured := svc.resolveListing("u-none", "org-1", "glm")
+	ls, _, configured := keyByKey(svc, "u-none", "org-1").resolveListing("glm")
 	if !configured || !ls.shared || ls.cacheScope != ai.OrgScope("org-1") {
 		t.Fatalf("resolveListing = %+v, %v; want shared under the org scope", ls, configured)
 	}
@@ -106,7 +106,7 @@ func TestDynamicModels_SharedListingCachedUnderOrgScope(t *testing.T) {
 
 	// A member with their own key lists — and caches — under their scope.
 	_ = secrets.Save("u-own", "glm", "own-key")
-	ls, _ = svc.resolveListing("u-own", "org-1", "glm")
+	ls, _, _ = keyByKey(svc, "u-own", "org-1").resolveListing("glm")
 	if ls.shared || ls.cacheScope != "u-own" {
 		t.Errorf("member with own key: %+v, want personal scope", ls)
 	}

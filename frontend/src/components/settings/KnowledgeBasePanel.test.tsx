@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach, onTestFinished} from 'vitest'
-import {render, screen, fireEvent, waitFor, within} from '@testing-library/react'
+import {act, render, screen, fireEvent, waitFor, within} from '@testing-library/react'
 import KnowledgeBasePanel from './KnowledgeBasePanel'
 import {useOrgStore, type Organisation} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
@@ -377,24 +377,17 @@ describe('KnowledgeBasePanel', () => {
     expect(screen.queryByText('upstream unavailable')).toBeNull()
   })
 
-  it('waits at least five minutes on upload and re-index', async () => {
+  it('waits at least five minutes on a re-index request', async () => {
     seedStore('admin')
-    routeRequests({reindex: () => Promise.resolve({chunks: 1, docs: 1}), upload: () => Promise.resolve({})})
-    const {container} = renderPanel()
+    routeRequests({reindex: () => Promise.resolve({chunks: 1, docs: 1})})
+    renderPanel()
     await screen.findByText('guide.md')
-
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement
-    fireEvent.change(input, {target: {files: [new File(['# rules'], 'rules.md', {type: 'text/markdown'})]}})
-    fireEvent.click(screen.getByText('Index Document'))
-    await waitFor(() => expect(requestMock).toHaveBeenCalledWith('/api/orgs/org-1/knowledge/upload', expect.anything()))
     await confirmFirstReindexDialog()
     await waitFor(() =>
       expect(requestMock).toHaveBeenCalledWith('/api/orgs/org-1/knowledge/reindex', expect.anything()),
     )
-    for (const suffix of ['/knowledge/upload', '/knowledge/reindex']) {
-      const call = requestMock.mock.calls.find(c => String(c[0]).endsWith(suffix))!
-      expect((call[1] as {timeoutMs?: number}).timeoutMs).toBeGreaterThanOrEqual(5 * 60_000)
-    }
+    const call = requestMock.mock.calls.find(c => String(c[0]).endsWith('/knowledge/reindex'))!
+    expect((call[1] as {timeoutMs?: number}).timeoutMs).toBeGreaterThanOrEqual(5 * 60_000)
   })
 
   it('follows nextCursor across pages and reports the total', async () => {
@@ -452,7 +445,9 @@ describe('KnowledgeBasePanel', () => {
     renderPanel()
     await confirmFirstReindexDialog()
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Re-indexed 250 chunks so far…')
+    expect(await screen.findByRole('status', {name: 'Re-index progress'})).toHaveTextContent(
+      'Re-indexed 250 chunks so far…',
+    )
     fireEvent.click(screen.getByRole('button', {name: 'Stop'}))
 
     expect(await screen.findByText(/Re-index stopped after 250 chunks/)).toBeInTheDocument()
@@ -499,7 +494,9 @@ describe('KnowledgeBasePanel', () => {
     renderPanel()
     await confirmFirstReindexDialog()
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Re-indexed 250 chunks so far…')
+    expect(await screen.findByRole('status', {name: 'Re-index progress'})).toHaveTextContent(
+      'Re-indexed 250 chunks so far…',
+    )
     fireEvent.click(screen.getByRole('button', {name: 'Stop'}))
     expect(await screen.findByText(/The pages done are kept/)).toBeInTheDocument()
 
@@ -582,6 +579,31 @@ describe('KnowledgeBasePanel', () => {
         expect.objectContaining({body: {cursor: {docId: 'd9', id: 'c700'}}}),
       ),
     )
+  })
+
+  it("shows the server's invalid-filename verdict verbatim on upload", async () => {
+    seedStore('admin')
+    routeRequests({
+      upload: () =>
+        Promise.reject(
+          new ApiError('the file name contains characters that are not allowed', 400, 'KNOWLEDGE_FILENAME_INVALID'),
+        ),
+    })
+    const {container} = renderPanel()
+    await screen.findByText('guide.md')
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, {target: {files: [new File(['# rules'], 'rules.md', {type: 'text/markdown'})]}})
+    fireEvent.click(screen.getByText('Index Document'))
+    expect(await screen.findByText('the file name contains characters that are not allowed')).toBeInTheDocument()
+  })
+
+  // R-knowledge-1: an unpinned deployment embeds each member's questions with the member's own key.
+  it.each(['admin', 'member'] as const)('tells %s users that members embed with their own key', async role => {
+    seedStore(role)
+    routeRequests({})
+    renderPanel()
+    await screen.findByText('guide.md')
+    expect(screen.getByText(/own embedding key/)).toHaveTextContent('PAD_EMBEDDING_PROVIDER')
   })
 
   it('shows the document-too-large verdict verbatim on upload', async () => {
@@ -679,5 +701,533 @@ describe('KnowledgeBasePanel', () => {
       await screen.findByText('No documents indexed yet.')
       expect(screen.queryByText(NOTICE)).toBeNull()
     })
+  })
+})
+
+// R-knowledge-2: an upload is stored first and embedded page by page within each request's budget; the panel
+// continues it by document id while passages are pending, shows how far it got, and can stop and resume it.
+describe('KnowledgeBasePanel two-phase upload (R-knowledge-2)', () => {
+  type Body = Record<string, unknown>
+  const uploads = () =>
+    requestMock.mock.calls.filter(c => String(c[0]).endsWith('/knowledge/upload')).map(c => (c[1] as {body: Body}).body)
+  const result = (over: Record<string, unknown>) => ({
+    id: 'd9',
+    filename: 'rules.md',
+    state: 'pending',
+    chunkerVersion: 2,
+    chunks: 300,
+    embedded: 100,
+    pendingChunks: 200,
+    ...over,
+  })
+
+  function routeUpload(upload: (body: Body, signal?: AbortSignal) => unknown, list?: unknown[]) {
+    requestMock.mockImplementation((url: string, opts?: {body?: Body; signal?: AbortSignal}) => {
+      if (url.endsWith('/knowledge/upload')) return upload(opts?.body ?? {}, opts?.signal)
+      return Promise.resolve(
+        list ?? [
+          {id: 'd1', filename: 'guide.md', createdAt: new Date().toISOString(), chunkCount: 2, vectorIndexed: 2},
+        ],
+      )
+    })
+  }
+
+  async function pickAndUpload(container: HTMLElement) {
+    await screen.findByText('guide.md')
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, {target: {files: [new File(['# rules'], 'rules.md', {type: 'text/markdown'})]}})
+    fireEvent.click(screen.getByText('Index Document'))
+  }
+
+  it('continues the stored document by id while passages are pending, following nextCursor when given', async () => {
+    seedStore('admin')
+    const answers = [
+      result({nextCursor: {docId: 'd9', id: 'c100'}}),
+      result({embedded: 100, pendingChunks: 100}),
+      result({embedded: 100, pendingChunks: 0, state: 'ready'}),
+    ]
+    routeUpload(() => Promise.resolve(answers.shift()))
+    const {container} = renderPanel()
+    await pickAndUpload(container)
+
+    expect(await screen.findByText('Document added')).toBeInTheDocument()
+    expect(uploads()).toEqual([
+      {filename: 'rules.md', content: '# rules'},
+      {docId: 'd9', cursor: {docId: 'd9', id: 'c100'}},
+      {docId: 'd9'},
+    ])
+  })
+
+  it('shows how many passages are embedded while it continues', async () => {
+    seedStore('admin')
+    let call = 0
+    routeUpload(() => (++call === 1 ? Promise.resolve(result({})) : new Promise(() => {})))
+    const {container} = renderPanel()
+    await pickAndUpload(container)
+
+    expect(await screen.findByRole('status', {name: 'Upload progress'})).toHaveTextContent(
+      'Embedded 100 of 300 passages…',
+    )
+  })
+
+  it('stops on request, and Resume continues the same document', async () => {
+    seedStore('admin')
+    let call = 0
+    routeUpload((_body, signal) => {
+      if (++call === 1) return Promise.resolve(result({nextCursor: {docId: 'd9', id: 'c100'}}))
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    const {container} = renderPanel()
+    await pickAndUpload(container)
+
+    fireEvent.click(await screen.findByRole('button', {name: 'Stop upload'}))
+    expect(await screen.findByText(/Upload paused at 100 of 300 passages/)).toBeInTheDocument()
+
+    routeUpload(() => Promise.resolve(result({embedded: 200, pendingChunks: 0, state: 'ready'})))
+    fireEvent.click(await screen.findByRole('button', {name: 'Resume upload'}))
+    expect(await screen.findByText('Document added')).toBeInTheDocument()
+    expect(uploads().at(-1)).toEqual({docId: 'd9', cursor: {docId: 'd9', id: 'c100'}})
+    await waitFor(() => expect(screen.queryByRole('button', {name: 'Resume upload'})).toBeNull())
+  })
+
+  it('offers Resume when a request fails after the document was stored, from the cursor the error names', async () => {
+    seedStore('admin')
+    routeUpload(() =>
+      Promise.reject(
+        new ApiError('the embedding provider is rate limiting', 429, 'EMBEDDING_RATE_LIMITED', null, {
+          id: 'd9',
+          pendingChunks: 250,
+          nextCursor: {docId: 'd9', id: 'c50'},
+        }),
+      ),
+    )
+    const {container} = renderPanel()
+    await pickAndUpload(container)
+
+    expect(await screen.findByText('the embedding provider is rate limiting')).toBeInTheDocument()
+    routeUpload(() => Promise.resolve(result({embedded: 250, pendingChunks: 0, state: 'ready'})))
+    fireEvent.click(await screen.findByRole('button', {name: 'Resume upload'}))
+    expect(await screen.findByText('Document added')).toBeInTheDocument()
+    expect(uploads().at(-1)).toEqual({docId: 'd9', cursor: {docId: 'd9', id: 'c50'}})
+  })
+
+  it('says so when the upload to resume no longer exists, and drops Resume', async () => {
+    seedStore('admin')
+    let call = 0
+    routeUpload((_body, signal) => {
+      if (++call === 1) return Promise.resolve(result({}))
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    const {container} = renderPanel()
+    await pickAndUpload(container)
+    fireEvent.click(await screen.findByRole('button', {name: 'Stop upload'}))
+
+    routeUpload(() => Promise.reject(new ApiError('not found', 404, 'KNOWLEDGE_DOCUMENT_NOT_FOUND')))
+    fireEvent.click(await screen.findByRole('button', {name: 'Resume upload'}))
+    expect(await screen.findByText(/That upload no longer exists/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Resume upload'})).toBeNull()
+  })
+
+  it('does not loop on a continuation that embeds nothing', async () => {
+    seedStore('admin')
+    let call = 0
+    routeUpload(() => Promise.resolve(++call === 1 ? result({}) : result({embedded: 0})))
+    const {container} = renderPanel()
+    await pickAndUpload(container)
+
+    expect(await screen.findByText(/made no progress/)).toBeInTheDocument()
+    expect(uploads()).toHaveLength(2)
+    expect(screen.getByRole('button', {name: 'Resume upload'})).toBeInTheDocument()
+  })
+
+  it('bounds each upload request under the ingress cut instead of one long bulk wait', async () => {
+    seedStore('admin')
+    routeUpload(() => Promise.resolve(result({pendingChunks: 0, embedded: 300, state: 'ready'})))
+    const {container} = renderPanel()
+    await pickAndUpload(container)
+    await screen.findByText('Document added')
+    const call = requestMock.mock.calls.find(c => String(c[0]).endsWith('/knowledge/upload'))!
+    const timeoutMs = (call[1] as {timeoutMs?: number}).timeoutMs!
+    expect(timeoutMs).toBeGreaterThanOrEqual(2 * 60_000)
+    expect(timeoutMs).toBeLessThan(4 * 60_000)
+  })
+
+  describe('a pending document in the list', () => {
+    const pendingDoc = {
+      id: 'd7',
+      filename: 'sop.md',
+      createdAt: new Date().toISOString(),
+      chunkCount: 300,
+      vectorIndexed: 120,
+      state: 'pending',
+      pendingChunks: 180,
+      chunkerVersion: 2,
+      hasSource: true,
+    }
+
+    it('shows it as unfinished, not searchable and not as an index problem', async () => {
+      seedStore('member')
+      routeUpload(() => Promise.resolve({}), [{...pendingDoc, vectorIndexed: 0}])
+      renderPanel()
+      expect(await screen.findByText(/Upload unfinished: 120 of 300 passages embedded/)).toBeInTheDocument()
+      expect(screen.queryByText(/searchable/i)).toBeNull()
+      expect(screen.queryByText(/Not searchable/i)).toBeNull()
+      expect(screen.queryByRole('button', {name: /Resume the upload of/})).toBeNull()
+    })
+
+    it('lets an admin resume it by document id', async () => {
+      seedStore('admin')
+      routeUpload(
+        () => Promise.resolve(result({id: 'd7', pendingChunks: 0, embedded: 180, state: 'ready'})),
+        [pendingDoc],
+      )
+      renderPanel()
+      fireEvent.click(await screen.findByRole('button', {name: 'Resume the upload of sop.md'}))
+      expect(await screen.findByText('Document added')).toBeInTheDocument()
+      expect(uploads()).toEqual([{docId: 'd7'}])
+    })
+  })
+})
+
+// R-knowledge-9: documents cut by an older chunker can be cut again from their kept source text.
+describe('KnowledgeBasePanel re-chunk (R-knowledge-9)', () => {
+  const doc = (over: Record<string, unknown>) => ({
+    id: 'd1',
+    filename: 'guide.md',
+    createdAt: new Date().toISOString(),
+    chunkCount: 2,
+    vectorIndexed: 2,
+    state: 'ready',
+    chunkerVersion: 1,
+    hasSource: true,
+    ...over,
+  })
+
+  function routeRechunk(list: unknown[], rechunk: (body: unknown, signal?: AbortSignal) => unknown) {
+    requestMock.mockImplementation((url: string, opts?: {body?: unknown; signal?: AbortSignal}) => {
+      if (url.endsWith('/knowledge/reindex')) return rechunk(opts?.body, opts?.signal)
+      return Promise.resolve(list)
+    })
+  }
+
+  const reindexBodies = () =>
+    requestMock.mock.calls
+      .filter(c => String(c[0]).endsWith('/knowledge/reindex'))
+      .map(c => (c[1] as {body: unknown}).body)
+
+  it('is offered to admins only when a document with kept text was cut by an older chunker', async () => {
+    seedStore('admin')
+    routeRechunk([doc({chunkerVersion: 2}), doc({id: 'd2', filename: 'old.md', hasSource: false})], () => ({}))
+    const {unmount} = renderPanel()
+    await screen.findByText('guide.md')
+    expect(screen.queryByRole('button', {name: 'Re-chunk'})).toBeNull()
+    unmount()
+
+    routeRechunk([doc({})], () => ({}))
+    const second = renderPanel()
+    expect(await screen.findByRole('button', {name: 'Re-chunk'})).toBeInTheDocument()
+    second.unmount()
+
+    seedStore('member')
+    routeRechunk([doc({})], () => ({}))
+    renderPanel()
+    await screen.findByText('guide.md')
+    expect(screen.queryByRole('button', {name: 'Re-chunk'})).toBeNull()
+  })
+
+  it('reports the documents left alone for an unfinished upload of the same name, counted once', async () => {
+    seedStore('admin')
+    const pages = [
+      {chunks: 8, docs: 1, rechunked: 1, skippedPending: 2, truncated: true, nextCursor: {docId: 'd3', id: ''}},
+      {chunks: 4, docs: 1, rechunked: 1, skippedPending: 2},
+    ]
+    routeRechunk([doc({})], () => Promise.resolve(pages.shift()))
+    renderPanel()
+    fireEvent.click(await screen.findByRole('button', {name: 'Re-chunk'}))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Re-chunk'}))
+
+    expect(await screen.findByText('Re-chunked 2 documents')).toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        '2 documents were left as they are because an upload of them is unfinished. Finish or delete that upload first.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('repeats {rechunk: true} while nextCursor is set and reports what it skipped', async () => {
+    seedStore('admin')
+    const pages = [
+      {chunks: 40, docs: 2, rechunked: 2, skippedNoSource: 1, truncated: true, nextCursor: {docId: 'd3', id: ''}},
+      {chunks: 10, docs: 1, rechunked: 1, skippedNoSource: 1, skippedTooLarge: 1},
+    ]
+    routeRechunk([doc({})], () => Promise.resolve(pages.shift()))
+    renderPanel()
+    fireEvent.click(await screen.findByRole('button', {name: 'Re-chunk'}))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Re-chunk'}))
+
+    expect(await screen.findByText('Re-chunked 3 documents')).toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        '1 document was uploaded before its text was kept, so it could not be re-chunked: upload it again.',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('1 document would split into more passages than one upload may index and was left as it is.'),
+    ).toBeInTheDocument()
+    expect(reindexBodies()).toEqual([{rechunk: true}, {rechunk: true}])
+  })
+
+  it('marks a document that cannot be re-chunked for admins', async () => {
+    seedStore('admin')
+    routeRechunk([doc({}), doc({id: 'd2', filename: 'old.md', hasSource: false})], () => ({}))
+    renderPanel()
+    expect(await screen.findByText(/Uploaded before its text was kept/)).toBeInTheDocument()
+  })
+})
+
+// Step 10 review: a paused upload and a re-chunk, a stop with nothing known yet, an organisation switch, failures
+// and the announced progress.
+describe('KnowledgeBasePanel upload and re-chunk review fixes', () => {
+  type Body = Record<string, unknown>
+  type Handler = (body: Body, signal?: AbortSignal) => unknown
+  const now = new Date().toISOString()
+  const ready = {id: 'd1', filename: 'guide.md', createdAt: now, chunkCount: 2, vectorIndexed: 2, state: 'ready'}
+  const legacy = {...ready, chunkerVersion: 1, hasSource: true}
+  const pendingDoc = {
+    id: 'd7',
+    filename: 'sop.md',
+    createdAt: now,
+    chunkCount: 300,
+    vectorIndexed: 120,
+    state: 'pending',
+    pendingChunks: 180,
+    chunkerVersion: 2,
+    hasSource: true,
+  }
+  const result = (over: Record<string, unknown>) => ({
+    id: 'd9',
+    filename: 'rules.md',
+    state: 'pending',
+    chunkerVersion: 2,
+    chunks: 300,
+    embedded: 100,
+    pendingChunks: 200,
+    ...over,
+  })
+  const hang: Handler = (_body, signal) =>
+    new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+    })
+  let lists: unknown[][] = []
+
+  // The list answers lists[0], then lists[1], … (the last one from then on).
+  function route(handlers: {upload?: Handler; reindex?: Handler}, ...listSequence: unknown[][]) {
+    lists = listSequence.length > 0 ? listSequence : [[ready]]
+    requestMock.mockImplementation((url: string, opts?: {body?: Body; signal?: AbortSignal}) => {
+      if (url.endsWith('/knowledge/upload') && handlers.upload) return handlers.upload(opts?.body ?? {}, opts?.signal)
+      if (url.endsWith('/knowledge/reindex') && handlers.reindex)
+        return handlers.reindex(opts?.body ?? {}, opts?.signal)
+      return Promise.resolve(lists.length > 1 ? lists.shift() : lists[0])
+    })
+  }
+  const listLoads = () => requestMock.mock.calls.filter(c => String(c[0]).endsWith('/knowledge')).length
+  const uploads = () =>
+    requestMock.mock.calls.filter(c => String(c[0]).endsWith('/knowledge/upload')).map(c => (c[1] as {body: Body}).body)
+  const pick = (container: HTMLElement, name = 'rules.md') => {
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, {target: {files: [new File(['# rules'], name, {type: 'text/markdown'})]}})
+  }
+  async function startRechunk() {
+    fireEvent.click(await screen.findByRole('button', {name: 'Re-chunk'}))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Re-chunk'}))
+  }
+
+  it('does not offer Re-chunk while a document is pending, which a re-chunk would supersede', async () => {
+    seedStore('admin')
+    route({}, [legacy, pendingDoc])
+    renderPanel()
+    await screen.findByText('sop.md')
+    expect(screen.queryByRole('button', {name: 'Re-chunk'})).toBeNull()
+  })
+
+  it('does not offer Re-chunk while an upload runs', async () => {
+    seedStore('admin')
+    route({upload: hang}, [legacy])
+    const {container} = renderPanel()
+    expect(await screen.findByRole('button', {name: 'Re-chunk'})).toBeInTheDocument()
+    pick(container)
+    fireEvent.click(screen.getByText('Index Document'))
+    await waitFor(() => expect(screen.queryByRole('button', {name: 'Re-chunk'})).toBeNull())
+  })
+
+  it('says a re-chunk that made no progress with work left stopped, not that it is done', async () => {
+    seedStore('admin')
+    route({reindex: () => Promise.resolve({chunks: 0, docs: 0, truncated: true, nextCursor: {docId: 'd1', id: ''}})}, [
+      legacy,
+    ])
+    renderPanel()
+    await startRechunk()
+    expect(await screen.findByText(/Re-chunk stopped before it finished/)).toBeInTheDocument()
+    expect(screen.queryByText('Nothing to re-chunk')).toBeNull()
+    expect(await screen.findByRole('button', {name: 'Re-chunk'})).toBeInTheDocument()
+  })
+
+  it('clears the picked file once a Resume finishes the same document', async () => {
+    seedStore('admin')
+    let call = 0
+    route({upload: (body, signal) => (++call === 1 ? Promise.resolve(result({})) : hang(body, signal))})
+    const {container} = renderPanel()
+    await screen.findByText('guide.md')
+    pick(container)
+    fireEvent.click(screen.getByText('Index Document'))
+    fireEvent.click(await screen.findByRole('button', {name: 'Stop upload'}))
+
+    route({upload: () => Promise.resolve(result({embedded: 200, pendingChunks: 0, state: 'ready'}))})
+    fireEvent.click(await screen.findByRole('button', {name: 'Resume upload'}))
+    expect(await screen.findByText('Document added')).toBeInTheDocument()
+    expect(screen.getByText('Index Document').closest('button')).toBeDisabled()
+    expect(screen.queryByText('rules.md')).toBeNull()
+  })
+
+  it("stopping a pending row's Resume before it answers reports the row's progress", async () => {
+    seedStore('admin')
+    route({upload: hang}, [pendingDoc])
+    renderPanel()
+    fireEvent.click(await screen.findByRole('button', {name: 'Resume the upload of sop.md'}))
+    fireEvent.click(await screen.findByRole('button', {name: 'Stop upload'}))
+    expect(await screen.findByText(/Upload paused at 120 of 300 passages/)).toBeInTheDocument()
+  })
+
+  it('stopping a fresh upload before its first answer says so and lists the stored document with Resume', async () => {
+    seedStore('admin')
+    route({upload: hang}, [ready], [ready, pendingDoc])
+    const {container} = renderPanel()
+    await screen.findByText('guide.md')
+    pick(container)
+    fireEvent.click(screen.getByText('Index Document'))
+    fireEvent.click(await screen.findByRole('button', {name: 'Stop upload'}))
+
+    expect(await screen.findByText(/Upload stopped/)).toBeInTheDocument()
+    expect(await screen.findByRole('button', {name: 'Resume the upload of sop.md'})).toBeInTheDocument()
+  })
+
+  it('reloads the list after a first request that failed without naming a document', async () => {
+    seedStore('admin')
+    route({upload: () => Promise.reject(new ApiError('Gateway Timeout', 504, null))}, [ready], [ready, pendingDoc])
+    const {container} = renderPanel()
+    await screen.findByText('guide.md')
+    const before = listLoads()
+    pick(container)
+    fireEvent.click(screen.getByText('Index Document'))
+    expect(await screen.findByRole('button', {name: 'Resume the upload of sop.md'})).toBeInTheDocument()
+    expect(listLoads()).toBeGreaterThan(before)
+  })
+
+  it("forgets the old organisation's Resume and error when the organisation changes", async () => {
+    seedStore('admin')
+    let call = 0
+    route({upload: (body, signal) => (++call === 1 ? Promise.resolve(result({})) : hang(body, signal))})
+    const {container} = renderPanel()
+    await screen.findByText('guide.md')
+    pick(container)
+    fireEvent.click(screen.getByText('Index Document'))
+    fireEvent.click(await screen.findByRole('button', {name: 'Stop upload'}))
+    await screen.findByRole('button', {name: 'Resume upload'})
+
+    act(() => {
+      useOrgStore.setState({organisations: [adminOrg, {...adminOrg, id: 'org-2', name: 'Beta'}], activeOrgId: 'org-2'})
+    })
+    await screen.findByText('Beta')
+    expect(screen.queryByRole('button', {name: 'Resume upload'})).toBeNull()
+    expect(requestMock.mock.calls.some(c => String(c[0]).startsWith('/api/orgs/org-2/knowledge/upload'))).toBe(false)
+  })
+
+  it("forgets the old organisation's re-index Resume when the organisation changes", async () => {
+    seedStore('admin')
+    let call = 0
+    route({
+      reindex: (body, signal) =>
+        ++call === 1 ? Promise.resolve({chunks: 5, docs: 1, nextCursor: {docId: 'd2'}}) : hang(body, signal),
+    })
+    renderPanel()
+    fireEvent.click(await screen.findByRole('button', {name: 'Re-index'}))
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', {name: 'Re-index'}))
+    fireEvent.click(await screen.findByRole('button', {name: 'Stop'}))
+    await screen.findByRole('button', {name: 'Resume re-index'})
+
+    act(() => {
+      useOrgStore.setState({organisations: [adminOrg, {...adminOrg, id: 'org-2', name: 'Beta'}], activeOrgId: 'org-2'})
+    })
+    await screen.findByText('Beta')
+    expect(screen.queryByRole('button', {name: 'Resume re-index'})).toBeNull()
+  })
+
+  it('gives a re-chunk refused for another embedding model the model-change copy and bounds each request', async () => {
+    seedStore('admin')
+    route({reindex: () => Promise.reject(new ApiError('model differs', 409, 'EMBEDDING_MODEL_CHANGED'))}, [legacy])
+    renderPanel()
+    await startRechunk()
+    expect(await screen.findByText(/Not re-chunked: your embedding model differs/)).toBeInTheDocument()
+    const call = requestMock.mock.calls.find(c => String(c[0]).endsWith('/knowledge/reindex'))!
+    expect((call[1] as {timeoutMs?: number}).timeoutMs).toBe(3 * 60_000)
+  })
+
+  it('keeps both progress regions mounted while idle, so the first update is announced', async () => {
+    seedStore('admin')
+    route({})
+    renderPanel()
+    await screen.findByText('guide.md')
+    expect(screen.getByRole('status', {name: 'Upload progress'})).toBeEmptyDOMElement()
+    expect(screen.getByRole('status', {name: 'Re-index progress'})).toBeEmptyDOMElement()
+  })
+
+  it('names the Index Document button while it shows only the spinner', async () => {
+    seedStore('admin')
+    route({upload: hang})
+    const {container} = renderPanel()
+    await screen.findByText('guide.md')
+    pick(container)
+    fireEvent.click(screen.getByText('Index Document'))
+    expect(await screen.findByRole('button', {name: 'Indexing…'})).toBeInTheDocument()
+  })
+
+  it('stops a re-chunk on request and says how far it got', async () => {
+    seedStore('admin')
+    let call = 0
+    route(
+      {
+        reindex: (body, signal) =>
+          ++call === 1
+            ? Promise.resolve({chunks: 8, docs: 1, rechunked: 1, truncated: true, nextCursor: {docId: 'd1', id: ''}})
+            : hang(body, signal),
+      },
+      [legacy],
+    )
+    renderPanel()
+    await startRechunk()
+    fireEvent.click(await screen.findByRole('button', {name: 'Stop'}))
+    expect(await screen.findByText(/Re-chunk stopped after 1 document/)).toBeInTheDocument()
+    expect(call).toBe(2)
+  })
+
+  it('stops quietly when the panel unmounts mid-upload: no further request', async () => {
+    seedStore('admin')
+    let resolveFirst: (v: unknown) => void = () => {}
+    route({upload: () => new Promise(r => (resolveFirst = r))})
+    const {container, unmount} = renderPanel()
+    await screen.findByText('guide.md')
+    pick(container)
+    fireEvent.click(screen.getByText('Index Document'))
+    await waitFor(() => expect(uploads()).toHaveLength(1))
+    unmount()
+    await act(async () => resolveFirst(result({})))
+    expect(uploads()).toHaveLength(1)
   })
 })

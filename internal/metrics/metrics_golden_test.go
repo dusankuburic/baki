@@ -204,12 +204,22 @@ func TestMetricsGolden(t *testing.T) {
 // listed here.
 func TestMetrics_HistogramBuckets(t *testing.T) {
 	defBuckets := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+	// The AI call histograms reach the stream's 10-minute wall clock (R-observability-8).
+	aiLatency := []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300, 600}
 	want := map[string][]float64{
-		"ai_request_duration_seconds":           defBuckets,
-		"http_request_duration_seconds":         defBuckets,
-		"pad_background_task_duration_seconds":  {0.01, 0.05, 0.25, 1, 5, 15, 60, 300, 1800},
-		"pad_blob_operation_duration_seconds":   defBuckets,
-		"pad_chat_command_seconds":              defBuckets,
+		"ai_request_duration_seconds":          defBuckets,
+		"http_request_duration_seconds":        defBuckets,
+		"pad_ai_call_duration_seconds":         aiLatency,
+		"pad_ai_stream_first_token_seconds":    aiLatency,
+		"pad_background_task_duration_seconds": {0.01, 0.05, 0.25, 1, 5, 15, 60, 300, 1800},
+		"pad_blob_operation_duration_seconds":  defBuckets,
+		"pad_chat_command_seconds":             defBuckets,
+		// A turn cut by the stream's 10-minute cap lands in a finite bucket (R-observability-1).
+		"pad_chat_turn_duration_seconds": {0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600, 900},
+		"pad_chat_tool_duration_seconds": {0.005, 0.025, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 120, 300},
+		"pad_chat_approval_wait_seconds": {1, 2.5, 5, 10, 20, 30, 60, 120, 300},
+		// Around the knowledge lookup's 800 ms default deadline, up to PAD_RAG_DEADLINE_MS's 10 s ceiling.
+		"pad_chat_rag_lookup_seconds":           {0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.5, 3, 10},
 		"pad_event_subscriber_duration_seconds": {0.0001, 0.001, 0.01, 0.05, 0.25, 1, 5, 30},
 		"pad_job_duration_seconds":              {0.1, 1, 10, 60, 300, 900, 1800, 3600, 7200},
 	}

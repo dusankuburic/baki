@@ -176,8 +176,8 @@ func TestStream_SilenceWithoutHostedStepStillIdleCancelled(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &silentHostedProvider{FakeProvider: &testutil.FakeProvider{}, silence: 2 * time.Second, preText: true}
 			typ, data := runSilentHostedStream(t, p, tc.useTools, 0)
-			if msg, _ := data["message"].(string); typ != "error" || !strings.Contains(msg, providerStalled) {
-				t.Errorf("stream ended with %s %v, want the provider-stalled error", typ, data)
+			if msg, _ := data["message"].(string); typ != "error" || !strings.Contains(msg, providerStalled) || data["code"] != "STREAM_IDLE_TIMEOUT" {
+				t.Errorf("stream ended with %s %v, want the provider-stalled error with code STREAM_IDLE_TIMEOUT", typ, data)
 			}
 		})
 	}
@@ -279,8 +279,8 @@ func TestStream_HungHostedStepStillBounded(t *testing.T) {
 	p := &silentHostedProvider{FakeProvider: &testutil.FakeProvider{}, silence: 3 * time.Second, openStep: true}
 	started := time.Now()
 	typ, data := runSilentHostedStream(t, p, true, 2*testIdleLimit)
-	if msg, _ := data["message"].(string); typ != "error" || !strings.Contains(msg, providerStalled) {
-		t.Errorf("stream ended with %s %v, want the provider-stalled error", typ, data)
+	if msg, _ := data["message"].(string); typ != "error" || !strings.Contains(msg, providerStalled) || data["code"] != "STREAM_IDLE_TIMEOUT" {
+		t.Errorf("stream ended with %s %v, want the provider-stalled error with code STREAM_IDLE_TIMEOUT", typ, data)
 	}
 	if took := time.Since(started); took > 2500*time.Millisecond {
 		t.Errorf("hung hosted step cancelled after %v, want about the hosted limit", took)

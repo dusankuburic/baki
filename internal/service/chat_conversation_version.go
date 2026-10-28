@@ -29,6 +29,15 @@ import (
 // conversation's current version.
 const CodeConversationConflict = "CONVERSATION_CONFLICT"
 
+// CodeConversationKeyTaken is the machine code of the 409 a save or a title gets on a key that holds another user's
+// conversation (R-security-3): no reload makes it succeed; the client starts the thread under a new key.
+const CodeConversationKeyTaken = "CONVERSATION_KEY_TAKEN"
+
+// CodeConversationUnowned is the machine code of the 403 a clear (or a title) gets on a conversation stored before
+// conversations had owners, from a caller that may not delete the flow: nobody can tell whose it is. The client
+// drops the thread from its own list; the conversation goes with its flow.
+const CodeConversationUnowned = "CONVERSATION_UNOWNED"
+
 // mutateConversationAttempts bounds a writer's read-modify-write rounds. A round is lost only to another writer that
 // finished its own first, so each lost round is someone else's progress; five covers a handful of replicas writing
 // one thread at once, and the per-conversation lock keeps the contenders of one replica to a single at a time.
@@ -36,8 +45,10 @@ const mutateConversationAttempts = 5
 
 // mutateConversationBackoff is the pause before round attempt+1: short and jittered so replicas that lost together
 // do not meet again. A test variable.
-var mutateConversationBackoff = func(int) time.Duration {
-	return 10*time.Millisecond + rand.N(40*time.Millisecond) // #nosec G404 -- jitter only, not security-sensitive
+var mutateConversationBackoff = func(attempt int) time.Duration {
+	// Grows with the round, so several writers on one hot thread (replicas, a tab saving on this replica) cannot
+	// use every round up within a few tens of milliseconds.
+	return time.Duration(attempt) * (10*time.Millisecond + rand.N(40*time.Millisecond)) // #nosec G404 -- jitter only, not security-sensitive
 }
 
 // chatBlindSavesTotal counts client saves that carried no base version, which the server must apply as the blind
@@ -66,14 +77,26 @@ var chatConversationConflictsTotal = prometheus.NewCounterVec(prometheus.Counter
 	Help: "Lost compare-and-swaps on a stored conversation, by source: client_save and client_clear (answered 409 CONVERSATION_CONFLICT: the client reloads, merges and saves again), retry (a server write's round lost to another writer and run again on the fresh history), retry_exhausted (a server write lost every round and was dropped, as pad_chat_persist_giveups_total). A rising retry rate is one thread written from several replicas or tabs at once.",
 }, []string{"source"})
 
-// conversationConflictSources is the closed value set of the source label.
-var conversationConflictSources = []string{"client_save", "client_clear", "retry", "retry_exhausted"}
+// conversationConflictSources is the closed value set of the source label. answer_with_question is a turn whose
+// question was not stored at its start (every round lost, or the write failed): its answer's write stores the
+// question with it, so the thread holds both or neither.
+var conversationConflictSources = []string{"client_save", "client_clear", "retry", "retry_exhausted", "answer_with_question"}
+
+// chatAnswerWriteFailuresTotal counts server-owned answers whose write at the end of the turn failed after its
+// retries: the done event then says answerStored false and the client saves the turn itself.
+var chatAnswerWriteFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "pad_chat_answer_write_failures_total",
+	Help: "Server-owned chat answers whose write at the end of the turn failed after its retries, by cause: error (the store refused or failed), timeout (persistAnswerTimeout ran out, or the server's stop cut it), conflict (every compare-and-swap round lost). A done turn's done event says answerStored false and the client saves the turn; a failed turn's write, made after its error event, is counted but cannot be announced.",
+}, []string{"cause"})
 
 func init() {
-	metrics.MustRegister(chatBlindSavesTotal, chatPersistGiveUpsTotal, chatConversationConflictsTotal)
+	metrics.MustRegister(chatBlindSavesTotal, chatPersistGiveUpsTotal, chatConversationConflictsTotal, chatAnswerWriteFailuresTotal)
 	// Every source is exported from the first scrape, so a rate over it starts at zero instead of absent.
 	for _, src := range conversationConflictSources {
 		chatConversationConflictsTotal.WithLabelValues(src)
+	}
+	for _, cause := range []string{"error", "timeout", "conflict"} {
+		chatAnswerWriteFailuresTotal.WithLabelValues(cause)
 	}
 }
 
@@ -133,7 +156,7 @@ func (s *ChatService) mutateConversationAt(ctx context.Context, flowID, key stri
 		return mutation{Changed: stored}, err
 	}
 	for attempt := 1; ; attempt++ {
-		stored, version, err := s.backend.LoadConversationVersioned(ctx, flowID, key)
+		stored, version, err := s.backend.LoadConversationVersioned(ctx, flowID, key, callerScope(ctx))
 		if err != nil {
 			return mutation{}, err
 		}
@@ -147,7 +170,7 @@ func (s *ChatService) mutateConversationAt(ctx context.Context, flowID, key stri
 		if !s.conversationHistoryEnabled(ctx) {
 			return mutation{}, nil
 		}
-		written, err := s.backend.SaveConversationIf(ctx, flowID, key, version, toStorageMessages(normalizeConversation(callerScope(ctx), out)))
+		written, err := s.backend.SaveConversationIf(ctx, flowID, key, callerScope(ctx), version, toStorageMessages(normalizeConversation(callerScope(ctx), out)))
 		if err == nil {
 			return mutation{Changed: true, Loaded: version, Version: written, Versioned: true}, nil
 		}
@@ -157,7 +180,7 @@ func (s *ChatService) mutateConversationAt(ctx context.Context, flowID, key stri
 		if attempt >= mutateConversationAttempts {
 			chatPersistGiveUpsTotal.Inc()
 			chatConversationConflictsTotal.WithLabelValues("retry_exhausted").Inc()
-			logger.Warn("chat: gave up a conversation write after losing every round to concurrent writers",
+			logger.FromContext(ctx).Warn("chat: gave up a conversation write after losing every round to concurrent writers",
 				"conversation", conversationLogID(flowID, key), "attempts", attempt)
 			return mutation{}, err
 		}
@@ -192,7 +215,7 @@ type ConversationSaved struct {
 // stored only if the conversation is still at the version the client loaded, else a 409 CONVERSATION_CONFLICT carries
 // the current version. Without base (a client from before versions) it is the blind full replace, counted. File
 // storage has no versions, so base is ignored there.
-func (s *ChatService) SaveClientConversation(ctx context.Context, flowID, provider string, base *int64, messages []models.ChatMessage) (ConversationSaved, error) {
+func (s *ChatService) SaveClientConversation(ctx context.Context, flowID, provider string, base *int64, messages []models.ChatMessage, mayReplaceUnowned bool) (ConversationSaved, error) {
 	if flowID == "" {
 		return ConversationSaved{}, fmt.Errorf("no flow loaded")
 	}
@@ -200,44 +223,61 @@ func (s *ChatService) SaveClientConversation(ctx context.Context, flowID, provid
 		_, err := s.saveConversation(ctx, flowID, provider, messages)
 		return ConversationSaved{}, err
 	}
+	// A shared conversation (stored before owners under "flow" or a block id, R-security-3) belongs to nobody: the
+	// flow's chat audience appends to it through their turns, but replacing its list — which can drop everyone else's
+	// messages — needs the right to delete it. Ownership never moves to such a row, so the check cannot go stale.
+	if owner := callerScope(ctx); owner != "" && !mayReplaceUnowned {
+		shared, err := s.backend.IsSharedConversation(ctx, flowID, provider)
+		if err != nil {
+			return ConversationSaved{}, err
+		}
+		if shared {
+			return ConversationSaved{}, conversationOwnerError(storageif.ErrConversationUnowned)
+		}
+	}
 	if base == nil {
 		chatBlindSavesTotal.Inc()
 		_, err := s.saveConversation(ctx, flowID, provider, messages)
-		return ConversationSaved{}, err
+		return ConversationSaved{}, conversationOwnerError(err)
 	}
 	// "Save conversation history" off: accepted and dropped, the version unchanged.
 	if !s.conversationHistoryEnabled(ctx) {
 		return ConversationSaved{Version: *base, Versioned: true}, nil
 	}
-	version, err := s.backend.SaveConversationIf(ctx, flowID, provider, *base, toStorageMessages(normalizeConversation(callerScope(ctx), messages)))
+	version, err := s.backend.SaveConversationIf(ctx, flowID, provider, callerScope(ctx), *base, toStorageMessages(normalizeConversation(callerScope(ctx), messages)))
 	if errors.Is(err, storageif.ErrConversationConflict) {
 		chatConversationConflictsTotal.WithLabelValues("client_save").Inc()
 		return ConversationSaved{}, conversationConflict(err, version)
 	}
 	if err != nil {
-		return ConversationSaved{}, err
+		return ConversationSaved{}, conversationOwnerError(err)
 	}
 	return ConversationSaved{Version: version, Versioned: true}, nil
 }
 
 // ClearConversationIf deletes the conversation only while it is at the version the client loaded; a changed one is
 // the same 409 CONVERSATION_CONFLICT as a stale save. File storage has no versions and clears as ClearConversation.
-func (s *ChatService) ClearConversationIf(ctx context.Context, flowID, provider string, base int64) error {
+// Only the caller's own conversation is deleted (R-security-3): another user's under the key is a missing one to the
+// caller, and an unowned (pre-owner) one needs mayDeleteUnowned (the caller may delete the flow), else 403
+// CONVERSATION_UNOWNED.
+func (s *ChatService) ClearConversationIf(ctx context.Context, flowID, provider string, base int64, mayDeleteUnowned bool) error {
 	if flowID == "" {
 		return fmt.Errorf("no flow loaded")
 	}
 	if !s.useBackendConversations() {
-		return s.ClearConversation(ctx, flowID, provider)
+		return s.ClearConversation(ctx, flowID, provider, mayDeleteUnowned)
 	}
-	err := s.backend.DeleteConversationIf(ctx, flowID, provider, base)
+	err := s.clearingConversation(ctx, flowID, provider, func() error {
+		return s.backend.DeleteConversationIf(ctx, flowID, provider, callerScope(ctx), base, mayDeleteUnowned)
+	})
 	if !errors.Is(err, storageif.ErrConversationConflict) {
-		return err
+		return conversationOwnerError(err)
 	}
 	chatConversationConflictsTotal.WithLabelValues("client_clear").Inc()
 	// Only a hint for the client: when the read fails it learns the version by reloading.
-	_, current, lerr := s.backend.LoadConversationVersioned(ctx, flowID, provider)
+	_, current, lerr := s.backend.LoadConversationVersioned(ctx, flowID, provider, callerScope(ctx))
 	if lerr != nil {
-		logger.Debug("chat: could not read the current conversation version for a conflict", "error", lerr)
+		logger.FromContext(ctx).Debug("chat: could not read the current conversation version for a conflict", "error", lerr)
 	}
 	return conversationConflict(err, current)
 }
@@ -247,6 +287,19 @@ func conversationConflict(cause error, current int64) error {
 	return apperr.Conflict(CodeConversationConflict, "this conversation changed since you loaded it; reload it and try again").
 		WithDetails(map[string]any{"version": current}).
 		Wrap(cause)
+}
+
+// conversationOwnerError is the API error of a write the owner rule refused (R-security-3): a key that holds another
+// user's conversation (409 CONVERSATION_KEY_TAKEN), a delete or a name of an unowned one the caller may not make
+// (403 CONVERSATION_UNOWNED). Any other error is returned as it is.
+func conversationOwnerError(err error) error {
+	switch {
+	case errors.Is(err, storageif.ErrConversationKeyTaken):
+		return apperr.Conflict(CodeConversationKeyTaken, "this conversation key belongs to another user's conversation; start a new thread").Wrap(err)
+	case errors.Is(err, storageif.ErrConversationUnowned):
+		return apperr.Forbidden(CodeConversationUnowned, "this conversation was stored before conversations had owners; only someone who may delete the flow can delete it").Wrap(err)
+	}
+	return err
 }
 
 // ConversationRead is a stored conversation as GET returns it: the messages, the caller's stream whose answer is not
@@ -271,7 +324,7 @@ func (s *ChatService) ReadConversation(ctx context.Context, scope, flowID, convK
 	var err error
 	if s.useBackendConversations() && flowID != "" {
 		var stored []storageif.ChatMessage
-		if stored, out.Version, err = s.backend.LoadConversationVersioned(ctx, flowID, convKey); err != nil {
+		if stored, out.Version, err = s.backend.LoadConversationVersioned(ctx, flowID, convKey, callerScope(ctx)); err != nil {
 			return ConversationRead{}, err
 		}
 		out.Messages, out.Versioned = toModelMessages(stored), true
@@ -321,7 +374,8 @@ func storedUserTurn(req models.ChatRequest, history []models.ChatMessage) int {
 // same thread lands next to this one instead of being replaced by it. The caller holds the conversation mutex. A
 // history that cannot be read is neither used nor overwritten, as in the file path. stored says the question is in
 // the store (written now, or already there under its id); write holds its versions, nil when the store has none.
-func (s *ChatService) persistUserTurnVersioned(ctx context.Context, doc *models.FlowDocument, req *models.ChatRequest, convKey string) (stored bool, write *convWrite) {
+// historyFailed says the history could not be read: the turn must not be answered without it (R-tool-loop-19).
+func (s *ChatService) persistUserTurnVersioned(ctx context.Context, doc *models.FlowDocument, req *models.ChatRequest, convKey string) (stored bool, write *convWrite, historyFailed bool) {
 	var history []models.ChatMessage
 	loaded, already := false, false
 	res, err := s.mutateConversationAt(ctx, doc.ID, convKey, func(h []models.ChatMessage) ([]models.ChatMessage, bool, error) {
@@ -338,17 +392,93 @@ func (s *ChatService) persistUserTurnVersioned(ctx context.Context, doc *models.
 		return append(slices.Clone(h), newUserTurn(*req, h)), true, nil
 	})
 	if !loaded {
-		logger.Warn("chat: history load failed; answering without prior context and "+
-			"skipping persistence so the stored conversation is not overwritten", "error", err)
+		logger.FromContext(ctx).Warn("chat: history load failed; the turn is not sent, and the stored conversation is left as it is",
+			"error", err)
 		req.Messages = nil
-		return false, nil
+		return false, nil, true
 	}
 	req.Messages = history
 	if err != nil {
-		logger.Warn("chat: failed to persist user turn at stream start", "error", err)
+		// The answer's write stores the question with it (persistAssistantTurn), so the thread keeps the pair.
+		logger.FromContext(ctx).Warn("chat: failed to persist user turn at stream start; the answer's write will store it", "error", err)
 	}
 	if !res.Versioned {
-		return res.Changed || already, nil
+		return res.Changed || already, nil, false
 	}
-	return res.Changed || already, &convWrite{Base: res.Loaded, Version: res.Version}
+	return res.Changed || already, &convWrite{Base: res.Loaded, Version: res.Version}, false
+}
+
+// ListThreads is the caller's thread index on a flow (R-frontend-c26 (c)): their stored conversations, newest change
+// first, after the position after, at most limit. Unowned (pre-owner) conversations are in nobody's index. File
+// storage (desktop, local modes) and a deployment without accounts keep no index: the list is empty.
+func (s *ChatService) ListThreads(ctx context.Context, flowID string, after *storageif.PageCursor, limit int) ([]storageif.ConversationSummary, error) {
+	owner := callerScope(ctx)
+	if !s.useBackendConversations() || owner == "" {
+		return []storageif.ConversationSummary{}, nil
+	}
+	return s.backend.ListConversations(ctx, flowID, owner, after, limit)
+}
+
+// SetThreadTitle names the caller's thread on a flow, creating its stored conversation empty when it has none yet
+// (a thread named before its first turn); "" removes the name. The title is user text shown in every browser's index
+// and in the export: stored clamped (ClampConversationTitle) and as its scrubbed copy, like the messages. Another
+// user's key is 409 CONVERSATION_KEY_TAKEN, an unowned conversation 403 CONVERSATION_UNOWNED. The result is the
+// conversation's version after the call (Versioned false where there are no versions). File storage and a
+// deployment without accounts keep no index: accepted and dropped.
+//
+// A title stores something only where a turn would: with "Save conversation history" off it is accepted and dropped.
+// It creates a conversation only under a thread id (storageif.IsThreadID), never under "flow" or another predictable
+// key, which would take the key from every other user; a missing conversation under such a key is accepted and
+// dropped. And it does not bring back a thread the caller cleared on this replica within clearedThreadTTL (a rename
+// racing the close): the cleared thread is left gone, the title dropped.
+func (s *ChatService) SetThreadTitle(ctx context.Context, flowID, key, title string) (ConversationSaved, error) {
+	owner := callerScope(ctx)
+	if !s.useBackendConversations() || owner == "" || !s.conversationHistoryEnabled(ctx) {
+		return ConversationSaved{}, nil
+	}
+	// Under the thread's stripe lock, as a clear: a title and a clear of one thread on this replica run one after the
+	// other, so the clear's mark is seen by any title that comes after its delete.
+	mu := s.convMutexFor(flowID, key)
+	if err := s.lockConversation(ctx, mu); err != nil {
+		return ConversationSaved{}, err
+	}
+	defer mu.Unlock()
+	if s.recentlyCleared(flowID, key, owner) {
+		// Rename the thread only if it is stored again (a new turn after the clear); never recreate it.
+		if _, v, err := s.backend.LoadConversationVersioned(ctx, flowID, key, owner); err != nil || v == 0 {
+			return ConversationSaved{}, err
+		}
+	}
+	title = ClampConversationTitle(historyScrubs.scrubText(owner, ClampConversationTitle(title)))
+	version, err := s.backend.SetConversationTitle(ctx, flowID, key, owner, title)
+	if errors.Is(err, storageif.ErrNotFound) {
+		return ConversationSaved{}, nil
+	}
+	if err != nil {
+		return ConversationSaved{}, conversationOwnerError(err)
+	}
+	return ConversationSaved{Version: version, Versioned: true}, nil
+}
+
+// clearedThreadTTL is how long a clear keeps SetThreadTitle from recreating the cleared thread: long past any rename
+// in flight when the thread was closed. A test variable.
+var clearedThreadTTL = 10 * time.Minute
+
+// clearedThreadKey names one caller's thread on a flow in clearedThreads.
+func clearedThreadKey(flowID, key, owner string) string {
+	return flowID + "\x00" + key + "\x00" + owner
+}
+
+// markCleared records that owner cleared the thread, for recentlyCleared; the mark expires after clearedThreadTTL.
+func (s *ChatService) markCleared(flowID, key, owner string) {
+	k := clearedThreadKey(flowID, key, owner)
+	at := time.Now()
+	s.clearedThreads.Store(k, at)
+	time.AfterFunc(clearedThreadTTL, func() { s.clearedThreads.CompareAndDelete(k, at) })
+}
+
+// recentlyCleared reports whether owner cleared the thread on this replica within clearedThreadTTL.
+func (s *ChatService) recentlyCleared(flowID, key, owner string) bool {
+	v, ok := s.clearedThreads.Load(clearedThreadKey(flowID, key, owner))
+	return ok && time.Since(v.(time.Time)) < clearedThreadTTL
 }

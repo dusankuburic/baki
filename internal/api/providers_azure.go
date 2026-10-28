@@ -604,6 +604,6 @@ func (h *ProviderHandler) registerAzureFoundryRoutes(rb *route.Builder) {
 		rb.Get("/models/{modelId}", h.handleAzureModelGet)
 		rb.Put("/models/{modelId}", h.handleAzureModelUpdate)
 		rb.Delete("/models/{modelId}", h.handleAzureModelDelete)
-		rb.Post("/test", h.handleAzureTest, route.RateLimit(route.RateChat), route.NoTx())
+		rb.Post("/test", h.handleAzureTest, route.RateLimit(route.RateChat), route.Billed(), route.NoTx())
 	})
 }

@@ -23,7 +23,12 @@ const doc = {
   id: 'doc1',
   name: 'Flow',
   subflows: [
-    {id: 'sf1', name: 'Main', blocks: [block('b1', 'Fetch orders', 2), block('b2', 'Post invoice', 3)], variables: []},
+    {
+      id: 'sf1',
+      name: 'Main',
+      blocks: [block('b1', 'Fetch orders', 2), {...block('b2', 'Post invoice', 3), rawType: 'Excel.WriteToExcel'}],
+      variables: [],
+    },
   ],
   variables: [],
 } as unknown as FlowDocument
@@ -56,6 +61,12 @@ describe('SelectionContextBar', () => {
     renderBar({contextBlockId: 'b1'})
     expect(screen.getByText('Fetch orders')).toBeInTheDocument()
     expect(screen.queryByText('Post invoice')).not.toBeInTheDocument()
+  })
+
+  it("gives the context block's type, not the selection's (R-frontend-7)", () => {
+    useFlowStore.getState().selectBlock('b2')
+    renderBar({contextBlockId: 'b1'})
+    expect(screen.getByText('Fetch orders')).toHaveAttribute('title', 'Fetch orders (HTTPClient.InvokeUrl)')
   })
 
   it('never shows a raw id for a context block that is not in the flow', () => {

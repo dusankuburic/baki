@@ -11,7 +11,7 @@
 //   3. this template:
 //      az deployment group create -g rg-baki-prod -f infra/main.bicep \
 //        --parameters @infra/main.parameters.json \
-//        --parameters authSecret=<...> databaseUrl=<...>
+//        --parameters authSecret=<...> encryptionKey=<...> databaseUrl=<...>
 //
 // REPLICAS. The repository default is ONE replica (minReplicas = maxReplicas = 1,
 // no Redis). The release that introduced the cross-replica mechanisms ships at one
@@ -88,9 +88,10 @@ param memory string = '2.0Gi'
 @secure()
 param authSecret string
 
-@description('Dedicated at-rest encryption key for the provider-key keystore (AES-256-GCM). Separate from the JWT secret so that rotating one does not affect the other. Empty means the app falls back to authSecret and warns at boot. Set it before users store provider keys. To change it later, move the old value to encryptionKeyPrevious (key rotation); replacing it outright makes every stored secret unreadable.')
+@description('Dedicated at-rest encryption key (PAD_ENCRYPTION_KEY) for the provider-key keystore and the sealed secret columns (AES-256-GCM), at least 32 characters: openssl rand -hex 32. Required, as docker-compose.prod.yml requires it: separate from the JWT secret so that rotating one does not affect the other. A deployment that ran without it sealed every stored value under authSecret: pass a NEW value here and the current authSecret as encryptionKeyPrevious, so the boot re-seals them (docs/architecture/operations.md, "Encryption keys"); passing the authSecret value itself also keeps them readable, but then a leak of one key is a leak of both. To change it later, move the old value to encryptionKeyPrevious (key rotation); replacing it outright makes every stored secret unreadable.')
 @secure()
-param encryptionKey string = ''
+@minLength(32)
+param encryptionKey string
 
 @description('Key rotation: the keys encryptionKey replaced, comma-separated, newest first (PAD_ENCRYPTION_KEY_PREVIOUS). Values they sealed stay readable and are re-sealed with encryptionKey at boot; remove them once the log reports "secret re-seal complete". Needs encryptionKey. Empty when no rotation is under way.')
 @secure()
@@ -550,8 +551,8 @@ var secrets = concat(
   [
     { name: 'auth-secret', value: authSecret }
     { name: 'database-url', value: databaseUrl }
+    { name: 'encryption-key', value: encryptionKey }
   ],
-  empty(encryptionKey) ? [] : [ { name: 'encryption-key', value: encryptionKey } ],
   empty(encryptionKeyPrevious) ? [] : [ { name: 'encryption-key-previous', value: encryptionKeyPrevious } ],
   empty(metricsToken) ? [] : [ { name: 'metrics-token', value: metricsToken } ],
   empty(ciWebhookSecret) ? [] : [ { name: 'ci-webhook-secret', value: ciWebhookSecret } ],
@@ -611,6 +612,7 @@ var coreEnv = [
   { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
   { name: 'PAD_AUTH_SECRET', secretRef: 'auth-secret' }
   { name: 'PAD_DATABASE_URL', secretRef: 'database-url' }
+  { name: 'PAD_ENCRYPTION_KEY', secretRef: 'encryption-key' }
 ]
 
 var storageEnv = empty(effectiveStorageAccount) ? [] : [
@@ -619,7 +621,6 @@ var storageEnv = empty(effectiveStorageAccount) ? [] : [
 ]
 
 var optionalEnv = concat(
-  empty(encryptionKey) ? [] : [ { name: 'PAD_ENCRYPTION_KEY', secretRef: 'encryption-key' } ],
   empty(encryptionKeyPrevious) ? [] : [ { name: 'PAD_ENCRYPTION_KEY_PREVIOUS', secretRef: 'encryption-key-previous' } ],
   empty(metricsToken) ? [] : [ { name: 'PAD_METRICS_TOKEN', secretRef: 'metrics-token' } ],
   empty(ciWebhookSecret) ? [] : [ { name: 'PAD_CI_WEBHOOK_SECRET', secretRef: 'ci-webhook-secret' } ],

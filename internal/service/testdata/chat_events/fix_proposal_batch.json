@@ -1,0 +1,32 @@
+{
+  "data": {
+    "batch": true,
+    "count": 2,
+    "items": [
+      {
+        "blockId": "b1",
+        "blockLabel": "Invoke Url",
+        "fixType": "wrap-error-handler",
+        "id": "b1:unhandled-error",
+        "line": 3,
+        "ruleId": "unhandled-error",
+        "summary": ""
+      },
+      {
+        "blockId": "b2",
+        "blockLabel": "Invoke Url",
+        "fixType": "wrap-error-handler",
+        "id": "b2:unhandled-error",
+        "line": 5,
+        "ruleId": "unhandled-error",
+        "summary": ""
+      }
+    ],
+    "previewKind": "fix-patch",
+    "proposalId": "proposal-1",
+    "requiredScope": "write",
+    "tool": "apply_fixes"
+  },
+  "streamId": "stream-1",
+  "type": "fix_proposal"
+}

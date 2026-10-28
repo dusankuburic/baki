@@ -24,7 +24,6 @@ export default function ProvidersPanel() {
   const [hidden, setHidden] = useState<string[]>([])
   const alive = useRef(true)
   const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
-  const setProvider = useChatStore(s => s.setProvider)
   const updateAI = useSettingsStore(s => s.updateAI)
   const knownRemoteBackend = useSystemStore(s => (s.info ? !s.info.capabilities.sessionAnalytics : false))
 
@@ -78,10 +77,9 @@ export default function ProvidersPanel() {
         }
         if (currentConfigured) return
       }
-      setProvider(id)
       void updateAI({activeProvider: id})
     },
-    [setProvider, updateAI],
+    [updateAI],
   )
 
   const onUnavailable = useCallback((id: string) => {

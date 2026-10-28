@@ -1,0 +1,6 @@
+# gemini/truncated.sse through parseGeminiSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 text="The subflow " served="gemini-2.5-flash"
+02 text="Process_Invoices calls" served="gemini-2.5-flash"
+return error=truncated msg=none
+summary chunks=2 keepalives=0 text="The subflow Process_Invoices calls"

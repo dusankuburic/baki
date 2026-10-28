@@ -1,0 +1,9 @@
+{
+  "data": {
+    "message": "the response ended before a decision was made — nothing was changed",
+    "proposalId": "proposal-1",
+    "status": "cancelled"
+  },
+  "streamId": "stream-1",
+  "type": "fix_decision"
+}

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"pad-analyzer/internal/storage"
@@ -18,6 +19,8 @@ import (
 	"pad-core/logger"
 )
 
+// keystoreTimeout bounds every keystore statement: the whole timeout for the context-free methods, a ceiling on
+// the caller's context for the ...Ctx reads (a request that ends first aborts the read).
 const keystoreTimeout = 5 * time.Second
 
 // EncryptedKeyStore persists provider API keys in PostgreSQL, encrypted at rest with AES-256-GCM; it
@@ -36,6 +39,17 @@ const keystoreTimeout = 5 * time.Second
 type EncryptedKeyStore struct {
 	db   *sql.DB
 	keys *sealKeys
+	// warned holds the rows whose decrypt failure was already logged: the catalogue and the listing read every
+	// key on each call, so an unreadable row would otherwise log on every page load. Bounded by the rows.
+	warned sync.Map
+}
+
+// warnDecryptOnce logs a row's decrypt failure the first time this process meets it (provider only, no owner id).
+func (s *EncryptedKeyStore) warnDecryptOnce(msg, rowKey, provider string, err error) {
+	if _, seen := s.warned.LoadOrStore(rowKey, struct{}{}); seen {
+		return
+	}
+	logger.Warn(msg, "provider", provider, "error", err)
 }
 
 // The keystore also holds orgs' shared credentials, lists/releases key families, and restores an org
@@ -45,6 +59,11 @@ var (
 	_ interfaces.SecretFamilyLister   = (*EncryptedKeyStore)(nil)
 	_ interfaces.OrgSecretFamilyStore = (*EncryptedKeyStore)(nil)
 	_ interfaces.OrgSecretRestorer    = (*EncryptedKeyStore)(nil)
+	// The provider catalogue and listing read a scope's keys in one query, under the request's context.
+	_ interfaces.SecretStateLister      = (*EncryptedKeyStore)(nil)
+	_ interfaces.OrgSecretStateLister   = (*EncryptedKeyStore)(nil)
+	_ interfaces.SecretContextReader    = (*EncryptedKeyStore)(nil)
+	_ interfaces.OrgSecretContextReader = (*EncryptedKeyStore)(nil)
 )
 
 // NewEncryptedKeyStore builds a database-backed encrypted keystore. The secret
@@ -131,7 +150,12 @@ func (s *EncryptedKeyStore) Save(scope, provider, key string) error {
 // if a row exists but cannot be decrypted with the current deployment key (almost always: rotated) — the
 // distinction lets the API surface "re-enter the key after secret rotation" instead of "no key configured".
 func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	return s.GetCtx(context.Background(), scope, provider)
+}
+
+// GetCtx is Get under ctx, keystoreTimeout its ceiling.
+func (s *EncryptedKeyStore) GetCtx(ctx context.Context, scope, provider string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, keystoreTimeout)
 	defer cancel()
 	var ct string
 	err := s.db.QueryRowContext(ctx, `SELECT ciphertext FROM provider_keys WHERE user_id = $1 AND provider = $2`, scope, provider).Scan(&ct)
@@ -144,9 +168,9 @@ func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
 	plaintext, err := s.decrypt(ct, keyAAD(scope, provider))
 	if err != nil {
 		// Log so the operator can see that a rotation invalidated stored keys;
-		// keep it at warn with provider only (no user id).
-		logger.Warn("keystore: ciphertext decrypt failed (deployment key may have rotated)",
-			"provider", provider, "error", err)
+		// keep it at warn with provider only (no user id), once per row.
+		s.warnDecryptOnce("keystore: ciphertext decrypt failed (deployment key may have rotated)",
+			"u\x00"+scope+"\x00"+provider, provider, err)
 		return "", storage.ErrSecretDecryptFailed
 	}
 	return plaintext, nil
@@ -154,7 +178,12 @@ func (s *EncryptedKeyStore) Get(scope, provider string) (string, error) {
 
 // Has reports whether a key row exists for the (scope, provider) pair.
 func (s *EncryptedKeyStore) Has(scope, provider string) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	return s.HasCtx(context.Background(), scope, provider)
+}
+
+// HasCtx is Has under ctx, keystoreTimeout its ceiling.
+func (s *EncryptedKeyStore) HasCtx(ctx context.Context, scope, provider string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, keystoreTimeout)
 	defer cancel()
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
@@ -312,7 +341,12 @@ func (s *EncryptedKeyStore) OrgsWithKeySavedBy(provider, userID string) ([]strin
 // GetOrg returns the decrypted shared key, storage.ErrSecretNotFound when the org has none, or
 // storage.ErrSecretDecryptFailed when the row cannot be decrypted with the current deployment key (see Get).
 func (s *EncryptedKeyStore) GetOrg(orgID, provider string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	return s.GetOrgCtx(context.Background(), orgID, provider)
+}
+
+// GetOrgCtx is GetOrg under ctx, keystoreTimeout its ceiling.
+func (s *EncryptedKeyStore) GetOrgCtx(ctx context.Context, orgID, provider string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, keystoreTimeout)
 	defer cancel()
 	var ct string
 	err := s.db.QueryRowContext(ctx, `SELECT ciphertext FROM org_provider_keys WHERE org_id = $1 AND provider = $2`, orgID, provider).Scan(&ct)
@@ -324,8 +358,8 @@ func (s *EncryptedKeyStore) GetOrg(orgID, provider string) (string, error) {
 	}
 	plaintext, err := s.decrypt(ct, orgKeyAAD(orgID, provider))
 	if err != nil {
-		logger.Warn("keystore: org ciphertext decrypt failed (deployment key may have rotated)",
-			"provider", provider, "error", err)
+		s.warnDecryptOnce("keystore: org ciphertext decrypt failed (deployment key may have rotated)",
+			"o\x00"+orgID+"\x00"+provider, provider, err)
 		return "", storage.ErrSecretDecryptFailed
 	}
 	return plaintext, nil
@@ -333,7 +367,12 @@ func (s *EncryptedKeyStore) GetOrg(orgID, provider string) (string, error) {
 
 // HasOrg reports whether the org has a shared key row for the provider.
 func (s *EncryptedKeyStore) HasOrg(orgID, provider string) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), keystoreTimeout)
+	return s.HasOrgCtx(context.Background(), orgID, provider)
+}
+
+// HasOrgCtx is HasOrg under ctx, keystoreTimeout its ceiling.
+func (s *EncryptedKeyStore) HasOrgCtx(ctx context.Context, orgID, provider string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, keystoreTimeout)
 	defer cancel()
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
@@ -370,6 +409,71 @@ func (s *EncryptedKeyStore) OrgKeyMeta(orgID, provider string) (info interfaces.
 		return interfaces.OrgKeyInfo{}, false, fmt.Errorf("keystore: org key meta: %w", err)
 	}
 	return info, true, nil
+}
+
+// --- Key states ---
+//
+// The provider catalogue and listing need, for every provider a deployment offers, whether the caller (and their
+// organisation) holds a usable key, an unreadable one or none (R-provider-19). One query per owner answers it:
+// the rows are opened here, the same way Get opens one, and only their state leaves the store.
+
+// KeyStates reports the state of each of keys scope holds, in one query under ctx (keystoreTimeout its ceiling);
+// a key with no row has no entry. An undecryptable row is SecretUnreadable and logged once, as Get logs it.
+func (s *EncryptedKeyStore) KeyStates(ctx context.Context, scope string, keys []string) (map[string]interfaces.SecretState, error) {
+	return s.keyStates(ctx, "keystore: key states",
+		`SELECT provider, ciphertext FROM provider_keys WHERE user_id = $1 AND provider = ANY($2)`, scope, keys,
+		func(provider string) ([]byte, string) {
+			return keyAAD(scope, provider), "u\x00" + scope + "\x00" + provider
+		},
+		"keystore: ciphertext decrypt failed (deployment key may have rotated)")
+}
+
+// OrgKeyStates is KeyStates for the organisation's shared keys.
+func (s *EncryptedKeyStore) OrgKeyStates(ctx context.Context, orgID string, keys []string) (map[string]interfaces.SecretState, error) {
+	return s.keyStates(ctx, "keystore: org key states",
+		`SELECT provider, ciphertext FROM org_provider_keys WHERE org_id = $1 AND provider = ANY($2)`, orgID, keys,
+		func(provider string) ([]byte, string) {
+			return orgKeyAAD(orgID, provider), "o\x00" + orgID + "\x00" + provider
+		},
+		"keystore: org ciphertext decrypt failed (deployment key may have rotated)")
+}
+
+// keyStates runs a key-states query for owner's keys and opens each row with the AAD row gives (and the row's
+// warn-once key); what names the query in errors, warn the decrypt-failure log line.
+func (s *EncryptedKeyStore) keyStates(ctx context.Context, what, query, owner string, keys []string,
+	row func(provider string) (aad []byte, warnKey string), warn string) (map[string]interfaces.SecretState, error) {
+	out := make(map[string]interfaces.SecretState, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, keystoreTimeout)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, query, owner, keys)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var provider, ct string
+		if err := rows.Scan(&provider, &ct); err != nil {
+			return nil, fmt.Errorf("%s: %w", what, err)
+		}
+		aad, warnKey := row(provider)
+		plaintext, err := s.decrypt(ct, aad)
+		switch {
+		case err != nil:
+			s.warnDecryptOnce(warn, warnKey, provider, err)
+			out[provider] = interfaces.SecretUnreadable
+		case plaintext == "":
+			out[provider] = interfaces.SecretEmpty
+		default:
+			out[provider] = interfaces.SecretUsable
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	return out, nil
 }
 
 // --- Key families ---

@@ -1,0 +1,8 @@
+{
+  "data": {
+    "kind": "knowledge",
+    "status": "identity_mismatch"
+  },
+  "streamId": "stream-1",
+  "type": "notice"
+}

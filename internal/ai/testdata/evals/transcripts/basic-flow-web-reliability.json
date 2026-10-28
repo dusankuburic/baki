@@ -1,0 +1,23 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "list_findings",
+          "input": {
+            "category": "Reliability"
+          }
+        }
+      ],
+      "tokensIn": 1980,
+      "tokensOut": 22
+    },
+    {
+      "text": "The browser steps in the `ErrorHandling` subflow carry the most serious reliability findings:\n\n1. **No timeouts (warning)** — `missing-timeout` on all four web actions: [Launch Browser](block:B32), [Navigate To](block:B33), [Click Click](block:B34) and [Close Browser](block:B35). A slow page hangs the run indefinitely ([finding](finding:missing-timeout:d782a41e536f5dcd)).\n2. **No error handling (warning)** — `unhandled-error` on the same four actions; a failed navigation stops the flow ([finding](finding:unhandled-error:82f47428193b9166)).\n3. **No retry and no waits (info)** — `missing-retry` and `missing-delay` on lines 39–41: add a retry loop around the launch and a `Wait for element` before clicking.\n\nStart with the timeouts — they are auto-fixable (`set-timeout`).",
+      "tokensIn": 3650,
+      "tokensOut": 214
+    }
+  ]
+}

@@ -1,8 +1,12 @@
 package ai
 
+// openaiProviderID is the registry id: the constructors label their counters with it (a reference to openaiSpec.ID from a
+// constructor would be an initialization cycle through Ctor).
+const openaiProviderID = "openai"
+
 // openaiSpec: OpenAI's chat completions and embeddings with a bare key.
 var openaiSpec = ProviderSpec{
-	ID:           "openai",
+	ID:           openaiProviderID,
 	Name:         "OpenAI",
 	AuthType:     AuthAPIKey,
 	Caps:         CapChat | CapStream | CapEmbeddings | CapTools | CapReasoning | CapOrgShared,

@@ -142,6 +142,8 @@ type FlowService struct {
 
 	// snapshots is the in-memory undo ring (flow_snapshots.go); nil when disabled.
 	snapshots *snapshotStore
+	// diskSnaps is the desktop's undo ring on disk (WithDesktopSnapshotDir); nil keeps desktop flows on the memory ring.
+	diskSnaps *diskSnapshots
 	// snapshotDB is the durable undo ring of cloud flows (WithSnapshotStore); nil keeps cloud flows on the memory
 	// ring too. snapshotLimits are the bounds each push to it enforces.
 	snapshotDB     storageif.FlowSnapshotStore
@@ -1090,11 +1092,16 @@ func (s *FlowService) PatchFlow(ctx context.Context, doc *models.FlowDocument, p
 		return nil, fmt.Errorf("patch would introduce parse errors (file left unchanged)")
 	}
 
-	// Capture the pre-fix state; record it only once the write landed.
+	// Capture the pre-fix state; record it only once the write landed. The disk ring stores it BEFORE the write
+	// (a crash between the two keeps the way back) and drops it again if the write fails.
 	snap := s.snapshotDesktopFile(doc, targetPath, "before fix")
+	staged := s.stageDesktopSnapshot(doc, snap)
 
 	dir := filepath.Dir(targetPath)
 	if writeErr := atomicWriteConv(dir, targetPath, []byte(patched)); writeErr != nil {
+		if staged {
+			s.diskSnaps.remove(flowSnapshotKey(doc), snap.ID)
+		}
 		return nil, fmt.Errorf("write source file: %w", writeErr)
 	}
 	s.pushSnapshot(ctx, doc, snap)

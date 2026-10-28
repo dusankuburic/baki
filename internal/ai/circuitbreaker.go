@@ -2,7 +2,10 @@ package ai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -23,6 +26,10 @@ func (s circuitState) String() string {
 const (
 	cbFailureThreshold = 5                // consecutive retryable failures before opening
 	cbOpenDuration     = 30 * time.Second // minimum time before allowing a probe
+	// cbProbeWindow bounds the half-open probe's exclusive window: a Chat or Embed probe resolves only when its
+	// call returns, and every other caller on the key was refused for the whole of it. Past the window further
+	// callers are admitted; the first outcome recorded still decides the circuit.
+	cbProbeWindow = 20 * time.Second
 )
 
 type circuitState int
@@ -40,6 +47,20 @@ type breakerState struct {
 	state       circuitState
 	failures    int
 	lastFailure time.Time
+	// probeStarted is when the circuit turned half-open, or admitted its last extra probe (cbProbeWindow).
+	probeStarted time.Time
+	// openFor is the cooldown of the breaker that last opened the circuit (the open-circuit gauge).
+	openFor time.Duration
+	// label names the circuit in its metrics and log lines: set once, when the state is created.
+	label breakerLabel
+}
+
+// breakerLabel is a circuit's bounded, non-secret name: the provider id, a model label from a closed set
+// (metricModelLabel) and a short hash of the resource scope (never the endpoint itself).
+type breakerLabel struct {
+	provider string
+	model    string
+	resource string
 }
 
 var (
@@ -58,6 +79,11 @@ const breakerStaleFailure = 4 * cbOpenDuration
 // breakerStateFor returns the shared circuit state for a registry key, creating it on first use. State is per
 // upstream, not per user: a provider that is down is down for everyone.
 func breakerStateFor(key string) *breakerState {
+	return breakerStateLabelled(key, breakerLabel{})
+}
+
+// breakerStateLabelled is breakerStateFor naming a new state with label.
+func breakerStateLabelled(key string, label breakerLabel) *breakerState {
 	breakerRegistryMu.Lock()
 	defer breakerRegistryMu.Unlock()
 	s, ok := breakerRegistry[key]
@@ -68,7 +94,7 @@ func breakerStateFor(key string) *breakerState {
 			// to max-1 so the insert below cannot push past the cap.
 			evictBreakersToLocked(breakerRegistryMax - 1)
 		}
-		s = &breakerState{}
+		s = &breakerState{label: label}
 		breakerRegistry[key] = s
 	}
 	return s
@@ -171,7 +197,60 @@ func (cb *CircuitBreakerProvider) stateFor(model string) *breakerState {
 	if cb.scope != "" {
 		id += "#" + cb.scope
 	}
-	return breakerStateFor(breakerKey(id, model))
+	return breakerStateLabelled(breakerKey(id, model), breakerLabel{
+		provider: cb.providerID, model: metricModelLabel(cb.providerID, model), resource: scopeHash(cb.scope),
+	})
+}
+
+// metricModelLabel bounds a model id for a metric label: a catalogued model keeps its id, an alias provider's
+// model is "deployment" (a user-chosen name), anything else "uncatalogued", and no model (the provider-wide
+// circuit: embeddings) "none".
+func metricModelLabel(providerID, model string) string {
+	switch {
+	case model == "":
+		return "none"
+	case aliasModelProviders[providerID]:
+		return "deployment"
+	}
+	if m, ok := catalogEntryFor(providerID, model); ok {
+		return m.ID // the catalogue's own id: a case or version variant is the same label
+	}
+	return "uncatalogued"
+}
+
+// scopeHash is the first 8 hex characters of the scope's SHA-256: enough to tell one tenant resource from
+// another in a metric or a log line, never the endpoint itself (the scope "never reaches logs").
+func scopeHash(scope string) string {
+	if scope == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(scope))
+	return hex.EncodeToString(sum[:4])
+}
+
+// circuitOpenError is ErrCircuitOpen naming the circuit and how long it stays open, so the chat can say which
+// model failed and when to try again.
+type circuitOpenError struct {
+	provider   string
+	model      string
+	retryAfter time.Duration
+}
+
+// Error names no metric label (the connection test shows it): the remaining cooldown only.
+func (e *circuitOpenError) Error() string {
+	return fmt.Sprintf("%v (retry in %s)", ErrCircuitOpen, max(e.retryAfter.Round(time.Second), time.Second))
+}
+
+func (e *circuitOpenError) Unwrap() error { return ErrCircuitOpen }
+
+// CircuitOpenDetail returns the model label and the remaining cooldown of an ErrCircuitOpen error, ok false for
+// any other error (or a bare ErrCircuitOpen).
+func CircuitOpenDetail(err error) (model string, retryAfter time.Duration, ok bool) {
+	var open *circuitOpenError
+	if !errors.As(err, &open) {
+		return "", 0, false
+	}
+	return open.model, open.retryAfter, true
 }
 
 func NewCircuitBreakerProvider(p Provider) *CircuitBreakerProvider {
@@ -196,52 +275,56 @@ func NewCircuitBreakerProviderWithConfig(p Provider, threshold int, openDur time
 
 func (cb *CircuitBreakerProvider) Chat(ctx context.Context, req Request) (*Response, error) {
 	st := cb.stateFor(req.Model)
-	if err := cb.checkSt(st); err != nil {
+	if err := cb.checkSt(ctx, st); err != nil {
 		return nil, err
 	}
-	defer cb.recordPanicSt(st)
+	defer cb.recordPanicSt(ctx, st)
 	resp, err := cb.Provider.Chat(ctx, req)
-	cb.recordSt(st, err)
+	cb.recordSt(ctx, st, err)
 	return resp, err
 }
 
 func (cb *CircuitBreakerProvider) Embed(ctx context.Context, text []string) ([][]float32, error) {
 	st := cb.stateFor("")
-	if err := cb.checkSt(st); err != nil {
+	if err := cb.checkSt(ctx, st); err != nil {
 		return nil, err
 	}
-	defer cb.recordPanicSt(st)
+	defer cb.recordPanicSt(ctx, st)
 	res, err := cb.Provider.Embed(ctx, text)
-	cb.recordSt(st, err)
+	cb.recordSt(ctx, st, err)
 	return res, err
 }
 
 // recordPanic resolves the circuit when the wrapped provider panics — without it a half-open PROBE is never
 // resolved and check() rejects every caller forever. On the normal path recover() returns nil (no double-record).
-func (cb *CircuitBreakerProvider) recordPanicSt(st *breakerState) {
+func (cb *CircuitBreakerProvider) recordPanicSt(ctx context.Context, st *breakerState) {
 	if r := recover(); r != nil {
-		cb.recordSt(st, ErrProviderDown)
+		// Without the caller's cancellation (a panic is the provider's failure, never the caller's own cancel)
+		// but with its values, so the transition line names the request.
+		cb.recordSt(context.WithoutCancel(ctx), st, ErrProviderDown)
 		panic(r)
 	}
 }
 
 // Stream counts mid-stream failures too: the SSE parsers surface an upstream error as Chunk{Error} and then
 // return nil, which would otherwise be a recorded success. A half-open probe is resolved on the first
-// non-error chunk (the upstream has accepted the request; every other caller was rejected for the whole probe).
+// non-error chunk the upstream sent (it has accepted the request; every other caller was rejected for the whole
+// probe) — never on a LocalKeepalive, which streamViaChat synthesises while its request is still pending and
+// which proves nothing about the upstream.
 func (cb *CircuitBreakerProvider) Stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
 	st := cb.stateFor(req.Model)
-	if err := cb.checkSt(st); err != nil {
+	if err := cb.checkSt(ctx, st); err != nil {
 		return err
 	}
-	defer cb.recordPanicSt(st)
+	defer cb.recordPanicSt(ctx, st)
 	var chunkErr error
 	answered := false
 	err := cb.Provider.Stream(ctx, req, func(c Chunk) {
 		if c.Error != nil {
 			chunkErr = c.Error
-		} else if !answered {
+		} else if !answered && !c.LocalKeepalive {
 			answered = true
-			cb.resolveProbeSt(st)
+			cb.resolveProbeSt(ctx, st)
 		}
 		onChunk(c)
 	})
@@ -249,19 +332,19 @@ func (cb *CircuitBreakerProvider) Stream(ctx context.Context, req Request, onChu
 	if outcome == nil {
 		outcome = chunkErr
 	}
-	cb.recordSt(st, outcome)
+	cb.recordSt(ctx, st, outcome)
 	return err
 }
 
 // resolveProbeSt closes a half-open circuit as soon as its probe is answered (see Stream); a no-op in any
 // other state, so an ordinary stream's first chunk never resets the failure count a closed circuit accumulates.
-func (cb *CircuitBreakerProvider) resolveProbeSt(st *breakerState) {
+func (cb *CircuitBreakerProvider) resolveProbeSt(ctx context.Context, st *breakerState) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.state != circuitHalfOpen {
 		return
 	}
-	cb.transitionLocked(st, circuitClosed)
+	cb.transitionLocked(ctx, st, circuitClosed)
 	st.failures = 0
 }
 
@@ -278,45 +361,52 @@ func probeSaysNothing(err error) bool {
 
 // check returns ErrCircuitOpen when the circuit is open and the cooldown has not elapsed yet. In half-open
 // state only ONE probe is allowed through; subsequent callers are rejected until the probe completes.
-func (cb *CircuitBreakerProvider) checkSt(st *breakerState) error {
+func (cb *CircuitBreakerProvider) checkSt(ctx context.Context, st *breakerState) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	switch st.state {
 	case circuitOpen:
-		if time.Since(st.lastFailure) >= cb.openDuration {
-			cb.transitionLocked(st, circuitHalfOpen)
-			return nil // allow the single probe
+		if wait := cb.openDuration - time.Since(st.lastFailure); wait > 0 {
+			return &circuitOpenError{provider: cb.providerID, model: st.label.model, retryAfter: wait}
 		}
-		return ErrCircuitOpen
+		cb.transitionLocked(ctx, st, circuitHalfOpen)
+		st.probeStarted = time.Now()
+		return nil // allow the single probe
 	case circuitHalfOpen:
-		// A probe is already in flight — reject all others until it resolves.
-		return ErrCircuitOpen
+		// A probe is already in flight — reject all others until it resolves. Past its window one more caller is
+		// admitted as a probe, and the window starts again: at most one extra probe per window.
+		if time.Since(st.probeStarted) >= cbProbeWindow {
+			st.probeStarted = time.Now()
+			return nil
+		}
+		return &circuitOpenError{provider: cb.providerID, model: st.label.model, retryAfter: cbProbeWindow - time.Since(st.probeStarted)}
 	default:
 		return nil
 	}
 }
 
-// record updates the failure count and circuit state based on a call outcome.
-func (cb *CircuitBreakerProvider) recordSt(st *breakerState, err error) {
+// record updates the failure count and circuit state based on a call outcome; ctx is the call's own.
+func (cb *CircuitBreakerProvider) recordSt(ctx context.Context, st *breakerState, err error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if err == nil {
 		// Any success (including the half-open probe) closes the circuit.
-		cb.transitionLocked(st, circuitClosed)
+		cb.transitionLocked(ctx, st, circuitClosed)
 		st.failures = 0
 		return
 	}
 	// A failed half-open probe must always resolve the probe, or the circuit stays half-open and rejects
 	// every caller forever: reopen and restart the cooldown regardless of retryability.
 	if st.state == circuitHalfOpen {
-		if probeSaysNothing(err) {
-			// The probe's failure is the caller's own and says nothing about the upstream: release the probe
-			// without restarting the cooldown, so the next checkSt admits the next caller as the probe.
-			cb.transitionLocked(st, circuitOpen)
+		if probeSaysNothing(err) || ctx.Err() != nil {
+			// The probe's failure is the caller's own and says nothing about the upstream (its credentials, its
+			// request, or its own cancel or deadline ending the call): release the probe without restarting the
+			// cooldown, so the next checkSt admits the next caller as the probe.
+			cb.transitionLocked(ctx, st, circuitOpen)
 			return
 		}
 		st.lastFailure = time.Now()
-		cb.transitionLocked(st, circuitOpen)
+		cb.transitionLocked(ctx, st, circuitOpen)
 		return
 	}
 	// Closed circuit: only transient provider conditions count toward tripping; permanent errors must not
@@ -332,21 +422,48 @@ func (cb *CircuitBreakerProvider) recordSt(st *breakerState, err error) {
 	st.failures++
 	st.lastFailure = time.Now()
 	if st.failures >= cb.failureThreshold {
-		cb.transitionLocked(st, circuitOpen)
+		cb.transitionLocked(ctx, st, circuitOpen)
 	}
 }
 
 // transitionLocked sets the circuit to next, emitting a log line and metric only
-// when the state actually changes. Caller must hold cb.st.mu.
-func (cb *CircuitBreakerProvider) transitionLocked(st *breakerState, next circuitState) {
+// when the state actually changes. Caller must hold cb.st.mu. ctx is the call that caused the change, so the
+// line carries that request's attributes.
+func (cb *CircuitBreakerProvider) transitionLocked(ctx context.Context, st *breakerState, next circuitState) {
 	if st.state == next {
 		return
 	}
 	st.state = next
-	recordCircuitBreakerTransition(cb.providerID, next.String())
-	if next == circuitClosed {
-		logger.Info("AI circuit breaker closed", "provider", cb.providerID)
-	} else {
-		logger.Warn("AI circuit breaker transition", "provider", cb.providerID, "state", next.String(), "failures", st.failures)
+	if next == circuitOpen {
+		st.openFor = cb.openDuration
 	}
+	l := st.label
+	if l.provider == "" {
+		l.provider = cb.providerID
+	}
+	recordCircuitBreakerTransition(l.provider, l.model, l.resource, next.String())
+	if next == circuitClosed {
+		logger.FromContext(ctx).Info("AI circuit breaker closed", "provider", l.provider, "model", l.model, "resource", l.resource)
+	} else {
+		logger.FromContext(ctx).Warn("AI circuit breaker transition", "provider", l.provider, "model", l.model, "resource", l.resource,
+			"state", next.String(), "failures", st.failures)
+	}
+}
+
+// openCircuitCounts is the number of circuits refusing callers now, by provider: half-open, or open within the
+// cooldown of the breaker that opened it. An open circuit past its cooldown admits its next caller as the probe.
+func openCircuitCounts() map[string]int {
+	counts := map[string]int{}
+	breakerRegistryMu.Lock()
+	defer breakerRegistryMu.Unlock()
+	for _, st := range breakerRegistry {
+		st.mu.Lock()
+		refusing := st.state == circuitHalfOpen || (st.state == circuitOpen && time.Since(st.lastFailure) < st.openFor)
+		provider := st.label.provider
+		st.mu.Unlock()
+		if refusing && provider != "" {
+			counts[provider]++
+		}
+	}
+	return counts
 }

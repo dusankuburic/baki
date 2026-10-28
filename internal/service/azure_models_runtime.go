@@ -53,8 +53,17 @@ type AzureChatResolution struct {
 
 // ResolveChat resolves a chat turn's model id (see AzureChatResolution): personal entries first, then credOrg's — no other org is queried, so no existence oracle.
 // Unusable ids are all ErrModelNotAvailable; registry/keystore failures and a pending legacy import are different errors, never a fallback.
+// A resolved resource whose project listing is due gets a background refresh (refreshResolved).
 func (s *AzureModelService) ResolveChat(ctx context.Context, scope, credOrg, modelID string) (res AzureChatResolution, err error) {
 	defer logger.Guard("AzureModels.ResolveChat", &err)
+	if res, err = s.resolveChat(ctx, scope, credOrg, modelID); err == nil {
+		s.refreshResolved(ctx, scope, res)
+	}
+	return res, err
+}
+
+// resolveChat is ResolveChat's resolution.
+func (s *AzureModelService) resolveChat(ctx context.Context, scope, credOrg, modelID string) (AzureChatResolution, error) {
 	modelID = strings.TrimSpace(modelID)
 	owner := s.userOwner(scope)
 	pending := s.prepareOwner(ctx, owner, scope)
@@ -504,6 +513,51 @@ type azureListingRefresher struct {
 	inflight map[string]bool
 	queue    []azureRefreshJob
 	wg       sync.WaitGroup
+	// known is what the last credential read of each resource (by job key) showed, so the chat path decides
+	// whether a refresh is due without reading the credential again (refreshResolved). Trusted for
+	// azureRefreshKnownTTL; at azureRefreshKnownMax resources it starts over.
+	known map[string]azureRefreshKnown
+}
+
+// azureRefreshKnown is what one credential read of a resource showed: whether it lists a project (ready, Entra ID
+// or CLI + project endpoint) and its credential's fingerprint, at the service's clock.
+type azureRefreshKnown struct {
+	project     bool
+	fingerprint string
+	at          time.Time
+}
+
+// What the chat path trusts of an earlier credential read: for the listing TTL — a credential replaced on another
+// replica is seen within it — and for at most this many resources.
+const (
+	azureRefreshKnownTTL = 5 * time.Minute
+	azureRefreshKnownMax = 4096
+)
+
+// remember records what a credential read of key's resource showed.
+func (r *azureListingRefresher) remember(key string, k azureRefreshKnown) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, had := r.known[key]; !had && len(r.known) >= azureRefreshKnownMax {
+		r.known = map[string]azureRefreshKnown{}
+	}
+	r.known[key] = k
+}
+
+// recall is what the last credential read of key's resource showed, while it is trusted at now.
+func (r *azureListingRefresher) recall(key string, now time.Time) (azureRefreshKnown, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k, ok := r.known[key]
+	if !ok || now.Sub(k.at) >= azureRefreshKnownTTL || now.Before(k.at) {
+		return azureRefreshKnown{}, false
+	}
+	return k, true
+}
+
+// azureRefreshKey is the refresh job key of owner's resource connID: one job per resource, whoever triggers it.
+func azureRefreshKey(owner storageif.AzureOwner, connID string) string {
+	return owner.String() + "\x00" + connID
 }
 
 // azureRefreshJob is one resource's refresh: owner/scope/connID, the credential fingerprint the read saw, and the entries.
@@ -519,7 +573,7 @@ type azureRefreshJob struct {
 }
 
 func newAzureListingRefresher(refresh func(ctx context.Context, raw string, models []ai.AzureRegisteredModel) error) *azureListingRefresher {
-	return &azureListingRefresher{refresh: refresh, inflight: map[string]bool{}}
+	return &azureListingRefresher{refresh: refresh, inflight: map[string]bool{}, known: map[string]azureRefreshKnown{}}
 }
 
 // trigger schedules job unless its resource's refresh is running or queued. Never blocks.
@@ -602,22 +656,88 @@ func (j azureRefreshJob) current() (string, bool) {
 	return raw, true
 }
 
-// refreshListings triggers a background refresh of st's resources that list a project: ready,
-// Entra ID (or CLI) + project endpoint, at least one chat entry; a live listing costs nothing.
+// refreshListings triggers a background refresh of st's resources whose listing is due (triggerRefresh).
 func (s *AzureModelService) refreshListings(st *azureOwnerState) {
 	if s.refresher == nil {
 		return
 	}
 	for _, c := range st.conns {
-		cred := st.creds[c.ID]
-		entries := st.entriesOf(c.ID)
-		if !cred.ready() || !cred.cfg.ProjectAccess() || !hasChatEntry(entries) {
-			continue
+		s.triggerRefresh(st.owner, st.scope, c.ID, st.creds[c.ID], st.entriesOf(c.ID))
+	}
+}
+
+// refreshResolved triggers the background refresh of a chat turn's resource when its listing is due: registry
+// providers only read the listing cache, and on a replica no picker or Settings read has warmed (or one idle past
+// the stale grace) the turns would otherwise size from undecorated entries. What an earlier credential read showed
+// (the refresher's memo) decides without the keystore — a live listing, a pending retry or a resource that lists
+// no project costs no read; otherwise one read under the request's context. The refresh itself runs on the
+// refresher, which reads the credential again when it runs, so the turn never waits on the project.
+func (s *AzureModelService) refreshResolved(ctx context.Context, scope string, res AzureChatResolution) {
+	if s.refresher == nil || !hasChatEntry(res.Entries) {
+		return
+	}
+	owner := s.userOwner(scope)
+	if res.ConnectionRef.OrgID != "" {
+		owner = storageif.AzureOrgOwner(res.ConnectionRef.OrgID)
+	}
+	connID := res.ConnectionRef.ConnID
+	if k, ok := s.refresher.recall(azureRefreshKey(owner, connID), s.now()); ok {
+		if k.project && ai.AzureFoundryListingDue(k.fingerprint, res.Entries) {
+			s.refresher.trigger(s.refreshJob(owner, scope, connID, k.fingerprint, res.Entries))
 		}
-		s.refresher.trigger(azureRefreshJob{
-			key: st.owner.String() + "\x00" + c.ID, owner: st.owner, scope: st.scope, connID: c.ID,
-			fingerprint: cred.cfg.Fingerprint(), entries: entries, read: s.readCredential,
-		})
+		return
+	}
+	raw, err := s.readCredentialCtx(ctx, owner, scope, connID)
+	cred, err := credentialFromRead(owner, connID, raw, err)
+	if err != nil {
+		logger.FromContext(ctx).Debug("azure registry: a chat turn's listing refresh could not read its credential; skipped", "owner", owner.String(), "resource", connID, "error", err)
+		return
+	}
+	s.triggerRefresh(owner, scope, connID, cred, res.Entries)
+}
+
+// readCredentialCtx is readCredential under ctx, through the keystores' request-scoped reads where they are wired.
+func (s *AzureModelService) readCredentialCtx(ctx context.Context, owner storageif.AzureOwner, scope, connID string) (string, error) {
+	var (
+		raw string
+		err error
+	)
+	switch {
+	case owner.IsOrg() && s.orgKeys != nil && s.orgKeyReads != nil:
+		raw, err = s.orgKeyReads.GetOrgCtx(ctx, owner.ID, credentialKey(connID))
+	case !owner.IsOrg() && s.keyReads != nil:
+		raw, err = s.keyReads.GetCtx(ctx, scope, credentialKey(connID))
+	default:
+		return s.readCredential(owner, scope, connID)
+	}
+	if errors.Is(err, storage.ErrSecretNotFound) {
+		return "", nil
+	}
+	return raw, err
+}
+
+// triggerRefresh records what this read of connID's credential showed (the chat path's memo) and schedules the
+// resource's listing refresh when it lists a project — ready, Entra ID (or CLI) + project endpoint, at least one
+// chat entry — and its listing is due (ai.AzureFoundryListingOf): a live listing, or a failed refresh's pending
+// retry, costs nothing. The job key is the resource, so the picker's and the chat path's triggers share one job.
+func (s *AzureModelService) triggerRefresh(owner storageif.AzureOwner, scope, connID string, cred azureCredential, entries []ai.AzureRegisteredModel) {
+	project := cred.ready() && cred.cfg.ProjectAccess()
+	known := azureRefreshKnown{project: project, at: s.now()}
+	if project {
+		known.fingerprint = cred.cfg.Fingerprint()
+	}
+	s.refresher.remember(azureRefreshKey(owner, connID), known)
+	if !project || !hasChatEntry(entries) || !ai.AzureFoundryListingOf(cred.cfg, entries).Due {
+		return
+	}
+	s.refresher.trigger(s.refreshJob(owner, scope, connID, known.fingerprint, entries))
+}
+
+// refreshJob is the refresh of owner's resource connID on the credential with fingerprint.
+func (s *AzureModelService) refreshJob(owner storageif.AzureOwner, scope, connID, fingerprint string, entries []ai.AzureRegisteredModel) azureRefreshJob {
+	return azureRefreshJob{
+		key: azureRefreshKey(owner, connID), owner: owner, scope: scope, connID: connID,
+		fingerprint: fingerprint, entries: entries, read: s.readCredential,
 	}
 }
 

@@ -1,9 +1,13 @@
 package ai
 
+// githubModelsProviderID is the registry id: the constructors label their counters with it (a reference to githubModelsSpec.ID from a
+// constructor would be an initialization cycle through Ctor).
+const githubModelsProviderID = "github-models"
+
 // githubModelsSpec: GitHub Models through the device flow; the token is stored under its historical key
 // "github-models-token", and the listing comes from the service. Free tier: nothing is metered.
 var githubModelsSpec = ProviderSpec{
-	ID:           "github-models",
+	ID:           githubModelsProviderID,
 	Name:         "GitHub Models",
 	AuthType:     AuthOAuth,
 	Caps:         CapChat | CapStream | CapEmbeddings | CapTools | CapReasoning | CapLiveListing | CapOrgShared,

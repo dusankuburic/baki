@@ -591,9 +591,8 @@ func TestAzureFoundry_AgentReplayMemoNotRefreshedByEveryTurn(t *testing.T) {
 		t.Fatalf("Chat: %v", err)
 	}
 	key := srv.URL + "/api/projects/p1/openai/v1/responses\x00Helper"
-	learnedRepairs.Lock()
-	seen := learnedRepairs.m[key].seen
-	learnedRepairs.Unlock()
+	memo, _ := learnedRepairs.Get(memoKey(paramRepairsSpec, key))
+	seen := memo.seen
 	if seen.IsZero() {
 		t.Fatal("the rejected replay must be memoised")
 	}
@@ -602,14 +601,12 @@ func TestAzureFoundry_AgentReplayMemoNotRefreshedByEveryTurn(t *testing.T) {
 			t.Fatalf("memoised turn: %v", err)
 		}
 	}
-	learnedRepairs.Lock()
-	refreshed := !learnedRepairs.m[key].seen.Equal(seen)
+	e, _ := learnedRepairs.Get(memoKey(paramRepairsSpec, key))
+	refreshed := !e.seen.Equal(seen)
 	if !refreshed {
-		e := learnedRepairs.m[key]
 		e.seen = time.Now().Add(-learnedRepairsTTL - time.Second)
-		learnedRepairs.m[key] = e
+		learnedRepairs.Set(memoKey(paramRepairsSpec, key), e, 1, 0)
 	}
-	learnedRepairs.Unlock()
 	if refreshed {
 		t.Fatal("a 200 that merely re-applied the memo refreshed its TTL")
 	}

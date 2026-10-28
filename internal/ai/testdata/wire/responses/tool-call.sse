@@ -1,0 +1,34 @@
+: hand-built from the OpenAI / Azure Responses API streaming event reference (function_call items, function_call_arguments.*), NOT a live capture; see ../README.md
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_WIRE0000000000000000000000000002","object":"response","created_at":1761523301,"status":"in_progress","error":null,"incomplete_details":null,"model":"gpt-4.1-2025-04-14","output":[],"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"fc_WIRE0000000000000000000000000001","type":"function_call","status":"in_progress","arguments":"","call_id":"call_WIRE00000000000000000001","name":"get_block"}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":2,"item_id":"fc_WIRE0000000000000000000000000001","output_index":0,"delta":"{\"block"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":3,"item_id":"fc_WIRE0000000000000000000000000001","output_index":0,"delta":"Id\":\"b-12\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":4,"item_id":"fc_WIRE0000000000000000000000000001","output_index":0,"name":"get_block","arguments":"{\"blockId\":\"b-12\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"id":"fc_WIRE0000000000000000000000000001","type":"function_call","status":"completed","arguments":"{\"blockId\":\"b-12\"}","call_id":"call_WIRE00000000000000000001","name":"get_block"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":6,"output_index":1,"item":{"id":"fc_WIRE0000000000000000000000000002","type":"function_call","status":"in_progress","arguments":"","call_id":"call_WIRE00000000000000000002","name":"get_variable_lineage"}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":7,"item_id":"fc_WIRE0000000000000000000000000002","output_index":1,"delta":"{\"variable\":\"LoopIndex\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":8,"item_id":"fc_WIRE0000000000000000000000000002","output_index":1,"name":"get_variable_lineage","arguments":"{\"variable\":\"LoopIndex\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":9,"output_index":1,"item":{"id":"fc_WIRE0000000000000000000000000002","type":"function_call","status":"completed","arguments":"{\"variable\":\"LoopIndex\"}","call_id":"call_WIRE00000000000000000002","name":"get_variable_lineage"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":10,"response":{"id":"resp_WIRE0000000000000000000000000002","object":"response","created_at":1761523301,"status":"completed","error":null,"incomplete_details":null,"model":"gpt-4.1-2025-04-14","output":[{"id":"fc_WIRE0000000000000000000000000001","type":"function_call","status":"completed","arguments":"{\"blockId\":\"b-12\"}","call_id":"call_WIRE00000000000000000001","name":"get_block"},{"id":"fc_WIRE0000000000000000000000000002","type":"function_call","status":"completed","arguments":"{\"variable\":\"LoopIndex\"}","call_id":"call_WIRE00000000000000000002","name":"get_variable_lineage"}],"usage":{"input_tokens":2210,"input_tokens_details":{"cached_tokens":0},"output_tokens":46,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2256}}}
+

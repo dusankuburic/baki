@@ -195,11 +195,11 @@ func TestRunToolLoop_StoppedBeforeTheFirstCallReportsTheStop(t *testing.T) {
 // and its text ("keystore: … cipher: …") must not reach the chat.
 func TestProviderSetupError_HidesKeystoreFailures(t *testing.T) {
 	ctl := &streamCtl{}
-	missing := providerSetupError("user-1", "claude", fmt.Errorf("claude: %w", ai.ErrKeyNotConfigured))
+	missing := providerSetupError(context.Background(), "user-1", "claude", fmt.Errorf("claude: %w", ai.ErrKeyNotConfigured))
 	if code, msg := ctl.classifyFailure(context.Background(), missing); code != ChatErrProviderNotConfigured || !strings.Contains(msg, "Settings") {
 		t.Errorf("missing key: got (%q, %q)", code, msg)
 	}
-	broken := providerSetupError("user-1", "claude", fmt.Errorf("get claude key: keystore: open: cipher: message authentication failed"))
+	broken := providerSetupError(context.Background(), "user-1", "claude", fmt.Errorf("get claude key: keystore: open: cipher: message authentication failed"))
 	code, msg := ctl.classifyFailure(context.Background(), broken)
 	if code != ChatErrProviderUnavailable {
 		t.Errorf("broken key store: code = %q, want %s", code, ChatErrProviderUnavailable)
@@ -484,7 +484,7 @@ func TestClientMessageID_OnlyAcceptsCanonicalUUIDs(t *testing.T) {
 func TestClassifyFailure_ProviderNotAllowedHasCode(t *testing.T) {
 	ctl := &streamCtl{}
 	cause := fmt.Errorf("%w: xai is not on your organisation's list of allowed AI providers — pick one that is", ai.ErrProviderNotAllowed)
-	if got := providerSetupError("u1", "xai", cause); !errors.Is(got, cause) {
+	if got := providerSetupError(context.Background(), "u1", "xai", cause); !errors.Is(got, cause) {
 		t.Errorf("providerSetupError replaced the refusal with %v", got)
 	}
 	code, msg := ctl.classifyFailure(context.Background(), cause)

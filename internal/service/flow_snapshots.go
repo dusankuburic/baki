@@ -248,6 +248,9 @@ func (s *FlowService) durableSnapshots(doc *models.FlowDocument) bool {
 // context the mutation persisted under: the durable ring joins its request transaction, so a mutation that rolls
 // back takes its snapshot with it. A snapshot that cannot be stored is logged and dropped, never an error: it is an
 // affordance, and failing the fix that already landed would lose the more valuable half.
+// snapshotPushTimeout bounds storing a durable undo entry once its write committed.
+const snapshotPushTimeout = 10 * time.Second
+
 func (s *FlowService) pushSnapshot(ctx context.Context, doc *models.FlowDocument, snap *SourceSnapshot) {
 	if snap == nil {
 		return
@@ -258,7 +261,11 @@ func (s *FlowService) pushSnapshot(ctx context.Context, doc *models.FlowDocument
 		if a := auth.ActorFromContext(ctx); a != nil {
 			userID = a.UserID
 		}
-		err := s.snapshotDB.PushFlowSnapshot(ctx, &storageif.FlowSnapshot{
+		// The write it undoes has committed: the entry must land even when the caller's context ended right after
+		// (a stopped stream, a cancelled request), within a bound of its own.
+		pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotPushTimeout)
+		defer cancel()
+		err := s.snapshotDB.PushFlowSnapshot(pctx, &storageif.FlowSnapshot{
 			ID: snap.ID, FlowID: doc.ID, Label: snap.Label, UserID: userID, CreatedAt: snap.CreatedAt, Bytes: snap.Bytes,
 			Source: snap.source, Files: snap.Files,
 		}, s.snapshotLimits)
@@ -272,10 +279,29 @@ func (s *FlowService) pushSnapshot(ctx context.Context, doc *models.FlowDocument
 		}
 		return
 	}
+	if snap.TargetPath != "" && s.desktopRing(doc) {
+		if err := s.diskSnaps.save(flowSnapshotKey(doc), snap); err != nil {
+			logger.Warn("source snapshot not stored", "flow", doc.ID, "label", snap.Label, "error", err)
+		}
+		return
+	}
 	if s.snapshots == nil {
 		return
 	}
 	s.snapshots.push(flowSnapshotKey(doc), snap)
+}
+
+// stageDesktopSnapshot stores snap in the disk ring before the write it precedes, and reports whether it did;
+// pushSnapshot after the write then finds it stored.
+func (s *FlowService) stageDesktopSnapshot(doc *models.FlowDocument, snap *SourceSnapshot) bool {
+	if snap == nil || snap.TargetPath == "" || !s.desktopRing(doc) {
+		return false
+	}
+	if err := s.diskSnaps.save(flowSnapshotKey(doc), snap); err != nil {
+		logger.Warn("source snapshot not staged", "flow", doc.ID, "label", snap.Label, "error", err)
+		return false
+	}
+	return true
 }
 
 // snapshotDesktopFile captures the CURRENT bytes of targetPath before a
@@ -385,6 +411,9 @@ func (s *FlowService) ListSourceSnapshots(ctx context.Context, doc *models.FlowD
 		}
 		return out, nil
 	}
+	if s.desktopRing(doc) {
+		return append([]*SourceSnapshot{}, s.diskSnaps.list(flowSnapshotKey(doc))...), nil
+	}
 	if s.snapshots == nil {
 		return []*SourceSnapshot{}, nil
 	}
@@ -402,6 +431,17 @@ func (s *FlowService) takeSnapshot(ctx context.Context, doc *models.FlowDocument
 			return nil, fmt.Errorf("load snapshot: %w", err)
 		}
 		return &SourceSnapshot{ID: row.ID, FlowID: row.FlowID, Label: row.Label, CreatedAt: row.CreatedAt, Bytes: row.Bytes, Files: row.Files, source: row.Source}, nil
+	}
+	if s.desktopRing(doc) {
+		snap, ok := s.diskSnaps.take(flowSnapshotKey(doc), snapshotID)
+		if !ok {
+			return nil, fmt.Errorf("%w: %q for this flow", ErrSnapshotNotFound, snapshotID)
+		}
+		// Read back from a file: nothing in it is taken on trust before it names where to write.
+		if err := snapshotTargetsOf(doc, snap); err != nil {
+			return nil, err
+		}
+		return snap, nil
 	}
 	if s.snapshots == nil {
 		return nil, fmt.Errorf("no snapshots available")
@@ -422,6 +462,13 @@ func (s *FlowService) RestoreSourceSnapshot(ctx context.Context, doc *models.Flo
 	snap, err := s.takeSnapshot(ctx, doc, snapshotID)
 	if err != nil {
 		return nil, err
+	}
+	// A desktop snapshot restores into a file or folder the user may have deleted or moved since: writing it would
+	// re-create what they removed.
+	if snap.TargetPath != "" {
+		if _, serr := os.Stat(snap.TargetPath); serr != nil {
+			return nil, fmt.Errorf("%w: the file this snapshot restores to no longer exists (%s)", ErrInvalidInput, filepath.Base(snap.TargetPath))
+		}
 	}
 
 	if snap.TargetPath != "" && snap.Files != nil {

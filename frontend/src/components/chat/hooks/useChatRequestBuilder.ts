@@ -1,6 +1,7 @@
 import {useCallback} from 'react'
 import {useChatStore, conversationKey} from '@/stores/chatStore'
 import type {ChatThread} from '@/stores/chatStore'
+import {requestHistory} from '@/lib/conversationSync'
 import type {ChatMessage, ChatRequest, FlowDocument, AISettings, ProviderID} from '@/types'
 
 export interface BuildChatRequestArgs {
@@ -15,6 +16,19 @@ export interface BuildChatRequestArgs {
   includeHistory?: boolean
   userMessageId?: string
   assistantMessageId?: string
+}
+
+/**
+ * Whether the thread's turns run the grounding tool loop (R-frontend-6): the thread's own choice, else the AI
+ * setting's default, which is on. On is safe for every model: the server falls back to the marker loop for one
+ * without native tools. The header toggle and the request both read this.
+ */
+export function threadUsesTools(
+  thread: Pick<ChatThread, 'useTools'> | null | undefined,
+  aiSettings: Pick<AISettings, 'toolsOffByDefault'>,
+): boolean {
+  if (!thread) return false
+  return thread.useTools ?? !aiSettings.toolsOffByDefault
 }
 
 export function buildChatRequest({
@@ -41,16 +55,7 @@ export function buildChatRequest({
     flowId: thread.flowId,
     provider,
     model,
-    ...(sendHistory
-      ? {
-          messages: messages.map((m: ChatMessage) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            timestamp: m.timestamp,
-          })),
-        }
-      : {}),
+    ...(sendHistory ? {messages: requestHistory(messages)} : {}),
     userMessage: text,
     conversationId: conversationKey(thread),
     contextBlockId: thread.contextBlockId || '',
@@ -60,7 +65,7 @@ export function buildChatRequest({
     maxTokens: providerConfig?.maxTokens ?? 4096,
     ...(reasoningEffort ? {reasoningEffort} : {}),
     excludeContext: excludeContext ?? false,
-    useTools: thread.useTools ?? false,
+    useTools: threadUsesTools(thread, aiSettings),
     ...(userMessageId ? {userMessageId} : {}),
     ...(assistantMessageId ? {assistantMessageId} : {}),
   }

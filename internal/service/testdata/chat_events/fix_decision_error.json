@@ -1,0 +1,9 @@
+{
+  "data": {
+    "message": "the fix could not be applied to the flow as it is now, so nothing was changed — call list_findings and try again",
+    "proposalId": "proposal-1",
+    "status": "error"
+  },
+  "streamId": "stream-1",
+  "type": "fix_decision"
+}

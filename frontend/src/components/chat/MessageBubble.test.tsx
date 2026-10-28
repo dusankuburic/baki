@@ -378,3 +378,69 @@ describe('MessageBubble — external links', () => {
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
   })
 })
+
+describe('MessageBubble — coded errors (R-provider-16)', () => {
+  const errorMsg = (errorCode: string) =>
+    msg({content: '*Error: x*', finishReason: 'error', errorCode} as Partial<ChatMessage>)
+
+  it('a context overflow offers Compact and a hint, and keeps Retry', () => {
+    const onCompact = vi.fn()
+    render(<MessageBubble message={errorMsg('CONTEXT_LIMIT')} onRetry={vi.fn()} onCompact={onCompact} />)
+    expect(screen.getByRole('button', {name: /retry/i})).toBeInTheDocument()
+    expect(screen.getByText(/narrow the question/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Compact'}))
+    expect(onCompact).toHaveBeenCalledOnce()
+  })
+
+  it('a context overflow on a read-only flow keeps Retry, and Compact waits for a running reply', () => {
+    const {unmount} = render(<MessageBubble message={errorMsg('CONTEXT_LIMIT')} onRetry={vi.fn()} />)
+    expect(screen.getByRole('button', {name: /retry/i})).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Compact'})).toBeNull()
+    unmount()
+    render(
+      <MessageBubble
+        message={errorMsg('CONTEXT_LIMIT')}
+        onRetry={vi.fn()}
+        onCompact={vi.fn()}
+        resendDisabledReason="A reply is still being written"
+      />,
+    )
+    expect(screen.getByRole('button', {name: 'Compact'})).toBeDisabled()
+  })
+
+  it('a step-limit failure shows its hint and keeps Retry', () => {
+    render(<MessageBubble message={errorMsg('TOOL_LOOP_LIMIT')} onRetry={vi.fn()} />)
+    expect(screen.getByText(/narrower question/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /retry/i})).toBeInTheDocument()
+  })
+
+  it('a timeout keeps the plain Retry', () => {
+    render(<MessageBubble message={errorMsg('STREAM_TIMEOUT')} onRetry={vi.fn()} onCompact={vi.fn()} />)
+    expect(screen.getByRole('button', {name: /retry/i})).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Compact'})).toBeNull()
+  })
+})
+
+// The knowledge notice (R-knowledge-1): the org's knowledge base was not consulted for this answer, and why.
+describe('MessageBubble — knowledge notice', () => {
+  it.each(['identity_mismatch', 'no_embedder', 'deadline'] as const)('renders the %s notice', status => {
+    render(<MessageBubble message={msg({content: 'answer', knowledge: status})} />)
+    // The notice without its icon's drawing, which belongs to the icon library.
+    const notice = screen.getByTestId('knowledge-notice').cloneNode(true) as HTMLElement
+    notice.querySelector('svg')?.replaceChildren()
+    expect(notice).toMatchSnapshot()
+  })
+
+  it('re-renders when a message gains its knowledge status (the memo compares it)', () => {
+    const at = '2026-10-27T10:00:00Z'
+    const {rerender} = render(<MessageBubble message={msg({content: 'answer', timestamp: at})} />)
+    expect(screen.queryByTestId('knowledge-notice')).toBeNull()
+    rerender(<MessageBubble message={msg({content: 'answer', timestamp: at, knowledge: 'deadline'})} />)
+    expect(screen.getByTestId('knowledge-notice')).toHaveTextContent(/did not answer in time/)
+  })
+
+  it('renders no notice when the knowledge base was consulted', () => {
+    render(<MessageBubble message={msg({content: 'answer'})} />)
+    expect(screen.queryByTestId('knowledge-notice')).toBeNull()
+  })
+})

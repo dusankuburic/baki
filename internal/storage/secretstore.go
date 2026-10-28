@@ -2,6 +2,8 @@ package storage
 
 import (
 	"errors"
+
+	"pad-analyzer/internal/storage/interfaces"
 )
 
 // ErrSecretStorageUnavailable is returned by write operations when the active
@@ -46,3 +48,14 @@ type SecretStore interface {
 // (desktop/local mode). It degrades gracefully — never panics — when no
 // keychain is reachable (headless/CI environments); see keyring.go.
 func NewKeyringSecretStore() SecretStore { return keyringStore{} }
+
+// KeyringStore is the OS-keychain SecretStore with its request-scoped reads (R-provider-19): the deployment provides
+// both from one value, so no consumer type-asserts the store for them.
+type KeyringStore interface {
+	SecretStore
+	interfaces.SecretStateLister
+	interfaces.SecretContextReader
+}
+
+// NewKeyringStore is NewKeyringSecretStore with the request-scoped reads.
+func NewKeyringStore() KeyringStore { return keyringStore{} }

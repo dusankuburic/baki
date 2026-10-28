@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"pad-core/logger"
 
@@ -32,12 +33,17 @@ func init() {
 				noPurge: "configuration lives as long as its organisation"},
 			{table: "org_ci_credentials", noExport: "the organisation's CI credentials (sealed secrets)",
 				erase: erasedByStep, org: orgByCascade},
+			// A ready document is organisation content, never on a timer; an unfinished upload (v51) is swept once
+			// abandoned (KnowledgePendingTTL).
 			{table: "knowledge_documents", noExport: "the organisation's knowledge base",
-				erase: notPersonal, eraseWhy: "organisation content; no uploader is recorded", org: orgByStep,
-				noPurge: "organisation content, never on a timer"},
+				erase: notPersonal, eraseWhy: "organisation content; no uploader is recorded", org: orgByStep},
 			{table: "knowledge_chunks", noExport: "the organisation's knowledge base",
 				erase: notPersonal, eraseWhy: "organisation content; no uploader is recorded", org: orgByCascade,
 				noPurge: "organisation content, never on a timer"},
+			// v50: the chunks' text again, for the lexical search's trigram index; one row per chunk, gone with it.
+			{table: "knowledge_chunk_search", noExport: "the search index of the organisation's knowledge base",
+				erase: notPersonal, eraseWhy: "derived from organisation content; no uploader is recorded", org: orgByCascade,
+				noPurge: "derived, one row per chunk"},
 		},
 		export: []exportSection{
 			section("organisations", exportOrganisations,
@@ -79,6 +85,15 @@ func init() {
 			// An expired CI credential stays listed for 30 days, so its admin sees why a runner started to fail.
 			{table: "org_ci_credentials", cond: `expires_at < NOW() - INTERVAL '30 days'`,
 				count: func(r *interfaces.PurgeResult) *int { return &r.CICredentials }},
+			// An unfinished knowledge upload (v51) older than KnowledgePendingTTL is abandoned: it never served, and
+			// the ready version it would have replaced still does. Its chunks and its kept source text go with it (ON
+			// DELETE CASCADE). Not batched by ctid: each document cascades up to 2 500 chunks, so one sweep takes the
+			// oldest KnowledgePendingPurgeBatch documents and the next sweep the rest. A maintenance path (no RLS
+			// actor), like every purge step.
+			{table: "knowledge_documents", cond: fmt.Sprintf(`id IN (SELECT id FROM knowledge_documents
+				WHERE state = 'pending' AND created_at < NOW() - INTERVAL '%d seconds' ORDER BY created_at LIMIT %d)`,
+				int(interfaces.KnowledgePendingTTL.Seconds()), interfaces.KnowledgePendingPurgeBatch),
+				count: func(r *interfaces.PurgeResult) *int { return &r.KnowledgeUploads }},
 		},
 	})
 }

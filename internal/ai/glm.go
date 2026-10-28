@@ -17,8 +17,10 @@ func NewGLMProvider(apiKey string) *GLMProvider {
 		openaiBase: openaiBase{
 			apiKey:                apiKey,
 			client:                fixedHostClient(),
+			longWaitClient:        fixedHostClientFor(false),
 			baseURL:               &glmBaseURL,
 			providerLabel:         "glm",
+			providerID:            glmProviderID,
 			embeddingModel:        "embedding-3",
 			embeddingModelDefault: "embedding-3",
 			handle429: func(_ *http.Response, apiErr openAIErrorResp) error {

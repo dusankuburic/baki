@@ -111,6 +111,11 @@ func TestProviderSpecs_Complete(t *testing.T) {
 			if (spec.Keys.OAuthToken != "") != (spec.Resolver != nil) {
 				t.Error("an OAuth token key goes with a Resolver that reads it")
 			}
+			if spec.Resolver != nil && spec.Caps.Has(CapOrgShared) {
+				// resolveCredential hands a Resolver neither the member/org rule nor ForOrgCredential's org-only
+				// refusal (R-provider-30): only a provider whose credential is never an organisation's may have one.
+				t.Error("a Resolver provider cannot be CapOrgShared: the Resolver does not apply the member/org credential rule")
+			}
 			if len(spec.Modes) == 0 {
 				t.Error("Modes is empty")
 			}
@@ -308,6 +313,46 @@ func TestProviderSpecs_CopilotResolverAndOrgRule(t *testing.T) {
 	}
 	if _, err := f.For(context.Background(), "u3", "copilot"); err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Errorf("For(copilot) with nothing stored = %v, want a not-configured error", err)
+	}
+}
+
+// TestMustRegisterSpec_RefusesResolverWithOrgShared: a Resolver reads the keys itself, outside the member/org rule
+// (ForOrgCredential's org-only refusal included), so registering one on an org-shareable provider is a programming
+// error (R-provider-30); the registry is left as it was.
+func TestMustRegisterSpec_RefusesResolverWithOrgShared(t *testing.T) {
+	const id = "test-resolver-org-shared"
+	t.Cleanup(func() {
+		providerMu.Lock()
+		delete(providerSpecs, id)
+		providerMu.Unlock()
+	})
+	spec := ProviderSpec{
+		ID: id, Name: id, Caps: CapChat | CapOrgShared, Keys: KeySchema{Primary: id, OAuthToken: id + "-token"},
+		Order: 1 << 29, Ctor: func(Credential) Provider { return nil },
+		Resolver: func(*ProviderFactory, string, string) (Credential, string, string, error) {
+			return Credential{}, "", "", nil
+		},
+	}
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("mustRegisterSpec accepted a spec with both a Resolver and CapOrgShared")
+			}
+			if !strings.Contains(fmt.Sprint(r), "CapOrgShared") {
+				t.Errorf("panic = %v, want it to name CapOrgShared", r)
+			}
+		}()
+		mustRegisterSpec(spec)
+	}()
+	if _, ok := SpecOf(id); ok {
+		t.Error("the refused spec was registered")
+	}
+	// The same spec without CapOrgShared (Copilot's shape) registers.
+	spec.Caps &^= CapOrgShared
+	mustRegisterSpec(spec)
+	if _, ok := SpecOf(id); !ok {
+		t.Error("a Resolver spec without CapOrgShared was not registered")
 	}
 }
 

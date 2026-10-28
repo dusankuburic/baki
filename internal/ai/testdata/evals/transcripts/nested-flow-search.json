@@ -1,0 +1,36 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "search_flow",
+          "input": {
+            "query": "SubItemList"
+          }
+        }
+      ],
+      "tokensIn": 1720,
+      "tokensOut": 21
+    },
+    {
+      "toolCalls": [
+        {
+          "id": "call_2",
+          "name": "get_variable_lineage",
+          "input": {
+            "name": "SubItemList"
+          }
+        }
+      ],
+      "tokensIn": 1810,
+      "tokensOut": 23
+    },
+    {
+      "text": "`SubItemList` appears once: [LOOP FOREACH SubItem IN %SubItemList%](block:B4) on line 5, inside the `IF %Item% > 10` branch.\n\nIt is never set — its lineage has a single read and no write — so the inner loop iterates an empty or undefined list and its body (the `IF %SubItem% = %Item%` check) never runs. Initialise `SubItemList` before the outer loop, or build it from `Item` inside it.",
+      "tokensIn": 1905,
+      "tokensOut": 109
+    }
+  ]
+}

@@ -251,6 +251,10 @@ func TestWatchStream_CancelsWhenSubscriberGone(t *testing.T) {
 
 	select {
 	case <-ctx.Done():
+		// Its own wire code, not the user's STREAM_STOPPED (R-streaming-10).
+		if code, msg := ctl.classifyFailure(ctx, context.Canceled); code != "STREAM_CLIENT_GONE" || msg != "response stopped: you were disconnected while it was generating" {
+			t.Errorf("classifyFailure = %s %q, want STREAM_CLIENT_GONE with the disconnect reason", code, msg)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("watchdog did not cancel the stream after subscriber loss")
 	}
@@ -298,22 +302,24 @@ func TestWatchStream_NotStartedNotCancelledBySubscriberLoss(t *testing.T) {
 }
 
 // TestWatchStream_CancelsIdleProvider: a provider that stops emitting chunks is cancelled after the idle timeout
-// — even before the client begins — with the provider-stalled reason.
+// — even before the client begins — with the provider-stalled reason and the idle code.
 func TestWatchStream_CancelsIdleProvider(t *testing.T) {
 	notifier := &testutil.CountingNotifier{}
-	svc := &ChatService{notifier: notifier, watchdogInterval: 5 * time.Millisecond, idleTimeout: 30 * time.Millisecond}
+	svc := &ChatService{notifier: notifier, watchdogInterval: 5 * time.Millisecond, idleTimeout: 30 * time.Millisecond,
+		hostedIdleTimeout: 30 * time.Millisecond}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ctl := &streamCtl{cancel: cancel, started: make(chan struct{})} // not begun
 	ctl.touch()
+	ctl.beginProviderTurn() // the provider was called
 
 	go svc.watchStream(ctx, "s1", "user-1", ctl)
 
 	select {
 	case <-ctx.Done():
-		if got := ctl.failureMessage(ctx, context.Canceled); got != "response stopped: the AI provider stopped responding" {
-			t.Errorf("failureMessage = %q, want the provider-stalled reason", got)
+		if code, got := ctl.classifyFailure(ctx, context.Canceled); code != "STREAM_IDLE_TIMEOUT" || got != "response stopped: the AI provider stopped responding" {
+			t.Errorf("classifyFailure = %s %q, want STREAM_IDLE_TIMEOUT with the provider-stalled reason", code, got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("watchdog did not cancel an idle provider stream")

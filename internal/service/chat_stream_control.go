@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,24 +27,128 @@ var journaledEventTypes = map[string]bool{
 	"notice":       true,
 }
 
-// maxJournalEvents bounds the journal: a handful of events per tool iteration, one per batch fix — 100 covers
-// every realistic stream; when exceeded the OLDEST entries drop (recent events matter most for replay).
+// maxJournalEvents bounds the journal's droppable events (tool calls and notices, the truncation marker
+// included): two per tool call, so it is reached only by a turn of about 50 calls. When it is reached the OLDEST half
+// of them drops (recent events matter most for replay). Approval cards and their decisions are never dropped
+// (journalKept): a decided proposal must stay in the stored record with its decision, so the journal holds at most
+// maxJournalEvents plus the turn's approval events.
 const maxJournalEvents = 100
+
+// journalTruncatedName names the marker tool_result that stands for the tool calls the bound dropped.
+const journalTruncatedName = "journal_truncated"
+
+// journalKept reports whether a journaled event type survives the bound: the approval cards and their decisions.
+func journalKept(eventType string) bool {
+	return eventType == "fix_proposal" || eventType == "fix_decision"
+}
 
 // recordJournal appends an event when its type is journaled; called on the base emit path under the ctl mutex.
 func (c *streamCtl) recordJournal(eventType string, data map[string]interface{}) {
 	if !journaledEventTypes[eventType] {
 		return
 	}
-	if len(c.journal) >= maxJournalEvents {
-		// Drop half the oldest entries in place, amortized-O(1); the vacated tail is cleared so dropped
-		// events are not pinned in the backing array.
-		kept := copy(c.journal, c.journal[maxJournalEvents/2:])
-		clear(c.journal[kept:])
-		c.journal = c.journal[:kept]
+	if !journalKept(eventType) {
+		if c.journalDroppable >= maxJournalEvents {
+			c.trimJournal()
+		}
+		c.journalDroppable++
 	}
 	c.journal = append(c.journal, journalEvent{Type: eventType, Data: data})
 	c.journalSeq++
+	c.turn.count(eventType, data)
+	if eventType == "notice" && data["kind"] == noticeKnowledge {
+		c.knowledgeStatus, _ = data["status"].(string)
+	}
+}
+
+// trimJournal drops the oldest half of the droppable events and records one marker tool_result in their place,
+// first in the journal, counting every tool call dropped so far ("N earlier tool calls omitted"): the stored trail
+// (journalTurnRecord) and a reconnecting client show that calls are missing. The cut ends between whole calls: past
+// the half, it goes on only until the result of every call start it took is taken too (a batch journals all its
+// starts, then its results). Starts are paired with their results by name, oldest first (journalCallEnds), so a
+// "tool" row that never gets a result — the context-block row, a provider status line, tools_unsupported,
+// step_limit_reached, a hosted step whose completion never came — does not hold the cut open to the end of the
+// journal. Approval events stay, in order. The journal is rebuilt in a new array, so the dropped events are not pinned
+// by the old one. Caller holds c.mu.
+func (c *streamCtl) trimJournal() {
+	ends := journalCallEnds(c.journal)
+	target := maxJournalEvents / 2
+	kept := make([]journalEvent, 1, len(c.journal)+1)
+	dropped, results := 0, 0
+	// cutUntil is the index of the last result a dropped start is waiting for; the cut stays open up to it.
+	cutUntil := -1
+	for i, ev := range c.journal {
+		if isJournalMarker(ev) {
+			continue
+		}
+		if journalKept(ev.Type) || (dropped >= target && i > cutUntil) {
+			kept = append(kept, ev)
+			continue
+		}
+		dropped++
+		switch ev.Type {
+		case "tool":
+			if end, paired := ends[i]; paired {
+				cutUntil = max(cutUntil, end)
+			}
+		case "tool_result":
+			results++
+		}
+	}
+	c.journalOmitted += results
+	kept[0] = journalMarker(c.journalOmitted)
+	c.journal = kept
+	c.journalDroppable = 0
+	for _, ev := range kept {
+		if !journalKept(ev.Type) {
+			c.journalDroppable++
+		}
+	}
+}
+
+// journalCallEnds pairs each "tool" start of the journal with its tool_result: by name, the oldest open start of
+// that name first (a batch emits its starts, then its results in call order). The map is start index -> result
+// index; a start without a result (a notice-shaped row, a call still running) is absent.
+func journalCallEnds(journal []journalEvent) map[int]int {
+	open := map[string][]int{}
+	ends := map[int]int{}
+	for i, ev := range journal {
+		if isJournalMarker(ev) {
+			continue
+		}
+		name := journalString(ev.Data["name"])
+		switch ev.Type {
+		case "tool":
+			open[name] = append(open[name], i)
+		case "tool_result":
+			if starts := open[name]; len(starts) > 0 {
+				ends[starts[0]] = i
+				open[name] = starts[1:]
+			}
+		}
+	}
+	return ends
+}
+
+// journalMarker is the tool_result that stands for omitted dropped tool calls. It is not a tool the model ran: it is
+// journaled directly (never emitted live, never counted by the turn's record) and is ok, so no card shows a failure.
+func journalMarker(omitted int) journalEvent {
+	noun := "calls"
+	if omitted == 1 {
+		noun = "call"
+	}
+	return journalEvent{Type: "tool_result", Data: map[string]interface{}{
+		"name":       journalTruncatedName,
+		"label":      "Earlier tool calls omitted",
+		"ok":         true,
+		"durationMs": 0,
+		"summary":    fmt.Sprintf("%d earlier tool %s omitted", omitted, noun),
+	}}
+}
+
+// isJournalMarker reports whether ev is the truncation marker.
+func isJournalMarker(ev journalEvent) bool {
+	return ev.Type == "tool_result" && ev.Data["name"] == journalTruncatedName
 }
 
 // setDroppedHistory records the turn's cumulative history_truncated count.
@@ -109,6 +214,11 @@ type streamCtl struct {
 	// convWrite is where this turn's own conversation writes left the stored version (the question at stream start,
 	// then the answer), kept only while no other writer got in between; the terminal event carries it. nil: unknown.
 	convWrite atomic.Pointer[convWrite]
+	// answerUnstored: the server-owned answer's write failed; the done event says answerStored false.
+	answerUnstored atomic.Bool
+	// conversationCleared: the conversation was deleted while the stream ran (clearingConversation); its answer is
+	// not written.
+	conversationCleared atomic.Bool
 	// sharedCredential records that the turn runs on the org's shared credential (ai.UsedOrgCredential): an auth
 	// or permission failure is then the org admin's to fix, and classifyFailure says so.
 	sharedCredential atomic.Bool
@@ -119,9 +229,23 @@ type streamCtl struct {
 	// replica that cannot keep its liveness key stops such streams (fencePublishedStreams).
 	published atomic.Bool
 	// cancelReason is the client-facing explanation for a deliberate cancellation; it replaces the raw
-	// "context canceled" wrapping when the failure is reported. cancelCode is its class ("" = ChatErrStopped).
+	// "context canceled" wrapping when the failure is reported. cancelCode is its class ("" = ChatErrStopped; the
+	// watchdog's are ChatErrIdleTimeout and ChatErrClientGone).
 	cancelReason string
 	cancelCode   string
+	// knowledgeStatus is the status of the turn's knowledge notice ("" = none), under mu: the stored answer reads
+	// it here, since the journal that carries the notice may have been trimmed.
+	knowledgeStatus string
+	// turn is what the turn's terminal record says beyond the stream's own state (chat_turn_record.go).
+	turn turnRecord
+	// applyHolds counts the approved applies running (holdCancel); a cancel asked for meanwhile sets cancelDeferred
+	// and fires when the last one releases. Both under mu.
+	applyHolds     int
+	cancelDeferred bool
+	// phaseBeforeApply is the phase an apply interrupted, restored when the last hold releases; under mu.
+	phaseBeforeApply streamPhase
+	// phase is the streamPhase the stream is in (setPhase), read by the idle check in watchStream.
+	phase atomic.Int32
 	// lastActivity is the UnixNano of the most recent provider chunk, read by the idle check in watchStream.
 	lastActivity atomic.Int64
 	// lastEmit is the UnixNano of the most recent event delivered to the client; distinct from lastActivity on
@@ -137,6 +261,11 @@ type streamCtl struct {
 	awaitingOutput atomic.Bool
 	// journal records agentic events for replay on reconnect; guarded by mu. See journalEvent.
 	journal []journalEvent
+	// journalDroppable counts the journal's events the bound may drop (all but the approval events), the marker
+	// included; guarded by mu. See recordJournal.
+	journalDroppable int
+	// journalOmitted counts the tool calls the bound dropped so far, the number the marker states; guarded by mu.
+	journalOmitted int
 	// journalSeq counts journal appends (length alone repeats once trimmed); guarded by mu. See mirrorMark.
 	journalSeq uint64
 	// noticesShown holds provider status lines already shown this turn; guarded by mu. See firstNotice.
@@ -215,6 +344,60 @@ func heartbeatStream(ctx context.Context, ctl *streamCtl, emit func(string, map[
 // touch records provider activity for the idle timeout.
 func (c *streamCtl) touch() { c.lastActivity.Store(time.Now().UnixNano()) }
 
+// streamPhase is what a stream is doing, for the idle watchdog's message and log line (R-streaming-10).
+type streamPhase int32
+
+const (
+	// phaseSetup: everything before the first provider call (the provider build, the history, the context build).
+	phaseSetup streamPhase = iota
+	// phaseProvider: a provider call, from its start to its return.
+	phaseProvider
+	// phaseTool: the tools of a tool-loop iteration.
+	phaseTool
+	// phaseApproval: an approval card waiting for the user's decision.
+	phaseApproval
+	// phaseApply: an approved fix being applied.
+	phaseApply
+)
+
+func (p streamPhase) String() string {
+	switch p {
+	case phaseProvider:
+		return "provider"
+	case phaseTool:
+		return "tool"
+	case phaseApproval:
+		return "approval"
+	case phaseApply:
+		return "apply"
+	}
+	return "setup"
+}
+
+// setPhase records what the stream is doing now.
+func (c *streamCtl) setPhase(p streamPhase) { c.phase.Store(int32(p)) }
+
+// currentPhase is what the stream is doing now.
+func (c *streamCtl) currentPhase() streamPhase { return streamPhase(c.phase.Load()) }
+
+// idleCancelMessage is the ChatErrIdleTimeout copy for a stream that stalled in phase p: only a provider-phase stall
+// blames the provider (a stall in setup was reported as the provider's, which was never called). The approval and
+// apply copies are for completeness: the approval wait touches the clock every fixDecisionKeepalive and the apply
+// through its applier's touch, and an apply holds the cancel until it returns, so neither is reached in practice.
+func idleCancelMessage(p streamPhase) string {
+	switch p {
+	case phaseProvider:
+		return "response stopped: the AI provider stopped responding"
+	case phaseTool:
+		return "response stopped: a tool the assistant ran stopped responding"
+	case phaseApproval:
+		return "response stopped: nothing happened while it waited for your approval"
+	case phaseApply:
+		return "response stopped: applying the fix stopped responding"
+	}
+	return "response stopped: setting up the response took too long — the AI provider was not called yet; try again"
+}
+
 // hostedStep accounts one provider ToolEvent: a start opens a hosted step, a completion closes one (never below
 // zero — an unseen completion must not hide a later open step).
 func (c *streamCtl) hostedStep(start bool) {
@@ -238,7 +421,10 @@ func (c *streamCtl) endProviderTurn() {
 }
 
 // beginProviderTurn marks the start of a provider call: until first output the watchdog applies the hosted-step limit.
-func (c *streamCtl) beginProviderTurn() { c.awaitingOutput.Store(true) }
+func (c *streamCtl) beginProviderTurn() {
+	c.setPhase(phaseProvider)
+	c.awaitingOutput.Store(true)
+}
 
 // sawOutput records a chunk that proves the provider is producing output; the normal idle limit applies from here.
 func (c *streamCtl) sawOutput(text, toolCalls, done bool) {
@@ -252,14 +438,66 @@ func (c *streamCtl) cancelWithReason(reason string) { c.cancelWithCode("", reaso
 
 // cancelWithCode is cancelWithReason with the failure code the cancellation reports ("" = ChatErrStopped); the
 // first reason wins with its code, so a stream the user stopped stays stopped when the server then shuts down.
+//
+// While an approved fix is being applied (holdCancel) the cancel itself waits for it: the write and its undo
+// snapshot cannot be cut in half, and the fix's decision reaches the client before the stream's terminal event.
 func (c *streamCtl) cancelWithCode(code, reason string) {
 	c.mu.Lock()
 	if c.cancelReason == "" {
 		c.cancelReason, c.cancelCode = reason, code
 	}
+	if c.applyHolds > 0 {
+		c.cancelDeferred = true
+		c.mu.Unlock()
+		return
+	}
 	c.mu.Unlock()
 	c.cancel()
 }
+
+// holdCancel makes the stream's cancellation wait until release is called: an approved fix's apply and its
+// verification run as one critical section (R-approvals-c17). false when the stream is already ending — the fix
+// must not start then. Shutdown bounds the wait (forceCancel).
+func (c *streamCtl) holdCancel() (release func(), ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cancelReason != "" && c.applyHolds == 0 {
+		return func() {}, false
+	}
+	if c.applyHolds == 0 {
+		c.phaseBeforeApply = c.currentPhase()
+		c.setPhase(phaseApply)
+	}
+	c.applyHolds++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.mu.Lock()
+			c.applyHolds--
+			if c.applyHolds == 0 {
+				c.setPhase(c.phaseBeforeApply)
+			}
+			fire := c.applyHolds == 0 && c.cancelDeferred
+			if fire {
+				c.cancelDeferred = false
+			}
+			c.mu.Unlock()
+			if fire {
+				c.cancel()
+			}
+		})
+	}, true
+}
+
+// stopRequested reports a cancellation asked for while the cancel is held, with its code ("" = the user stopped).
+func (c *streamCtl) stopRequested() (code string, asked bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cancelCode, c.cancelReason != ""
+}
+
+// forceCancel cancels the stream now, held or not: Shutdown's budget is spent.
+func (c *streamCtl) forceCancel() { c.cancel() }
 
 // setFailure records the stream's terminal error message under lock with its code and shared-credential flag
 // (see chat_errors.go), so resume/begin can hand them to a client that missed the live error event. Shared by
@@ -309,6 +547,14 @@ func (c *streamCtl) markDone(tokensIn, tokensOut int, servedModel string) {
 
 // terminalLocked reports whether the stream recorded its terminal state; caller holds c.mu.
 func (c *streamCtl) terminalLocked() bool { return c.done || c.errMsg != "" }
+
+// stampAnswerStored adds answerStored false to a done event when the stream's server-side answer write failed
+// (R-tool-loop-20); absent otherwise, so older clients see the event unchanged.
+func (c *streamCtl) stampAnswerStored(data map[string]interface{}) {
+	if c.answerUnstored.Load() {
+		data["answerStored"] = false
+	}
+}
 
 // claimTerminalEvent reports whether the stream's terminal event (done or error) may go out now, and marks it sent:
 // one per stream, whoever sends it. A done is refused once a failure is recorded, so the event the client acts on
@@ -429,15 +675,25 @@ func (c *streamCtl) snapshot() resumeSnapshot {
 // snapshotLocked is snapshot with c.mu held.
 func (c *streamCtl) snapshotLocked() resumeSnapshot {
 	return resumeSnapshot{
-		Owner:       c.ownerID,
-		Text:        c.buffer.String(),
-		Done:        c.done,
-		Error:       c.errMsg,
-		ErrorCode:   c.errCode,
-		ErrorShared: c.errShared,
-		TokensIn:    c.tokensIn,
-		TokensOut:   c.tokensOut,
-		ServedModel: c.servedModel,
-		Events:      c.snapshotEvents(),
+		Owner:        c.ownerID,
+		Text:         c.buffer.String(),
+		Done:         c.done,
+		Error:        c.errMsg,
+		ErrorCode:    c.errCode,
+		ErrorShared:  c.errShared,
+		TokensIn:     c.tokensIn,
+		TokensOut:    c.tokensOut,
+		ServedModel:  c.servedModel,
+		Events:       c.snapshotEvents(),
+		AnswerStored: c.answerStoredField(),
 	}
+}
+
+// answerStoredField is the resume form of stampAnswerStored: false when the answer's write failed, else absent.
+func (c *streamCtl) answerStoredField() *bool {
+	if !c.answerUnstored.Load() {
+		return nil
+	}
+	stored := false
+	return &stored
 }

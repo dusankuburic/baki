@@ -20,6 +20,9 @@ export function credentialErrorText(t: TFunction<'settings'>, err: unknown, fall
   if (code === 'USE_PROVIDER_CONFIG') {
     return t('providers.errorWithCode', {message: t('providers.codeUseProviderConfig'), code})
   }
+  if (code === 'SECRET_STORAGE_UNAVAILABLE') {
+    return t('providers.errorWithCode', {message: t('providers.codeSecretStorageUnavailable'), code})
+  }
   const message = err instanceof ApiError ? err.message : ''
   if (code) return t('providers.errorWithCode', {message: message || fallback, code})
   return message || fallback

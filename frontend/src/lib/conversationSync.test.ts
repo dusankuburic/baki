@@ -6,6 +6,7 @@ import {
   adoptStreamVersion,
   clearThreadConversation,
   isConversationConflict,
+  isPersistable,
   replaceThreadConversation,
   saveThreadConversation,
 } from './conversationSync'
@@ -275,5 +276,76 @@ describe("adoptStreamVersion (the version a stream's terminal event names)", () 
     const id = seed([msg('u1')], 6)
     expect(adoptStreamVersion(id, {conversationBase: 6, conversationVersion: 4})).toBe(false)
     expect(useChatStore.getState().getConversationVersion(id)).toBe(6)
+  })
+})
+
+describe('isPersistable (R-approvals-4)', () => {
+  it('keeps a failed turn that left something behind, drops a bare error bubble', () => {
+    const failed = (extra: Partial<ChatMessage>) => ({
+      ...msg('f', 'assistant'),
+      finishReason: 'error' as const,
+      ...extra,
+    })
+    expect(isPersistable(failed({content: '*Error: provider down*'}))).toBe(false)
+    expect(isPersistable(failed({content: 'The flow starts by\n\n---\n*Error: provider down*'}))).toBe(true)
+    expect(isPersistable(failed({content: '*Error: x*', toolCalls: [{name: 'list_findings', ok: true}]}))).toBe(true)
+    expect(
+      isPersistable(
+        failed({
+          content: '*Error: x*',
+          fixProposals: [
+            {proposalId: 'p', ruleId: 'r', fixType: 'f', blockLabel: 'b', line: 1, summary: '', status: 'applied'},
+          ],
+        }),
+      ),
+    ).toBe(true)
+  })
+})
+
+// R-security-3: a key that holds another user's conversation is refused (409 CONVERSATION_KEY_TAKEN). No reload makes
+// such a save succeed: the thread moves to a new key, keeping its messages, and is saved there.
+describe('a save refused because another user holds the key', () => {
+  const keyTaken = () => Object.assign(new Error('taken'), {status: 409, code: 'CONVERSATION_KEY_TAKEN'})
+
+  it('moves the thread to a new key and saves its messages there, from version 0', async () => {
+    const id = seed([msg('u1'), msg('a1', 'assistant')], 3)
+    save.mockRejectedValueOnce(keyTaken()).mockResolvedValueOnce({version: 1})
+
+    await saveThreadConversation(id, 'flow1', id)
+
+    const st = useChatStore.getState()
+    expect(st.threads.some(t => t.id === id)).toBe(false)
+    const moved = st.threads.find(t => t.flowId === 'flow1')!
+    expect(moved.id).not.toBe(id)
+    expect(save).toHaveBeenLastCalledWith('flow1', moved.id, [msg('u1'), msg('a1', 'assistant')], 0)
+    expect(st.getConversationVersion(moved.id)).toBe(1)
+    expect(st.getMessages(moved.id).map(m => m.id)).toEqual(['u1', 'a1'])
+  })
+
+  it('waits for a running stream to end before moving the thread, and saves no failure meanwhile', async () => {
+    const id = seed([msg('u1'), msg('a1', 'assistant')], 3)
+    useChatStore.getState().startStream(id, 's2', 'm2')
+    save.mockRejectedValueOnce(keyTaken()).mockResolvedValueOnce({version: 1})
+
+    const saving = saveThreadConversation(id, 'flow1', id)
+    await Promise.resolve()
+    expect(useChatStore.getState().threads.some(t => t.id === id)).toBe(true)
+    useChatStore.getState().endStream(id)
+    await expect(saving).resolves.toBeUndefined()
+
+    const moved = useChatStore.getState().threads.find(t => t.flowId === 'flow1')!
+    expect(moved.id).not.toBe(id)
+    expect(save).toHaveBeenLastCalledWith('flow1', moved.id, [msg('u1'), msg('a1', 'assistant')], 0)
+  })
+
+  it('stores a compaction under the new key too', async () => {
+    const id = seed([msg('u1'), msg('a1', 'assistant'), msg('u2')], 3)
+    save.mockRejectedValueOnce(keyTaken()).mockResolvedValueOnce({version: 1})
+
+    await expect(replaceThreadConversation(id, 'flow1', id, [msg('u2')])).resolves.toBe(true)
+
+    const moved = useChatStore.getState().threads.find(t => t.flowId === 'flow1')!
+    expect(moved.id).not.toBe(id)
+    expect(save).toHaveBeenLastCalledWith('flow1', moved.id, [msg('u2')], 0)
   })
 })

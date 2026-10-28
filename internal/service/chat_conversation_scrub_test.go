@@ -166,7 +166,7 @@ func TestStreamedTurn_QuestionIsStoredMasked_CloudStore(t *testing.T) {
 			t.Fatalf("stream did not finish cleanly: done=%v err=%q", ctl.done, ctl.errMsg)
 		}
 		ctx := context.Background()
-		stored, _, err := b.LoadConversationVersioned(ctx, h.doc.ID, h.key)
+		stored, _, err := b.LoadConversationVersioned(ctx, h.doc.ID, h.key, "")
 		if err != nil {
 			t.Fatalf("LoadConversationVersioned: %v", err)
 		}
@@ -199,7 +199,7 @@ func TestSaveClientConversation_StoresSecretsMasked(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := tc.svc(t)
-			if _, err := svc.SaveClientConversation(ctx, doc.ID, key, tc.base, msgs); err != nil {
+			if _, err := svc.SaveClientConversation(ctx, doc.ID, key, tc.base, msgs, true); err != nil {
 				t.Fatalf("SaveClientConversation: %v", err)
 			}
 			var stored []models.ChatMessage
@@ -252,7 +252,7 @@ func TestPersistAssistantTurn_DedupesAgainstTheStoredCopy(t *testing.T) {
 		{ID: uuid.NewString(), Role: "user", Content: "what does the connection block look like?"},
 		{ID: uuid.NewString(), Role: "assistant", Content: yamlAnswer},
 	}
-	if _, err := svc.SaveClientConversation(ctx, doc.ID, key, nil, saved); err != nil {
+	if _, err := svc.SaveClientConversation(ctx, doc.ID, key, nil, saved, true); err != nil {
 		t.Fatalf("SaveClientConversation: %v", err)
 	}
 	svc.persistAssistantTurn(ctx, doc, models.ChatRequest{ConversationID: convID}, finishedAnswer(yamlAnswer), "fake-model", "")

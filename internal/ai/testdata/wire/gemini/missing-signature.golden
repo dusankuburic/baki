@@ -1,0 +1,5 @@
+# gemini/missing-signature.sse through parseGeminiSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 error=thought_signature_missing msg=none in=2410 served="gemini-3-pro-preview"
+return nil
+summary chunks=1 keepalives=0 text=""

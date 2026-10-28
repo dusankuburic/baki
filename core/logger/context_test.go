@@ -99,3 +99,32 @@ func TestFromContext_FollowsTheCurrentDefault(t *testing.T) {
 		t.Errorf("request_id missing after the default changed: %s", second.String())
 	}
 }
+
+func TestWithAttrs_EveryLineUnderTheContextCarriesThem(t *testing.T) {
+	buf := captureDefault(t)
+	setExtractor(t, func(ctx context.Context) []slog.Attr {
+		id, _ := ctx.Value(requestKey{}).(string)
+		return []slog.Attr{slog.String("request_id", id)}
+	})
+
+	ctx := context.WithValue(context.Background(), requestKey{}, "req-9")
+	ctx = WithAttrs(ctx, slog.String("stream_id", "s-1"))
+	ctx = WithAttrs(ctx, slog.String("tool", "list_findings"))
+	FromContext(ctx).Info("tool ran")
+
+	line := lastLine(t, buf)
+	for k, want := range map[string]string{"request_id": "req-9", "stream_id": "s-1", "tool": "list_findings"} {
+		if line[k] != want {
+			t.Errorf("%s = %v, want %q (line %v)", k, line[k], want, line)
+		}
+	}
+}
+
+func TestWithAttrs_WorksWithoutAnExtractor(t *testing.T) {
+	buf := captureDefault(t)
+	SetContextAttrs(nil)
+	FromContext(WithAttrs(context.Background(), slog.String("stream_id", "s-2"))).Info("x")
+	if line := lastLine(t, buf); line["stream_id"] != "s-2" {
+		t.Errorf("line %v, want stream_id s-2", line)
+	}
+}

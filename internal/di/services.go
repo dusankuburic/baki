@@ -14,6 +14,7 @@ import (
 	"go.uber.org/fx"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/capability"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/egress"
@@ -273,7 +274,8 @@ func ProvideProviderPolicy(settings service.SettingsProvider, backend storageif.
 // leaser is the jobs' lease (nil on the desktop): the background re-embed job runs under it, one replica at a time, and
 // so does every org upload and re-index (a lease per org over the check -> embed -> write window, at most
 // PAD_KNOWLEDGE_LEASE_CAP held per replica).
-func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService, bus *eventbus.Bus, leaser lock.Leaser) *rag.KnowledgeService {
+// extra are further options (the audit recorder in the fx graph).
+func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.ProviderFactory, settings service.SettingsProvider, cfg *config.Config, azure *service.AzureModelService, bus *eventbus.Bus, leaser lock.Leaser, extra ...rag.Option) *rag.KnowledgeService {
 	opts := []rag.Option{rag.WithEmbeddingProvider(cfg.Storage.EmbeddingProvider), rag.WithEventBus(bus)}
 	if leaser != nil {
 		opts = append(opts, rag.WithJobLeaser(leaser), rag.WithLeaseCap(cfg.Storage.EffectiveKnowledgeLeaseCap()))
@@ -281,6 +283,7 @@ func ProvideKnowledgeService(backend storageif.StorageBackend, factory *ai.Provi
 	if azure != nil {
 		opts = append(opts, rag.WithAzureEmbedder(azure))
 	}
+	opts = append(opts, extra...)
 	return rag.NewKnowledgeService(backend, factory, settings, opts...)
 }
 
@@ -295,10 +298,17 @@ type knowledgeDeps struct {
 	Azure    *service.AzureModelService
 	Bus      *eventbus.Bus
 	Leaser   lock.Leaser `optional:"true"`
+	// Recorder records the service's own corpus changes (the identity stamp of proven legacy documents); absent
+	// from the di-only test graphs.
+	Recorder *audit.Recorder `optional:"true"`
 }
 
 func provideKnowledgeService(d knowledgeDeps) *rag.KnowledgeService {
-	return ProvideKnowledgeService(d.Backend, d.Factory, d.Settings, d.Cfg, d.Azure, d.Bus, d.Leaser)
+	var extra []rag.Option
+	if d.Recorder != nil {
+		extra = append(extra, rag.WithAuditRecorder(d.Recorder))
+	}
+	return ProvideKnowledgeService(d.Backend, d.Factory, d.Settings, d.Cfg, d.Azure, d.Bus, d.Leaser, extra...)
 }
 
 // azureDatabaseRegistry is the database's registry when the registry lives
@@ -342,7 +352,7 @@ func ProvideAzureRegistry(cfg *config.Config, db storagedb.AzureRegistryProvider
 // with PAD_EMBEDDING_PROVIDER=azure-foundry); the data-subject export reads
 // each personal resource's public configuration through it. keyFamilies and
 // orgKeys are the database keystore's (nil with the OS keyring).
-func ProvideAzureModelService(registry storageif.AzureRegistryStore, secrets service.KeyStore, keyFamilies storageif.SecretFamilyLister, orgKeys service.OrgKeyStore, factory *ai.ProviderFactory, settings service.SettingsProvider, backend storageif.StorageBackend, db storagedb.AzureRegistryProvider, cfg *config.Config) *service.AzureModelService {
+func ProvideAzureModelService(registry storageif.AzureRegistryStore, secrets service.KeyStore, keyFamilies storageif.SecretFamilyLister, orgKeys service.OrgKeyStore, factory *ai.ProviderFactory, settings service.SettingsProvider, backend storageif.StorageBackend, db storagedb.AzureRegistryProvider, cfg *config.Config, bus *eventbus.Bus) *service.AzureModelService {
 	src := azureDatabaseRegistry(cfg, db)
 	perUser := src != nil
 	deps := service.AzureModelServiceDeps{
@@ -355,6 +365,8 @@ func ProvideAzureModelService(registry storageif.AzureRegistryStore, secrets ser
 		PerUserOwners: perUser,
 		// The shared corpus is the organisations' knowledge base: a server store with accounts.
 		KnowledgeEmbeddingEnabled: capability.Of(cfg).Has(capability.ServerStore, capability.Accounts) && cfg.Storage.EmbeddingProvider == ai.AzureFoundryProviderID,
+		// The registry's credential writes drop the knowledge base's memoised embedders (rag.embedders) on every replica.
+		Events: bus,
 	}
 	if backend != nil {
 		deps.UserSettings, deps.Orgs, deps.Corpus, deps.Users = backend, backend, backend, backend
@@ -472,8 +484,12 @@ var ServiceModule = fx.Options(
 		ProvideProviderPolicy,
 		provideKnowledgeService,
 		// /api/keys/has and /api/keys/delete for azure-foundry act on the
-		// model registry (any resource; resource "default").
-		service.NewSystemService,
+		// model registry (any resource; resource "default"). The key-status route reads under the request's
+		// context (R-provider-19).
+		func(settings service.SettingsProvider, secrets service.KeyStore, keyReads service.KeyReads, notifier service.EventNotifier,
+			backend storageif.StorageBackend, mode config.DeploymentMode, azure *service.AzureModelService, bus *eventbus.Bus) *service.SystemService {
+			return service.NewSystemService(settings, secrets, notifier, backend, mode, azure, bus).WithKeyReads(keyReads)
+		},
 		service.NewAuthzService,
 		ProvideFlowService,
 		ProvideAnalysisService,
@@ -546,10 +562,13 @@ var ServiceModule = fx.Options(
 			azure *service.AzureModelService,
 			cfg *config.Config,
 			health *redisx.Health,
+			recorder chatAuditIn,
 			lc fx.Lifecycle,
 		) *service.ChatService {
 			chat := service.NewChatService(notifier, configDir, flowSvc, analysisSvc, settings, factory, backend, mode, service.ChatOptions{
 				Knowledge: knowledge,
+				// A turn's wait for its knowledge-base guidelines (PAD_RAG_DEADLINE_MS, validated at boot).
+				RAGDeadline: cfg.Runtime.EffectiveRAGDeadline(),
 				// Chat turns and context previews on azure-foundry resolve their
 				// model id on the Azure AI Foundry model registry and run on
 				// exactly that entry's resource.
@@ -565,6 +584,8 @@ var ServiceModule = fx.Options(
 				// liveness key (a stop for a dead replica's stream is then an ended stream, not 503).
 				MultiReplica: multiReplicaClient(redisClient, cfg) != nil,
 				Health:       health,
+				// Approval decisions and the fixes they write leave audit rows (R-security-4).
+				Audit: recorder.Recorder,
 			})
 			// The replica listens for stream commands from start; Shutdown (the first stop hook) ends the subscriptions after
 			// the streams (ADR 0033). A no-op without Redis.
@@ -576,7 +597,9 @@ var ServiceModule = fx.Options(
 			copilot *ai.CopilotAuth,
 			factory *ai.ProviderFactory,
 			secrets service.KeyStore,
+			keyReads service.KeyReads,
 			orgKeys service.OrgKeyStore,
+			orgKeyReads service.OrgKeyReads,
 			azure *service.AzureModelService,
 			cfg *config.Config,
 			bus *eventbus.Bus,
@@ -588,10 +611,13 @@ var ServiceModule = fx.Options(
 			// checks on every resource. The registry is the azure-foundry
 			// spec's Listing hook (ADR 0025), installed here because it is
 			// built after the specs register.
-			if hook := service.AzureListing(azure, orgKeys); hook != nil {
+			// keyReads and orgKeyReads: the keystores' request-scoped reads — the catalogue and the listing read a
+			// scope's keys once, under the request's context (R-provider-19).
+			if hook := service.AzureListing(azure, orgKeys, orgKeyReads); hook != nil {
 				ai.InstallListing(ai.AzureFoundryProviderID, hook)
 			}
-			return service.NewProviderService(auth, copilot, factory, secrets, orgKeys, azure, service.WithProfile(capability.Of(cfg).Profile()), service.WithProviderEvents(bus))
+			return service.NewProviderService(auth, copilot, factory, secrets, orgKeys, azure, service.WithProfile(capability.Of(cfg).Profile()),
+				service.WithProviderEvents(bus), service.WithKeyReads(keyReads, orgKeyReads))
 		},
 	),
 	// R4: the deployment custom-rule file is its OWN graph node rather than
@@ -610,6 +636,11 @@ var ServiceModule = fx.Options(
 	fx.Decorate(func(resolver *service.RuleProfileResolver, svc *service.FlowService) *service.FlowService {
 		svc.SetRuleProfileResolver(resolver)
 		return svc
+	}),
+	// The Azure registry's chat-path credential read runs under the request's context (R-replicas-c4); a
+	// decorator, not a ProvideAzureModelService parameter, so the wiring tests keep their call sites.
+	fx.Decorate(func(svc *service.AzureModelService, keyReads service.KeyReads, orgKeyReads service.OrgKeyReads) *service.AzureModelService {
+		return svc.WithKeyReads(keyReads, orgKeyReads)
 	}),
 	fx.Invoke(SubscribeFlowCaches),
 	fx.Invoke(SubscribeSettingsAndCredentialCaches),
@@ -660,4 +691,11 @@ func commandBusKey(cfg *config.Config, hasRedis bool) []byte {
 		return nil
 	}
 	return redisx.DeriveBusKey(shared.Reveal())
+}
+
+// chatAuditIn takes the audit recorder when the graph has one: the app provides it (audit.Provide); a graph of the
+// service module alone (its tests) chats without audit rows.
+type chatAuditIn struct {
+	fx.In
+	Recorder *audit.Recorder `optional:"true"`
 }

@@ -48,7 +48,8 @@ func (rt *Router) finishRoutes(rb *route.Builder) error {
 
 // selfTestRoutes resolves a sample path of every route (route.SamplePath) and fails unless each resolves to the
 // route's own policy. It also refuses a bucket BuildHandler has no limiter for, which would silently fall back to
-// the general one, and an Idempotent route the idempotency layer cannot honour.
+// the general one, a billed route (route.Billed) off the cost buckets, and an Idempotent route the idempotency
+// layer cannot honour.
 func (rt *Router) selfTestRoutes() error {
 	var errs []error
 	for _, p := range rt.routes.Policies() {
@@ -58,9 +59,12 @@ func (rt *Router) selfTestRoutes() error {
 		}
 		switch p.RateLimit {
 		case "", route.RateNone, route.RateGeneral, route.RateAuth, route.RateAnalysis, route.RateChat, route.RateUpload, route.RateChannelTest,
-			route.RateAvatar:
+			route.RateAvatar, route.RateControl, route.RateEmbed:
 		default:
 			errs = append(errs, fmt.Errorf("route policy: %s %s: unknown rate-limit bucket %q", p.Method, p.Pattern, p.RateLimit))
+		}
+		if p.Billed && !route.CostBucket(p.RateLimit) {
+			errs = append(errs, fmt.Errorf("route policy: %s %s: billed on the %q bucket, which free requests share: use a cost bucket (chat or embed)", p.Method, p.Pattern, bucketName(p.RateLimit)))
 		}
 		if err := idempotentRouteError(p); err != nil {
 			errs = append(errs, err)

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("000000000000000000000000000000000000000000000000000000000000000000\nevent: content_block_start\ndata: {\"indeX\":1,\"Content_BloCk\":{\"tYpe\":\"tool_use\"}}\n00000000000000000000000000000000000000000000000000000\nevent: content_block_delta\ndata: {\"indeX\":1,\"deltA\":{\"tYpe\":\"input_json_delta\",\"pArtiAl_json\":\"\\f\"}}\nevent: message_delta\ndata: {\"deltA\":{\"stop_reAson\":\"0\"}}")

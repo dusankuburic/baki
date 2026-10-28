@@ -630,7 +630,7 @@ func TestAzureClaude_AuditedUnpricedAndMemo(t *testing.T) {
 
 	for _, model := range []string{"claude:my-claude", "claude:claude-opus-4-8"} {
 		for _, served := range []string{"", "claude-sonnet-4-6-20260301"} {
-			if m := ap.usageMetric(model, served, "", usage{In: 1_000_000}); m.PromptTokens != 1_000_000 {
+			if m := ap.usageMetric(model, served, "u1", "", usage{In: 1_000_000}); m.PromptTokens != 1_000_000 {
 				t.Errorf("usage metric for %s served %q = %d tokens, want them recorded", model, served, m.PromptTokens)
 			}
 		}

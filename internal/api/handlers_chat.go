@@ -21,6 +21,8 @@ type ChatHandler struct {
 	flowSvc *service.FlowService
 	common  *SecurityConfig
 	audit   *audit.Recorder
+	// authz authorizes the typed chat endpoints (the thread list and title, AuthorizeFlow).
+	authz *service.AuthzService
 	// draining is the server's draining state; nil is the process's (drain.Process), tests set their own.
 	draining *drain.State
 }
@@ -29,8 +31,8 @@ type ChatHandler struct {
 // attachments needs no more (large flow content is pulled server-side); tighter than the global 10 MiB cap.
 const maxChatMessageBodyBytes = 1 << 20 // 1 MiB
 
-func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, common *SecurityConfig, recorder *audit.Recorder) *ChatHandler {
-	return &ChatHandler{chatSvc: chatSvc, flowSvc: flowSvc, common: common, audit: recorder}
+func NewChatHandler(chatSvc *service.ChatService, flowSvc *service.FlowService, common *SecurityConfig, recorder *audit.Recorder, authz *service.AuthzService) *ChatHandler {
+	return &ChatHandler{chatSvc: chatSvc, flowSvc: flowSvc, common: common, audit: recorder, authz: authz}
 }
 
 // @Summary      Stream chat message
@@ -200,7 +202,7 @@ func (h *ChatHandler) handleCancelStream(w http.ResponseWriter, r *http.Request)
 // @Failure      401 {object} map[string]string "Unauthorized"
 // @Failure      403 {object} render.ErrorResponse "Not the stream's owner (code STREAM_NOT_FOUND), or a token without the scope the tool requires"
 // @Failure      404 {object} map[string]string "Not Found"
-// @Failure      503 {object} render.ErrorResponse "The stream runs on another server this one could not reach (code REPLICA_UNREACHABLE; Retry-After and details.retryAfterSeconds say when to retry; the decision may not have been delivered, so send it again)"
+// @Failure      503 {object} render.ErrorResponse "The stream runs on another server this one could not reach (code REPLICA_UNREACHABLE; Retry-After and details.retryAfterSeconds say when to retry; the decision may not have been delivered, so send it again), or an approve reached a server that is restarting (code SERVER_RESTARTING; nothing was applied; a decline is still accepted)"
 // @Router       /api/chat/fix-decision [post]
 func (h *ChatHandler) handleFixDecision(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -225,6 +227,10 @@ func (h *ChatHandler) handleFixDecision(w http.ResponseWriter, r *http.Request) 
 		switch {
 		case errors.Is(err, service.ErrPermissionDenied):
 			render.Error(w, err, http.StatusForbidden)
+		case errors.Is(err, service.ErrServerRestarting):
+			// The replica running the stream is draining (ADR 0024): the stop would cut an approved apply in half, so the
+			// approve is refused there, and only there — this replica may relay to a healthy one. A decline still goes.
+			drain.Refuse(w)
 		case errors.Is(err, service.ErrReplicaUnreachable), errors.Is(err, service.ErrStreamNotOwned):
 			h.renderCommandError(w, err)
 		default:
@@ -342,7 +348,7 @@ type saveConversationResponse struct {
 }
 
 // @Summary      Get conversation history
-// @Description  Retrieves the chat history for a specific flow and conversation key (the wire field is historically named `provider`). The body is an object — {messages: [...]} (always an array), version (the conversation's version, 0 when none is stored yet; send it back as baseVersion on save and clear; absent where the store has no versions) plus activeStreamId when the caller has a stream on this conversation whose question is stored but whose answer is not yet (live, or finished and still being stored) — so a client that reloads mid-turn can re-attach via /api/chat/resume instead of losing the answer until another reload. The frontend still accepts the bare array older servers answered with.
+// @Description  Retrieves the chat history for a specific flow and conversation key (the wire field is historically named `provider`). Only the caller's own conversation is returned, or one stored before conversations had owners: a key under which another user's conversation is stored reads as an empty conversation at version 0. The body is an object — {messages: [...]} (always an array), version (the conversation's version, 0 when none is stored yet; send it back as baseVersion on save and clear; absent where the store has no versions) plus activeStreamId when the caller has a stream on this conversation whose question is stored but whose answer is not yet (live, or finished and still being stored) — so a client that reloads mid-turn can re-attach via /api/chat/resume instead of losing the answer until another reload. The frontend still accepts the bare array older servers answered with.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
@@ -384,14 +390,15 @@ func (h *ChatHandler) handleGetConversation(w http.ResponseWriter, r *http.Reque
 }
 
 // @Summary      Save conversation history
-// @Description  Saves the chat history for a specific flow and provider. A message's content is stored as its scrubbed copy (secrets such as passwords, tokens and keys masked `[REDACTED]`, as the model saw them), so a reload returns the masked text. A message's modelLabel (the model's display name when it was sent) is stored clamped: NFC-normalised, control, bidi and zero-width characters dropped, whitespace collapsed, at most 64 characters. With baseVersion (the version GET returned, or a previous save answered) the list replaces the stored one only if the conversation still has that version, and the response carries the new version; a conversation that changed since answers 409 CONVERSATION_CONFLICT with details.version (the current version): reload, merge by message id and save again. Without baseVersion (a client from before versions) the save replaces the stored list whatever it holds, which can erase a turn another tab or the server stored; it is counted in pad_chat_blind_saves_total.
+// @Description  Saves the chat history for a specific flow and provider. The conversation belongs to the user whose save or turn created it; a key under which another user's conversation is stored is refused with 409 CONVERSATION_KEY_TAKEN (no reload makes it succeed: start the thread under a new key). A conversation stored before owners under a thread id becomes the caller's with the save; under "flow" or a block id it is shared, and its list is replaced only by someone who may delete the flow: anyone else gets 403 CONVERSATION_UNOWNED (the server still stores the caller's turns on it). A message's content is stored as its scrubbed copy (secrets such as passwords, tokens and keys masked `[REDACTED]`, as the model saw them), so a reload returns the masked text. A message's modelLabel (the model's display name when it was sent) is stored clamped: NFC-normalised, control, bidi and zero-width characters dropped, whitespace collapsed, at most 64 characters. With baseVersion (the version GET returned, or a previous save answered) the list replaces the stored one only if the conversation still has that version, and the response carries the new version; a conversation that changed since answers 409 CONVERSATION_CONFLICT with details.version (the current version): reload, merge by message id and save again. Without baseVersion (a client from before versions) the save replaces the stored list whatever it holds, which can erase a turn another tab or the server stored; it is counted in pad_chat_blind_saves_total.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} saveConversationResponse "OK"
 // @Failure      400 {object} map[string]string "Bad Request"
-// @Failure      409 {object} render.ErrorResponse "CONVERSATION_CONFLICT: the conversation is no longer at baseVersion (details.version is the current one)"
+// @Failure      403 {object} render.ErrorResponse "CONVERSATION_UNOWNED: a shared conversation stored before owners, and the caller may not delete the flow"
+// @Failure      409 {object} render.ErrorResponse "CONVERSATION_CONFLICT: the conversation is no longer at baseVersion (details.version is the current one); CONVERSATION_KEY_TAKEN: the key holds another user's conversation"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/chat/save [post]
 func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Request) {
@@ -426,7 +433,10 @@ func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Requ
 	for i := range req.Messages {
 		req.Messages[i].ModelLabel = service.ClampModelLabel(req.Messages[i].ModelLabel)
 	}
-	saved, err := h.chatSvc.SaveClientConversation(r.Context(), flowID, req.Provider, req.BaseVersion, req.Messages)
+	// A conversation stored before owners under a predictable key (`flow`, a block id) is shared: only a caller who could
+	// delete it with the flow may replace its list (R-security-3).
+	mayReplaceUnowned := !h.common.JWTEnabled || h.flowSvc.CheckFlowPermission(r.Context(), flowID, service.FlowDelete) == nil
+	saved, err := h.chatSvc.SaveClientConversation(r.Context(), flowID, req.Provider, req.BaseVersion, req.Messages, mayReplaceUnowned)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
@@ -439,13 +449,14 @@ func (h *ChatHandler) handleSaveConversation(w http.ResponseWriter, r *http.Requ
 }
 
 // @Summary      Clear conversation history
-// @Description  Deletes the chat history for a specific flow and provider. With baseVersion the history is deleted only if the conversation still has that version, else 409 CONVERSATION_CONFLICT with details.version; without it the delete is unconditional, as before.
+// @Description  Deletes the caller's chat history for a flow and conversation key (the wire field is historically named `provider`). Needs only chat access to the flow (viewer): a conversation belongs to the user whose turn or save created it, and only they can delete it. Another user's conversation under the key is never deleted — the clear answers as for a missing conversation. A conversation stored before conversations had owners under a thread id (a uuid) is deleted by whoever sends its key (the id is unguessable: its holder is its creator); under "flow" or a block id it is shared, and only someone who may delete the flow (its owner, an admin of its organisation) deletes it — anyone else gets 403 CONVERSATION_UNOWNED (drop the thread from the client's own list; the conversation goes with its flow). With baseVersion the history is deleted only if the conversation still has that version, else 409 CONVERSATION_CONFLICT with details.version; without it the delete is unconditional, as before.
 // @Tags         chat
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
 // @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      403 {object} render.ErrorResponse "No chat access to the flow, or CONVERSATION_UNOWNED: a conversation stored before owners, and the caller may not delete the flow"
 // @Failure      409 {object} render.ErrorResponse "CONVERSATION_CONFLICT: the conversation is no longer at baseVersion (details.version is the current one)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/chat/clear [post]
@@ -464,17 +475,20 @@ func (h *ChatHandler) handleClearConversation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Kept on the editor role check, not Can's FlowEdit: that would demand the write scope of a chat token.
-	flowID, ok := resolveFlowIDByRole(w, r, h.flowSvc, h.common, req.FlowID, "editor")
+	// Chat access, as reading and streaming the conversation: the clear deletes only the caller's own conversation
+	// (R-security-3), so a viewer may clear the threads they started (R-frontend-c26).
+	flowID, ok := resolveFlowID(w, r, h.flowSvc, h.common, req.FlowID, service.ChatUse)
 	if !ok {
 		return
 	}
+	// An unowned (pre-owner) conversation names nobody: only a caller who could delete it with the whole flow may.
+	mayDeleteUnowned := !h.common.JWTEnabled || h.flowSvc.CheckFlowPermission(r.Context(), flowID, service.FlowDelete) == nil
 
 	var err error
 	if req.BaseVersion != nil {
-		err = h.chatSvc.ClearConversationIf(r.Context(), flowID, req.Provider, *req.BaseVersion)
+		err = h.chatSvc.ClearConversationIf(r.Context(), flowID, req.Provider, *req.BaseVersion, mayDeleteUnowned)
 	} else {
-		err = h.chatSvc.ClearConversation(r.Context(), flowID, req.Provider)
+		err = h.chatSvc.ClearConversation(r.Context(), flowID, req.Provider, mayDeleteUnowned)
 	}
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
@@ -546,16 +560,23 @@ func (h *ChatHandler) handleGetSuggestedPrompts(w http.ResponseWriter, r *http.R
 // lifetime).
 func (h *ChatHandler) Mount(rb *route.Builder) {
 	rb.Route("/api/chat", func(rb *route.Builder) {
-		rb.Post("/stream", h.handleStreamChatMessage, route.RateLimit(route.RateChat), route.Streaming())
+		rb.Post("/stream", h.handleStreamChatMessage, route.RateLimit(route.RateChat), route.Billed(), route.Streaming())
 		rb.Post("/begin", h.handleBeginStream)
-		rb.Post("/cancel", h.handleCancelStream)
+		// The stream commands ride the control bucket and skip the per-user write cap (route.RateControl): a Stop the
+		// caller's other traffic got refused left a billed stream running. Both act only on the caller's own stream.
+		rb.Post("/cancel", h.handleCancelStream, route.RateLimit(route.RateControl))
 		// Approving a fix proposal edits the flow: write on top of chat.
-		rb.Post("/fix-decision", h.handleFixDecision, route.Scopes(auth.ScopeChat, auth.ScopeWrite))
+		rb.Post("/fix-decision", h.handleFixDecision, route.Scopes(auth.ScopeChat, auth.ScopeWrite), route.RateLimit(route.RateControl))
 		rb.Post("/resume", h.handleResumeStream)
 		rb.Post("/get", h.handleGetConversation)
 		rb.Post("/save", h.handleSaveConversation)
 		rb.Post("/clear", h.handleClearConversation)
-		rb.Post("/preview-context", h.handlePreviewContext)
+		// The caller's thread index (R-frontend-c26 (c)): typed endpoints, chat access to the flow.
+		rb.Post("/threads", JSON(h.listThreads, AuthorizeFlow(h.common, h.authz, service.ChatUse)))
+		rb.Post("/title", JSON(h.setThreadTitle, AuthorizeFlow(h.common, h.authz, service.ChatUse)))
+		// The preview builds the turn's context, the org guidelines' query embedding included (billed): the chat
+		// bucket, beside the turns it previews (R-security-c22).
+		rb.Post("/preview-context", h.handlePreviewContext, route.Billed())
 		rb.Post("/suggested-prompts", h.handleGetSuggestedPrompts)
 	}, route.Scopes(auth.ScopeChat), route.NoTx())
 }

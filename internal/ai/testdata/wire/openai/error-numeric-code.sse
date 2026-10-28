@@ -1,0 +1,9 @@
+: hand-built from vLLM's create_streaming_error_response (v0.10: {"error": ErrorResponse} with an int code, then [DONE]), NOT a live capture; see ../README.md
+data: {"id":"chatcmpl-WIRE0000000000000000000000004","object":"chat.completion.chunk","created":1761523203,"model":"Qwen/Qwen3-8B","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000004","object":"chat.completion.chunk","created":1761523203,"model":"Qwen/Qwen3-8B","choices":[{"index":0,"delta":{"content":"The loop"},"logprobs":null,"finish_reason":null}]}
+
+data: {"error": {"object": "error", "message": "The model is overloaded; retry later.", "type": "ServiceUnavailableError", "param": null, "code": 503}}
+
+data: [DONE]
+

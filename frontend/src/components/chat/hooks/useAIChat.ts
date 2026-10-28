@@ -12,7 +12,8 @@ import {useSettingsStore} from '@/stores/settingsStore'
 import {chatApi, ApiError} from '@/api'
 import {useToast} from '@/components/shared'
 import {logger} from '@/lib/logger'
-import {clearThreadConversation} from '@/lib/conversationSync'
+import {clearThreadConversation, isConversationUnowned} from '@/lib/conversationSync'
+import {rekeyThread} from '@/lib/threadIndex'
 import {CHAT_ERROR_CODES} from '@/lib/chatErrors'
 import {conversationToMarkdown, downloadTextFile, safeFilename, type ExportModelName} from '@/lib/chatExport'
 import {useChatConversations} from './useChatConversations'
@@ -105,26 +106,39 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
     [doc, activeThread, engine, turnModel, sendBlocked],
   )
 
+  /** False when the send did not go ahead (no flow or thread, blocked, or refused by the engine). */
   const handleSend = useCallback(
-    (text: string, files: string[], excludeContext?: boolean) => {
-      executeSend(text, files.length > 0 ? files : undefined, excludeContext)
-    },
+    (text: string, files: string[], excludeContext?: boolean): boolean =>
+      executeSend(text, files.length > 0 ? files : undefined, excludeContext),
     [executeSend],
   )
 
   const handleQueue = useCallback(
-    (text: string, files: string[], excludeContext?: boolean) => {
-      if (!activeThreadId || !text.trim() || sendBlocked) return
+    (text: string, files: string[], excludeContext?: boolean): boolean => {
+      if (!activeThreadId || sendBlocked) return false
+      if (!text.trim()) {
+        // A queued follow-up is a question; tagged files alone have nothing to ask (the composer keeps them).
+        if (files.length > 0)
+          toast.warning(t('composer.queueNeedsText'), {description: t('composer.queueNeedsTextBody')})
+        return false
+      }
       const st = useChatStore.getState()
       const pinnedAs = threadPinKey(st.threads.find(th => th.id === activeThreadId))
-      st.queueMessage(activeThreadId, {text: text.trim(), files, excludeContext, ...turnModel, pinnedAs})
+      return st.queueMessage(activeThreadId, {text: text.trim(), files, excludeContext, ...turnModel, pinnedAs})
     },
-    [activeThreadId, turnModel, sendBlocked],
+    [activeThreadId, turnModel, sendBlocked, toast, t],
   )
-  const cancelQueued = useCallback(() => {
-    if (activeThreadId) useChatStore.getState().clearQueuedMessage(activeThreadId)
-  }, [activeThreadId])
+  const cancelQueued = useCallback(
+    (id: string) => {
+      if (activeThreadId) useChatStore.getState().removeQueuedMessage(activeThreadId, id)
+    },
+    [activeThreadId],
+  )
   const queuedForActiveThread = useChatStore(s => (s.activeThreadId ? s.queuedByThread[s.activeThreadId] : undefined))
+  const queuePaused = useChatStore(s => (s.activeThreadId ? s.queuePausedByThread[s.activeThreadId] : undefined))
+  const resumeQueue = useCallback(() => {
+    if (activeThreadId) useChatStore.getState().resumeQueue(activeThreadId)
+  }, [activeThreadId])
 
   const handlePreviewContext = useCallback(
     async (text: string, files: string[], excludeContext?: boolean, onConfirmed?: () => void) => {
@@ -198,8 +212,9 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
     downloadTextFile(safeFilename(title), conversationToMarkdown(title, messages, exportModelName))
   }, [activeThread, getMessages, t, exportModelName])
 
+  // A viewer clears their own thread too (R-security-3): a conversation belongs to whoever stored it.
   const handleClearThread = useCallback(() => {
-    if (!doc || !activeThread || isCurrentThreadStreaming || readOnly) return
+    if (!doc || !activeThread || isCurrentThreadStreaming) return
     const threadId = activeThread.id
     clearThreadConversation(threadId, activeThread.flowId, conversationKey(activeThread))
       .then(cleared => {
@@ -212,20 +227,32 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
         clearThreadMessages(threadId)
       })
       .catch(err => {
+        if (isConversationUnowned(err)) {
+          // Stored before owners, and not this user's to delete: the user asked for an empty thread, so the thread
+          // starts afresh under a new key, and the old conversation stays on the server.
+          const fresh = rekeyThread(threadId, 'unowned')
+          if (fresh) clearThreadMessages(fresh)
+          toast.info(t('errors.threadUnownedCleared'))
+          return
+        }
         logger.warn('Failed to clear conversation', err)
         toast.error(t('errors.clearFailed'))
       })
-  }, [doc, activeThread, isCurrentThreadStreaming, readOnly, clearThreadMessages, toast, t])
+  }, [doc, activeThread, isCurrentThreadStreaming, clearThreadMessages, toast, t])
 
   const handleCancelStream = useCallback(() => {
-    const tid = useChatStore.getState().activeThreadId
-    if (tid) engine.stop(tid)
+    const st = useChatStore.getState()
+    const tid = st.activeThreadId
+    if (!tid) return
+    // The user's Stop holds the thread's queued follow-ups rather than starting the next one (they stay listed).
+    st.pauseQueue(tid, 'stopped')
+    engine.stop(tid)
   }, [engine])
 
   const handleCloseThread = useCallback(
     (threadId: string) => {
       engine.abandon(threadId)
-      threadActions.handleCloseThread(threadId)
+      void threadActions.handleCloseThread(threadId)
     },
     [engine, threadActions],
   )
@@ -274,6 +301,8 @@ export function useAIChat({turnModel, exportModelName, sendBlocked = false}: Use
     handleQueue,
     cancelQueued,
     queuedForActiveThread,
+    queuePaused,
+    resumeQueue,
     handlePreviewContext,
     handleResend,
     handleExport,

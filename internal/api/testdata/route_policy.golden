@@ -402,30 +402,30 @@ POST /api/v1/chat/begin | route=/api/chat/begin auth=jwt scopes=chat ratelimit=g
 POST /api/./chat/begin | route=/api/chat/begin auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/begin
 POST /api/chat/begin/ | route=/api/chat/begin auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/begin
 OPTIONS /api/chat/begin | route=- auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/begin
-POST /api/chat/cancel | route=/api/chat/cancel auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/cancel
-POST /api/v1/chat/cancel | route=/api/chat/cancel auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/cancel
-POST /api/./chat/cancel | route=/api/chat/cancel auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/cancel
-POST /api/chat/cancel/ | route=/api/chat/cancel auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/cancel
+POST /api/chat/cancel | route=/api/chat/cancel auth=jwt scopes=chat ratelimit=control rls=exempt timeout=default metric=/api/chat/cancel
+POST /api/v1/chat/cancel | route=/api/chat/cancel auth=jwt scopes=chat ratelimit=control rls=exempt timeout=default metric=/api/chat/cancel
+POST /api/./chat/cancel | route=/api/chat/cancel auth=jwt scopes=chat ratelimit=control rls=exempt timeout=default metric=/api/chat/cancel
+POST /api/chat/cancel/ | route=/api/chat/cancel auth=jwt scopes=chat ratelimit=control rls=exempt timeout=default metric=/api/chat/cancel
 OPTIONS /api/chat/cancel | route=- auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/cancel
 POST /api/chat/clear | route=/api/chat/clear auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/clear
 POST /api/v1/chat/clear | route=/api/chat/clear auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/clear
 POST /api/./chat/clear | route=/api/chat/clear auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/clear
 POST /api/chat/clear/ | route=/api/chat/clear auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/clear
 OPTIONS /api/chat/clear | route=- auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/clear
-POST /api/chat/fix-decision | route=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=general rls=exempt timeout=default metric=/api/chat/fix-decision
-POST /api/v1/chat/fix-decision | route=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=general rls=exempt timeout=default metric=/api/chat/fix-decision
-POST /api/./chat/fix-decision | route=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=general rls=exempt timeout=default metric=/api/chat/fix-decision
-POST /api/chat/fix-decision/ | route=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=general rls=exempt timeout=default metric=/api/chat/fix-decision
+POST /api/chat/fix-decision | route=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=control rls=exempt timeout=default metric=/api/chat/fix-decision
+POST /api/v1/chat/fix-decision | route=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=control rls=exempt timeout=default metric=/api/chat/fix-decision
+POST /api/./chat/fix-decision | route=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=control rls=exempt timeout=default metric=/api/chat/fix-decision
+POST /api/chat/fix-decision/ | route=/api/chat/fix-decision auth=jwt scopes=write+chat ratelimit=control rls=exempt timeout=default metric=/api/chat/fix-decision
 OPTIONS /api/chat/fix-decision | route=- auth=jwt scopes=write+chat ratelimit=general rls=exempt timeout=default metric=/api/chat/fix-decision
 POST /api/chat/get | route=/api/chat/get auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/get
 POST /api/v1/chat/get | route=/api/chat/get auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/get
 POST /api/./chat/get | route=/api/chat/get auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/get
 POST /api/chat/get/ | route=/api/chat/get auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/get
 OPTIONS /api/chat/get | route=- auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/get
-POST /api/chat/preview-context | route=/api/chat/preview-context auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/preview-context
-POST /api/v1/chat/preview-context | route=/api/chat/preview-context auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/preview-context
-POST /api/./chat/preview-context | route=/api/chat/preview-context auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/preview-context
-POST /api/chat/preview-context/ | route=/api/chat/preview-context auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/preview-context
+POST /api/chat/preview-context | route=/api/chat/preview-context auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=default metric=/api/chat/preview-context billed=yes
+POST /api/v1/chat/preview-context | route=/api/chat/preview-context auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=default metric=/api/chat/preview-context billed=yes
+POST /api/./chat/preview-context | route=/api/chat/preview-context auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=default metric=/api/chat/preview-context billed=yes
+POST /api/chat/preview-context/ | route=/api/chat/preview-context auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=default metric=/api/chat/preview-context billed=yes
 OPTIONS /api/chat/preview-context | route=- auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/preview-context
 POST /api/chat/resume | route=/api/chat/resume auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/resume
 POST /api/v1/chat/resume | route=/api/chat/resume auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/resume
@@ -437,16 +437,26 @@ POST /api/v1/chat/save | route=/api/chat/save auth=jwt scopes=chat ratelimit=gen
 POST /api/./chat/save | route=/api/chat/save auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/save
 POST /api/chat/save/ | route=/api/chat/save auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/save
 OPTIONS /api/chat/save | route=- auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/save
-POST /api/chat/stream | route=/api/chat/stream auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=stream metric=/api/chat/stream
-POST /api/v1/chat/stream | route=/api/chat/stream auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=stream metric=/api/chat/stream
-POST /api/./chat/stream | route=/api/chat/stream auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=stream metric=/api/chat/stream
-POST /api/chat/stream/ | route=/api/chat/stream auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=stream metric=/api/chat/stream
+POST /api/chat/stream | route=/api/chat/stream auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=stream metric=/api/chat/stream billed=yes
+POST /api/v1/chat/stream | route=/api/chat/stream auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=stream metric=/api/chat/stream billed=yes
+POST /api/./chat/stream | route=/api/chat/stream auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=stream metric=/api/chat/stream billed=yes
+POST /api/chat/stream/ | route=/api/chat/stream auth=jwt scopes=chat ratelimit=chat rls=exempt timeout=stream metric=/api/chat/stream billed=yes
 OPTIONS /api/chat/stream | route=- auth=jwt scopes=chat ratelimit=general rls=exempt timeout=stream metric=/api/chat/stream
 POST /api/chat/suggested-prompts | route=/api/chat/suggested-prompts auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/suggested-prompts
 POST /api/v1/chat/suggested-prompts | route=/api/chat/suggested-prompts auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/suggested-prompts
 POST /api/./chat/suggested-prompts | route=/api/chat/suggested-prompts auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/suggested-prompts
 POST /api/chat/suggested-prompts/ | route=/api/chat/suggested-prompts auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/suggested-prompts
 OPTIONS /api/chat/suggested-prompts | route=- auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/suggested-prompts
+POST /api/chat/threads | route=/api/chat/threads auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/threads
+POST /api/v1/chat/threads | route=/api/chat/threads auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/threads
+POST /api/./chat/threads | route=/api/chat/threads auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/threads
+POST /api/chat/threads/ | route=/api/chat/threads auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/threads
+OPTIONS /api/chat/threads | route=- auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/threads
+POST /api/chat/title | route=/api/chat/title auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/title
+POST /api/v1/chat/title | route=/api/chat/title auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/title
+POST /api/./chat/title | route=/api/chat/title auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/title
+POST /api/chat/title/ | route=/api/chat/title auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/title
+OPTIONS /api/chat/title | route=- auth=jwt scopes=chat ratelimit=general rls=exempt timeout=default metric=/api/chat/title
 GET /api/dashboard/analytics | route=/api/dashboard/analytics auth=jwt scopes=read ratelimit=general rls=exempt timeout=default metric=/api/dashboard/analytics
 GET /api/v1/dashboard/analytics | route=/api/dashboard/analytics auth=jwt scopes=read ratelimit=general rls=exempt timeout=default metric=/api/dashboard/analytics
 GET /api/./dashboard/analytics | route=/api/dashboard/analytics auth=jwt scopes=read ratelimit=general rls=exempt timeout=default metric=/api/dashboard/analytics
@@ -882,17 +892,17 @@ GET /api/./orgs/id1/knowledge/ | route=/api/orgs/{id}/knowledge auth=jwt scopes=
 GET /api/orgs/a%2Fb/knowledge/ | route=/api/orgs/{id}/knowledge/ auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/orgs/{id}/knowledge
 HEAD /api/orgs/id1/knowledge/ | route=/api/orgs/{id}/knowledge auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/orgs/{id}/knowledge
 OPTIONS /api/orgs/id1/knowledge/ | route=/api/orgs/{id}/knowledge auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/orgs/{id}/knowledge
-POST /api/orgs/id1/knowledge/reindex | route=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex
-POST /api/v1/orgs/id1/knowledge/reindex | route=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex
-POST /api/./orgs/id1/knowledge/reindex | route=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex
-POST /api/orgs/id1/knowledge/reindex/ | route=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex
-POST /api/orgs/a%2Fb/knowledge/reindex | route=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex
+POST /api/orgs/id1/knowledge/reindex | route=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=embed rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex billed=yes
+POST /api/v1/orgs/id1/knowledge/reindex | route=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=embed rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex billed=yes
+POST /api/./orgs/id1/knowledge/reindex | route=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=embed rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex billed=yes
+POST /api/orgs/id1/knowledge/reindex/ | route=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=embed rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex billed=yes
+POST /api/orgs/a%2Fb/knowledge/reindex | route=/api/orgs/{id}/knowledge/reindex auth=jwt scopes=write ratelimit=embed rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex billed=yes
 OPTIONS /api/orgs/id1/knowledge/reindex | route=- auth=jwt scopes=read ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/reindex
-POST /api/orgs/id1/knowledge/upload | route=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload
-POST /api/v1/orgs/id1/knowledge/upload | route=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload
-POST /api/./orgs/id1/knowledge/upload | route=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload
-POST /api/orgs/id1/knowledge/upload/ | route=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload
-POST /api/orgs/a%2Fb/knowledge/upload | route=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload
+POST /api/orgs/id1/knowledge/upload | route=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=embed rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload billed=yes
+POST /api/v1/orgs/id1/knowledge/upload | route=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=embed rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload billed=yes
+POST /api/./orgs/id1/knowledge/upload | route=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=embed rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload billed=yes
+POST /api/orgs/id1/knowledge/upload/ | route=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=embed rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload billed=yes
+POST /api/orgs/a%2Fb/knowledge/upload | route=/api/orgs/{id}/knowledge/upload auth=jwt scopes=write ratelimit=embed rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload billed=yes
 OPTIONS /api/orgs/id1/knowledge/upload | route=- auth=jwt scopes=read ratelimit=general rls=exempt timeout=bulk metric=/api/orgs/{id}/knowledge/upload
 DELETE /api/orgs/id1/knowledge/docId1 | route=/api/orgs/{id}/knowledge/{docId} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/orgs/{id}/knowledge/{docId}
 DELETE /api/v1/orgs/id1/knowledge/docId1 | route=/api/orgs/{id}/knowledge/{docId} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/orgs/{id}/knowledge/{docId}
@@ -998,11 +1008,11 @@ PUT /api/v1/orgs/id1/providers/azure-foundry/models/modelId1 | route=/api/orgs/{
 PUT /api/./orgs/id1/providers/azure-foundry/models/modelId1 | route=/api/orgs/{id}/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/orgs/{id}/providers/azure-foundry/models/{modelId}
 PUT /api/orgs/id1/providers/azure-foundry/models/modelId1/ | route=/api/orgs/{id}/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/orgs/{id}/providers/azure-foundry/models/{modelId}
 PUT /api/orgs/a%2Fb/providers/azure-foundry/models/modelId1 | route=/api/orgs/{id}/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/orgs/{id}/providers/azure-foundry/models/{modelId}
-POST /api/orgs/id1/providers/azure-foundry/test | route=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test
-POST /api/v1/orgs/id1/providers/azure-foundry/test | route=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test
-POST /api/./orgs/id1/providers/azure-foundry/test | route=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test
-POST /api/orgs/id1/providers/azure-foundry/test/ | route=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test
-POST /api/orgs/a%2Fb/providers/azure-foundry/test | route=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test
+POST /api/orgs/id1/providers/azure-foundry/test | route=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test billed=yes
+POST /api/v1/orgs/id1/providers/azure-foundry/test | route=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test billed=yes
+POST /api/./orgs/id1/providers/azure-foundry/test | route=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test billed=yes
+POST /api/orgs/id1/providers/azure-foundry/test/ | route=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test billed=yes
+POST /api/orgs/a%2Fb/providers/azure-foundry/test | route=/api/orgs/{id}/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test billed=yes
 OPTIONS /api/orgs/id1/providers/azure-foundry/test | route=- auth=jwt scopes=read ratelimit=general rls=exempt timeout=default metric=/api/orgs/{id}/providers/azure-foundry/test
 GET /api/orgs/id1/rules/ | route=/api/orgs/{id}/rules auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/orgs/{id}/rules
 GET /api/v1/orgs/id1/rules/ | route=/api/orgs/{id}/rules auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/orgs/{id}/rules
@@ -1097,10 +1107,10 @@ PUT /api/v1/providers/azure-foundry/models/modelId1 | route=/api/providers/azure
 PUT /api/./providers/azure-foundry/models/modelId1 | route=/api/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/providers/azure-foundry/models/{modelId}
 PUT /api/providers/azure-foundry/models/modelId1/ | route=/api/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/providers/azure-foundry/models/{modelId}
 PUT /api/providers/azure-foundry/models/a%2Fb | route=/api/providers/azure-foundry/models/{modelId} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/providers/azure-foundry/models/{modelId}
-POST /api/providers/azure-foundry/test | route=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/azure-foundry/test
-POST /api/v1/providers/azure-foundry/test | route=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/azure-foundry/test
-POST /api/./providers/azure-foundry/test | route=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/azure-foundry/test
-POST /api/providers/azure-foundry/test/ | route=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/azure-foundry/test
+POST /api/providers/azure-foundry/test | route=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/azure-foundry/test billed=yes
+POST /api/v1/providers/azure-foundry/test | route=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/azure-foundry/test billed=yes
+POST /api/./providers/azure-foundry/test | route=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/azure-foundry/test billed=yes
+POST /api/providers/azure-foundry/test/ | route=/api/providers/azure-foundry/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/azure-foundry/test billed=yes
 OPTIONS /api/providers/azure-foundry/test | route=- auth=jwt scopes=read ratelimit=general rls=exempt timeout=default metric=/api/providers/azure-foundry/test
 GET /api/providers/catalog | route=/api/providers/catalog auth=jwt scopes=read ratelimit=general rls=exempt timeout=default metric=/api/providers/catalog
 GET /api/v1/providers/catalog | route=/api/providers/catalog auth=jwt scopes=read ratelimit=general rls=exempt timeout=default metric=/api/providers/catalog
@@ -1166,10 +1176,10 @@ POST /api/providers/local/config | route=/api/providers/local/config auth=jwt sc
 POST /api/v1/providers/local/config | route=/api/providers/local/config auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/providers/local/config
 POST /api/./providers/local/config | route=/api/providers/local/config auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/providers/local/config
 POST /api/providers/local/config/ | route=/api/providers/local/config auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/providers/local/config
-POST /api/providers/test | route=/api/providers/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/test
-POST /api/v1/providers/test | route=/api/providers/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/test
-POST /api/./providers/test | route=/api/providers/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/test
-POST /api/providers/test/ | route=/api/providers/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/test
+POST /api/providers/test | route=/api/providers/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/test billed=yes
+POST /api/v1/providers/test | route=/api/providers/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/test billed=yes
+POST /api/./providers/test | route=/api/providers/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/test billed=yes
+POST /api/providers/test/ | route=/api/providers/test auth=jwt scopes=write ratelimit=chat rls=exempt timeout=default metric=/api/providers/test billed=yes
 OPTIONS /api/providers/test | route=- auth=jwt scopes=read ratelimit=general rls=exempt timeout=default metric=/api/providers/test
 GET /api/shared | route=/api/shared auth=none scopes=- ratelimit=analysis rls=none timeout=default metric=/api/shared
 GET /api/v1/shared | route=/api/shared auth=none scopes=- ratelimit=analysis rls=none timeout=default metric=/api/shared
@@ -1216,6 +1226,18 @@ POST /api/v1/system/settings/org/id1 | route=/api/system/settings/org/{id} auth=
 POST /api/./system/settings/org/id1 | route=/api/system/settings/org/{id} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}
 POST /api/system/settings/org/id1/ | route=/api/system/settings/org/{id} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}
 POST /api/system/settings/org/a%2Fb | route=/api/system/settings/org/{id} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}
+GET /api/system/settings/org/id1/sections/section1 | route=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+GET /api/v1/system/settings/org/id1/sections/section1 | route=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+GET /api/./system/settings/org/id1/sections/section1 | route=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+GET /api/system/settings/org/id1/sections/section1/ | route=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+GET /api/system/settings/org/a%2Fb/sections/section1 | route=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+HEAD /api/system/settings/org/id1/sections/section1 | route=- auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+OPTIONS /api/system/settings/org/id1/sections/section1 | route=- auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+PATCH /api/system/settings/org/id1/sections/section1 | route=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+PATCH /api/v1/system/settings/org/id1/sections/section1 | route=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+PATCH /api/./system/settings/org/id1/sections/section1 | route=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+PATCH /api/system/settings/org/id1/sections/section1/ | route=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
+PATCH /api/system/settings/org/a%2Fb/sections/section1 | route=/api/system/settings/org/{id}/sections/{section} auth=jwt scopes=write ratelimit=general rls=tx timeout=default metric=/api/system/settings/org/{id}/sections/{section}
 GET /api/users/id1/avatar | route=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/users/{id}/avatar
 GET /api/v1/users/id1/avatar | route=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/users/{id}/avatar
 GET /api/./users/id1/avatar | route=/api/users/{id}/avatar auth=jwt scopes=read ratelimit=general rls=tx timeout=default metric=/api/users/{id}/avatar

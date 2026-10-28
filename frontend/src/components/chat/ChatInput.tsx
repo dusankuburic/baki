@@ -1,9 +1,9 @@
 import {useTranslation} from 'react-i18next'
 import clsx from 'clsx'
-import {Eye, Maximize2, FileText, X, AtSign, Slash} from 'lucide-react'
+import {Eye, Maximize2, FileText, X, AtSign, Slash, Wrench} from 'lucide-react'
 import {useRef, useEffect, useCallback, useState, useMemo} from 'react'
 import type {SourceFileInfo} from '@/types'
-import {useChatStore, MAX_CONCURRENT_STREAMS} from '@/stores/chatStore'
+import {useChatStore, MAX_CONCURRENT_STREAMS, MAX_QUEUED_MESSAGES} from '@/stores/chatStore'
 import {useOptionalToast} from '@/components/shared/Toast'
 import {isImeKeydown} from '@/lib/imeKey'
 import FileAutocomplete from './FileAutocomplete'
@@ -23,14 +23,21 @@ interface Props {
   onShowHelp?: () => void
   disabled?: boolean
   placeholder?: string
-  onQueue?: (text: string, files: string[], excludeContext?: boolean) => void
-  queued?: {text: string; files: string[]; excludeContext?: boolean} | null
-  onCancelQueue?: () => void
+  /** Queues a follow-up while the reply streams; false when it was refused (nothing queued). */
+  onQueue?: (text: string, files: string[], excludeContext?: boolean) => boolean | void
+  /** The thread's queued follow-ups, oldest first. */
+  queued?: readonly {id: string; text: string}[] | null
+  onCancelQueue?: (id: string) => void
+  /** Why the queue holds (a failed or stopped turn, a refused send); the banner offers to send the next one. */
+  queuePaused?: 'error' | 'stopped' | 'refused' | null
+  onResumeQueue?: () => void
   sourceFiles?: SourceFileInfo[]
   promptTokens?: number
   completionTokens?: number
   contextLimit?: number
   guidance?: {text: string; actionLabel: string; onAction: () => void} | null
+  /** Set while the thread's tools are off: the composer says so and offers to turn them on (R-frontend-6). */
+  onEnableTools?: () => void
 }
 
 export default function ChatInput({
@@ -44,11 +51,14 @@ export default function ChatInput({
   onQueue,
   queued,
   onCancelQueue,
+  queuePaused,
+  onResumeQueue,
   sourceFiles = EMPTY_SOURCE_FILES,
   promptTokens = 0,
   completionTokens = 0,
   contextLimit,
   guidance,
+  onEnableTools,
 }: Props) {
   const [value, setValue] = useState('')
   const {t} = useTranslation('chat')
@@ -196,7 +206,15 @@ export default function ChatInput({
     if (!trimmed && taggedFiles.length === 0) return false
     if (isDisabled || sendBlocked) return false
     if (canQueue) {
-      onQueue?.(trimmed, taggedFiles, excludeContext)
+      const queueFull = (queued?.length ?? 0) >= MAX_QUEUED_MESSAGES
+      if (queueFull || onQueue?.(trimmed, taggedFiles, excludeContext) === false) {
+        if (queueFull) {
+          toast?.warning(t('composer.queueFullTitle'), {
+            description: t('composer.queueFullBody', {count: MAX_QUEUED_MESSAGES}),
+          })
+        }
+        return false
+      }
       resetComposer()
       closeExpanded()
       return true
@@ -215,6 +233,7 @@ export default function ChatInput({
     isDisabled,
     sendBlocked,
     canQueue,
+    queued,
     atCap,
     onQueue,
     onSend,
@@ -465,21 +484,61 @@ export default function ChatInput({
           </div>
         )}
 
-        {queued && (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-500/5 border-b border-border-subtle/50 first:rounded-t-xl text-2xs text-text-secondary">
-            <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-soft shrink-0" />
-            <span className="truncate">
-              {t('composer.queuedPrefix')} <span className="text-text-primary">{queued.text}</span>
-            </span>
-            {onCancelQueue && (
-              <button
-                onClick={onCancelQueue}
-                className="ml-auto shrink-0 text-text-tertiary hover:text-text-primary transition-colors"
-                aria-label={t('composer.cancelQueued')}
-              >
-                <X size={12} />
-              </button>
-            )}
+        {onEnableTools && !guidance && (
+          <div className="flex items-center gap-2 px-3 py-1 border-b border-border-subtle/50 first:rounded-t-xl text-2xs text-text-tertiary">
+            <Wrench size={11} className="shrink-0" aria-hidden="true" />
+            <p className="flex-1 min-w-0 truncate">{t('composer.toolsOffHint')}</p>
+            <button
+              type="button"
+              onClick={onEnableTools}
+              className="shrink-0 font-medium text-brand-400 hover:text-brand-300 transition-colors"
+            >
+              {t('composer.toolsOffAction')}
+            </button>
+          </div>
+        )}
+
+        {queued && queued.length > 0 && (
+          <div className="px-3 py-1.5 bg-brand-500/5 border-b border-border-subtle/50 first:rounded-t-xl text-2xs text-text-secondary">
+            <div className="flex items-center gap-2">
+              <span
+                className={clsx(
+                  'w-1.5 h-1.5 rounded-full shrink-0',
+                  queuePaused ? 'bg-semantic-warning' : 'bg-brand-400 animate-pulse-soft',
+                )}
+                aria-hidden="true"
+              />
+              <span className="font-medium text-text-primary">{t('composer.queuedCount', {count: queued.length})}</span>
+              <span className="truncate text-text-tertiary">
+                {queuePaused ? t(`composer.queuePaused.${queuePaused}`) : t('composer.queuedHint')}
+              </span>
+              {queuePaused && onResumeQueue && (
+                <button
+                  type="button"
+                  onClick={onResumeQueue}
+                  className="ml-auto shrink-0 font-medium text-brand-400 hover:text-brand-300 transition-colors"
+                >
+                  {t('composer.queueSendNext')}
+                </button>
+              )}
+            </div>
+            <ol className="mt-1 space-y-0.5" aria-label={t('composer.queuedListAria')}>
+              {queued.map(q => (
+                <li key={q.id} className="flex items-center gap-2 pl-3.5 min-w-0">
+                  <span className="truncate text-text-primary">{q.text}</span>
+                  {onCancelQueue && (
+                    <button
+                      type="button"
+                      onClick={() => onCancelQueue(q.id)}
+                      className="ml-auto shrink-0 text-text-tertiary hover:text-text-primary transition-colors"
+                      aria-label={t('composer.cancelQueued', {text: q.text})}
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ol>
           </div>
         )}
 

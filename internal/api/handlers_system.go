@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -88,10 +89,11 @@ func (h *SystemHandler) handleGetSettings(w http.ResponseWriter, r *http.Request
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
-// @Failure      400 {object} map[string]string "Bad Request"
+// @Failure      400 {object} map[string]string "Malformed body, a body over 1 MiB, or a field over its cap (invalid settings: the message names the field, e.g. ai.systemPromptSuffix over 4000 characters, more than 20 prompts in a list, an unknown ai.activeProvider; a value the write carries back unchanged is never refused)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/system/settings [post]
 func (h *SystemHandler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSettingsBodyBytes) // as the org route's
 	var body json.RawMessage
 	if !decodeBody(w, r, &body) {
 		return
@@ -144,14 +146,14 @@ func (h *SystemHandler) handleGetOrgSettings(w http.ResponseWriter, r *http.Requ
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]interface{} "Updated"
-// @Failure      400 {object} render.ErrorResponse "Malformed body, or ids in ai.allowedProviders that no provider spec describes (PROVIDER_UNKNOWN; details.providers lists them)"
+// @Failure      400 {object} render.ErrorResponse "Malformed body, ids in ai.allowedProviders that no provider spec describes (PROVIDER_UNKNOWN; details.providers lists them), or a field over its cap (invalid settings, the field named, as on /api/system/settings)"
 // @Router       /api/system/settings/org/{id} [post]
 func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "id")
 	if !requireOrgAdmin(w, r, h.security, orgID) {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // a settings document, read whole below
+	r.Body = http.MaxBytesReader(w, r.Body, maxSettingsBodyBytes) // a settings document, read whole below
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		render.Error(w, err, http.StatusBadRequest)
@@ -177,6 +179,10 @@ func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.R
 				map[string]any{"providers": unknown.IDs})
 			return
 		}
+		if errors.Is(err, service.ErrSettingsInvalid) {
+			render.Error(w, err, http.StatusBadRequest)
+			return
+		}
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -187,6 +193,111 @@ func (h *SystemHandler) handleUpdateOrgSettings(w http.ResponseWriter, r *http.R
 	}
 	h.audit.Record(r.Context(), orgAuditEntry(audit.ActionSettingsChange, orgID, meta))
 	render.JSON(w, map[string]string{"status": "ok"})
+}
+
+// orgSettingsSectionRequest names an organisation's settings section.
+type orgSettingsSectionRequest struct {
+	OrgID   string `path:"id"`
+	Section string `path:"section"`
+}
+
+// orgSettingsSectionWrite is the body of a section write: the fields of the section it sets (null clears one), and
+// the revision the writer read (GET .../sections/{section}), "" to write without a precondition.
+type orgSettingsSectionWrite struct {
+	OrgID      string                     `json:"-" path:"id"`
+	Section    string                     `json:"-" path:"section"`
+	Values     map[string]json.RawMessage `json:"values" swaggertype:"object"`
+	IfRevision string                     `json:"ifRevision,omitempty"`
+}
+
+// requireSettingsOrg is requireOrgMember (admin false) or requireOrgAdmin as route middleware, for the typed
+// section endpoints: the organisation is the route's {id}.
+func (h *SystemHandler) requireSettingsOrg(admin bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			orgID := chi.URLParam(r, "id")
+			allowed := false
+			if admin {
+				allowed = requireOrgAdmin(w, r, h.security, orgID)
+			} else {
+				allowed = requireOrgMember(w, r, h.security, orgID)
+			}
+			if allowed {
+				next.ServeHTTP(w, r)
+			}
+		})
+	}
+}
+
+// capSettingsBody holds a settings write's body to maxSettingsBodyBytes, as the whole-document writes are, below the
+// router's general limit.
+func capSettingsBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxSettingsBodyBytes)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// settingsSectionError maps the section write's refusals onto their wire codes.
+func settingsSectionError(err error) error {
+	if unknown := (*service.UnknownProvidersError)(nil); errors.As(err, &unknown) {
+		return apperr.Invalid(service.ProviderCodeUnknown, err.Error()).WithDetails(map[string]any{"providers": unknown.IDs}).Wrap(err)
+	}
+	switch {
+	case errors.Is(err, service.ErrSettingsConflict):
+		return apperr.Conflict(service.SettingsCodeStale, err.Error()).Wrap(err)
+	case errors.Is(err, service.ErrSettingsInvalid):
+		return apperr.Invalid("", err.Error()).Wrap(err)
+	}
+	return err
+}
+
+// @Summary      Get an org settings section
+// @Description  One section of the organisation's settings (ai, analysis, profile, ...) with its revision, the token a section write's ifRevision carries. Reading requires org membership.
+// @Tags         system
+// @Param        id path string true "Org ID"
+// @Param        section path string true "Section key, e.g. ai"
+// @Produce      json
+// @Success      200 {object} service.SettingsSectionState "The section and its revision"
+// @Failure      400 {object} render.ErrorResponse "Not a section a write can set (recentFiles, version, or unknown)"
+// @Router       /api/system/settings/org/{id}/sections/{section} [get]
+func (h *SystemHandler) getOrgSettingsSection(ctx context.Context, req orgSettingsSectionRequest) (service.SettingsSectionState, error) {
+	state, err := h.sysSvc.GetOrgSettingsSection(ctx, req.OrgID, req.Section)
+	return state, settingsSectionError(err)
+}
+
+// @Summary      Update fields of an org settings section
+// @Description  Sets the fields of one section the body names and keeps the section's other fields and every other section (R-config-4): the server merges them into the section as stored, under the settings rows' lock, so two admins saving different fields at once both land. With ifRevision (from GET .../sections/{section}) the write is refused with 409 SETTINGS_STALE when the section changed since that read: reload, then apply the change again. Writing requires org admin. An explicit null clears a field; ai.allowedProviders must name registered providers only.
+// @Tags         system
+// @Param        id path string true "Org ID"
+// @Param        section path string true "Section key, e.g. ai"
+// @Param        request body orgSettingsSectionWrite true "The fields to set and the revision read"
+// @Accept       json
+// @Produce      json
+// @Success      200 {object} service.SettingsSectionState "The section as written and its new revision"
+// @Failure      400 {object} render.ErrorResponse "Malformed body, no field, a field the section does not have, a value of the wrong type or over its cap, or unknown ids in ai.allowedProviders (PROVIDER_UNKNOWN; details.providers lists them)"
+// @Failure      409 {object} render.ErrorResponse "SETTINGS_STALE: the section changed since the revision in ifRevision"
+// @Router       /api/system/settings/org/{id}/sections/{section} [patch]
+func (h *SystemHandler) patchOrgSettingsSection(ctx context.Context, req orgSettingsSectionWrite) (service.SettingsSectionState, error) {
+	state, err := h.sysSvc.PatchOrgSettingsSection(ctx, req.OrgID, service.SettingsSectionPatch{
+		Section: req.Section, Values: req.Values, IfRevision: req.IfRevision,
+	})
+	if err != nil {
+		return service.SettingsSectionState{}, settingsSectionError(err)
+	}
+	// The section's own field names, not the body's: the write matches them regardless of case.
+	meta := map[string]string{"section": req.Section, "fields": strings.Join(state.Fields, ",")}
+	if req.Section == "ai" {
+		var written struct {
+			AllowedProviders []string `json:"allowedProviders"`
+		}
+		if slices.Contains(state.Fields, "allowedProviders") && json.Unmarshal(state.Values, &written) == nil {
+			// The list is the org's AI policy: the audit row says what it became (empty = every provider).
+			meta["allowedProviders"] = strings.Join(written.AllowedProviders, ",")
+		}
+	}
+	h.audit.Record(ctx, orgAuditEntry(audit.ActionSettingsChange, req.OrgID, meta))
+	return state, nil
 }
 
 // @Summary      Get app info
@@ -256,19 +367,32 @@ const maxFrontendErrorBytes = 64 << 10
 // @Accept       json
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
-// @Failure      400 {object} render.ErrorResponse "Malformed body, a provider id no spec describes (PROVIDER_UNKNOWN), or a provider configured through its own routes rather than a bare key (USE_PROVIDER_CONFIG: azure-foundry, local)"
+// @Failure      400 {object} render.ErrorResponse "Malformed body (over 64 KiB, or a field neither provider, key nor one the provider's credential declares), a provider id no spec describes (PROVIDER_UNKNOWN), a provider configured through its own routes rather than a bare key (USE_PROVIDER_CONFIG: azure-foundry, local), or a key that is empty after trimming, over 8 KiB or holds a control character (KEY_INVALID)"
+// @Failure      503 {object} render.ErrorResponse "SECRET_STORAGE_UNAVAILABLE: the secret store cannot be reached (an OS keychain that is down); nothing changed"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/keys/save [post]
 func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxKeySaveBodyBytes)
+	var fields map[string]json.RawMessage
+	if !decodeBody(w, r, &fields) {
+		return
+	}
 	var req struct {
 		Provider string `json:"provider"`
 		Key      string `json:"key"`
 	}
-	if !decodeBody(w, r, &req) {
+	raw, _ := json.Marshal(fields)
+	if err := json.Unmarshal(raw, &req); err != nil {
+		render.Error(w, err, http.StatusBadRequest)
 		return
 	}
 	if !ai.KnownProvider(req.Provider) {
 		render.ErrorWithCode(w, fmt.Errorf("unknown provider: %q", req.Provider), http.StatusBadRequest, service.ProviderCodeUnknown)
+		return
+	}
+	spec, _ := ai.SpecOf(req.Provider)
+	if name, ok := undeclaredKeyField(spec.Credential.Fields, fields); !ok {
+		render.Error(w, fmt.Errorf("unknown field %q: the %s credential declares no such field", name, req.Provider), http.StatusBadRequest)
 		return
 	}
 	// Azure AI Foundry stores a validated configuration document, not a bare
@@ -291,13 +415,41 @@ func (h *SystemHandler) handleSaveApiKey(w http.ResponseWriter, r *http.Request)
 	render.JSON(w, map[string]string{"status": "ok"})
 }
 
+// Bounds of the settings and key bodies: a settings document is read whole, and a key body is one key and the
+// few fields its credential declares (service.MaxAPIKeyBytes bounds the key itself).
+const (
+	maxSettingsBodyBytes = 1 << 20
+	maxKeySaveBodyBytes  = 64 << 10
+)
+
+// undeclaredKeyField returns the first field of a key save body that is neither provider, key nor one of the
+// provider's declared credential fields (the client sends the declared non-secret fields beside the key), with ok
+// false.
+func undeclaredKeyField(credential []ai.CredentialField, fields map[string]json.RawMessage) (name string, ok bool) {
+	declared := map[string]bool{"provider": true, "key": true}
+	for _, f := range credential {
+		declared[f.Name] = true
+	}
+	names := make([]string, 0, len(fields))
+	for k := range fields {
+		names = append(names, k)
+	}
+	slices.Sort(names)
+	for _, k := range names {
+		if !declared[k] {
+			return k, false
+		}
+	}
+	return "", true
+}
+
 // @Summary      Check if API key exists
 // @Description  Checks if an API key for a given provider is saved. For azure-foundry (deprecated form, one release): whether the caller has at least one Azure AI Foundry resource of their own — GET /api/providers/azure-foundry/connections lists them.
 // @Tags         keys
 // @Param        request body object true "request"
 // @Accept       json
 // @Produce      json
-// @Success      200 {object} map[string]bool "{has: bool}"
+// @Success      200 {object} map[string]bool "{has: bool, unreadable?: true} — unreadable: a key is stored but the server cannot decrypt it (its encryption key changed); enter it again"
 // @Failure      400 {object} render.ErrorResponse "Malformed body, or a provider id no spec describes (PROVIDER_UNKNOWN)"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/keys/has [post]
@@ -312,12 +464,16 @@ func (h *SystemHandler) handleHasApiKey(w http.ResponseWriter, r *http.Request) 
 		render.ErrorWithCode(w, fmt.Errorf("unknown provider: %q", req.Provider), http.StatusBadRequest, service.ProviderCodeUnknown)
 		return
 	}
-	has, err := h.sysSvc.HasApiKey(h.security.KeyScope(r), req.Provider)
+	status, err := h.sysSvc.ApiKeyStatus(r.Context(), h.security.KeyScope(r), req.Provider)
 	if err != nil {
 		render.Error(w, err, http.StatusInternalServerError)
 		return
 	}
-	render.JSON(w, map[string]bool{"has": has})
+	out := map[string]bool{"has": status != service.CredentialMissing}
+	if status == service.CredentialUnreadable {
+		out["unreadable"] = true
+	}
+	render.JSON(w, out)
 }
 
 // @Summary      Delete API key
@@ -328,6 +484,7 @@ func (h *SystemHandler) handleHasApiKey(w http.ResponseWriter, r *http.Request) 
 // @Produce      json
 // @Success      200 {object} map[string]string "OK"
 // @Failure      400 {object} render.ErrorResponse "Malformed body, or a provider id no spec describes (PROVIDER_UNKNOWN)"
+// @Failure      503 {object} render.ErrorResponse "SECRET_STORAGE_UNAVAILABLE: the secret store cannot be reached (an OS keychain that is down); the key was not removed"
 // @Failure      500 {object} map[string]string "Internal Server Error"
 // @Router       /api/keys/delete [post]
 func (h *SystemHandler) handleDeleteApiKey(w http.ResponseWriter, r *http.Request) {
@@ -583,6 +740,9 @@ func (h *SystemHandler) Mount(rb *route.Builder) {
 		rb.Post("/settings", h.handleUpdateSettings)
 		rb.Get("/settings/org/{id}", h.handleGetOrgSettings)     // member-only
 		rb.Post("/settings/org/{id}", h.handleUpdateOrgSettings) // admin-only
+		// One section's fields, merged under the settings rows' lock (R-config-4).
+		rb.With(h.requireSettingsOrg(false)).Get("/settings/org/{id}/sections/{section}", Query(h.getOrgSettingsSection))
+		rb.With(h.requireSettingsOrg(true), capSettingsBody).Patch("/settings/org/{id}/sections/{section}", JSON(h.patchOrgSettingsSection))
 		rb.Get("/info", h.handleAppInfo)
 		rb.Post("/log-error", h.handleLogError)
 	})

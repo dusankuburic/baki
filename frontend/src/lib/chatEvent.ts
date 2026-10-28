@@ -9,6 +9,8 @@ export interface DoneMeta {
    */
   conversationVersion?: number
   conversationBase?: number
+  /** False when the server could not store this server-owned turn's answer: the client saves the turn itself. */
+  answerStored?: false
 }
 
 export interface ErrorUsage {
@@ -48,20 +50,41 @@ export type ApprovalSource = 'fix' | 'approval'
 
 /**
  * A journaled notice about the turn itself. history_truncated: the server left `dropped` earlier history
- * messages out to fit the model's context window, `keptFrom` of them in all so far.
+ * messages out to fit the model's context window, `keptFrom` of them in all so far. knowledge: the org's knowledge
+ * base was not consulted for this turn, `status` says why (a status this client does not know is dropped).
  */
 export interface NoticePayload {
   kind: 'notice'
   notice: string
   dropped?: number
   keptFrom?: number
+  status?: KnowledgeStatus
 }
 
 export const NOTICE_HISTORY_TRUNCATED = 'history_truncated'
+export const NOTICE_KNOWLEDGE = 'knowledge'
+
+/**
+ * Why a turn's answer went without the org's knowledge base (R-knowledge-1): the member's embedding model is not
+ * the one the corpus was indexed with, the member has no embedding provider, or the lookup ran out of time.
+ */
+export type KnowledgeStatus = 'identity_mismatch' | 'no_embedder' | 'deadline'
+
+const KNOWLEDGE_STATUSES: ReadonlySet<string> = new Set<KnowledgeStatus>([
+  'identity_mismatch',
+  'no_embedder',
+  'deadline',
+])
+
+export function asKnowledgeStatus(value: unknown): KnowledgeStatus | null {
+  return typeof value === 'string' && KNOWLEDGE_STATUSES.has(value) ? (value as KnowledgeStatus) : null
+}
 
 export interface FixProposalEventItem {
   id: string
   label: string
+  /** The block the fix targets, when the item names one (fix-patch items). */
+  blockId?: string
   ruleId: string
   fixType: string
   blockLabel: string
@@ -106,6 +129,7 @@ function doneMeta(data: Record<string, unknown>): DoneMeta {
     meta.conversationVersion = conversationVersion
     meta.conversationBase = conversationBase
   }
+  if (data.answerStored === false) meta.answerStored = false
   return meta
 }
 
@@ -115,9 +139,11 @@ function requestItem(rec: Record<string, unknown>): FixProposalEventItem {
   const meta = asRecord(rec.meta) ?? {}
   const ruleId = asString(rec.ruleId) ?? asString(meta.ruleId) ?? ''
   const blockLabel = asString(rec.blockLabel) ?? asString(meta.blockLabel) ?? ''
+  const blockId = asString(rec.blockId)
   return {
     id: asString(rec.id) ?? ruleId,
     label: asString(rec.label) ?? blockLabel,
+    ...(blockId ? {blockId} : {}),
     ruleId,
     fixType: asString(rec.fixType) ?? asString(meta.fixType) ?? '',
     blockLabel,
@@ -224,11 +250,13 @@ export function parseChatEvent(raw: unknown): ChatEvent | null {
       if (!notice) return null
       const dropped = asNumber(data.dropped)
       const keptFrom = asNumber(data.keptFrom)
+      const status = notice === NOTICE_KNOWLEDGE ? asKnowledgeStatus(data.status) : null
       return {
         kind: 'notice',
         notice,
         ...(dropped !== null ? {dropped} : {}),
         ...(keptFrom !== null ? {keptFrom} : {}),
+        ...(status !== null ? {status} : {}),
       }
     }
     case 'tool_result': {

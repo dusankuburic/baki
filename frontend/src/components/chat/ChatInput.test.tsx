@@ -1,7 +1,7 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {render, screen, fireEvent, act} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import {useChatStore} from '@/stores/chatStore'
+import {useChatStore, MAX_QUEUED_MESSAGES} from '@/stores/chatStore'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {ToastProvider} from '@/components/shared/Toast'
 
@@ -25,7 +25,6 @@ beforeEach(() => {
     drafts: {},
     stagedPrompt: null,
     streams: {},
-    selectedProvider: 'claude',
     conversations: new Map(),
     threads: [
       {
@@ -232,22 +231,128 @@ describe('ChatInput queue-while-streaming (U1.6)', () => {
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
   })
 
+  // The composer as AITab wires it: the banner reads the thread's queue from the store, cancel removes one item.
+  function QueuedComposer({onQueue = vi.fn()}: {onQueue?: (text: string) => void}) {
+    const queued = useChatStore(s => s.queuedByThread['threadA'])
+    return (
+      <ChatInput
+        onSend={vi.fn()}
+        onQueue={onQueue}
+        queued={queued ?? null}
+        onCancelQueue={id => useChatStore.getState().removeQueuedMessage('threadA', id)}
+      />
+    )
+  }
+
   it('renders the queued chip with the message and lets the user cancel it', () => {
-    useChatStore.setState({
-      ...streamState,
-      queuedByThread: {threadA: {text: 'queued msg', files: []}},
-    } as never)
+    useChatStore.setState(streamState as never)
+    useChatStore.getState().queueMessage('threadA', {text: 'queued msg', files: []})
+    render(<QueuedComposer />)
+    expect(screen.getByText('queued msg')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Cancel queued message: queued msg'}))
+    expect(useChatStore.getState().queuedByThread['threadA']).toBeUndefined()
+    expect(screen.queryByText('queued msg')).not.toBeInTheDocument()
+  })
+
+  // R-frontend-13: the banner lists every queued follow-up with its own cancel.
+  it('reads "2 queued", and cancelling the first leaves the second', () => {
+    useChatStore.setState(streamState as never)
+    useChatStore.getState().queueMessage('threadA', {text: 'first follow-up', files: []})
+    useChatStore.getState().queueMessage('threadA', {text: 'second follow-up', files: []})
+    render(<QueuedComposer />)
+    expect(screen.getByText('2 queued')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Cancel queued message: first follow-up'}))
+    expect(useChatStore.getState().queuedByThread['threadA']?.map(q => q.text)).toEqual(['second follow-up'])
+    expect(screen.queryByText('first follow-up')).not.toBeInTheDocument()
+    expect(screen.getByText('second follow-up')).toBeInTheDocument()
+    expect(screen.getByText('1 queued')).toBeInTheDocument()
+  })
+
+  it('shows a held queue as paused, says why, and offers to send the next one', () => {
+    const onResume = vi.fn()
     render(
       <ChatInput
         onSend={vi.fn()}
-        onQueue={vi.fn()}
-        queued={{text: 'queued msg', files: []}}
-        onCancelQueue={() => useChatStore.getState().clearQueuedMessage('threadA')}
+        queued={[
+          {id: 'a', text: 'first follow-up'},
+          {id: 'b', text: 'second follow-up'},
+        ]}
+        queuePaused="error"
+        onResumeQueue={onResume}
       />,
     )
-    expect(screen.getByText('queued msg')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Cancel queued message'}))
-    expect(useChatStore.getState().queuedByThread['threadA']).toBeUndefined()
+    expect(screen.getByText('2 queued')).toBeInTheDocument()
+    expect(screen.getByText(/Paused: the last reply failed/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Send next'}))
+    expect(onResume).toHaveBeenCalledTimes(1)
+  })
+
+  it('a running queue says its messages are not kept across a reload', () => {
+    render(<ChatInput onSend={vi.fn()} queued={[{id: 'a', text: 'first follow-up'}]} />)
+    expect(screen.getByText(/not kept if you reload/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Send next'})).not.toBeInTheDocument()
+  })
+
+  it('refuses a follow-up past the queue cap with a toast and keeps the typed text', async () => {
+    useChatStore.setState(streamState as never)
+    for (let i = 0; i < MAX_QUEUED_MESSAGES; i++) {
+      useChatStore.getState().queueMessage('threadA', {text: `queued ${i}`, files: []})
+    }
+    const onQueue = vi.fn()
+    render(
+      <ToastProvider>
+        <QueuedComposer onQueue={onQueue} />
+      </ToastProvider>,
+    )
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    await userEvent.type(ta, 'one more')
+    fireEvent.keyDown(ta, {key: 'Enter'})
+    expect(onQueue).not.toHaveBeenCalled()
+    expect(ta.value).toBe('one more')
+    expect(await screen.findByText('Queue full')).toBeInTheDocument()
+  })
+})
+
+// R-frontend-4: the composer's live regions do not change while a reply streams. (jest-axe is not a dependency of
+// this project, so the live-region check is structural: no status text changes, the live figure is outside them.)
+describe('ChatInput live regions while streaming', () => {
+  const slot = (tokens: number, toolStatus: string | null = null) => ({
+    streamId: 's1',
+    messageId: 'm1',
+    text: 'partial',
+    isThinking: false,
+    tokens,
+    toolStatus,
+    toolCalls: [],
+    approvals: [],
+  })
+
+  it('keeps every role=status text under the composer unchanged across store updates', () => {
+    useChatStore.setState({streams: {threadA: slot(1)}})
+    const {container} = render(<ChatInput onSend={vi.fn()} onQueue={vi.fn()} />)
+    const statusTexts = () => Array.from(container.querySelectorAll('[role="status"]'), el => el.textContent)
+    const before = statusTexts()
+    expect(before.length).toBeGreaterThan(0)
+
+    for (const [n, tool] of [
+      [40, 'Searching flow'],
+      [900, null],
+      [1500, 'Reading block'],
+      [4096, null],
+    ] as const) {
+      act(() => {
+        useChatStore.setState({streams: {threadA: slot(n, tool)}})
+      })
+      expect(statusTexts()).toEqual(before)
+    }
+
+    const figure = screen.getByText('4.1k tokens so far')
+    expect(figure.closest('[aria-hidden="true"]')).not.toBeNull()
+    for (const region of container.querySelectorAll('[role="status"], [role="log"], [role="alert"], [aria-live]')) {
+      expect(region.getAttribute('aria-live')).not.toBe('assertive')
+      expect(region.textContent).not.toMatch(/\d+(\.\d+)?k? tokens/)
+    }
   })
 })
 

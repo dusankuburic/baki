@@ -13,11 +13,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
 	"pad-core/ai/scrubber"
+	"pad-core/cache"
 	"pad-core/logger"
 )
 
@@ -499,13 +499,13 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 		if err := p.authorize(ctx, httpReq); err != nil {
 			return nil, nil, err
 		}
-		resp, err := p.client.Do(httpReq)
+		resp, err := doProviderRequest(p.client, httpReq)
 		if err != nil {
 			return nil, nil, err
 		}
 		if resp.StatusCode == http.StatusOK {
 			// Only a repair learned this round (re)starts the memo's TTL (a re-applied replay
-			// rejection is usually transient); rememberRepairs overwrites, so the full set is passed.
+			// rejection is usually transient); rememberRepairs merges this set into the live entry.
 			if len(repaired) > len(learned) && !memoStale {
 				rememberRepairs(memoKey, repaired)
 			}
@@ -513,6 +513,7 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 		}
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		resp.Body.Close()
+		p.logUpstreamRejection(ctx, resp, name)
 		param, paramOK := unsupportedParam(resp.StatusCode, errBody)
 		// The store guard runs BEFORE the repair cap: a store rejection fails
 		// the turn with this deliberate error, not the raw 400 prose.
@@ -530,7 +531,8 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 			if err := remarshal(); err != nil {
 				return nil, nil, err
 			}
-			logger.Debug("azure ai foundry: responses replay rejected — retrying with the legacy history", "target", name)
+			recordRouteFallback(p.providerID, fallbackReplayRebuild)
+			logger.FromContext(ctx).Debug("azure ai foundry: responses replay rejected — retrying with the legacy history", "target", name)
 			continue
 		}
 		if !paramOK {
@@ -548,7 +550,8 @@ func (p *AzureFoundryProvider) postResponses(ctx context.Context, body responses
 			if err := remarshal(); err != nil {
 				return nil, nil, err
 			}
-			logger.Debug("azure ai foundry: responses parameter rejected — retrying without it", "param", param)
+			recordParamRepair(p.providerID, param)
+			logger.FromContext(ctx).Debug("azure ai foundry: responses parameter rejected — retrying without it", "param", param)
 			continue
 		}
 		return resp, errBody, nil
@@ -612,7 +615,8 @@ func (p *AzureFoundryProvider) modelChat(ctx context.Context, req Request) (*Res
 	if responsesRouteRefused(resp, errBody) {
 		resp.Body.Close()
 		p.rememberResponsesRoute(req.Model, false)
-		logger.Debug("azure ai foundry: the responses route refused the model; answering on chat completions", "deployment", req.Model)
+		recordRouteFallback(p.providerID, fallbackResponsesRefused)
+		logger.FromContext(ctx).Debug("azure ai foundry: the responses route refused the model; answering on chat completions", "deployment", req.Model)
 		return p.chat(ctx, req)
 	}
 	return p.responsesChat(ctx, resp, errBody)
@@ -655,7 +659,7 @@ func (p *AzureFoundryProvider) responsesChat(ctx context.Context, resp *http.Res
 		// One by one: an unexpected item shape must not fail the turn.
 		item, ok := decodeOutputItem(raw)
 		if !ok {
-			logger.Debug("azure ai foundry: skipping undecodable agent output item")
+			logger.FromContext(ctx).Debug("azure ai foundry: skipping undecodable agent output item")
 			continue
 		}
 		replay = append(replay, raw)
@@ -706,7 +710,8 @@ func (p *AzureFoundryProvider) modelStream(ctx context.Context, req Request, onC
 	if responsesRouteRefused(resp, errBody) {
 		resp.Body.Close()
 		p.rememberResponsesRoute(req.Model, false)
-		logger.Debug("azure ai foundry: the responses route refused the model; answering on chat completions", "deployment", req.Model)
+		recordRouteFallback(p.providerID, fallbackResponsesRefused)
+		logger.FromContext(ctx).Debug("azure ai foundry: the responses route refused the model; answering on chat completions", "deployment", req.Model)
 		return p.streamInner(ctx, req, onChunk, false)
 	}
 	return p.responsesStream(ctx, resp, errBody, onChunk)
@@ -733,10 +738,7 @@ func (p *AzureFoundryProvider) responsesStream(ctx context.Context, resp *http.R
 
 // responsesToolRoutes memoises, per endpoint and deployment, whether a tools-with-reasoning rejection should
 // reroute to the Responses API; separate from learnedRepairs so their forget path does not sweep it.
-var responsesToolRoutes = struct {
-	sync.Mutex
-	m map[string]responsesRoute
-}{m: map[string]responsesRoute{}}
+var responsesToolRoutes = cache.New[responsesRoute](responsesToolRoutesSpec, learnedRepairsMax, cache.WithMaxEntries(learnedRepairsMax), cache.WithTTL(learnedRepairsTTL))
 
 type responsesRoute struct {
 	use  bool
@@ -744,33 +746,23 @@ type responsesRoute struct {
 }
 
 func responsesRouteFor(key string) (use, known bool) {
-	responsesToolRoutes.Lock()
-	defer responsesToolRoutes.Unlock()
-	r, ok := responsesToolRoutes.m[key]
+	k := memoKey(responsesToolRoutesSpec, key)
+	r, ok := responsesToolRoutes.Get(k)
 	if !ok {
 		return false, false
 	}
 	if time.Since(r.seen) > learnedRepairsTTL {
-		delete(responsesToolRoutes.m, key)
+		responsesToolRoutes.Delete(k)
 		return false, false
 	}
 	return r.use, true
 }
 
 func rememberResponsesRoute(key string, use bool) {
-	responsesToolRoutes.Lock()
-	defer responsesToolRoutes.Unlock()
-	if len(responsesToolRoutes.m) >= learnedRepairsMax {
-		responsesToolRoutes.m = map[string]responsesRoute{}
-	}
-	responsesToolRoutes.m[key] = responsesRoute{use: use, seen: time.Now()}
+	responsesToolRoutes.Set(memoKey(responsesToolRoutesSpec, key), responsesRoute{use: use, seen: time.Now()}, 1, 0)
 }
 
-func resetResponsesToolRoutes() {
-	responsesToolRoutes.Lock()
-	responsesToolRoutes.m = map[string]responsesRoute{}
-	responsesToolRoutes.Unlock()
-}
+func resetResponsesToolRoutes() { responsesToolRoutes.Clear() }
 
 // responsesRouteKey is this resource's Responses route + deployment — the key postResponses builds for a model turn.
 func (p *AzureFoundryProvider) responsesRouteKey(model string) string {
@@ -1350,7 +1342,15 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 		// servedModel is seeded from every response-bearing event and rides text/error chunks, so a run cut before completed still records the model.
 		servedModel string
 	)
-	dataPrefix := []byte("data: ")
+	// Every chunk carries the served model once an event named it (R-provider-33): a run cut during its
+	// reasoning phase, whose chunks are keepalives and silent steps, still reports the model that took it.
+	deliver := onChunk
+	onChunk = func(c Chunk) {
+		if c.ServedModel == "" {
+			c.ServedModel = servedModel
+		}
+		deliver(c)
+	}
 	// emitted reports whether the event produced a chunk; emit is the only outlet, so the flag cannot drift.
 	var emitted bool
 	emit := func(c Chunk) {
@@ -1384,11 +1384,10 @@ func parseResponsesSSE(body io.Reader, onChunk func(Chunk)) error {
 	}
 
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		if !bytes.HasPrefix(line, dataPrefix) {
+		data, ok := sseField(scanner.Bytes(), "data")
+		if !ok {
 			continue
 		}
-		data := line[len(dataPrefix):]
 		if bytes.Equal(data, []byte("[DONE]")) {
 			break
 		}

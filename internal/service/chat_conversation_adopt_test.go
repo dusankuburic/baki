@@ -145,7 +145,7 @@ func TestStreamedTurn_AnswerIsStoredBeforeDoneAndDoneCarriesTheVersion(t *testin
 	if len(events) != 1 {
 		t.Fatalf("saw %d terminal events, want one done", len(events))
 	}
-	stored, version, err := backend.LoadConversationVersioned(context.Background(), h.doc.ID, h.key)
+	stored, version, err := backend.LoadConversationVersioned(context.Background(), h.doc.ID, h.key, "")
 	if err != nil || len(stored) != 2 {
 		t.Fatalf("stored conversation = %d messages, %v", len(stored), err)
 	}
@@ -186,7 +186,7 @@ func TestStreamedTurn_TwoTurnsInARowChainTheVersions(t *testing.T) {
 	if n := backend.saves.Load(); n != 4 {
 		t.Errorf("two turns wrote the conversation %d times, want 4 (question and answer each)", n)
 	}
-	_, current, _ := backend.LoadConversationVersioned(context.Background(), h.doc.ID, h.key)
+	_, current, _ := backend.LoadConversationVersioned(context.Background(), h.doc.ID, h.key, "")
 	if current != v2 {
 		t.Errorf("the thread is at %d, the last done said %d", current, v2)
 	}
@@ -200,9 +200,9 @@ type peerBeforeSaveBackend struct {
 	saves atomic.Int32
 }
 
-func (b *peerBeforeSaveBackend) SaveConversationIf(ctx context.Context, flowID, scope string, expected int64, msgs []storageif.ChatMessage) (int64, error) {
+func (b *peerBeforeSaveBackend) SaveConversationIf(ctx context.Context, flowID, scope, owner string, expected int64, msgs []storageif.ChatMessage) (int64, error) {
 	if b.saves.Add(1) == b.nth {
-		cur, _, err := b.LoadConversationVersioned(ctx, flowID, scope)
+		cur, _, err := b.LoadConversationVersioned(ctx, flowID, scope, owner)
 		if err != nil {
 			return 0, err
 		}
@@ -210,7 +210,7 @@ func (b *peerBeforeSaveBackend) SaveConversationIf(ctx context.Context, flowID, 
 			return 0, err
 		}
 	}
-	return b.FakeBackend.SaveConversationIf(ctx, flowID, scope, expected, msgs)
+	return b.FakeBackend.SaveConversationIf(ctx, flowID, scope, owner, expected, msgs)
 }
 
 // Another writer got in between the question write and the answer write: the stored list holds a message this
@@ -222,7 +222,7 @@ func TestStreamedTurn_APeerWriteBetweenQuestionAndAnswerWithholdsTheVersion(t *t
 
 	req, _ := h.turn(t, "question")
 
-	stored, _, _ := backend.LoadConversationVersioned(context.Background(), h.doc.ID, h.key)
+	stored, _, _ := backend.LoadConversationVersioned(context.Background(), h.doc.ID, h.key, "")
 	if len(stored) != 3 {
 		t.Fatalf("stored %d messages, want the question, the peer's message and the answer", len(stored))
 	}
@@ -252,7 +252,7 @@ func TestStreamedTurn_ErrorCarriesTheQuestionsVersion(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("saw %d terminal events, want one error", len(events))
 	}
-	stored, version, _ := backend.LoadConversationVersioned(context.Background(), h.doc.ID, h.key)
+	stored, version, _ := backend.LoadConversationVersioned(context.Background(), h.doc.ID, h.key, "")
 	if len(stored) != 1 {
 		t.Fatalf("stored %d messages, want only the question", len(stored))
 	}
@@ -305,15 +305,15 @@ func TestPersistUserTurn_AnIdAlreadyStoredIsNotStoredAgain(t *testing.T) {
 	if err := backend.SaveConversation(ctx, "f", "k", seed); err != nil {
 		t.Fatal(err)
 	}
-	_, before, _ := backend.LoadConversationVersioned(ctx, "f", "k")
+	_, before, _ := backend.LoadConversationVersioned(ctx, "f", "k", "")
 
 	req := models.ChatRequest{ConversationID: uuid.NewString(), UserMessage: "the question", UserMessageID: userID}
-	stored, _ := svc.reconstructAndPersistUserTurn(ctx, doc, &req, "k")
+	stored, _, _ := svc.reconstructAndPersistUserTurn(ctx, doc, &req, "k")
 	if !stored {
 		t.Error("the question is in the store but the turn reports it as not stored")
 	}
 
-	got, after, _ := backend.LoadConversationVersioned(ctx, "f", "k")
+	got, after, _ := backend.LoadConversationVersioned(ctx, "f", "k", "")
 	if len(got) != 3 {
 		t.Errorf("the thread has %d messages, want the same 3 (no duplicate question): %+v", len(got), got)
 	}

@@ -13,6 +13,11 @@ type AppSettingsStore interface {
 	LoadUserSettings(ctx context.Context, userID string) (*AppSettings, error)
 	SaveOrgSettings(ctx context.Context, orgID string, settings *AppSettings) error
 	LoadOrgSettings(ctx context.Context, orgID string) (*AppSettings, error)
+	// UpdateOrgSettingsWith reads the organisation's settings under the lock of its settings rows, hands them to
+	// mutate and writes what mutate leaves, in one transaction (the request's when one is open): a concurrent
+	// writer reads only after this one committed, so neither change is lost (R-config-4). An error from mutate
+	// writes nothing and is returned as is.
+	UpdateOrgSettingsWith(ctx context.Context, orgID string, mutate func(*AppSettings) error) error
 }
 
 // AppSettings MUST stay in field/tag parity with models.AppSettings — the service bridge round-trips via JSON and silently drops mismatches (service.TestSettingsRoundTrip guards it).
@@ -72,6 +77,8 @@ type AISettings struct {
 	Providers               map[string]AIProviderConfig `json:"providers"`
 	SaveConversationHistory bool                        `json:"saveConversationHistory"`
 	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
+	// ToolsOffByDefault mirrors models.AISettings.ToolsOffByDefault — keep tag parity or the round-trip drops it.
+	ToolsOffByDefault bool `json:"toolsOffByDefault,omitempty"`
 	// AllowedProviders mirrors models.AISettings.AllowedProviders (an organisation's allowed-provider list).
 	AllowedProviders []string        `json:"allowedProviders,omitempty"`
 	Prompts          AIPromptsConfig `json:"prompts"`

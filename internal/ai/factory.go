@@ -91,12 +91,37 @@ func (f *ProviderFactory) SetOrgKeyLookup(getOrgKey func(orgID, provider string)
 // per member. NOT the usage scope — rows name the member and org via OrgID/usageOrg.
 func OrgScope(orgID string) string { return "org:" + orgID }
 
+// OrgKeyError is a failure reading an organisation's shared credential (a keystore error, or one it cannot
+// decrypt), told apart from the member's own so the chat can point at the organisation's admin.
+type OrgKeyError struct {
+	Provider string
+	Err      error
+}
+
+func (e *OrgKeyError) Error() string { return fmt.Sprintf("get %s org key: %v", e.Provider, e.Err) }
+func (e *OrgKeyError) Unwrap() error { return e.Err }
+
+// Is makes an organisation's unreadable credential ErrCredentialUnreadable too.
+func (e *OrgKeyError) Is(target error) bool { return target == ErrCredentialUnreadable }
+
+// ErrCredentialUnreadable marks a credential the key store could not read (a store error, a document it cannot
+// decrypt) — not one that is absent (ErrKeyNotConfigured). A caller scanning for any usable credential must not
+// treat it as "none": the credential may well exist, and the next read may succeed.
+var ErrCredentialUnreadable = errors.New("the provider credential could not be read")
+
+// unreadableCredential wraps a key-store failure as ErrCredentialUnreadable, its message unchanged.
+type unreadableCredential struct{ err error }
+
+func (u unreadableCredential) Error() string        { return u.err.Error() }
+func (u unreadableCredential) Unwrap() error        { return u.err }
+func (u unreadableCredential) Is(target error) bool { return target == ErrCredentialUnreadable }
+
 // resolveKey applies the member-first rule: the caller's own key when they have one, else the org's shared
 // one (chain in OrgScope). A member key-store failure is reported, never silently fallen through to the org's.
 func (f *ProviderFactory) resolveKey(scope, orgID, providerID string) (key, memoScope string, err error) {
 	key, err = f.getKey(scope, storageKey(providerID))
 	if err != nil {
-		return "", "", fmt.Errorf("get %s key: %w", providerID, err)
+		return "", "", fmt.Errorf("get %s key: %w", providerID, unreadableCredential{err})
 	}
 	if key != "" {
 		return key, scope, nil
@@ -104,7 +129,7 @@ func (f *ProviderFactory) resolveKey(scope, orgID, providerID string) (key, memo
 	if orgID != "" && f.getOrgKey != nil {
 		key, err = f.getOrgKey(orgID, storageKey(providerID))
 		if err != nil {
-			return "", "", fmt.Errorf("get %s org key: %w", providerID, err)
+			return "", "", &OrgKeyError{Provider: providerID, Err: err}
 		}
 		if key != "" {
 			return key, OrgScope(orgID), nil
@@ -119,7 +144,7 @@ func (f *ProviderFactory) resolveOrgFirstKey(scope, orgID, providerID string) (k
 	if orgID != "" && f.getOrgKey != nil {
 		key, err = f.getOrgKey(orgID, storageKey(providerID))
 		if err != nil {
-			return "", "", fmt.Errorf("get %s org key: %w", providerID, err)
+			return "", "", &OrgKeyError{Provider: providerID, Err: err}
 		}
 		if key != "" {
 			return key, OrgScope(orgID), nil
@@ -127,7 +152,7 @@ func (f *ProviderFactory) resolveOrgFirstKey(scope, orgID, providerID string) (k
 	}
 	key, err = f.getKey(scope, storageKey(providerID))
 	if err != nil {
-		return "", "", fmt.Errorf("get %s key: %w", providerID, err)
+		return "", "", fmt.Errorf("get %s key: %w", providerID, unreadableCredential{err})
 	}
 	if key != "" {
 		return key, scope, nil
@@ -184,7 +209,7 @@ func (f *ProviderFactory) resolveCredential(spec *ProviderSpec, scope, orgID str
 		}
 		key, err = f.getOrgKey(orgID, spec.Keys.Primary)
 		if err != nil {
-			return Credential{}, "", "", fmt.Errorf("get %s org key: %w", spec.ID, err)
+			return Credential{}, "", "", &OrgKeyError{Provider: spec.ID, Err: err}
 		}
 		if key == "" {
 			return Credential{}, "", "", fmt.Errorf("%s: %w", spec.ID, ErrKeyNotConfigured)
@@ -193,7 +218,7 @@ func (f *ProviderFactory) resolveCredential(spec *ProviderSpec, scope, orgID str
 	default:
 		key, err = f.getKey(scope, spec.Keys.Primary)
 		if err != nil {
-			return Credential{}, "", "", fmt.Errorf("get %s key: %w", spec.ID, err)
+			return Credential{}, "", "", fmt.Errorf("get %s key: %w", spec.ID, unreadableCredential{err})
 		}
 		if key == "" {
 			return Credential{}, "", "", fmt.Errorf("%s: %w", spec.ID, ErrKeyNotConfigured)
@@ -333,7 +358,7 @@ func (f *ProviderFactory) resolveAzureConnectionKey(scope string, ref AzureConne
 	if ref.OrgID == "" {
 		key, err = f.getKey(scope, name)
 		if err != nil {
-			return "", "", "", fmt.Errorf("get %s key: %w", name, err)
+			return "", "", "", fmt.Errorf("get %s key: %w", name, unreadableCredential{err})
 		}
 		if key == "" {
 			return "", "", "", fmt.Errorf("%s: %w", name, ErrKeyNotConfigured)
@@ -345,7 +370,7 @@ func (f *ProviderFactory) resolveAzureConnectionKey(scope string, ref AzureConne
 	}
 	key, err = f.getOrgKey(ref.OrgID, name)
 	if err != nil {
-		return "", "", "", fmt.Errorf("get %s org key: %w", name, err)
+		return "", "", "", &OrgKeyError{Provider: name, Err: err}
 	}
 	if key == "" {
 		return "", "", "", fmt.Errorf("%s: %w", name, ErrKeyNotConfigured)

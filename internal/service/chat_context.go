@@ -32,7 +32,8 @@ const maxScrubbedDocCache = 4
 // maxCachedScrubbedBlocks is the largest clone the doc cache holds; a bigger flow is re-scrubbed per turn.
 const maxCachedScrubbedBlocks = 40_000
 
-// ragGuidelinesDeadline caps the streaming path's wait for RAG guidelines; on timeout the turn proceeds without.
+// ragGuidelinesDeadline caps the streaming path's wait for RAG guidelines when PAD_RAG_DEADLINE_MS sets none
+// (ragLookupDeadline); on timeout the turn proceeds without, and says so in a knowledge notice.
 const ragGuidelinesDeadline = 800 * time.Millisecond
 
 // ragGuidelinesTokenCap bounds the guidelines block (tail-truncated, keeping the header and top chunks).
@@ -221,40 +222,11 @@ func (s *ChatService) scrubbedDocFor(ctx context.Context, scope string, doc *mod
 	return sd, nil
 }
 
-// ragGuidelines returns the turn's KB guidelines or "": this RLS-exempt path gates org knowledge on MEMBERSHIP, fail closed.
-func (s *ChatService) ragGuidelines(ctx context.Context, scope string, doc *models.FlowDocument, userMessage string) string {
-	if s.knowledge == nil || doc == nil || doc.OrganizationID == "" {
-		return ""
-	}
-	if !s.isOrgMember(ctx, doc.OrganizationID, scope) {
-		recordRAGLookup("skipped")
-		return ""
-	}
-	guidelines, err := s.knowledge.Search(ctx, scope, doc.OrganizationID, userMessage)
-	guidelines = ai.TruncateToTokenLimit(guidelines, ragGuidelinesTokenCap)
-	switch {
-	case err != nil:
-		if ctx.Err() == nil { // deadline skips are expected under load, not errors
-			recordRAGLookup("error")
-		} else {
-			recordRAGLookup("skipped")
-		}
-	case guidelines == "":
-		recordRAGLookup("miss")
-	default:
-		recordRAGLookup("hit")
-	}
-	if err != nil || guidelines == "" {
-		return ""
-	}
-	return guidelines
-}
-
 // isOrgMember reports org membership; "" and store errors fail closed — a missing proof must never widen knowledge access.
 func (s *ChatService) isOrgMember(ctx context.Context, orgID, userID string) bool {
 	_, ok, err := s.orgRoleCached(ctx, orgID, userID)
 	if err != nil {
-		logger.Warn("rag guidelines: org membership lookup failed; skipping guidelines", "error", err)
+		logger.FromContext(ctx).Warn("rag guidelines: org membership lookup failed; skipping guidelines", "error", err)
 		return false
 	}
 	return ok
@@ -264,7 +236,7 @@ func (s *ChatService) isOrgMember(ctx context.Context, orgID, userID string) boo
 func (s *ChatService) orgRole(ctx context.Context, orgID, userID string) (role auth.Role, ok bool) {
 	role, ok, err := s.orgRoleCached(ctx, orgID, userID)
 	if err != nil {
-		logger.Warn("chat: org role lookup failed; not using the org's shared credential", "error", err)
+		logger.FromContext(ctx).Warn("chat: org role lookup failed; not using the org's shared credential", "error", err)
 		return "", false
 	}
 	return role, ok
@@ -508,7 +480,7 @@ func buildScopedMessages(scope string, req models.ChatRequest, contextText, guid
 			continue
 		}
 		// Memoised (historyScrubs): the same stored messages come back every turn.
-		content := historyScrubs.scrubText(scope, m.Content)
+		content := historyScrubs.scrubText(scope, historyContent(m))
 		if strings.TrimSpace(content) == "" {
 			logger.Debug("chat: dropping an empty history message", "role", role, "index", i)
 			continue
@@ -571,6 +543,41 @@ func promptTokenCeiling(req *ai.Request) int {
 // truncateForContextWindow drops oldest turns until the prompt fits the window; the current turn (pin) is never dropped.
 func truncateForContextWindow(ctx context.Context, provider ai.Provider, req *ai.Request, ctxLimit int, pin int) (int, error) {
 	return truncateForContextWindowMemo(ctx, provider, req, ctxLimit, pin, nil)
+}
+
+// statedWindow is the window a context-length rejection stated (*ai.ContextLimitError, R-provider-12) when it is
+// below ctxLimit, the window the rejected request was sized to (0: unknown). It is the one rejection a retry can
+// help: sized to it, the request leaves more history out. A rejection stating no window, or none smaller, would
+// only be rejected again.
+func statedWindow(err error, ctxLimit int) (int, bool) {
+	var cle *ai.ContextLimitError
+	if !errors.As(err, &cle) || cle.Limit <= 0 || (ctxLimit > 0 && cle.Limit >= ctxLimit) {
+		return 0, false
+	}
+	return cle.Limit, true
+}
+
+// capToWindow is maxTokens held to window's outputBackstop (0, the provider's default, stays 0).
+func capToWindow(maxTokens, window int) int {
+	if c := outputBackstop(window); maxTokens > c {
+		return c
+	}
+	return maxTokens
+}
+
+// resizeToStatedWindow is the single-call turn's retry at a stated window (statedWindow): req, the rejected
+// request, re-sized to window — its output cap and its prompt, whose last message, the current turn, is kept.
+// ok is false when it cannot be: the current turn does not fit the window, or the re-sized request is the one
+// already rejected. dropped is how many more history messages it leaves out.
+func resizeToStatedWindow(ctx context.Context, provider ai.Provider, req ai.Request, window int) (resized ai.Request, dropped int, ok bool) {
+	resized = req
+	resized.MaxTokens = capToWindow(req.MaxTokens, window)
+	pin := len(req.Messages) - 1
+	newPin, err := truncateForContextWindow(ctx, provider, &resized, window, pin)
+	if err != nil || (sameMessages(req.Messages, resized.Messages) && resized.MaxTokens >= req.MaxTokens) {
+		return req, 0, false
+	}
+	return resized, pin - newPin, true
 }
 
 // tokenMemo remembers EstimateTokens results across one turn's tool-loop iterations; nil consults tokenCounts.
@@ -879,19 +886,20 @@ func (s *ChatService) PreviewContext(ctx context.Context, scope string, doc *mod
 			}
 			req.Messages = history
 		} else {
-			logger.Warn("chat preview: history load failed; previewing without prior context", "error", hErr)
+			logger.FromContext(ctx).Warn("chat preview: history load failed; previewing without prior context", "error", hErr)
 		}
 	}
 	asked := req.ContextBlockID
 	req, blockStatus := resolveContextBlock(doc, req)
 	useTools := req.UseTools || model.agent()
-	gate := ai.NewToolGate(auth.ActorFromContext(ctx), s.flowCache != nil, s.canEditFlow(ctx, doc))
+	gate := s.toolGate(ctx, doc)
 	ts := turnSetup{provider: provider, model: model, orgID: orgID}
 	// The knowledge base under the stream's deadline: a slow lookup previews without guidelines, as the turn runs.
+	// The search's follow-up (an empty result's census for ops) is the turns' to run, not a preview's.
 	guidelines := func() (string, bool) {
-		ragCtx, cancel := context.WithTimeout(ctx, ragGuidelinesDeadline)
+		ragCtx, cancel := context.WithTimeout(ctx, s.ragLookupDeadline())
 		defer cancel()
-		return s.ragGuidelines(ragCtx, scope, doc, req.UserMessage), true
+		return s.ragGuidelinesFor(ragCtx, ragSourcePreview, scope, doc, report, req).guidelines, true
 	}
 	a, _, err := s.assembleTurnRequest(ctx, scope, ts, doc, report, req, guidelines, gate, useTools)
 	if err != nil {

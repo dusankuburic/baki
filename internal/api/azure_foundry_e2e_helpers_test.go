@@ -412,7 +412,7 @@ func newAzureE2EEnv(t *testing.T) *azE2EEnv {
 		NewSystemHandler(sysSvc, security, auditRec, nil, authzSvc, service.NewHealthService(store, nil)),
 		NewFlowHandler(flowSvc, docProv, store, security, shareSvc, auditRec),
 		NewLibraryHandler(libSvc, store, security, auditRec),
-		NewChatHandler(chatSvc, flowSvc, security, auditRec),
+		NewChatHandler(chatSvc, flowSvc, security, auditRec, authzSvc),
 		NewAnalysisHandler(analysisSvc, flowSvc, dashboardSvc, store, security, service.NewWebhookNotifier(nil), mail, nil, service.NewPolicyService(store), service.NewGovernanceAlertService(store), triageSvc, service.NewCommentService(store, triageSvc, nil), shareSvc, auditRec, exportSvc),
 		NewDashboardHandler(dashboardSvc, security),
 		NewExportHandler(exportSvc, flowSvc, analysisSvc, security, auditRec),

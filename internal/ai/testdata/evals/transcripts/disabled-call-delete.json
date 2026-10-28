@@ -1,0 +1,10 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "text": "Probably yes. [Call Helper (disabled)](block:B2) on line 3 is a disabled duplicate of the `Call Helper` on line 2 — it never runs, and the analyzer reports it as [disabled-block](finding:disabled-block:d46344cef7c7bba8).\n\nKeep it only if you disable and enable it on purpose while testing; otherwise delete it so nobody re-enables it by accident and calls `Helper` twice.",
+      "tokensIn": 1430,
+      "tokensOut": 86
+    }
+  ]
+}

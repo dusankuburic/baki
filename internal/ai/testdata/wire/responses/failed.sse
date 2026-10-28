@@ -1,0 +1,10 @@
+: hand-built from the Responses API streaming "response.failed" event (response.error code/message, usage so far), NOT a live capture; see ../README.md
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_WIRE0000000000000000000000000004","object":"response","created_at":1761523303,"status":"in_progress","error":null,"incomplete_details":null,"model":"gpt-4.1-2025-04-14","output":[],"usage":null}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_WIRE0000000000000000000000000004","object":"response","created_at":1761523303,"status":"in_progress","error":null,"incomplete_details":null,"model":"gpt-4.1-2025-04-14","output":[],"usage":null}}
+
+event: response.failed
+data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_WIRE0000000000000000000000000004","object":"response","created_at":1761523303,"status":"failed","error":{"code":"rate_limit_exceeded","message":"Rate limit reached for gpt-4.1 in organization org-WIRE on tokens per min (TPM). Please try again in 2s."},"incomplete_details":null,"model":"gpt-4.1-2025-04-14","output":[],"usage":{"input_tokens":512,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":512}}}
+

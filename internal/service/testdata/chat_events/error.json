@@ -1,0 +1,12 @@
+{
+  "data": {
+    "code": "PROVIDER_OUTPUT_LIMIT",
+    "conversationBase": 0,
+    "conversationVersion": 1,
+    "message": "the model used its whole Max tokens budget before writing an answer (reasoning models count their thinking against it) — raise Max tokens in Settings → AI Behavior and try again",
+    "tokensIn": 30,
+    "tokensOut": 4096
+  },
+  "streamId": "stream-1",
+  "type": "error"
+}

@@ -43,6 +43,15 @@ func TestRateLimitGroup_OtherBuckets(t *testing.T) {
 		{"POST", "/api/analysis/run", rlGroupAnalysis},
 		{"GET", "/api/analysis/run", rlGroupGeneral}, // analysis bucket is POST-only
 		{"POST", "/api/chat/stream", rlGroupChat},
+		// The billed routes ride the cost buckets (R-security-c22): the context preview embeds the query (chat
+		// bucket); the knowledge base's upload and re-index embed in bulk (embed bucket).
+		{"POST", "/api/chat/preview-context", rlGroupChat},
+		{"POST", "/api/v1/chat/preview-context", rlGroupChat},
+		{"POST", "/api/orgs/o1/knowledge/upload", route.RateEmbed},
+		{"POST", "/api/v1/orgs/o1/knowledge/reindex", route.RateEmbed},
+		{"GET", "/api/orgs/o1/knowledge", rlGroupGeneral},
+		{"DELETE", "/api/orgs/o1/knowledge/d1", rlGroupGeneral},
+		{"POST", "/api/orgs//knowledge/upload", rlGroupGeneral},
 		{"POST", "/api/flow/upload", rlGroupUpload},
 		{"GET", "/api/flow/upload", rlGroupGeneral}, // upload bucket is POST-only
 		{"POST", "/api/auth/profile/avatar", route.RateAvatar},

@@ -13,9 +13,20 @@ interface SecretFieldProps {
   placeholder?: string
   hint?: string
   error?: string
+  maxLength?: number
 }
 
-export default function SecretField({id, label, value, onChange, onBlur, placeholder, hint, error}: SecretFieldProps) {
+export default function SecretField({
+  id,
+  label,
+  value,
+  onChange,
+  onBlur,
+  placeholder,
+  hint,
+  error,
+  maxLength,
+}: SecretFieldProps) {
   const {t} = useTranslation('settings')
   const [shown, setShown] = useState(false)
   return (
@@ -30,6 +41,7 @@ export default function SecretField({id, label, value, onChange, onBlur, placeho
           placeholder={placeholder}
           hint={hint}
           error={error}
+          maxLength={maxLength}
           autoComplete="new-password"
           spellCheck={false}
           autoCapitalize="off"

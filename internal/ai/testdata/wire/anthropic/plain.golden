@@ -1,0 +1,13 @@
+# anthropic/plain.sse through parseClaudeSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 in=2460 cacheRead=2048 served="claude-sonnet-4-5-20250929"
+02 keepalive served="claude-sonnet-4-5-20250929"
+03 keepalive served="claude-sonnet-4-5-20250929"
+04 text="The flow reads " served="claude-sonnet-4-5-20250929"
+05 text="the workbook, then loops " served="claude-sonnet-4-5-20250929"
+06 text="over each row — café names included." served="claude-sonnet-4-5-20250929"
+07 keepalive served="claude-sonnet-4-5-20250929"
+08 done finish="end_turn" in=2460 out=21 cacheRead=2048 items=[{"text":"The flow reads the workbook, then loops over each row — café names included.","type":"text"}] served="claude-sonnet-4-5-20250929"
+09 keepalive served="claude-sonnet-4-5-20250929"
+return nil
+summary chunks=9 keepalives=4 text="The flow reads the workbook, then loops over each row — café names included."

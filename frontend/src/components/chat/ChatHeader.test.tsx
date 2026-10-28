@@ -1,10 +1,20 @@
-import {describe, it, expect, vi} from 'vitest'
+import {describe, it, expect, vi, afterEach} from 'vitest'
 import {render, screen, fireEvent, within} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ChatHeader from './ChatHeader'
 import {ConfirmProvider} from '@/components/shared/ConfirmDialog'
 import type {PickerProvider} from './ModelPicker'
 import type {ModelDetail} from '@/types'
+
+const conn = vi.hoisted(() => ({state: 'open'}))
+vi.mock('@/api/client', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/api/client')>()),
+  getEventConnectionState: () => conn.state,
+  subscribeConnectionState: (cb: (s: string) => void) => {
+    cb(conn.state)
+    return () => {}
+  },
+}))
 
 const models: ModelDetail[] = [
   {id: 'm1', displayName: 'Sonnet', contextLimit: 200_000},
@@ -291,5 +301,31 @@ describe('ChatHeader focus mode and text size', () => {
     expect(screen.getByRole('menuitem', {name: /Focus mode/})).toBeInTheDocument()
     await user.click(screen.getByRole('menuitem', {name: 'Text size: Medium'}))
     expect(onCycleTextSize).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ChatHeader connection state (R-streaming-6)', () => {
+  const dot = () => picker().querySelector('span[aria-hidden="true"].rounded-full')
+
+  afterEach(() => {
+    conn.state = 'open'
+  })
+
+  it('shows ready with the success dot only while the event stream is open', () => {
+    conn.state = 'open'
+    renderHeader()
+    expect(picker()).toHaveAttribute('title', 'Ready')
+    expect(dot()).toHaveClass('bg-success')
+  })
+
+  it.each([
+    ['reconnecting', 'Reconnecting...'],
+    ['idle', 'Disconnected'],
+  ])('a %s stream is never shown as ready, nor with the success dot', (state, title) => {
+    conn.state = state
+    renderHeader()
+    expect(picker()).toHaveAttribute('title', title)
+    expect(picker().getAttribute('title')).not.toBe('Ready')
+    expect(dot()).not.toHaveClass('bg-success')
   })
 })

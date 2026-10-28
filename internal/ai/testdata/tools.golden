@@ -7,6 +7,7 @@ get_variable_lineage | Tracing variable | default | false | - | -
 list_findings | Listing findings | default | false | - | -
 propose_fix | Previewing fix | default | false | - | -
 search_flow | Searching flow | default | false | - | -
+search_knowledge | Searching knowledge base | 15s | false | - | -
 
 ## apply_fix
 Apply a finding's auto-fix to the flow. ALWAYS requires explicit user approval: the user sees the patch preview and an approve/decline prompt, and nothing is written unless they approve. Call this only when the user asked to fix the issue; prefer propose_fix first when they just want to see the change.
@@ -39,3 +40,7 @@ schema: {"properties":{"blockId":{"description":"Block ID of the finding","type"
 ## search_flow
 Search the flow for blocks whose name, action type, variables, or property values contain the query. Returns matching blocks with their IDs and subflow.
 schema: {"properties":{"limit":{"description":"Max results (default 15)","type":"integer"},"query":{"description":"Case-insensitive substring to search for","type":"string"}},"required":["query"],"type":"object"}
+
+## search_knowledge
+Search the organisation's knowledge base (its own PAD standards, policies and guidelines) for passages relevant to the query, e.g. a rule, connector or pattern list_findings or get_block turned up. Returns the best passages with their source file; cite the file when you rely on one.
+schema: {"properties":{"limit":{"description":"Max passages (default and at most 5)","type":"integer"},"query":{"description":"What to look for: name the action, rule, connector or practice","type":"string"}},"required":["query"],"type":"object"}

@@ -20,7 +20,7 @@ vi.mock('@/api', async importOriginal => {
       getGitHubUser: vi.fn(),
       getCopilotUser: vi.fn(),
       getDeviceAuthUser: vi.fn(),
-      hasApiKey: vi.fn(),
+      keyStatus: vi.fn(),
       deleteApiKey: vi.fn(),
       testProviderConnection: vi.fn(),
       getLocalModelsConfig: vi.fn(),
@@ -104,7 +104,7 @@ beforeEach(async () => {
   api.getGitHubUser.mockResolvedValue(null)
   api.getCopilotUser.mockResolvedValue(null)
   api.getDeviceAuthUser.mockResolvedValue(null)
-  api.hasApiKey.mockResolvedValue(false)
+  api.keyStatus.mockResolvedValue({has: false, unreadable: false})
   api.getLocalModelsConfig.mockResolvedValue({configured: false, baseUrl: ''})
   seedAzure()
 })

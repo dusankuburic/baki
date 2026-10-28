@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/events"
+	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/platform/txhook"
 	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
@@ -157,6 +159,10 @@ type AzureModelServiceDeps struct {
 	KeyFamilies storageif.SecretFamilyLister
 	// OrgKeys holds organisations' shared credentials (cloud); nil disables org registries (ErrOrgKeyStoreUnavailable).
 	OrgKeys OrgKeyStore
+	// KeyReads and OrgKeyReads are the keystores' request-scoped reads (R-provider-19): the chat path's credential
+	// read runs under the request's context; nil reads through Secrets / OrgKeys.
+	KeyReads    KeyReads
+	OrgKeyReads OrgKeyReads
 	// Factory builds the providers the picker sizes models with and the KB embeds with; nil = no provider-derived windows.
 	Factory *ai.ProviderFactory
 	// Settings is the desktop settings store the legacy import reads the saved default from.
@@ -170,6 +176,9 @@ type AzureModelServiceDeps struct {
 	PerUserOwners bool
 	// KnowledgeEmbeddingEnabled: the KB embeds with Azure AI Foundry here, so the designation is offered.
 	KnowledgeEmbeddingEnabled bool
+	// Events announces the registry's credential writes (CredentialChanged), so the caches derived from
+	// credentials drop what they hold for the owner (the knowledge base's memoised embedders); nil announces nothing.
+	Events *eventbus.Bus
 }
 
 // AzureModelService is the Azure AI Foundry model registry: resources and models (CRUD, designations, validation, status), the legacy import, the chat runtime.
@@ -178,6 +187,8 @@ type AzureModelService struct {
 	secrets                   KeyStore
 	keyFamilies               storageif.SecretFamilyLister
 	orgKeys                   OrgKeyStore
+	keyReads                  KeyReads
+	orgKeyReads               OrgKeyReads
 	factory                   *ai.ProviderFactory
 	settings                  SettingsProvider
 	userSettings              AzureSettingsLoader
@@ -186,6 +197,7 @@ type AzureModelService struct {
 	users                     AzureUserDirectory
 	perUserOwners             bool
 	knowledgeEmbeddingEnabled bool
+	events                    *eventbus.Bus
 
 	// now is the clock (tests move it).
 	now func() time.Time
@@ -291,6 +303,8 @@ func NewAzureModelService(deps AzureModelServiceDeps) *AzureModelService {
 		secrets:                   deps.Secrets,
 		keyFamilies:               deps.KeyFamilies,
 		orgKeys:                   deps.OrgKeys,
+		keyReads:                  deps.KeyReads,
+		orgKeyReads:               deps.OrgKeyReads,
 		factory:                   deps.Factory,
 		settings:                  deps.Settings,
 		userSettings:              deps.UserSettings,
@@ -299,6 +313,7 @@ func NewAzureModelService(deps AzureModelServiceDeps) *AzureModelService {
 		users:                     deps.Users,
 		perUserOwners:             deps.PerUserOwners,
 		knowledgeEmbeddingEnabled: deps.KnowledgeEmbeddingEnabled,
+		events:                    deps.Events,
 		now:                       time.Now,
 		importedMemo:              newOwnerMemo("import-marker"),
 		sweptMemo:                 newOwnerMemo("orphan-sweep"),
@@ -308,6 +323,13 @@ func NewAzureModelService(deps AzureModelServiceDeps) *AzureModelService {
 		probeModel:                ai.ProbeAzureFoundryModel,
 		discover:                  ai.DiscoverAzureFoundryProject,
 	}
+}
+
+// WithKeyReads gives the service the keystores' request-scoped reads (nil: reads through the keystores); DI
+// decorates the service with them. Call it before the service is used.
+func (s *AzureModelService) WithKeyReads(own KeyReads, org OrgKeyReads) *AzureModelService {
+	s.keyReads, s.orgKeyReads = own, org
+	return s
 }
 
 // KnowledgeEmbeddingEnabled reports whether the KB embeds with Azure AI Foundry here (the "Use for knowledge base" designation is offered).
@@ -399,6 +421,11 @@ const (
 // credentialState reads and classifies connID's credential; "none"/"cannot decrypt" are statuses, not errors.
 func (s *AzureModelService) credentialState(owner storageif.AzureOwner, scope, connID string) (azureCredential, error) {
 	raw, err := s.readCredential(owner, scope, connID)
+	return credentialFromRead(owner, connID, raw, err)
+}
+
+// credentialFromRead classifies one read of connID's credential (credentialState).
+func credentialFromRead(owner storageif.AzureOwner, connID, raw string, err error) (azureCredential, error) {
 	switch {
 	case errors.Is(err, storage.ErrSecretDecryptFailed):
 		return azureCredential{status: AzureStatusUnreadable, reason: azureReasonUnreadable}, nil
@@ -1242,7 +1269,19 @@ func (s *AzureModelService) CreateConnection(ctx context.Context, as AzureScope,
 	if err != nil {
 		return AzureConnectionView{}, mapConnectionWriteErr(err)
 	}
+	s.announceCredential(ctx, owner, as.Scope)
 	return s.viewConnection(ctx, owner, as, id)
+}
+
+// announceCredential publishes the change of one of owner's Azure AI Foundry credentials (a resource created, its
+// credential re-entered, the resource removed): the owner's key scope — the organisation's shared scope for an org
+// registry, the caller's own otherwise — and the provider. The key store's own writers do not announce it.
+func (s *AzureModelService) announceCredential(ctx context.Context, owner storageif.AzureOwner, scope string) {
+	e := events.CredentialChanged{Scope: scope, ProviderID: ai.AzureFoundryProviderID, Kind: events.CredentialSaved}
+	if owner.IsOrg() {
+		e.Scope, e.OrgID = ai.OrgScope(owner.ID), owner.ID
+	}
+	s.events.Publish(ctx, e)
 }
 
 // createConnectionTx is the transactional create (credential first, then the row); a failed row write removes the orphaned credential.
@@ -1416,6 +1455,7 @@ func (s *AzureModelService) UpdateConnection(ctx context.Context, as AzureScope,
 	}
 	if rot != nil {
 		rot.release()
+		s.announceCredential(ctx, owner, as.Scope)
 	}
 	return v, nil
 }
@@ -1609,6 +1649,7 @@ func (s *AzureModelService) deleteConnection(ctx context.Context, owner storagei
 		// A slot is free: a legacy import waiting for one runs at the next read.
 		s.setImportDeferred(owner, false)
 	})
+	s.announceCredential(ctx, owner, scope)
 	res := AzureConnectionDeleteResult{Status: "ok", DeletedModels: len(deleted)}
 	for _, m := range deleted {
 		res.ClearedKnowledgeEmbedding = res.ClearedKnowledgeEmbedding || m.IsKnowledgeEmbedding

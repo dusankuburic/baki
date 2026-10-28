@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"pad-core/cache"
 )
 
 // Learned context windows (alias providers only): a deployment name says nothing about the model's window, so an
@@ -18,10 +20,17 @@ type learnedWindow struct {
 	seen  time.Time
 }
 
+// learnedWindows is a declared cache (ai.context-windows, R-provider-31): least recently used first at servedMemoMax.
+// learnedMu serialises recordContextWindow's keep-the-smaller read-compare-write.
 var (
 	learnedMu      sync.Mutex
-	learnedWindows = map[string]learnedWindow{}
+	learnedWindows = cache.New[learnedWindow](contextWindowsSpec, servedMemoMax, cache.WithMaxEntries(servedMemoMax), cache.WithTTL(servedMemoTTL))
 )
+
+// learnedWindowKey keys the memo like the served-model memo: scope, provider and requested model.
+func learnedWindowKey(scope, providerID, requestModel string) cache.Key {
+	return scopedMemoKey(contextWindowsSpec, scope, providerID, requestModel)
+}
 
 // recordContextWindow remembers the window a rejection of requestModel stated, keeping the smaller of two
 // observations within the TTL (a model router may be routed to models with different windows); no-op for
@@ -34,38 +43,23 @@ func recordContextWindow(scope, providerID, requestModel string, limit int) {
 	now := time.Now()
 	learnedMu.Lock()
 	defer learnedMu.Unlock()
-	if len(learnedWindows) >= servedMemoMax {
-		for k, e := range learnedWindows {
-			if now.Sub(e.seen) > servedMemoTTL {
-				delete(learnedWindows, k)
-			}
-		}
-		for k := range learnedWindows {
-			if len(learnedWindows) < servedMemoMax {
-				break
-			}
-			delete(learnedWindows, k)
-		}
-	}
-	key := servedKey(scope, providerID, requestModel)
-	if prev, ok := learnedWindows[key]; ok && now.Sub(prev.seen) <= servedMemoTTL && prev.limit < limit {
+	key := learnedWindowKey(scope, providerID, requestModel)
+	if prev, ok := learnedWindows.Get(key); ok && now.Sub(prev.seen) <= servedMemoTTL && prev.limit < limit {
 		limit = prev.limit
 	}
-	learnedWindows[key] = learnedWindow{limit: limit, seen: now}
+	learnedWindows.Set(key, learnedWindow{limit: limit, seen: now}, 1, 0)
 }
 
 // lookupContextWindow returns the learned window for requestModel (expired
 // entries are dropped and reported as missing).
 func lookupContextWindow(scope, providerID, requestModel string) (int, bool) {
-	learnedMu.Lock()
-	defer learnedMu.Unlock()
-	key := servedKey(scope, providerID, requestModel)
-	e, ok := learnedWindows[key]
+	key := learnedWindowKey(scope, providerID, requestModel)
+	e, ok := learnedWindows.Get(key)
 	if !ok {
 		return 0, false
 	}
 	if time.Since(e.seen) > servedMemoTTL {
-		delete(learnedWindows, key)
+		learnedWindows.Delete(key)
 		return 0, false
 	}
 	return e.limit, true
@@ -77,7 +71,7 @@ func lookupContextWindow(scope, providerID, requestModel string) (int, bool) {
 // learnedMu before servedMu.
 func forgetContextWindow(scope, providerID, requestModel string) {
 	learnedMu.Lock()
-	delete(learnedWindows, servedKey(scope, providerID, requestModel))
+	learnedWindows.Delete(learnedWindowKey(scope, providerID, requestModel))
 	learnedMu.Unlock()
 }
 
@@ -115,5 +109,5 @@ func applyLearnedWindows(scope, providerID string, models []ModelInfo) []ModelIn
 func resetLearnedWindows() {
 	learnedMu.Lock()
 	defer learnedMu.Unlock()
-	learnedWindows = map[string]learnedWindow{}
+	learnedWindows.Clear()
 }

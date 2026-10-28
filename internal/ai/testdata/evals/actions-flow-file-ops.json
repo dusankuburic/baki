@@ -1,0 +1,25 @@
+{
+  "why": "Finds the file operations without error handling and previews (does not apply) the fix for the first one.",
+  "flow": "actions_flow",
+  "question": "Which file operations lack error handling? Show me the fix for the first one.",
+  "expect": {
+    "toolsSubset": [
+      "list_findings",
+      "propose_fix"
+    ],
+    "mustNotCall": [
+      "apply_fix",
+      "apply_fixes"
+    ],
+    "mustMention": [
+      "B10",
+      "B26"
+    ],
+    "mentionOrder": true,
+    "mustLink": [
+      "block:",
+      "finding:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

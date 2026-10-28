@@ -50,7 +50,7 @@ func init() {
 		export: []exportSection{
 			flowsSection(),
 			section("conversations", func(ctx context.Context, b *PostgresStorageBackend, x *exportRun) ([]*interfaces.ExportedConversation, error) {
-				return b.exportConversations(ctx, x.flowIDs)
+				return b.exportConversations(ctx, x.userID, x.flowIDs)
 			}, func(out *interfaces.UserDataExport, v []*interfaces.ExportedConversation) { out.Conversations = v }),
 			section("comments", func(ctx context.Context, b *PostgresStorageBackend, x *exportRun) ([]*interfaces.FindingComment, error) {
 				return b.exportAuthoredComments(ctx, x.userID)
@@ -61,9 +61,11 @@ func init() {
 		},
 		erase: []eraseStep{
 			// conversations.flow_id has no foreign key (DeleteFlow removes them explicitly), so the owned flows'
-			// conversations go first.
+			// conversations go first, every user's threads on them with them (as when the flow is deleted); and the user's
+			// own threads on other people's flows (owner_id, v52, R-security-3), which are the user's words. An unowned
+			// (pre-v52) conversation on someone else's flow names nobody and stays with its flow.
 			eraseByUser(eraseDetached, "conversations",
-				`DELETE FROM conversations WHERE flow_id IN (SELECT id FROM flows WHERE owner_id = $1)`),
+				`DELETE FROM conversations WHERE flow_id IN (SELECT id FROM flows WHERE owner_id = $1) OR owner_id = $1`),
 			{phase: eraseOwned, table: "flows", deletes: true, run: eraseOwnedFlows},
 			// The user's identity on what stays with other people's flows: the content is theirs to keep.
 			eraseByUser(eraseIdentity, "flow_versions", `UPDATE flow_versions SET created_by = '' WHERE created_by = $1`),
@@ -246,34 +248,46 @@ func (b *PostgresStorageBackend) ownedFlowsPage(ctx context.Context, userID, aft
 	return page, nil
 }
 
-// exportConversations returns every stored chat conversation on the given (owned) flows — chat about your
-// own flow is user-authored content and belongs in the bundle.
-func (b *PostgresStorageBackend) exportConversations(ctx context.Context, flowIDs []string) ([]*interfaces.ExportedConversation, error) {
+// exportConversations returns the user's chat conversations: their own threads on any flow (owner_id, v52) — their
+// words even on a flow they can no longer open, so the read runs without the row-level-security user, as erasure
+// does — and the unowned (pre-v52) conversations on the given (owned) flows, which name nobody and were the flow
+// owner's in the bundle before conversations had owners. Another user's thread on an owned flow is that user's
+// content and stays out (R-security-3).
+func (b *PostgresStorageBackend) exportConversations(ctx context.Context, userID string, flowIDs []string) ([]*interfaces.ExportedConversation, error) {
 	out := []*interfaces.ExportedConversation{}
-	if len(flowIDs) == 0 {
+	if userID == "" {
 		return out, nil
 	}
-	rows, err := b.query(ctx).QueryContext(ctx,
-		`SELECT flow_id, scope, messages FROM conversations WHERE flow_id = ANY($1) ORDER BY flow_id, scope`,
-		flowIDs)
-	if err != nil {
-		return nil, err
+	if flowIDs == nil {
+		flowIDs = []string{}
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var c interfaces.ExportedConversation
-		var data []byte
-		if err := rows.Scan(&c.FlowID, &c.Scope, &data); err != nil {
-			return nil, err
+	q := b.query(ctx)
+	err := asSystem(ctx, q, func() error {
+		rows, err := q.QueryContext(ctx,
+			`SELECT flow_id, scope, COALESCE(title, ''), messages FROM conversations
+			 WHERE owner_id = $1 OR (owner_id IS NULL AND flow_id = ANY($2))
+			 ORDER BY flow_id, scope`,
+			userID, flowIDs)
+		if err != nil {
+			return err
 		}
-		if len(data) > 0 {
-			if err := json.Unmarshal(data, &c.Messages); err != nil {
-				return nil, fmt.Errorf("unmarshal conversation %s/%s: %w", c.FlowID, c.Scope, err)
+		defer rows.Close()
+		for rows.Next() {
+			var c interfaces.ExportedConversation
+			var data []byte
+			if err := rows.Scan(&c.FlowID, &c.Scope, &c.Title, &data); err != nil {
+				return err
 			}
+			if len(data) > 0 {
+				if err := json.Unmarshal(data, &c.Messages); err != nil {
+					return fmt.Errorf("unmarshal conversation %s/%s: %w", c.FlowID, c.Scope, err)
+				}
+			}
+			out = append(out, &c)
 		}
-		out = append(out, &c)
-	}
-	return out, rows.Err()
+		return rows.Err()
+	})
+	return out, err
 }
 
 // exportAuthoredComments returns the comments the user wrote, on any flow — they are the user's own words even

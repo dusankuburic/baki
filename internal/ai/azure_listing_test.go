@@ -140,7 +140,7 @@ func expireAzureListing(t *testing.T, cfg AzureFoundryConfig) {
 	if !ok {
 		t.Fatal("no cached listing to expire")
 	}
-	e.expires = time.Now().Add(-time.Second)
+	e.expires, e.retryAt = time.Now().Add(-time.Second), time.Time{}
 	azureModelsCache.m[azureModelsCacheKey(cfg)] = e
 }
 

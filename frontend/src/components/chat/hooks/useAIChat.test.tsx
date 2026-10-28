@@ -1,4 +1,4 @@
-import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach, onTestFinished} from 'vitest'
 import {useEffect} from 'react'
 import {renderHook, render, waitFor, act, screen} from '@testing-library/react'
 import {useAIChat} from './useAIChat'
@@ -50,12 +50,12 @@ vi.mock('@/api', () => ({
   chatApi: {
     streamChatMessage: vi.fn(),
     cancelStream: vi.fn().mockResolvedValue(undefined),
-    beginStream: vi.fn(),
     resumeStream: vi.fn().mockResolvedValue({text: '', done: false, error: '', tokensOut: 0, tokensIn: 0}),
     getConversation: vi.fn().mockResolvedValue([]),
     saveConversation: vi.fn().mockResolvedValue(undefined),
     clearConversation: vi.fn().mockResolvedValue(undefined),
     previewContext: vi.fn(),
+    respondFixDecision: vi.fn().mockResolvedValue(undefined),
   },
   flowApi: {
     getSourceFiles: vi.fn().mockResolvedValue([]),
@@ -586,6 +586,11 @@ describe('useChatStreamEngine send races', () => {
     await act(async () => {
       result.current.handleCancelStream()
     })
+    // The Stop holds the queue (review of R-frontend-13); the user sends the follow-up on with "Send next".
+    expect(useChatStore.getState().queuePausedByThread[threadId]).toBe('stopped')
+    await act(async () => {
+      result.current.resumeQueue()
+    })
     await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(2))
     const sid2 = vi.mocked(chatApi.streamChatMessage).mock.calls[1]![0].clientStreamId!
     expect(sid2).not.toBe(sid1)
@@ -633,6 +638,195 @@ describe("closing the flow's last thread", () => {
     await waitFor(() => expect(result.current.activeThread?.flowId).toBe('flow1'))
     expect(result.current.activeThreadId).not.toBe(t1)
     expect(useChatStore.getState().threads.some(t => t.id === t1)).toBe(false)
+  })
+})
+
+// R-security-3: a viewer clears their own thread; a conversation stored before owners leaves the list instead.
+describe('clearing as a viewer', () => {
+  it('a viewer of a read-only flow clears their own thread', async () => {
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+    useChatStore.getState().appendMessage(threadId, {id: 'u1', role: 'user', content: 'q', timestamp: 't'})
+    act(() => {
+      useFlowStore.setState({readOnly: true})
+    })
+    await waitFor(() => expect(result.current.readOnly).toBe(true))
+
+    act(() => {
+      result.current.handleClearThread()
+    })
+
+    await waitFor(() => expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', threadId, expect.anything()))
+    await waitFor(() => expect(useChatStore.getState().getMessages(threadId)).toHaveLength(0))
+  })
+
+  it('a clear refused as unowned starts the thread afresh under a new key, and says why', async () => {
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+    useChatStore.getState().appendMessage(threadId, {id: 'u1', role: 'user', content: 'q', timestamp: 't'})
+    vi.mocked(chatApi.clearConversation).mockRejectedValueOnce(new ApiError('unowned', 403, 'CONVERSATION_UNOWNED'))
+
+    act(() => {
+      result.current.handleClearThread()
+    })
+
+    await waitFor(() => expect(useChatStore.getState().threads.some(t => t.id === threadId)).toBe(false))
+    const active = useChatStore.getState().activeThreadId!
+    expect(active).not.toBe(threadId)
+    expect(useChatStore.getState().getMessages(active)).toHaveLength(0)
+    expect(await screen.findByText(/it stays on the server\. Your thread starts afresh/)).toBeInTheDocument()
+  })
+})
+
+describe('closing a thread mid-stream (R-frontend-c26)', () => {
+  it('drops the turn with no client save, even with a pending approval, then clears the conversation', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+    await act(async () => {
+      result.current.handleSend('fix it', [])
+    })
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'partial'))
+      capturedCb!({
+        name: 'chat:event',
+        data: {streamId: sid, type: 'fix_proposal', data: {proposalId: 'p1', ruleId: 'r1', summary: 'Rename'}},
+      })
+    })
+    await waitFor(() => expect(useChatStore.getState().streams[threadId]?.approvals).toHaveLength(1))
+    vi.mocked(chatApi.saveConversation).mockClear()
+
+    act(() => {
+      result.current.handleCloseThread(threadId)
+    })
+
+    await waitFor(() => expect(chatApi.clearConversation).toHaveBeenCalledWith('flow1', threadId))
+    await waitFor(() => expect(useChatStore.getState().threads.some(t => t.id === threadId)).toBe(false))
+    act(() => {
+      capturedCb?.(doneEvent(sid))
+    })
+    await new Promise(r => setTimeout(r, 20))
+    expect(chatApi.saveConversation).not.toHaveBeenCalled()
+    expect(chatApi.cancelStream).toHaveBeenCalledWith(sid)
+  })
+
+  it('sends exactly one cancel, and offers the stop again when it fails (R-frontend-17)', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    vi.mocked(chatApi.cancelStream).mockRejectedValue(new ApiError('unreachable', 503, 'REPLICA_UNREACHABLE'))
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+    await act(async () => {
+      result.current.handleSend('hello', [])
+    })
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(chunkEvent(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!, 'partial'))
+    })
+
+    act(() => {
+      result.current.handleCloseThread(threadId)
+    })
+
+    await waitFor(() => expect(useChatStore.getState().threads.some(t => t.id === threadId)).toBe(false))
+    expect(await screen.findByText("Couldn't stop the response")).toBeInTheDocument()
+    expect(chatApi.cancelStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('says the server was busy after a 429, and Try again ends the stopping subscription', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    vi.mocked(chatApi.cancelStream)
+      .mockRejectedValueOnce(new ApiError('rate limit exceeded', 429, 'RATE_LIMITED'))
+      .mockResolvedValueOnce(undefined)
+    const {result} = await renderChat()
+    await act(async () => {
+      result.current.handleSend('hello', [])
+    })
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    act(() => {
+      capturedCb!(chunkEvent(vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!, 'partial'))
+    })
+
+    act(() => {
+      result.current.handleCancelStream()
+    })
+    expect(await screen.findByText(/The server is busy and refused the stop/)).toBeInTheDocument()
+    expect(screen.queryByText(/runs on another server/)).toBeNull()
+    expect(capturedCb).not.toBeNull()
+
+    act(() => {
+      screen.getByRole('button', {name: 'Try again'}).click()
+    })
+    await waitFor(() => expect(chatApi.cancelStream).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(capturedCb).toBeNull())
+  })
+
+  it('ignores a second close while the first close is still clearing', async () => {
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+    useChatStore.getState().appendMessage(threadId, {id: 'u1', role: 'user', content: 'q', timestamp: 't'})
+    let finish: () => void = () => {}
+    vi.mocked(chatApi.clearConversation).mockImplementationOnce(() => new Promise<void>(r => (finish = r)))
+
+    act(() => {
+      result.current.handleCloseThread(threadId)
+      result.current.handleCloseThread(threadId)
+    })
+    await act(async () => finish())
+
+    await waitFor(() => expect(useChatStore.getState().threads.some(t => t.id === threadId)).toBe(false))
+    expect(chatApi.clearConversation).toHaveBeenCalledTimes(1)
+  })
+})
+
+// R-streaming-5: a fix decision the client only learns from a resume answer (its live event lost in a gap) settles
+// the card before the turn commits.
+describe('a fix decision known only from a resume answer', () => {
+  it('moves the card from applying to its decided status before commit', async () => {
+    // Fake from the start, so the stall probe the stream arms is one the test can run; time still flows for waitFor.
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    onTestFinished(() => {
+      vi.useRealTimers()
+    })
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+    await act(async () => {
+      result.current.handleSend('fix it', [])
+    })
+    await waitFor(() => expect(capturedCb).not.toBeNull())
+    const sid = vi.mocked(chatApi.streamChatMessage).mock.calls[0]![0].clientStreamId!
+    const proposal = {proposalId: 'p1', ruleId: 'r1', fixType: 'wrap-error-handler', summary: 'Wrap it'}
+    act(() => {
+      capturedCb!(chunkEvent(sid, 'partial'))
+      capturedCb!({name: 'chat:event', data: {streamId: sid, type: 'fix_proposal', data: proposal}})
+    })
+    await waitFor(() => expect(useChatStore.getState().streams[threadId]?.approvals).toHaveLength(1))
+    act(() => {
+      result.current.respondFixProposal(threadId, true, 'p1')
+    })
+    expect(useChatStore.getState().streams[threadId]!.approvals[0]!.status).toBe('applying')
+
+    // The decision's live event is lost; the stall probe's answer carries it, and the stream's end.
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'partial and done',
+      done: true,
+      error: '',
+      tokensOut: 3,
+      tokensIn: 2,
+      events: [
+        {type: 'fix_proposal', data: proposal},
+        {type: 'fix_decision', data: {proposalId: 'p1', status: 'applied'}},
+      ],
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
+
+    await waitFor(() => expect(useChatStore.getState().streams[threadId]).toBeUndefined())
+    const committed = useChatStore.getState().getMessages(threadId).at(-1)!
+    expect(committed.fixProposals?.[0]?.status).toBe('applied')
   })
 })
 
@@ -1628,5 +1822,90 @@ describe('useAIChat adopts the version a finished turn names (ADR 0031, addendum
     expect(saved[0]!.id).toBe(firstId)
     expect(base).toBe(1)
     expect(chatApi.getConversation).not.toHaveBeenCalled()
+  })
+})
+
+// R-frontend-13: queued follow-ups form a FIFO; the provider's drain sends exactly one after each endStream.
+describe('ChatStreamProvider drain of a queue of follow-ups', () => {
+  it('sends one queued message per finished reply, in order, until the queue is empty', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+    const sent = () => vi.mocked(chatApi.streamChatMessage).mock.calls.map(c => c[0].userMessage)
+    const lastSid = () => vi.mocked(chatApi.streamChatMessage).mock.calls.at(-1)![0].clientStreamId!
+    const finish = async () => {
+      const sid = lastSid()
+      await waitFor(() => expect(capturedCb).not.toBeNull())
+      await act(async () => {
+        capturedCb!(doneEvent(sid))
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+    }
+
+    await act(async () => {
+      result.current.handleSend('first', [])
+    })
+    await waitFor(() => expect(sent()).toEqual(['first']))
+    act(() => {
+      result.current.handleQueue('q1', [])
+      result.current.handleQueue('q2', [])
+    })
+    expect(useChatStore.getState().queuedByThread[threadId]?.map(q => q.text)).toEqual(['q1', 'q2'])
+
+    await finish()
+    await waitFor(() => expect(sent()).toEqual(['first', 'q1']))
+    expect(useChatStore.getState().queuedByThread[threadId]?.map(q => q.text)).toEqual(['q2'])
+
+    await finish()
+    await waitFor(() => expect(sent()).toEqual(['first', 'q1', 'q2']))
+    expect(threadId in useChatStore.getState().queuedByThread).toBe(false)
+
+    await finish()
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 0))
+    })
+    expect(sent()).toEqual(['first', 'q1', 'q2'])
+    expect(useChatStore.getState().streams[threadId]).toBeUndefined()
+  })
+})
+
+// Review of R-frontend-13: Stop holds the queue; a follow-up the queue refuses says why.
+describe('useAIChat queue: Stop and refusals', () => {
+  it("the user's Stop holds the queued follow-ups instead of sending the next one", async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {result} = await renderChat()
+    const threadId = result.current.activeThreadId!
+    await act(async () => {
+      result.current.handleSend('first', [])
+    })
+    await waitFor(() => expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1))
+    act(() => {
+      result.current.handleQueue('q1', [])
+    })
+    await act(async () => {
+      result.current.handleCancelStream()
+    })
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 0))
+    })
+    expect(chatApi.streamChatMessage).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().queuedByThread[threadId]?.map(q => q.text)).toEqual(['q1'])
+    expect(useChatStore.getState().queuePausedByThread[threadId]).toBe('stopped')
+  })
+
+  it('refuses a follow-up with files but no text, and says why', async () => {
+    vi.mocked(chatApi.streamChatMessage).mockResolvedValue('sid')
+    const {result} = await renderChat()
+    await act(async () => {
+      result.current.handleSend('first', [])
+    })
+    let accepted = true
+    act(() => {
+      accepted = result.current.handleQueue('', ['Main.txt'])
+    })
+    expect(accepted).toBe(false)
+    expect(await screen.findByText('Add a question to queue with the files')).toBeInTheDocument()
   })
 })

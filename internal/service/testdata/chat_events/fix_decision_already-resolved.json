@@ -1,0 +1,9 @@
+{
+  "data": {
+    "message": "the finding no longer appears on the flow (an edit since the proposal resolved or removed it) — nothing was changed",
+    "proposalId": "proposal-1",
+    "status": "already-resolved"
+  },
+  "streamId": "stream-1",
+  "type": "fix_decision"
+}

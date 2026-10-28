@@ -35,8 +35,11 @@ func NewGitHubModelsProvider(token string) *GitHubModelsProvider {
 		openaiBase: openaiBase{
 			apiKey:                token,
 			client:                fixedHostClient(),
+			longWaitClient:        fixedHostClientFor(false),
+			handle429:             quotaExhausted,
 			baseURL:               &githubModelsBaseURL,
 			providerLabel:         "github models",
+			providerID:            githubModelsProviderID,
 			embeddingModel:        "text-embedding-3-small",
 			embeddingModelDefault: "text-embedding-3-small",
 			extraHeaders: func(req *http.Request, model string) {
@@ -100,7 +103,7 @@ func (g *GitHubModelsProvider) fetchModels(ctx context.Context) (models []ModelI
 	}
 	req.Header.Set("Authorization", "Bearer "+g.apiKey)
 
-	resp, err := g.client.Do(req)
+	resp, err := doProviderRequest(g.client, req)
 	if err != nil {
 		return catalogModels(githubModelsSpec.Catalog), false
 	}

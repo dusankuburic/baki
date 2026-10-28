@@ -9,6 +9,7 @@ import (
 	"pad-analyzer/internal/api/middleware"
 	"pad-analyzer/internal/api/route"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/config"
 )
 
 // SetPerUserLimiter installs (or, with nil, removes) the limiter capping one
@@ -59,6 +60,12 @@ func (rt *Router) perUserRateLimit(next http.Handler) http.Handler {
 
 // perUserKey derives the per-user bucket key for a request:
 //   - Reads (GET/HEAD/OPTIONS) → "" (skip; the per-IP limiter covers reads).
+//   - The stream commands (Stop, an approval decision; streamControl) → "" (skip): they reduce spend and act only on
+//     the caller's own stream, and the per-address control bucket bounds them. Charged here, a user whose own
+//     writes drained the cap could not stop a billed stream (R-streaming-c20). Deliberately no per-user control
+//     ceiling either: like reads, they are bounded per address only, and one costs at most an owner lookup (a Redis
+//     read for another replica's stream). A separate per-user bucket on this limiter would share its rate, so an
+//     operator who tightens the write cap would tighten Stop with it.
 //   - Authenticated write → "ratelimit:peruser:" + hash(userID). The userID is
 //     SHA-256-hex'd before keying to avoid delimiter collisions, unbounded Redis
 //     key length, and control characters in keys/metrics/logs.
@@ -66,7 +73,7 @@ func (rt *Router) perUserRateLimit(next http.Handler) http.Handler {
 //     so credential-stuffing from N origins is throttled per-origin, NOT
 //     collapsed into a single shared bucket that would lock out every victim.
 func (rt *Router) perUserKey(r *http.Request) string {
-	if !isWriteMethod(r.Method) {
+	if !isWriteMethod(r.Method) || rt.streamControl(r) {
 		return ""
 	}
 	if claims := auth.ClaimsFromContext(r.Context()); claims != nil && claims.UserID != "" {
@@ -76,6 +83,17 @@ func (rt *Router) perUserKey(r *http.Request) string {
 	// /64, or rotating through the addresses of its own /64 bought a fresh
 	// bucket per anonymous write.
 	return middleware.BucketKey(route.RatePerUser, "ip:"+middleware.RateLimitAddr(middleware.ClientIP(r, rt.trustedProxies)))
+}
+
+// streamControl reports whether r is a stream command on the control bucket: the declared policy's bucket in
+// declarative mode, else the legacy classifier's, as rateLimitBucketOf decides (without counting a disagreement
+// again).
+func (rt *Router) streamControl(r *http.Request) bool {
+	if rt.policyMode == config.RoutePolicyDeclarative {
+		p, _ := middleware.RequestPolicy(r)
+		return p.RateLimit == route.RateControl
+	}
+	return rateLimitGroup(r.Method, r.URL) == route.RateControl
 }
 
 // isWriteMethod reports whether m is a state-changing verb. Per-user limiting

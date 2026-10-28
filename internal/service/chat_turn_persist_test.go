@@ -28,9 +28,9 @@ func (b *savesCountingBackend) SaveConversation(ctx context.Context, flowID, sco
 	return b.FakeBackend.SaveConversation(ctx, flowID, scope, messages)
 }
 
-func (b *savesCountingBackend) SaveConversationIf(ctx context.Context, flowID, scope string, expected int64, messages []storageif.ChatMessage) (int64, error) {
+func (b *savesCountingBackend) SaveConversationIf(ctx context.Context, flowID, scope, owner string, expected int64, messages []storageif.ChatMessage) (int64, error) {
 	b.saves.Add(1)
-	return b.FakeBackend.SaveConversationIf(ctx, flowID, scope, expected, messages)
+	return b.FakeBackend.SaveConversationIf(ctx, flowID, scope, owner, expected, messages)
 }
 
 // A server-owned turn (the client sent no history) is two conversation

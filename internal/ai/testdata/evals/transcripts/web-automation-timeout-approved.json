@@ -1,0 +1,25 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "text": "I'll request approval for the `set-timeout` fix.",
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "apply_fix",
+          "input": {
+            "blockId": "B2",
+            "ruleId": "missing-timeout"
+          }
+        }
+      ],
+      "tokensIn": 2290,
+      "tokensOut": 41
+    },
+    {
+      "text": "\n\nDone — I applied the `set-timeout` fix to [Launch Firefox](block:B2): it now waits at most 30 seconds for the browser to start, and the re-analysis no longer reports the [missing-timeout finding](finding:missing-timeout:94e2a71adde13026). The other web actions still have no timeout; ask if you want them fixed too.",
+      "tokensIn": 2480,
+      "tokensOut": 88
+    }
+  ]
+}

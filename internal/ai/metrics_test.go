@@ -13,7 +13,7 @@ import (
 func TestAIMetricsExposed(t *testing.T) {
 	recordAITokens("unit-test-provider", 11, 22)
 	observeAIRequest("unit-test-provider", 0.5)
-	recordAIError("unit-test-provider")
+	recordAIError("unit-test-provider", "other")
 
 	rr := httptest.NewRecorder()
 	metrics.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
@@ -22,7 +22,7 @@ func TestAIMetricsExposed(t *testing.T) {
 	for _, want := range []string{
 		`ai_tokens_total{direction="input",provider="unit-test-provider"} 11`,
 		`ai_tokens_total{direction="output",provider="unit-test-provider"} 22`,
-		`ai_request_errors_total{provider="unit-test-provider"} 1`,
+		`ai_request_errors_total{class="other",provider="unit-test-provider"} 1`,
 		`ai_request_duration_seconds_count{provider="unit-test-provider"} 1`,
 	} {
 		if !strings.Contains(body, want) {

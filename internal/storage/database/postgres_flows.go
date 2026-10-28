@@ -650,17 +650,39 @@ func (b *PostgresStorageBackend) DeleteFlow(ctx context.Context, id string) erro
 	if err := validFlowID(id); err != nil {
 		return err
 	}
-	// conversations.flow_id deliberately has no FK to flows (chats about never-persisted flows must
-	// survive), so delete them here BEFORE the flows row: the conversations RLS policy resolves
-	// visibility by joining flows, so removing the flow first would hide these rows from this statement.
-	if _, err := b.query(ctx).ExecContext(ctx, `DELETE FROM conversations WHERE flow_id = $1`, id); err != nil {
-		return fmt.Errorf("delete flow conversations: %w", err)
+	// Under a row-level-security user the deletion below reaches every user's conversations on the flow as the
+	// system: that power is used only on the word of the caller that checked FlowDelete (LibraryService), stated with
+	// interfaces.WithFlowDeletionAuthorized. Seeing the flow (the DELETE affecting its row) proves visibility, not the
+	// right to delete it; a caller that forgot the check fails here, before anything is deleted.
+	if _, scoped, err := rlsTxFromContext(ctx); err != nil {
+		return err
+	} else if scoped && !interfaces.FlowDeletionAuthorized(ctx, id) {
+		return interfaces.ErrFlowDeletionNotAuthorized
 	}
 	res, err := b.query(ctx).ExecContext(ctx, `DELETE FROM flows WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete flow: %w", err)
 	}
 	n, _ := res.RowsAffected()
+	// conversations.flow_id deliberately has no FK to flows (chats about never-persisted flows must survive), so
+	// they are deleted here, every user's thread on the flow with it. As the system, once the flow row went under the
+	// caller's row-level-security user: a conversation belongs to its owner (v52, R-security-3), and under the
+	// caller's user the statement would reach only the caller's and the unowned ones. A flow the statement did not
+	// delete (missing, or hidden from the caller) is no authority for that: its conversations are deleted as the
+	// caller sees them, which off the request transaction (the pool) is all of them, as it always was.
+	q := b.query(ctx)
+	deleteConversations := func() error {
+		_, err := q.ExecContext(ctx, `DELETE FROM conversations WHERE flow_id = $1`, id)
+		return err
+	}
+	if n > 0 {
+		err = asSystem(ctx, q, deleteConversations)
+	} else {
+		err = deleteConversations()
+	}
+	if err != nil {
+		return fmt.Errorf("delete flow conversations: %w", err)
+	}
 	if n == 0 {
 		return interfaces.ErrNotFound
 	}

@@ -1,0 +1,21 @@
+{
+  "why": "Answers from the selected block's Known Issues (wide-loop) and a get_block on a nested block the context lists.",
+  "flow": "parsexml",
+  "selectedBlock": "B4",
+  "question": "Is this loop too big? What would you change?",
+  "expect": {
+    "toolsSubset": [
+      "get_block"
+    ],
+    "mustMention": [
+      "wide-loop",
+      "B4",
+      "B6"
+    ],
+    "mustLink": [
+      "block:",
+      "finding:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

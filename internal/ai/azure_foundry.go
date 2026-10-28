@@ -76,6 +76,7 @@ func newAzureFoundryProviderFrom(cfg AzureFoundryConfig, cfgErr error, client *h
 		client:                client,
 		baseURL:               &base,
 		providerLabel:         "azure ai foundry",
+		providerID:            azureFoundryProviderID,
 		embeddingModel:        cfg.EmbeddingDeployment,
 		embeddingModelDefault: cfg.EmbeddingDeployment,
 		maxTokensParam:        maxTokensParamCompletion,
@@ -120,6 +121,8 @@ func newAzureFoundryProviderFrom(cfg AzureFoundryConfig, cfgErr error, client *h
 		if use, known := responsesRouteFor(p.responsesRouteKey(req.Model)); known && !use {
 			return false, nil // the route refused this model: repair instead
 		}
+		markRerouted(ctx)
+		recordRouteFallback(p.providerID, fallbackResponsesReroute)
 		return true, p.withTokenRetry(ctx, func(ctx context.Context) error {
 			return p.modelStream(ctx, req, onChunk)
 		})
@@ -144,6 +147,32 @@ func (p *AzureFoundryProvider) entraToken(ctx context.Context) (string, error) {
 type entraTokenUse struct {
 	mu  sync.Mutex
 	tok string
+	// retrying marks the recorder of a withTokenRetry: a nested withTokenRetry (the Responses reroute inside the
+	// turn's own) runs once and leaves the replay to it (R-provider-c5).
+	retrying bool
+	// rerouted records that chat completions rejected the turn's tools with reasoning and the turn went to the
+	// Responses route: the replay goes there directly instead of paying the rejection again.
+	rerouted bool
+}
+
+// markRerouted records the reroute on ctx's recorder, if any.
+func markRerouted(ctx context.Context) {
+	if use, _ := ctx.Value(entraTokenUseKey{}).(*entraTokenUse); use != nil {
+		use.mu.Lock()
+		use.rerouted = true
+		use.mu.Unlock()
+	}
+}
+
+// reroutedIn reports a reroute recorded on ctx's recorder.
+func reroutedIn(ctx context.Context) bool {
+	use, _ := ctx.Value(entraTokenUseKey{}).(*entraTokenUse)
+	if use == nil {
+		return false
+	}
+	use.mu.Lock()
+	defer use.mu.Unlock()
+	return use.rerouted
 }
 
 func (u *entraTokenUse) set(tok string) {
@@ -172,9 +201,15 @@ func withoutEntraTokenUse(ctx context.Context) context.Context {
 }
 
 // withTokenRetry retries fn once with a fresh Entra ID token when the service refused one that has not expired
-// (signing-key rollover, a gateway hiccup); the same token coming back means the rejection is real.
+// (signing-key rollover, a gateway hiccup); the same token coming back means the rejection is real. Re-entrant:
+// inside another withTokenRetry fn runs once on the outer recorder, so the outer level sees the token the inner
+// call sent and owns the one replay of the turn.
 func (p *AzureFoundryProvider) withTokenRetry(ctx context.Context, fn func(ctx context.Context) error) error {
+	if outer, _ := ctx.Value(entraTokenUseKey{}).(*entraTokenUse); outer != nil && outer.retrying {
+		return fn(ctx)
+	}
 	callCtx, use := withEntraTokenUse(ctx)
+	use.retrying = true
 	err := fn(callCtx)
 	if err == nil || p.tokens == nil || !errors.Is(err, ErrApiKeyInvalid) ||
 		errors.Is(err, errEntraToken) || errors.Is(err, ErrProviderPermissionDenied) {
@@ -184,14 +219,16 @@ func (p *AzureFoundryProvider) withTokenRetry(ctx context.Context, fn func(ctx c
 	if failed == "" {
 		return err // no token was sent: nothing to replace
 	}
+	recordEntraTokenEvent(entraTokenRejected)
 	p.tokens.Invalidate(failed)
 	fresh, ferr := p.tokens.Token(ctx)
 	if ferr != nil || fresh == failed {
 		return err
 	}
-	logger.Warn("azure ai foundry rejected a cached entra id token; retrying with a fresh one")
-	retryCtx, _ := withEntraTokenUse(ctx)
-	return fn(retryCtx)
+	logger.FromContext(ctx).Warn("azure ai foundry rejected a cached entra id token; retrying with a fresh one")
+	// The replay keeps the recorder (its reroute mark included): only the token is new.
+	use.set("")
+	return fn(callCtx)
 }
 
 // authorize sets the auth headers on a request outside openaiBase (model and deployment listings, the Responses API).
@@ -374,7 +411,13 @@ func (p *AzureFoundryProvider) Stream(ctx context.Context, req Request, onChunk 
 		}
 	}
 	// A 401 arrives as the HTTP status, before any chunk, so a retry never replays a partially delivered stream.
-	return p.withTokenRetry(ctx, func(ctx context.Context) error { return p.stream(ctx, req, onChunk) })
+	// A replay after a reroute goes straight to the Responses route: chat completions already refused the turn.
+	return p.withTokenRetry(ctx, func(ctx context.Context) error {
+		if reroutedIn(ctx) {
+			return p.modelStream(ctx, req, onChunk)
+		}
+		return p.stream(ctx, req, onChunk)
+	})
 }
 
 // claudeRoute reports whether model is served on the Anthropic Messages route and the id to call it by: a
@@ -509,21 +552,67 @@ func (p *AzureFoundryProvider) Embed(ctx context.Context, text []string) ([][]fl
 // set AND the document's deployment names (azureModelsCacheKey), and Models() runs on every turn.
 const azureModelsCacheTTL = 5 * time.Minute
 
-// azureModelsRetryAfter is how long a listing cut short by a transient project failure (network, 5xx, 429, an
-// unobtainable token, the extras bound) is served before the project is asked again.
+// azureModelsRetryAfter is the least wait before the project is asked again after a listing cut short by a
+// transient failure (network, 5xx, 429, an unobtainable token, the flight's budget); a throttled listing waits
+// for the project's Retry-After when that is longer (storeAzureListing), up to azureModelsRetryMax.
 const azureModelsRetryAfter = 30 * time.Second
+
+// azureModelsRetryMax bounds the project's Retry-After (any number of seconds, or a date): a throttled listing is
+// asked again within ten minutes however long the project asked for, as the shortest TTL it would replace allows.
+const azureModelsRetryMax = 10 * time.Minute
 
 const azureModelsCacheMax = 512
 
 // azureModelsFlight collapses concurrent listings of one document into one pair of project calls; see Models.
 var azureModelsFlight singleflight.Group
 
-// azureProjectExtrasTimeout bounds the project listings (deployments and agents, every page) as a whole. A variable so tests can shorten it.
+// azureProjectExtrasTimeout is the fallback budget of a listing flight whose caller brings no deadline (a document
+// provider's Models): the Entra ID token and both paginated listings, every page. A refresh carries its caller's
+// deadline instead (listingBudget). The project probe is bounded by it too. A variable so tests can shorten it.
 var azureProjectExtrasTimeout = 10 * time.Second
 
+// azureListingMaxBudget caps the budget a caller's deadline gives a listing flight; the background refresher's
+// 45 s fits under it.
+const azureListingMaxBudget = time.Minute
+
 type azureModelsEntry struct {
-	models  []ModelInfo
+	models []ModelInfo
+	// expires ends the listing's TTL: azureModelsCacheTTL for a complete one, the retry wait for an incomplete one.
 	expires time.Time
+	// complete: both project listings answered (or definitively refused). deployments: the deployments listing
+	// did, so the entries carry its decorations — an incomplete refresh never replaces such a listing.
+	complete    bool
+	deployments bool
+	// fetchedAt is when the listing's oldest part was fetched: a listing that kept the previous agents is as old as they are.
+	fetchedAt time.Time
+	// retryAt pushes the next attempt past expires: a kept listing whose refresh failed (storeAzureListing).
+	retryAt time.Time
+}
+
+// nextAttempt is when a refresh may ask the project again: the end of the TTL, or a kept listing's retry.
+func (e azureModelsEntry) nextAttempt() time.Time {
+	if e.retryAt.After(e.expires) {
+		return e.retryAt
+	}
+	return e.expires
+}
+
+// tooOld reports whether the listing's oldest part is past azureModelsStaleGrace beyond its TTL at now: it is served
+// no longer, whatever retry is pending. An entry without a fetch time (tests seed some) has no such bound.
+func (e azureModelsEntry) tooOld(now time.Time) bool {
+	return !e.fetchedAt.IsZero() && !now.Before(e.fetchedAt.Add(azureModelsCacheTTL+azureModelsStaleGrace))
+}
+
+// ModelsListing is the state of a resource's cached project listing, read without the network.
+type ModelsListing struct {
+	// Complete: the listing served answered in full — deployments and agents (or a definitive refusal). A
+	// listing kept over a failed refresh stays complete; one with the previous agents kept is not.
+	Complete bool
+	// AsOf is when the oldest part of the listing served was fetched; zero when none is served.
+	AsOf time.Time
+	// Live: within its TTL. Due: a refresh would ask the project now (not live, no retry pending).
+	Live bool
+	Due  bool
 }
 
 var azureModelsCache = struct {
@@ -533,9 +622,10 @@ var azureModelsCache = struct {
 
 // pruneAzureModelsCacheLocked makes room for one new entry WITHOUT wiping the map: expired listings go first,
 // else the one closest to expiry — the whole-map wipe re-paid the project listing for every active user at once.
+// A listing whose retry is pending is not expired: dropping it would ask a throttled project again at once.
 func pruneAzureModelsCacheLocked(now time.Time) {
 	for k, e := range azureModelsCache.m {
-		if !now.Before(e.expires) {
+		if !now.Before(e.nextAttempt()) {
 			delete(azureModelsCache.m, k)
 		}
 	}
@@ -553,7 +643,13 @@ func pruneAzureModelsCacheLocked(now time.Time) {
 // azureModelsCacheKey scopes a cached listing to the credential set AND the document's deployment names, which
 // the listing is built from: two users of one shared resource must never see each other's listing.
 func azureModelsCacheKey(cfg AzureFoundryConfig) string {
-	parts := append([]string{cfg.Fingerprint(), cfg.ChatDeployment, cfg.EmbeddingDeployment}, cfg.Deployments...)
+	return azureModelsCacheKeyFor(cfg.Fingerprint(), cfg)
+}
+
+// azureModelsCacheKeyFor is azureModelsCacheKey with the credential set's fingerprint given: a caller that
+// remembers it keys the listing without the credential.
+func azureModelsCacheKeyFor(fingerprint string, cfg AzureFoundryConfig) string {
+	parts := append([]string{fingerprint, cfg.ChatDeployment, cfg.EmbeddingDeployment}, cfg.Deployments...)
 	for _, d := range cfg.ClaudeDeployments {
 		parts = append(parts, claudeModelPrefix+d)
 	}
@@ -604,14 +700,14 @@ func (p *AzureFoundryProvider) Models(ctx context.Context) ([]ModelInfo, error) 
 	}
 
 	key := azureModelsCacheKey(p.cfg)
-	if cached, ok := cachedAzureModels(key); ok {
+	if cached, ok := cachedAzureModelsUntilDue(key); ok {
 		return cached, nil
 	}
 
 	// One listing per document at a time: the flight is detached from the first caller's cancellation (its
-	// result fills the cache for everyone); each caller waits under its own ctx, else falls back to the
-	// document's deployments. Complete: azureModelsCacheTTL; cut short: azureModelsRetryAfter.
-	ch := azureModelsFlight.DoChan(key, p.listingFlight(ctx, key))
+	// result fills the cache for everyone) and bounded by the fallback budget; each caller waits under its own
+	// ctx, else falls back to the document's deployments. What is cached: storeAzureListing.
+	ch := azureModelsFlight.DoChan(key, p.listingFlight(ctx, key, azureProjectExtrasTimeout))
 	select {
 	case r := <-ch:
 		listed := r.Val.([]ModelInfo)
@@ -624,19 +720,29 @@ func (p *AzureFoundryProvider) Models(ctx context.Context) ([]ModelInfo, error) 
 }
 
 // listingFlight is the shared project listing of one document (key): run once per key at a time, detached from
-// the caller's cancellation, and cached as Models describes.
-func (p *AzureFoundryProvider) listingFlight(ctx context.Context, key string) func() (any, error) {
+// the caller's cancellation — context.WithoutCancel drops its deadline too, so the flight runs within budget,
+// which the caller derives (listingBudget, or the fallback) — and cached by storeAzureListing. It returns the
+// listing now cached, which an incomplete attempt may have left as the earlier one.
+func (p *AzureFoundryProvider) listingFlight(ctx context.Context, key string, budget time.Duration) func() (any, error) {
 	return func() (any, error) {
-		listed, complete := p.projectListing(withoutEntraTokenUse(context.WithoutCancel(ctx)), p.configuredDeployments())
-		if len(listed) > 0 {
-			ttl := azureModelsCacheTTL
-			if !complete {
-				ttl = azureModelsRetryAfter
-			}
-			storeAzureModels(key, listed, ttl)
-		}
-		return listed, nil
+		listed := p.projectListing(withoutEntraTokenUse(context.WithoutCancel(ctx)), p.configuredDeployments(), budget)
+		return storeAzureListing(key, listed), nil
 	}
+}
+
+// listingBudget is the budget a refresh carries into its detached flight: the caller's remaining time less a
+// margin, so the flight ends — and caches what it read — before the caller stops waiting (capped by
+// azureListingMaxBudget); a caller without a deadline (or past it) gets the fallback, azureProjectExtrasTimeout.
+func listingBudget(ctx context.Context) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return azureProjectExtrasTimeout
+	}
+	left := time.Until(deadline)
+	if left <= 0 {
+		return azureProjectExtrasTimeout
+	}
+	return min(left-min(left/10, 2*time.Second), azureListingMaxBudget)
 }
 
 // cachedAzureModels returns a copy of the cached listing for key while it is live.
@@ -644,13 +750,69 @@ func cachedAzureModels(key string) ([]ModelInfo, bool) {
 	return cachedAzureModelsWithin(key, 0)
 }
 
-// withCachedAzureModels runs fn on the cached listing IN PLACE under the cache mutex; fn must not retain the
-// slice — it is the cache's own backing array, valid only while the lock is held.
-func withCachedAzureModels[T any](key string, grace time.Duration, fn func([]ModelInfo) T) (T, bool) {
+// cachedAzureModelsUntilDue returns a copy of the cached listing for key until a refresh is due: while live, or
+// while a kept listing's retry is pending — a document provider never asks the project before then — but never
+// past the listing's age bound (tooOld).
+func cachedAzureModelsUntilDue(key string) ([]ModelInfo, bool) {
+	now := time.Now()
 	azureModelsCache.mu.Lock()
 	defer azureModelsCache.mu.Unlock()
 	e, ok := azureModelsCache.m[key]
-	if !ok || !time.Now().Before(e.expires.Add(grace)) {
+	if !ok || !now.Before(e.nextAttempt()) || e.tooOld(now) {
+		return nil, false
+	}
+	out := make([]ModelInfo, len(e.models))
+	copy(out, e.models)
+	return out, true
+}
+
+// azureListingDue reports whether a refresh of key would ask the project now: nothing cached, or the TTL and any
+// pending retry are over.
+func azureListingDue(key string) bool {
+	azureModelsCache.mu.Lock()
+	defer azureModelsCache.mu.Unlock()
+	e, ok := azureModelsCache.m[key]
+	return !ok || !time.Now().Before(e.nextAttempt())
+}
+
+// azureListingState is ModelsListing for key; grace is how long past its expiry the reader serves a listing.
+func azureListingState(key string, grace time.Duration) ModelsListing {
+	now := time.Now()
+	azureModelsCache.mu.Lock()
+	defer azureModelsCache.mu.Unlock()
+	e, ok := azureModelsCache.m[key]
+	if !ok {
+		return ModelsListing{Due: true}
+	}
+	out := ModelsListing{Due: !now.Before(e.nextAttempt())}
+	if (now.Before(e.expires.Add(grace)) || !out.Due) && !e.tooOld(now) {
+		out.Complete, out.AsOf, out.Live = e.complete, e.fetchedAt, now.Before(e.expires)
+	}
+	return out
+}
+
+// ModelsListing reports the state of the listing this provider serves (see ModelsListing): a registry provider
+// serves one through azureModelsStaleGrace. A provider that lists no project has nothing to refresh: complete,
+// never due.
+func (p *AzureFoundryProvider) ModelsListing() ModelsListing {
+	if p.configErr != nil || p.isolated || !p.cfg.Configured() || !p.cfg.listsProjectDeployments() {
+		return ModelsListing{Complete: true}
+	}
+	grace := time.Duration(0)
+	if p.fromRegistry {
+		grace = azureModelsStaleGrace
+	}
+	return azureListingState(azureModelsCacheKey(p.cfg), grace)
+}
+
+// withCachedAzureModels runs fn on the cached listing IN PLACE under the cache mutex; fn must not retain the
+// slice — it is the cache's own backing array, valid only while the lock is held.
+func withCachedAzureModels[T any](key string, grace time.Duration, fn func([]ModelInfo) T) (T, bool) {
+	now := time.Now()
+	azureModelsCache.mu.Lock()
+	defer azureModelsCache.mu.Unlock()
+	e, ok := azureModelsCache.m[key]
+	if !ok || !now.Before(e.expires.Add(grace)) || e.tooOld(now) {
 		var zero T
 		return zero, false
 	}
@@ -680,6 +842,8 @@ func invalidateAzureCredentialListings(fingerprint string) {
 	}
 }
 
+// storeAzureModels caches models for key for ttl as they are (tests seed the cache with it); a listing attempt is
+// cached by storeAzureListing.
 func storeAzureModels(key string, models []ModelInfo, ttl time.Duration) {
 	now := time.Now()
 	azureModelsCache.mu.Lock()
@@ -687,19 +851,69 @@ func storeAzureModels(key string, models []ModelInfo, ttl time.Duration) {
 	if len(azureModelsCache.m) >= azureModelsCacheMax {
 		pruneAzureModelsCacheLocked(now)
 	}
-	azureModelsCache.m[key] = azureModelsEntry{models: models, expires: now.Add(ttl)}
+	complete := ttl == azureModelsCacheTTL
+	azureModelsCache.m[key] = azureModelsEntry{models: models, expires: now.Add(ttl), complete: complete, deployments: complete, fetchedAt: now}
 }
 
-// projectListing runs the project extras and reports completeness; the token is obtained under the caller's
-// full context (the fetch is shared with chat turns) and an unobtainable token skips the extras.
-func (p *AzureFoundryProvider) projectListing(ctx context.Context, models []ModelInfo) ([]ModelInfo, bool) {
-	if _, err := p.entraToken(ctx); err != nil {
-		logger.Warn("azure ai foundry: entra id token unavailable; listing the configured deployments only", "error", err)
-		return models, false
+// storeAzureListing caches one listing attempt for key and returns the listing now cached (the cache's own slice:
+// callers copy it). A complete attempt replaces the entry for azureModelsCacheTTL. An incomplete one never
+// replaces a listing whose deployments answered while that listing is within azureModelsStaleGrace of its TTL:
+// when the attempt's own deployments answered (its agents did not), they are cached with the earlier listing's
+// agents; otherwise the earlier listing is kept as it is. Either way the next attempt waits the project's
+// Retry-After, at least azureModelsRetryAfter and at most azureModelsRetryMax — and so does an incomplete attempt
+// cached on its own, with nothing better to keep. A kept listing is still served no longer than its age bound
+// (tooOld). An empty listing is not cached.
+func storeAzureListing(key string, l azureProjectListing) []ModelInfo {
+	now := time.Now()
+	wait := min(max(azureModelsRetryAfter, l.retryAfter), azureModelsRetryMax)
+	azureModelsCache.mu.Lock()
+	defer azureModelsCache.mu.Unlock()
+	prev, had := azureModelsCache.m[key]
+	keep := had && prev.deployments && now.Before(prev.fetchedAt.Add(azureModelsCacheTTL+azureModelsStaleGrace))
+	var e azureModelsEntry
+	switch {
+	case l.complete():
+		e = azureModelsEntry{models: l.models, expires: now.Add(azureModelsCacheTTL), complete: true, deployments: true, fetchedAt: now}
+	case keep && l.deployments:
+		e = azureModelsEntry{models: withListedAgents(l.models, prev.models), expires: now.Add(wait), deployments: true, fetchedAt: prev.fetchedAt}
+	case keep:
+		e = prev
+		e.retryAt = now.Add(wait)
+	default:
+		e = azureModelsEntry{models: l.models, expires: now.Add(wait), deployments: l.deployments, fetchedAt: now}
 	}
-	ectx, cancel := context.WithTimeout(ctx, azureProjectExtrasTimeout)
+	if len(e.models) == 0 {
+		return e.models
+	}
+	if !had && len(azureModelsCache.m) >= azureModelsCacheMax {
+		pruneAzureModelsCacheLocked(now)
+	}
+	azureModelsCache.m[key] = e
+	return e.models
+}
+
+// withListedAgents appends to models the agent entries of an earlier listing (prev) it lacks.
+func withListedAgents(models, prev []ModelInfo) []ModelInfo {
+	out := make([]ModelInfo, 0, len(models)+len(prev))
+	out = append(out, models...)
+	for _, m := range prev {
+		if IsAgentModel(m.ID) && listedIndex(out, m.ID, true) < 0 {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// projectListing runs one listing attempt within budget — the Entra ID token and both project listings — on
+// ctx, which the flight detached from its caller; an unobtainable token skips the extras.
+func (p *AzureFoundryProvider) projectListing(ctx context.Context, models []ModelInfo, budget time.Duration) azureProjectListing {
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	return p.projectExtras(ectx, models)
+	if _, err := p.entraToken(ctx); err != nil {
+		logger.FromContext(ctx).Warn("azure ai foundry: entra id token unavailable; listing the configured deployments only", "error", err)
+		return azureProjectListing{models: models}
+	}
+	return p.projectExtrasListing(ctx, models)
 }
 
 // configuredDeployments is the listing the document itself names: the chat deployment, the additional

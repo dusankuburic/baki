@@ -21,7 +21,6 @@ export default function LegacyProvidersPanel() {
   const [githubUser, setGithubUser] = useState<string | null>(null)
   const [copilotUser, setCopilotUser] = useState<string | null>(null)
   const bumpProviderEpoch = useChatStore(s => s.bumpProviderEpoch)
-  const setProvider = useChatStore(s => s.setProvider)
   const updateAI = useSettingsStore(s => s.updateAI)
   const [localUnavailable, setLocalUnavailable] = useState(false)
   const markLocalUnavailable = useCallback(() => setLocalUnavailable(true), [])
@@ -45,15 +44,13 @@ export default function LegacyProvidersPanel() {
 
   const handleCopilotAuthComplete = useCallback(() => {
     refresh()
-    setProvider('copilot')
     void updateAI({activeProvider: 'copilot'})
-  }, [refresh, setProvider, updateAI])
+  }, [refresh, updateAI])
 
   const handleGithubAuthComplete = useCallback(() => {
     refresh()
-    setProvider('github-models')
     void updateAI({activeProvider: 'github-models'})
-  }, [refresh, setProvider, updateAI])
+  }, [refresh, updateAI])
 
   const handleFirstAzureChatModel = useCallback(async () => {
     const current = useSettingsStore.getState().settings.ai.activeProvider
@@ -67,9 +64,8 @@ export default function LegacyProvidersPanel() {
       return
     }
     if (currentConfigured) return
-    setProvider('azure-foundry')
     void updateAI({activeProvider: 'azure-foundry'})
-  }, [setProvider, updateAI])
+  }, [updateAI])
 
   useEffect(() => {
     refreshLocal()

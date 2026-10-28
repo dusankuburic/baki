@@ -98,6 +98,18 @@ func (c *Typed[V]) Delete(k Key) {
 // tell which of its entries a lost message concerned. A fill in flight is fenced by its owner's guard, as for Delete.
 func (c *Typed[V]) Clear() { c.lru.Clear() }
 
+// Range calls fn with each unexpired entry's key and value, most recently used first, until fn returns false: a
+// read-only walk (diagnostics, a test's snapshot) that neither refreshes recency nor counts hits or misses. fn runs
+// on a copy taken under the lock, so it may call back into c.
+func (c *Typed[V]) Range(fn func(k Key, v V) bool) {
+	for _, e := range c.lru.live() {
+		v, _ := e.value.(V)
+		if !fn(Key{spec: c.spec, enc: e.key}, v) {
+			return
+		}
+	}
+}
+
 // Len is the number of entries held (expired ones included until touched).
 func (c *Typed[V]) Len() int { return c.lru.Len() }
 

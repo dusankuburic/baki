@@ -69,6 +69,9 @@ type ResumeResult struct {
 	// ServedModel is the model that answered (alias providers).
 	ServedModel string         `json:"servedModel,omitempty"`
 	Events      []journalEvent `json:"events,omitempty"`
+	// AnswerStored is false when the server-owned answer's write failed (the done event's answerStored): a client
+	// that reattaches after the done saves the turn itself. Absent otherwise.
+	AnswerStored *bool `json:"answerStored,omitempty"`
 }
 
 // resumeSnapshot is the cross-replica-persistable form of a stream's resumable state, plus the owner so a
@@ -92,6 +95,8 @@ type resumeSnapshot struct {
 	TokensOut   int            `json:"tokensOut"`
 	ServedModel string         `json:"servedModel,omitempty"`
 	Events      []journalEvent `json:"events,omitempty"`
+	// AnswerStored is ResumeResult.AnswerStored.
+	AnswerStored *bool `json:"answerStored,omitempty"`
 }
 
 // resumeStore is the pluggable backing for chat-stream resume: the no-op keeps single-replica behavior (local
@@ -224,8 +229,10 @@ func (s *ChatService) watchStream(ctx context.Context, streamID, scope string, c
 			return
 		case <-ticker.C:
 			if idle := time.Since(time.Unix(0, ctl.lastActivity.Load())); idle > s.idleLimitFor(ctl) {
-				logger.Info("chat stream cancelled: provider idle", "streamID", streamID, "idle", idle)
-				ctl.cancelWithReason("response stopped: the AI provider stopped responding")
+				// The phase it stalled in names the culprit: a setup stall is not the provider's (R-streaming-10).
+				phase := ctl.currentPhase()
+				logger.FromContext(ctx).Info("chat stream cancelled: idle", "idle", idle, "phase", phase.String())
+				ctl.cancelWithCode(ChatErrIdleTimeout, idleCancelMessage(phase))
 				return
 			}
 			if !begun {
@@ -242,8 +249,8 @@ func (s *ChatService) watchStream(ctx context.Context, streamID, scope string, c
 			}
 			misses++
 			if misses >= subscriberMissLimit {
-				logger.Info("chat stream cancelled: client SSE connection gone", "streamID", streamID)
-				ctl.cancelWithReason("response stopped: you were disconnected while it was generating")
+				logger.FromContext(ctx).Info("chat stream cancelled: client SSE connection gone")
+				ctl.cancelWithCode(ChatErrClientGone, "response stopped: you were disconnected while it was generating")
 				return
 			}
 		}
@@ -352,7 +359,8 @@ func (s *ChatService) CancelStream(streamID string) {
 // The stop hook calls Shutdown, which also waits; this stays for callers that must not block.
 func (s *ChatService) CancelAll() { s.cancelAll() }
 
-// cancelAll cancels every active stream with ChatErrServerRestarting and returns how many it reached.
+// cancelAll cancels every active stream with ChatErrServerRestarting and returns how many it reached. A stream
+// applying an approved fix ends once the apply returns (holdCancel).
 func (s *ChatService) cancelAll() int {
 	n := 0
 	s.activeStreams.Range(func(_, value interface{}) bool {
@@ -367,6 +375,10 @@ func (s *ChatService) cancelAll() int {
 // and a just-finished answer's persist take milliseconds when nothing is stuck, and the SSE connections, the pool
 // and Redis close only after it.
 const chatShutdownBudget = 2 * time.Second
+
+// chatShutdownStopMargin is how long Shutdown waits, after its budget, for the workers whose answer write the stop
+// cut to send their done.
+const chatShutdownStopMargin = 500 * time.Millisecond
 
 // Shutdown is the chat half of the server's stop (ADR 0024), called while the SSE connections are still open: it
 // refuses new streams (ErrServerRestarting), cancels every running one with ChatErrServerRestarting, and waits,
@@ -396,13 +408,29 @@ func (s *ChatService) Shutdown(ctx context.Context) error {
 	select {
 	case <-idle:
 		if active > 0 {
-			logger.Info("chat streams ended for shutdown", "streams", active)
+			logger.FromContext(ctx).Info("chat streams ended for shutdown", "streams", active)
 		}
 		return nil
 	case <-ctx.Done():
 	}
+	// The budget is spent: an approved apply still holding its stream's cancel is cut now.
+	s.activeStreams.Range(func(_, value interface{}) bool {
+		value.(*streamCtl).forceCancel()
+		return true
+	})
 	forced := s.forceServerRestarting(ctx)
-	logger.Warn("chat workers still running at shutdown", "streams", active, "forced", forced, "budget", budget)
+	// An answer write still under way (its done is claimed, so the stream was not ended above) is cut now; its
+	// worker sends the done, answerStored false, within a short margin (R-streaming-c16).
+	s.signalStop()
+	select {
+	case <-idle:
+		if forced == 0 {
+			logger.FromContext(ctx).Info("chat streams ended for shutdown after the stop cut their answer writes", "streams", active)
+			return nil
+		}
+	case <-time.After(chatShutdownStopMargin):
+	}
+	logger.FromContext(ctx).Warn("chat workers still running at shutdown", "streams", active, "forced", forced, "budget", budget)
 	return fmt.Errorf("chat shutdown: workers still running after %v (%d stream(s) ended in their place): %w", budget, forced, ctx.Err())
 }
 
@@ -418,6 +446,8 @@ func (s *ChatService) forceServerRestarting(ctx context.Context) int {
 			return true
 		}
 		n++
+		// Recorded now: the stuck worker may never end, and when it does it adds no second record.
+		s.recordTurnEnded(ctl)
 		select {
 		case <-ctl.started:
 			s.notifier.EmitTo(ctl.ownerID, "chat:event", map[string]interface{}{
@@ -545,6 +575,7 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 			ServedModel: ctl.servedModel,
 			Events:      ctl.snapshotEvents(),
 		}
+		snap.AnswerStored = ctl.answerStoredField()
 		ctl.mu.Unlock()
 		snap.Text = sliceFrom(buf, from)
 		return snap, nil
@@ -558,14 +589,15 @@ func (s *ChatService) ResumeStream(ctx context.Context, streamID string, from in
 // result is the ResumeResult a snapshot answers with, its text replaced by text (the delta tail or whole buffer).
 func (snap resumeSnapshot) result(text string) *ResumeResult {
 	return &ResumeResult{
-		Text:        text,
-		Done:        snap.Done,
-		Error:       snap.Error,
-		ErrorCode:   snap.ErrorCode,
-		ErrorShared: snap.ErrorShared,
-		TokensIn:    snap.TokensIn,
-		TokensOut:   snap.TokensOut,
-		ServedModel: snap.ServedModel,
-		Events:      snap.Events,
+		Text:         text,
+		Done:         snap.Done,
+		Error:        snap.Error,
+		ErrorCode:    snap.ErrorCode,
+		ErrorShared:  snap.ErrorShared,
+		TokensIn:     snap.TokensIn,
+		TokensOut:    snap.TokensOut,
+		ServedModel:  snap.ServedModel,
+		Events:       snap.Events,
+		AnswerStored: snap.AnswerStored,
 	}
 }

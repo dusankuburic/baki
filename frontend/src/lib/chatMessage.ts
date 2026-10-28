@@ -7,6 +7,7 @@ import type {
   ToolCallRecord,
 } from '@/types'
 import {storableModelLabel} from './modelIds'
+import {asKnowledgeStatus} from './chatEvent'
 
 const KNOWN_ROLES = new Set(['user', 'assistant', 'system'])
 
@@ -130,6 +131,12 @@ export function parseChatMessage(raw: unknown): ChatMessage | null {
   if (modelLabel) out.modelLabel = modelLabel
   if (typeof m.servedModel === 'string' && m.servedModel) out.servedModel = m.servedModel
   if (typeof m.finishReason === 'string') out.finishReason = m.finishReason as ChatMessage['finishReason']
+  // What the turn recorded about itself, so a reloaded message shows what it showed live.
+  if (typeof m.errorCode === 'string' && m.errorCode) out.errorCode = m.errorCode
+  if (m.errorShared === true) out.errorShared = true
+  if (typeof m.truncated === 'number' && Number.isInteger(m.truncated) && m.truncated > 0) out.truncated = m.truncated
+  const knowledge = asKnowledgeStatus(m.knowledge)
+  if (knowledge) out.knowledge = knowledge
 
   const toolCalls = parseToolCalls(m.toolCalls)
   if (toolCalls) out.toolCalls = toolCalls

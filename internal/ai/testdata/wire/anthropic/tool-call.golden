@@ -1,0 +1,17 @@
+# anthropic/tool-call.sse through parseClaudeSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 in=5626 cacheWrite=4096 served="claude-sonnet-4-5-20250929"
+02 keepalive served="claude-sonnet-4-5-20250929"
+03 text="I'll look up the Excel blocks first." served="claude-sonnet-4-5-20250929"
+04 keepalive served="claude-sonnet-4-5-20250929"
+05 keepalive served="claude-sonnet-4-5-20250929"
+06 keepalive served="claude-sonnet-4-5-20250929"
+07 keepalive served="claude-sonnet-4-5-20250929"
+08 keepalive served="claude-sonnet-4-5-20250929"
+09 keepalive served="claude-sonnet-4-5-20250929"
+10 keepalive served="claude-sonnet-4-5-20250929"
+11 keepalive served="claude-sonnet-4-5-20250929"
+12 done finish="tool_use" in=5626 out=87 cacheWrite=4096 tool{id="toolu_01WIRE00000000000000001" name="search_flow" input={"query":"Excel","limit":5}} tool{id="toolu_01WIRE00000000000000002" name="list_findings" input={}} items=[{"text":"I'll look up the Excel blocks first.","type":"text"},{"id":"toolu_01WIRE00000000000000001","input":{"query":"Excel","limit":5},"name":"search_flow","type":"tool_use"},{"id":"toolu_01WIRE00000000000000002","input":{},"name":"list_findings","type":"tool_use"}] served="claude-sonnet-4-5-20250929"
+13 keepalive served="claude-sonnet-4-5-20250929"
+return nil
+summary chunks=13 keepalives=10 text="I'll look up the Excel blocks first."

@@ -78,8 +78,8 @@ func (s *KnowledgeService) ReindexInBackground(ctx context.Context, scope, orgID
 }
 
 // onOrgCredential reports whether provider runs on the organisation's shared credential, the only one a
-// background run may spend (ADR 0027). The override is the single-provider deployment's and the tests' embedder:
-// not anyone's personal key.
+// background run may spend (ADR 0027). The embedder override (WithEmbedder) is a test hook, nil in production:
+// the tests' stand-in for the org credential, never anyone's personal key.
 func (s *KnowledgeService) onOrgCredential(provider ai.Provider) bool {
 	return ai.UsedOrgCredential(provider) || s.embedOverride != nil
 }

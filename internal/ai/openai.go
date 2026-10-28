@@ -20,8 +20,11 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 		openaiBase: openaiBase{
 			apiKey:                apiKey,
 			client:                fixedHostClient(),
+			longWaitClient:        fixedHostClientFor(false),
+			handle429:             quotaExhausted,
 			baseURL:               &openAIBaseURL,
 			providerLabel:         "openai",
+			providerID:            openaiProviderID,
 			embeddingModel:        "text-embedding-3-small",
 			embeddingModelDefault: "text-embedding-3-small",
 			maxTokensParam:        openAIMaxTokensParam(openAIBaseURL),

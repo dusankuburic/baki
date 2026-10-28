@@ -18,6 +18,8 @@ export interface CatalogSpecFixture {
   credential: {kind: string; fields: CatalogFieldFixture[]; helpUrl?: string}
   endpoints: {save?: string; test?: string; start?: string; poll?: string; revoke?: string; user?: string}
   configured: boolean
+  credentialStatus?: string
+  orgCredentialStatus?: string
   color?: string
   icon?: string
 }

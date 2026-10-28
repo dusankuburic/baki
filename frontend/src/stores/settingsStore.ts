@@ -14,6 +14,7 @@ import type {
 
 import {settingsApi} from '@/api'
 import {logger} from '@/lib/logger'
+import {getErrorCode, getErrorMessage} from '@/lib/getErrorMessage'
 import {setDisplayTimeZone} from '@/lib/time'
 
 type SettingsListener = (settings: AppSettings) => void
@@ -167,9 +168,22 @@ export const defaultSettings: AppSettings = {
   },
 }
 
+/** The last refused save: the server's (or the network's) message and the sections the write carried. The
+ * document has been put back and re-read from the server; a later save that succeeds clears it. */
+export interface SettingsSaveError {
+  message: string
+  code: string | null
+  sections: SettingsSection[]
+  at: number
+}
+
+/** A top-level section of the settings document; a write posts only the sections it changed. */
+export type SettingsSection = Exclude<keyof AppSettings, 'version'>
+
 interface SettingsState {
   settings: AppSettings
   isLoaded: boolean
+  saveError: SettingsSaveError | null
 
   loadFromBackend: () => Promise<void>
   updateSettings: (patch: Partial<AppSettings>) => Promise<void>
@@ -191,12 +205,36 @@ interface PersistQueueState {
   timer: ReturnType<typeof setTimeout> | null
   waiters: PersistWaiter[]
   inflight: Promise<void> | null
+  /** The sections the debounced write will post; 'all' for a whole-document write (a reset). */
+  sections: Set<SettingsSection> | 'all'
+  /** The sections of the writes not yet settled (debounced, in flight, or waiting behind the one in flight), each
+   * with its count: a re-read from the server keeps the store's own value for these. */
+  pending: Map<SettingsSection, number>
+  /** Bumped by a reset: a write from before it neither counts nor reports. */
+  generation: number
+  /** A refused write asked for a re-read, made once no write is pending. */
+  resyncWanted: boolean
 }
 const persistQueue: PersistQueueState = {
   timer: null,
   waiters: [],
   inflight: null,
+  sections: new Set(),
+  pending: new Map(),
+  generation: 0,
+  resyncWanted: false,
 }
+
+/** What the queue asks of the store (set once the store exists): its current document, and what a flush's outcome
+ * means for it. */
+const storeHooks: {
+  current: () => AppSettings
+  refused: (err: unknown, sections: SettingsSection[]) => void
+  saved: (sections: SettingsSection[]) => void
+  resync: () => void
+} = {current: () => defaultSettings, refused: () => {}, saved: () => {}, resync: () => {}}
+
+const ALL_SECTIONS = Object.keys(defaultSettings).filter(k => k !== 'version') as SettingsSection[]
 
 function dropPendingPersist(): void {
   if (persistQueue.timer) {
@@ -207,21 +245,65 @@ function dropPendingPersist(): void {
   persistQueue.waiters = []
   for (const w of waiters) w.resolve()
   persistQueue.inflight = null
+  persistQueue.sections = new Set()
+  persistQueue.pending = new Map()
+  persistQueue.generation++
+  persistQueue.resyncWanted = false
+}
+
+function pendingSections(): Set<SettingsSection> {
+  return new Set(persistQueue.pending.keys())
+}
+
+/** The body of a write: the document version and the named sections (the server keeps the others as stored, so
+ * two tabs editing different sections do not overwrite each other), or the whole document. */
+function writeBody(settings: AppSettings, sections: Set<SettingsSection> | 'all'): AppSettings {
+  if (sections === 'all') return settings
+  const body: Record<string, unknown> = {version: settings.version}
+  for (const key of sections) body[key] = settings[key]
+  return body as unknown as AppSettings
+}
+
+function isAbort(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError'
 }
 
 export function __resetPersistQueueForTest(): void {
   dropPendingPersist()
 }
 
-async function persist(settings: AppSettings): Promise<void> {
+async function persist(sections: SettingsSection[] | 'all'): Promise<void> {
+  const generation = persistQueue.generation
+  const names = sections === 'all' ? ALL_SECTIONS : sections
+  for (const key of names) persistQueue.pending.set(key, (persistQueue.pending.get(key) ?? 0) + 1)
+  try {
+    await persistQueued(sections)
+  } finally {
+    if (generation === persistQueue.generation) {
+      for (const key of names) {
+        const n = (persistQueue.pending.get(key) ?? 1) - 1
+        if (n > 0) persistQueue.pending.set(key, n)
+        else persistQueue.pending.delete(key)
+      }
+      if (persistQueue.pending.size === 0 && persistQueue.resyncWanted) {
+        persistQueue.resyncWanted = false
+        storeHooks.resync()
+      }
+    }
+  }
+}
+
+async function persistQueued(sections: SettingsSection[] | 'all'): Promise<void> {
   if (persistQueue.inflight) {
     await persistQueue.inflight.catch(() => {})
-    return persist(settings)
+    return persistQueued(sections)
   }
 
   if (persistQueue.timer) {
     clearTimeout(persistQueue.timer)
   }
+  if (sections === 'all') persistQueue.sections = 'all'
+  else if (persistQueue.sections !== 'all') for (const key of sections) persistQueue.sections.add(key)
 
   return new Promise((resolve, reject) => {
     persistQueue.waiters.push({resolve, reject})
@@ -229,13 +311,22 @@ async function persist(settings: AppSettings): Promise<void> {
       persistQueue.timer = null
       const waiters = [...persistQueue.waiters].reverse()
       persistQueue.waiters = []
+      const named = persistQueue.sections
+      persistQueue.sections = new Set()
+      const flushed = named === 'all' ? ALL_SECTIONS : [...named]
+      const generation = persistQueue.generation
+      // The store as it is now, not as the first coalesced write saw it: a refused earlier write has been put back
+      // since, and posting its value again would save what the user was told was not saved.
       persistQueue.inflight = settingsApi
-        .updateSettings(settings)
+        .updateSettings(writeBody(storeHooks.current(), named))
         .then(() => {
+          if (generation === persistQueue.generation) storeHooks.saved(flushed)
           for (const w of waiters) w.resolve()
         })
         .catch(err => {
           logger.warn('Failed to persist settings', err)
+          // One report per refused write, however many changes it carried.
+          if (generation === persistQueue.generation && !isAbort(err)) storeHooks.refused(err, flushed)
           for (const w of waiters) w.reject(err)
         })
         .finally(() => {
@@ -245,19 +336,65 @@ async function persist(settings: AppSettings): Promise<void> {
   })
 }
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** cur with each field a refused write changed (from prev to next) put back to prev, unless a later change has
+ * taken that field over since; a section the write replaced whole goes back whole while it is still the write's. */
+function rollBack(cur: AppSettings, next: AppSettings, prev: AppSettings, sections: SettingsSection[]): AppSettings {
+  const out: Record<string, unknown> = {...cur}
+  for (const key of sections) {
+    const c: unknown = cur[key]
+    const n: unknown = next[key]
+    const p: unknown = prev[key]
+    if (Object.is(c, n)) {
+      out[key] = p
+      continue
+    }
+    if (!isPlainObject(c) || !isPlainObject(n) || !isPlainObject(p)) continue
+    const section = {...c}
+    let changed = false
+    for (const field of new Set([...Object.keys(n), ...Object.keys(p)])) {
+      if (Object.is(n[field], p[field]) || !Object.is(c[field], n[field])) continue
+      changed = true
+      if (field in p) section[field] = p[field]
+      else delete section[field]
+    }
+    if (changed) out[key] = section
+  }
+  return out as unknown as AppSettings
+}
+
 export const useSettingsStore = create<SettingsState>((set, get) => {
-  const applyAndPersist = async (next: AppSettings, prev: AppSettings) => {
+  // A refused write is reported once, by the flush (storeHooks.refused): the toast and the panels' alert show it,
+  // and the document is re-read once no write is pending. A layout write (pane sizes, the last view) is put back
+  // without a report. A save that covers the reported sections clears it.
+  storeHooks.current = () => get().settings
+  storeHooks.refused = (err, sections) => {
+    persistQueue.resyncWanted = true
+    if (sections.every(key => key === 'layout')) return
+    set({saveError: {message: getErrorMessage(err, ''), code: getErrorCode(err), sections, at: Date.now()}})
+  }
+  storeHooks.saved = sections => {
+    const error = get().saveError
+    if (error && error.sections.some(key => sections.includes(key))) set({saveError: null})
+  }
+  storeHooks.resync = () => void get().loadFromBackend()
+
+  const applyAndPersist = async (next: AppSettings, prev: AppSettings, sections?: SettingsSection[]) => {
     set({settings: next})
     try {
-      await persist(next)
+      await persist(sections ?? 'all')
     } catch {
-      set({settings: prev})
+      set({settings: rollBack(get().settings, next, prev, sections ?? ALL_SECTIONS)})
     }
   }
 
   return {
     settings: defaultSettings,
     isLoaded: false,
+    saveError: null,
 
     loadFromBackend: async () => {
       try {
@@ -321,6 +458,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
               },
             },
           }
+          // A section with a write still pending keeps the store's value: the write is about to save it, and the
+          // server's (read before it) would show the user's change undone.
+          const current = get().settings as unknown as Record<string, unknown>
+          const kept = merged as unknown as Record<string, unknown>
+          for (const key of pendingSections()) kept[key] = current[key]
           set({settings: merged, isLoaded: true})
           listeners.forEach(fn => fn(merged))
         }
@@ -331,37 +473,38 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
     updateSettings: async patch => {
       const prev = get().settings
-      await applyAndPersist({...prev, ...patch}, prev)
+      const sections = Object.keys(patch).filter(k => k !== 'version') as SettingsSection[]
+      await applyAndPersist({...prev, ...patch}, prev, sections)
     },
 
     updateProfile: async profile => {
       const prev = get().settings
-      await applyAndPersist({...prev, profile: {...prev.profile, ...profile}}, prev)
+      await applyAndPersist({...prev, profile: {...prev.profile, ...profile}}, prev, ['profile'])
     },
 
     updateGeneral: async general => {
       const prev = get().settings
-      await applyAndPersist({...prev, general: {...prev.general, ...general}}, prev)
+      await applyAndPersist({...prev, general: {...prev.general, ...general}}, prev, ['general'])
     },
 
     updateAppearance: async appearance => {
       const prev = get().settings
-      await applyAndPersist({...prev, appearance: {...prev.appearance, ...appearance}}, prev)
+      await applyAndPersist({...prev, appearance: {...prev.appearance, ...appearance}}, prev, ['appearance'])
     },
 
     updateParser: async parser => {
       const prev = get().settings
-      await applyAndPersist({...prev, parser: {...prev.parser, ...parser}}, prev)
+      await applyAndPersist({...prev, parser: {...prev.parser, ...parser}}, prev, ['parser'])
     },
 
     updateLayout: async layout => {
       const prev = get().settings
-      await applyAndPersist({...prev, layout: {...prev.layout, ...layout}}, prev)
+      await applyAndPersist({...prev, layout: {...prev.layout, ...layout}}, prev, ['layout'])
     },
 
     updateAI: async ai => {
       const prev = get().settings
-      await applyAndPersist({...prev, ai: {...prev.ai, ...ai}}, prev)
+      await applyAndPersist({...prev, ai: {...prev.ai, ...ai}}, prev, ['ai'])
     },
 
     updateProvider: async (id, config) => {
@@ -371,7 +514,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       const next = {...prev, ai: {...prev.ai, providers: {...prev.ai.providers, [id]: entry}}}
       set({settings: next})
       try {
-        await persist(next)
+        await persist(['ai'])
         return true
       } catch {
         const cur = get().settings
@@ -404,5 +547,5 @@ useSettingsStore.subscribe(s => setDisplayTimeZone(s.settings.profile?.timezone)
 
 registerStoreReset(() => {
   dropPendingPersist()
-  useSettingsStore.setState({settings: defaultSettings, isLoaded: false})
+  useSettingsStore.setState({settings: defaultSettings, isLoaded: false, saveError: null})
 })

@@ -2,59 +2,6 @@
 
 Items of category `config` from the [AI assistant roadmap](../ai-roadmap.md), ordered by tier. Evidence is `file:line` as of the roadmap's byline; re-read the cited lines before starting an item.
 
-### R-config-2
-
-**The ai settings section is stored unvalidated (negative/NaN budgets, unknown provider ids, unbounded prompt suffix) and the user settings route has no body cap of its own** · tier 2
-
-**Problem.** `UpdateUserSettings` runs only `validateProfileSection` before the write (`internal/service/system.go:180`), and `UpdateSettings` persists whatever it is given (`system.go:98-108`). Every `ai.*` field is therefore stored as received: activeProvider, embeddingProvider, embeddingModel, dailyBudget, perUserDailyBudget, the per-provider temperature, maxTokens, contextTokenBudget and reasoningEffort, systemPromptSuffix and prompts. The model has plain float64/string fields with no constraints (`core/models/settings.go:89-109`). The client does not cap the suffix either: the textarea has no `maxLength` (`frontend/src/components/settings/AIBehaviorPanel.tsx:170-179`), and `frontend/src/lib/constraints.ts` holds no ai caps. On the desktop and in local mode, the route writes the deployment document (`system.go:183-191`). There `AIBudget.check` treats `DailyBudget <= 0` as unlimited and applies `PerUserDailyBudget` only when it is above 0 (`ai_budget.go:204`, `228`), so -5 behaves exactly like 0, a value the operator may set anyway. In cloud the member route writes the user's own document (`system.go:193-200`), which `AIBudget` does not read (`ai_budget.go:203`). `handleUpdateSettings` uses `decodeBody` with no `MaxBytesReader` (`handlers_system.go:93-97`), while the org route caps at 1 MiB (`handlers_system.go:153`). The router's global 10 MiB cap (`router.go:199`) is the only bound. `systemPromptSuffix` is only `TrimSpace`'d (`chat_context.go:654`) before it is concatenated onto every system prompt with no length cap (`ai/context.go:42-43`). `handlers_system.go:108` already maps `ErrSettingsInvalid` to 400, so the plumbing exists.
-
-**Evidence.**
-- `internal/service/system.go:180` — only `validateProfileSection` runs before the write; `UpdateSettings` (98-108) has no validation at all
-- `internal/service/ai_budget.go:204` — `DailyBudget <= 0` means unlimited; `PerUserDailyBudget` applies only when > 0 (228)
-- `core/models/settings.go:89` — `AISettings` fields are plain float64/string with no server-side constraints (89-109)
-- `internal/api/handlers_system.go:93` — user route: `decodeBody`, no `MaxBytesReader` (93-97); the org route caps at 1 MiB (153); `ErrSettingsInvalid` → 400 is already wired (108-110)
-- `internal/api/router.go:199` — the global 10 MiB `MaxBytesReader` is the only bound on the user settings body
-- `internal/service/chat_context.go:654` — `systemPromptSuffix` is only `TrimSpace`'d; it is concatenated onto the system prompt uncapped at `internal/ai/context.go:42-43`
-
-**Change.** Two changes are needed. Put a 1 MiB `MaxBytesReader` on the user route, as on the org route. Add a rune cap on `systemPromptSuffix` and on each prompt, plus a count cap on the prompt lists. Check them in a new `validateAISection` next to `validateProfileSection`, reject with `ErrSettingsInvalid` naming the field, and mirror the caps in `frontend/src/lib/constraints.ts`. Storage-time checks of the per-turn parameters are optional consistency hardening, not a fix for a silent bypass, because those values are already refused or clamped at use. The checks would be:
-- activeProvider and embeddingProvider must be known ids (`ai.KnownProvider` / `SupportsEmbeddings`).
-- Temperature must be within 0..2, and maxTokens and contextTokenBudget within the client's bounds.
-- reasoningEffort must be one of {"", low, medium, high}.
-
-At use today, `reasoningEffort` is refused (`internal/service/chat.go:694`), temperature and maxTokens are clamped (`chat.go:138-154`), and an unsupported embeddingProvider fails fast (`internal/rag/service.go:277-279`). Budget validation (finite, >= 0, PerUser <= Daily when both are above 0) belongs on the admin writer from along with logging and auditing budget changes (old → new). `encoding/json` already rejects NaN and out-of-range numbers.
-
-The tier-0 pass (2026-10-22) moved part of this behind the deployment writer: `validateDeploymentAISettings` (`internal/service/system.go`) checks the budgets (finite, >= 0), the embedding provider (`ai.SupportsEmbeddings`, and not an alias-model provider such as Azure AI Foundry, which embeds only under the operator's `PAD_EMBEDDING_PROVIDER` pin) and the model length for `PUT /api/admin/settings/ai`, and the caller's context budget is clamped at use to `service.MaxContextTokenBudget` (mirrored by `CONTEXT_TOKEN_BUDGET_MAX` in `frontend/src/lib/constraints.ts`). Two pieces were left here on purpose: the member Settings panel (`frontend/src/components/settings/AIBehaviorPanel.tsx`) still offers the embedding provider and model in cloud mode, where a member's write lands in their own document and the indexer never reads it, so those controls should point at the admin writer or disappear there; and `validateAISection` should reuse the deployment checks for the fields the member route keeps storing. `BackendSettingsProvider.UpdateWith` re-reads the document inside the request's transaction but holds no row lock between the read and the write (its comment says so); a section-level SQL write is the fix if two admin writers ever race.
-
-**Touches.** `internal/service/system.go`, `internal/service/settings_validation.go` (new), `internal/api/handlers_system.go`, `frontend/src/lib/constraints.ts`, `internal/service/system_test.go`
-
-**Done when.**
-- `POST /api/system/settings` with a 64 KiB `systemPromptSuffix`, or a prompt list over its cap, answers 400 with `ErrSettingsInvalid` copy naming the field, and the stored value is unchanged.
-- A 2 MiB user settings body is refused like the org route's.
-- A test asserts that the server caps equal the constraints the frontend exports.
-
-### R-config-3
-
-**/api/keys/save stores an empty or arbitrary key with no server-side contract, producing a provider that looks configured and never works** · tier 2
-
-**Problem.** `handleSaveApiKey` decodes `{provider, key}` with `decodeBody`. That is a plain `json.Decode` with no `DisallowUnknownFields` and no byte cap of its own beyond the router's 10 MiB (`internal/api/handlers_system.go:261-268`, `handler_helpers.go:22-23`). The handler checks only that the provider id is known and is not azure-foundry or local (269-282). It passes the key straight to `SaveApiKey` (284), which calls `secrets.Save` with no emptiness, whitespace, length or charset check (`internal/service/system.go:344-346`). The keystore upserts the ciphertext of any string, "" included (`keystore.go:112-123`). `Has` is a row-existence query (`keystore.go:156-166`), so `isConfigured` reports the provider as configured in the catalogue and listing (`providers.go:645-651`). `resolveKey`, by contrast, treats "" as absent (`factory.go:109`). With no org key, every turn fails with `ErrKeyNotConfigured` (`factory.go:121`). When the org holds a shared credential, `resolveKey` falls through to it (`factory.go:112-119`) and chat still works. The listing does not: `isConfigured` is true, so `resolveListing` picks the personal scope first (`providers.go:676-679`), and the listing and the chat path disagree. The frontend's `canSave` guard is the only barrier. Any other client, or a direct call, can produce a provider that looks configured and, without an org key, never works.
-
-**Evidence.**
-- `internal/api/handlers_system.go:261` — decodes Provider and Key only; validates the provider id (269-282) and nothing about the key before `SaveApiKey` (284)
-- `internal/api/handler_helpers.go:22` — `decodeBody`: `json.NewDecoder(r.Body).Decode`, no `DisallowUnknownFields`, no byte cap
-- `internal/service/system.go:344` — `SaveApiKey` persists whatever arrives through `s.secrets.Save` (346)
-- `internal/storage/database/keystore.go:112` — `Save` upserts the ciphertext of any string, "" included (112-123); `Has` is `SELECT EXISTS` on the row (156-166)
-- `internal/service/providers.go:650` — `isConfigured` uses `secrets.Has`, which is true for an empty row
-- `internal/ai/factory.go:109` — `resolveKey`: `key == ""` falls through; with no org key it ends in `ErrKeyNotConfigured` (121)
-
-**Change.** Keep it small. In the service, trim the key, refuse an empty one, cap its length (for example 8 KiB) and refuse control characters, answering 400 with code `KEY_INVALID`. Add a `MaxBytesReader` on the route. If unknown body fields are refused, the allow-list must accept the catalogue's declared credential field names. The client spreads them into the body (`{...extra, provider, key}`, `frontend/src/api/providers.ts:75-76`; `frontend/src/components/settings/providers/CredentialForm.tsx:113-119`). Every spec that reaches this route declares one field today (`internal/ai/spec.go:467`, `internal/ai/spec_copilot.go:23`). A cheap optional per-spec format check (prefix hints in `CredentialField`) can follow. The harm is limited to the caller's own key scope (`h.security.KeyScope(r)` at `handlers_system.go:284`), so this belongs in tier 2 or 3, not tier 1.
-
-**Touches.** `internal/api/handlers_system.go`, `internal/service/system.go`, `internal/api/handlers_system_test.go`
-
-**Done when.**
-- `POST /api/keys/save` with key `""` or `"   "` answers 400 `KEY_INVALID`, and `Has` stays false.
-- A 1 MiB key answers 413/400 and nothing is stored.
-- A body with an unknown field, other than the catalogue's declared credential fields, answers 400.
-
 ### R-config-5
 
 **Resilience knobs are unbounded: PAD_RETRY_MAX_ATTEMPTS and PAD_CB_FAILURES accept any integer, the durations have no ceiling, and none is documented outside .env.example** · tier 2
@@ -82,31 +29,6 @@ The only loader test rejects a non-integer, not an out-of-range value (`loader_t
 - Config load fails with a message naming the variable and field for each of: `PAD_RETRY_MAX_ATTEMPTS=0` or `=11`, `PAD_CB_FAILURES=0` or `=101`, `PAD_RETRY_BASE_DELAY=31s`, `PAD_CB_OPEN_DURATION=11m`. A config file with `{"Runtime":{"RetryMaxAttempts":0}}` fails the same way.
 - The existing defaults (3 attempts, 5 failures, 500ms, 30s) still boot, and `TestProviderFactory_ResilienceIsAppliedToEveryChain` is unchanged.
 - `docs/architecture/operations.md` contains each knob's name, default and bound, checked by a doc test or a grep in CI.
-
-### R-config-4
-
-**Org settings writes are a whole-document read-modify-write without a version token; concurrent ai.* edits lose one write, including the fail-closed provider policy** · tier 3
-
-**Problem.** `OrgAIProvidersSection` GETs the org document (`noDedup`) and POSTs it whole with only `ai.allowedProviders` changed (`frontend/src/components/settings/OrgAIProvidersSection.tsx:170-174`). `handleUpdateOrgSettings` has no `If-Match` or `updatedAt` precondition (`internal/api/handlers_system.go:148-163`). `UpdateOrgSettings` reads the stored document outside the write's lock and then replaces a named `ai` section whole (`internal/service/system.go:271-285`). The service admits this lost-update race in the comment on `UpdateUserSettings` (`system.go:174-177`); `UpdateOrgSettings` has the same unlocked read but no comment saying so. When two admins edit `ai.*` at the same time, or an admin and the Rules panel in another tab both save, one write is lost. The lost write can be the fail-closed allowed-provider list. ADR 0012 records a section-level write API as the follow-up (`docs/adr/0012-settings-sections-with-versions.md:19`).
-
-**Evidence.**
-- `frontend/src/components/settings/OrgAIProvidersSection.tsx:170` — GET (`noDedup`), then POST of the whole document with only the list changed (170-174); the rolling-deploy reason is in the comment (171-173)
-- `internal/api/handlers_system.go:148` — the org settings write carries no version or CAS token (148-163)
-- `internal/service/system.go:174` — the lost-update comment ("the stored document is read before the write, not under its lock") is on `UpdateUserSettings` (174-177)
-- `internal/service/system.go:271` — `UpdateOrgSettings` calls `LoadOrgSettings` outside the save and keeps the sections the write does not name (271-285); `allowedProviders` survives a write that omits it only because of its special case (279-284)
-- `internal/storage/database/postgres_settings.go:140` — `saveSettingsDoc`; the section rows are locked with `SELECT … FOR UPDATE` (88-91)
-- `docs/adr/0012-settings-sections-with-versions.md:12` — sections merge, but "a known field follows the write (absent means cleared)"
-- `docs/adr/0012-settings-sections-with-versions.md:19` — "Two concurrent saves of different sections can still lose one; a section-level write API is the follow-up"
-
-**Change.** Tier 3. Add a section-level write: either `PATCH /api/system/settings/org/{id}/sections/{section}`, or a body `{ai:{allowedProviders}}` with an `updatedAt`/ETag precondition. The merge runs under the `settings_sections` row lock that `saveSettingsDoc` already takes (`postgres_settings.go:88-91`), and a stale precondition answers 409. A section-level lock alone does not let two writes to different fields of `ai` both land. Sections are replaced whole (ADR 0012:12), and `allowedProviders` survives today only through its special case (`system.go:279-284`), so the fix also needs either field-level merging inside `ai` or the precondition. Move `OrgAIProvidersSection` and the Rules panel onto the new write only after the rolling-deploy constraint in the component comment (`OrgAIProvidersSection.tsx:171-173`) has passed.
-
-**Touches.** `internal/api/handlers_system.go`, `internal/service/system.go`, `internal/storage/database/postgres_settings.go`, `frontend/src/components/settings/OrgAIProvidersSection.tsx`, `frontend/src/api/settings.ts`
-
-**Done when.**
-- Two concurrent org writes, one naming `ai.allowedProviders` and one naming `ai.dailyBudget`, both land and neither field reverts.
-- A write with a stale precondition answers 409, and the UI reloads before retrying.
-
-**ADR.** specified as follow-up in ADR-0012, not implemented
 
 ### R-config-6
 

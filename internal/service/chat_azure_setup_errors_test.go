@@ -184,7 +184,7 @@ func TestChatAzureRegistry_UnreadableCredentials(t *testing.T) {
 // its own copy.
 func TestClassifyFailure_UnreadableAzureCredentials(t *testing.T) {
 	cause := fmt.Errorf("%w: %w", errAzureUnreadableCredentials, fmt.Errorf("get azure-foundry/abc key: %w", storage.ErrSecretDecryptFailed))
-	err := providerSetupError("u1", ai.AzureFoundryProviderID, cause)
+	err := providerSetupError(context.Background(), "u1", ai.AzureFoundryProviderID, cause)
 	if !errors.Is(err, errAzureUnreadableCredentials) || errors.Is(err, errProviderSetup) {
 		t.Fatalf("providerSetupError = %v, want the unreadable-credentials error kept", err)
 	}

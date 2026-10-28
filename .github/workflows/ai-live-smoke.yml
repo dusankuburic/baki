@@ -1,0 +1,123 @@
+name: AI live smoke
+
+# The opt-in live-provider smoke and eval run (R-testing-11, R-testing-12; docs/architecture/ai-providers.md).
+# Every other provider test runs on hand-written fixtures; this asks the vendors themselves, nightly and on demand.
+# NON-GATING: it never runs on push or pull_request and no branch protection requires it. A provider runs only
+# when its secret is set — an unset BAKI_LIVE_<PROVIDER>_KEY skips that provider's tests — and every call is
+# token-capped (BAKI_LIVE_SMOKE_MAX_TOKENS / BAKI_LIVE_EVAL_MAX_TOKENS; budgets and pricing left the product in
+# ADR 0037, so the cap is in tokens, not dollars). Nothing is written to a database: the chains record usage in
+# memory. The job summary lists pass/fail per provider, any new repair-memo entries and the eval pass rates.
+# No log is uploaded: GitHub masks a secret only in the console and only as a whole value (never a substring of the
+# Azure JSON document, never in an artifact). The tests pass every failure message through LiveProvider.Redact
+# (keys, credential-document fields, endpoints), and the console output is scrubbed of URLs below as well.
+
+on:
+  schedule:
+    # Nightly at 04:30 UTC, after the benchmarks and fuzz.
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+    inputs:
+      providers:
+        description: 'Provider ids to run, as a regex (e.g. claude|openai); empty runs every configured one'
+        required: false
+        default: ''
+      evals:
+        description: 'Also run the eval set against each configured provider'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-live-smoke
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: Live provider smoke and evals
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Secrets by name only; an unset secret is an empty variable, which skips that provider.
+      BAKI_LIVE_CLAUDE_KEY: ${{ secrets.BAKI_LIVE_CLAUDE_KEY }}
+      BAKI_LIVE_OPENAI_KEY: ${{ secrets.BAKI_LIVE_OPENAI_KEY }}
+      BAKI_LIVE_GEMINI_KEY: ${{ secrets.BAKI_LIVE_GEMINI_KEY }}
+      BAKI_LIVE_XAI_KEY: ${{ secrets.BAKI_LIVE_XAI_KEY }}
+      BAKI_LIVE_GLM_KEY: ${{ secrets.BAKI_LIVE_GLM_KEY }}
+      BAKI_LIVE_GITHUB_MODELS_KEY: ${{ secrets.BAKI_LIVE_GITHUB_MODELS_KEY }}
+      BAKI_LIVE_COPILOT_KEY: ${{ secrets.BAKI_LIVE_COPILOT_KEY }}
+      # The Azure AI Foundry credential document (JSON: endpoint, auth, chatDeployment, embeddingDeployment).
+      BAKI_LIVE_AZURE_FOUNDRY_KEY: ${{ secrets.BAKI_LIVE_AZURE_FOUNDRY_KEY }}
+      # Optional model overrides (repository variables); unset runs each provider's cheapest tool-capable model.
+      BAKI_LIVE_CLAUDE_MODEL: ${{ vars.BAKI_LIVE_CLAUDE_MODEL }}
+      BAKI_LIVE_OPENAI_MODEL: ${{ vars.BAKI_LIVE_OPENAI_MODEL }}
+      BAKI_LIVE_GEMINI_MODEL: ${{ vars.BAKI_LIVE_GEMINI_MODEL }}
+      BAKI_LIVE_XAI_MODEL: ${{ vars.BAKI_LIVE_XAI_MODEL }}
+      BAKI_LIVE_GLM_MODEL: ${{ vars.BAKI_LIVE_GLM_MODEL }}
+      BAKI_LIVE_GITHUB_MODELS_MODEL: ${{ vars.BAKI_LIVE_GITHUB_MODELS_MODEL }}
+      BAKI_LIVE_COPILOT_MODEL: ${{ vars.BAKI_LIVE_COPILOT_MODEL }}
+      BAKI_LIVE_AZURE_FOUNDRY_MODEL: ${{ vars.BAKI_LIVE_AZURE_FOUNDRY_MODEL }}
+      # The run's caps (the tests' defaults, stated here so the job shows them).
+      BAKI_LIVE_SMOKE_MAX_TOKENS: '40000'
+      BAKI_LIVE_SMOKE_MAX_CALLS: '40'
+      BAKI_LIVE_EVAL_MAX_TOKENS: '400000'
+      BAKI_LIVE_EVAL_MAX_CALLS: '100'
+      PROVIDERS: ${{ inputs.providers }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Prepare
+        run: |
+          echo "BAKI_LIVE_SUMMARY=$RUNNER_TEMP/live-summary.md" >> "$GITHUB_ENV"
+          : > "$RUNNER_TEMP/live-summary.md"
+
+      - name: Live smoke (list models, chat, stream with a tool, embed)
+        id: smoke
+        run: |
+          set +e
+          scrub() { sed -E 's#[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]"<>]+#<url>#g'; }
+          pattern='TestLiveSmoke'
+          if [ -n "$PROVIDERS" ]; then pattern="TestLiveSmoke/^(${PROVIDERS})\$"; fi
+          go test -tags live ./internal/ai -run "$pattern" -count=1 -v -timeout 15m 2>&1 | scrub | tee "$RUNNER_TEMP/smoke.log"
+          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Live evals (pass rate per model)
+        id: evals
+        if: github.event_name == 'schedule' || inputs.evals
+        run: |
+          set +e
+          scrub() { sed -E 's#[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]"<>]+#<url>#g'; }
+          pattern='TestLiveEval'
+          if [ -n "$PROVIDERS" ]; then pattern="TestLiveEval/^(${PROVIDERS})\$"; fi
+          go test -tags live ./internal/service -run "$pattern" -count=1 -v -timeout 40m 2>&1 | scrub | tee "$RUNNER_TEMP/evals.log"
+          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            cat "$RUNNER_TEMP/live-summary.md"
+            echo
+            if [ -s "$RUNNER_TEMP/smoke.log" ] && grep -q -- '--- FAIL' "$RUNNER_TEMP/smoke.log"; then
+              echo '#### Failed smoke steps'
+              echo '```'
+              grep -- '--- FAIL' "$RUNNER_TEMP/smoke.log"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The smoke's verdict is the job's (red when a vendor drifted); the eval is a measurement and fails only below
+      # BAKI_LIVE_EVAL_MIN_PASS (unset: never). Either way nothing waits on this job.
+      - name: Verdict
+        if: always()
+        env:
+          SMOKE: ${{ steps.smoke.outputs.code }}
+          EVALS: ${{ steps.evals.outputs.code }}
+        run: |
+          if [ "${SMOKE:-1}" != "0" ]; then echo "::error::the live smoke failed (exit ${SMOKE:-none}); see the job summary"; exit 1; fi
+          if [ -n "$EVALS" ] && [ "$EVALS" != "0" ]; then echo "::error::the live eval run failed (exit $EVALS)"; exit 1; fi

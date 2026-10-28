@@ -2,6 +2,7 @@ package ai
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -470,7 +471,7 @@ func (c *ClaudeProvider) post(ctx context.Context, body claudeRequest) (*http.Re
 	if body.Stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
-	resp, err := c.client.Do(httpReq)
+	resp, err := doProviderRequest(c.client, httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("claude API request: %w", err)
 	}
@@ -502,12 +503,13 @@ func (c *ClaudeProvider) send(ctx context.Context, body claudeRequest) (*http.Re
 		}
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		resp.Body.Close()
-		c.logUpstreamRejection(resp, body.Model)
+		c.logUpstreamRejection(ctx, resp, body.Model)
 		if !repaired && body.Temperature != nil && claudeSamplingRejected(resp.StatusCode, errBody) {
-			logger.Debug("Claude rejected the sampling parameters — retrying without temperature",
+			logger.FromContext(ctx).Debug("Claude rejected the sampling parameters — retrying without temperature",
 				"provider", c.logLabel(), "model", body.Model)
 			body.Temperature = nil
 			repaired = true
+			recordParamRepair(cmp.Or(c.itemsOwner, claudeSpec.ID), claudeSamplingParam)
 			continue
 		}
 		return resp, errBody, nil
@@ -560,20 +562,23 @@ func claudeRequestIDSuffix(resp *http.Response) string {
 	return s
 }
 
-// logUpstreamRejection records a non-200's status and request ids: a parameter rejection may still be
-// repaired by send, so it logs at debug.
-func (c *ClaudeProvider) logUpstreamRejection(resp *http.Response, model string) {
+// logUpstreamRejection records every non-200 once, with its status and whichever request ids the upstream
+// sent. A rejection without ids is logged too: a bare gateway 503 is exactly the outage that must leave a line.
+// A parameter rejection may still be repaired by send, so it logs at debug.
+func (c *ClaudeProvider) logUpstreamRejection(ctx context.Context, resp *http.Response, model string) {
+	attrs := []any{"provider", c.logLabel(), "model", model, "status", resp.StatusCode}
 	anthropicID, gatewayID := claudeRequestIDs(resp)
-	if anthropicID == "" && gatewayID == "" {
-		return
+	if anthropicID != "" {
+		attrs = append(attrs, "requestId", anthropicID)
 	}
-	attrs := []any{"provider", c.logLabel(), "model", model, "status", resp.StatusCode,
-		"requestId", anthropicID, "apimRequestId", gatewayID}
+	if gatewayID != "" {
+		attrs = append(attrs, "apimRequestId", gatewayID)
+	}
 	if parameterRejectionStatus(resp.StatusCode) {
-		logger.Debug("AI upstream rejection", attrs...)
+		logger.FromContext(ctx).Debug("AI upstream rejection", attrs...)
 		return
 	}
-	logger.Warn("AI upstream error", attrs...)
+	logger.FromContext(ctx).Warn("AI upstream error", attrs...)
 }
 
 // permissionDeniedMessage is the explanation kept on a permission-denied error, with a fallback when the service sent none.
@@ -770,7 +775,7 @@ func (c *ClaudeProvider) CountTokens(ctx context.Context, req Request) (int, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("anthropic-version", claudeAPIVersion)
-	resp, err := c.client.Do(httpReq)
+	resp, err := doProviderRequest(c.client, httpReq)
 	if err != nil {
 		return 0, fmt.Errorf("claude count_tokens request: %w", err)
 	}

@@ -125,6 +125,7 @@ var knownRegistrars = map[string][]string{
 	"internal/service.SubscribeRuleProfiles":         {"rule-profiles"},
 	"internal/service.SubscribeModelCache":           {"provider-model-cache"},
 	"internal/rag.SubscribeCorpusCache":              {"knowledge-corpus-count"},
+	"internal/rag.SubscribeEmbedderCache":            {"knowledge-embedder-cache"},
 	"internal/websocket.SubscribeAccessRechecks":     {"ws-access-recheck"},
 	"internal/api.SubscribeRevocations":              {"sse-access-revoked"},
 	"internal/api.SubscribeLentCredentialRevocation": {"lent-credential-revocation"},

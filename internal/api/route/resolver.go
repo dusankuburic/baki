@@ -189,8 +189,14 @@ func newMethodNotAllowed(k mnaKey) *Policy {
 		if q.Access == AuthRequired {
 			p.Access = AuthRequired
 		}
-		if bucketRank(q.RateLimit) > bucketRank(bucket) {
-			bucket = q.RateLimit
+		b := q.RateLimit
+		if b == RateControl {
+			// The control bucket is for the stream commands themselves; another method on their path is an ordinary
+			// request, on the general bucket.
+			b = RateGeneral
+		}
+		if bucketRank(b) > bucketRank(bucket) {
+			bucket = b
 		}
 		if !k.unknown {
 			p.Allowed = append(p.Allowed, probeMethods[i])

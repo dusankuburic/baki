@@ -206,6 +206,23 @@ func (c *SizedLRU) Cost() int64 {
 	return c.total
 }
 
+// live copies the unexpired entries, most recently used first, without refreshing recency or removing the expired
+// ones (that stays Get's job).
+func (c *SizedLRU) live() []sizedEntry {
+	now := time.Now().UnixNano()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]sizedEntry, 0, c.ll.Len())
+	for el := c.ll.Front(); el != nil; el = el.Next() {
+		e := el.Value.(*sizedEntry)
+		if e.expiration > 0 && now > e.expiration {
+			continue
+		}
+		out = append(out, *e)
+	}
+	return out
+}
+
 // Budget is the cost bound the cache was built with.
 func (c *SizedLRU) Budget() int64 {
 	return c.budget

@@ -67,6 +67,9 @@ func main() {
 		case "migrate":
 			runMigrate(os.Args[2:])
 			return
+		case "keys":
+			runKeys(os.Args[2:])
+			return
 		case "diff-reports":
 			runDiffReports(os.Args[2:])
 			return
@@ -100,6 +103,7 @@ Usage:
   bakicli migrate down [flags] <version>         Roll the server schema back (operator-only)
   bakicli migrate adopt-checksum [flags] <ver>   Adopt this binary's checksum for a drifted step
   bakicli migrate preflight [flags]              Check pre-deploy migration readiness & drift
+  bakicli keys check [flags]                     Report which configured key opens the stored sealed values
   bakicli --version                              Print version
   bakicli <subcommand> -h                        Flags of a subcommand
 

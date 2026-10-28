@@ -96,13 +96,12 @@ func (e *entraTokenError) Unwrap() []error {
 	return errs
 }
 
-// classifyEntraTokenError maps a GetToken failure to a one-line entraTokenError (the full azidentity text goes
-// to the server log): OAuth "temporarily_unavailable" is ErrEntraTokenUnavailable whatever the status; an
+// classifyEntraTokenError maps a GetToken failure to a one-line entraTokenError (the caller logs the full
+// azidentity text): OAuth "temporarily_unavailable" is ErrEntraTokenUnavailable whatever the status; an
 // AADSTS code with a known cause is ErrEntraCredentialsRejected (and ErrApiKeyInvalid) naming the fix; any
 // other 400/401 is ErrEntraCredentialsRejected with the code; anything else is ErrEntraTokenUnavailable. The
 // messages carry the AADSTS code and OAuth error, never the secret.
 func classifyEntraTokenError(err error) error {
-	logger.Warn("azure ai foundry: entra id token request failed", "error", err)
 	var afe *azidentity.AuthenticationFailedError
 	if errors.As(err, &afe) && afe.RawResponse != nil {
 		status := afe.RawResponse.StatusCode
@@ -258,6 +257,10 @@ func (s *entraTokenSource) Token(ctx context.Context) (string, error) {
 			s.mu.Lock()
 			s.refreshFailedAt = time.Now()
 			s.mu.Unlock()
+			recordEntraTokenEvent(entraTokenRefreshFailed)
+			// Logged here rather than in the classifier: fctx keeps the attributes of the request that started the
+			// fetch, so the full azidentity text can be joined with that request's lines.
+			logger.FromContext(fctx).Warn("azure ai foundry: entra id token request failed", "error", err)
 			return "", classifyEntraTokenError(err)
 		}
 		s.mu.Lock()
@@ -265,7 +268,8 @@ func (s *entraTokenSource) Token(ctx context.Context) (string, error) {
 		s.expires = at.ExpiresOn
 		s.refreshFailedAt = time.Time{}
 		s.mu.Unlock()
-		logger.Debug("azure ai foundry: refreshed entra id token", "expires", at.ExpiresOn)
+		recordEntraTokenEvent(entraTokenRefreshed)
+		logger.FromContext(fctx).Debug("azure ai foundry: refreshed entra id token", "expires", at.ExpiresOn)
 		return at.Token, nil
 	})
 	if tok != "" && left >= entraTokenMinRemaining {
@@ -296,6 +300,7 @@ func (s *entraTokenSource) Invalidate(failed string) {
 	}
 	s.token = ""
 	s.expires = time.Time{}
+	recordEntraTokenEvent(entraTokenInvalidated)
 	if s.newCred == nil || time.Since(s.rebuiltAt) < entraRebuildCooldown {
 		return
 	}

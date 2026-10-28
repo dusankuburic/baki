@@ -78,3 +78,6 @@ temp/
 # go.mod swag version) is byte-reproducible with no embedded timestamps or
 # absolute paths, so tracking the output is stable and the drift check is
 # meaningful. Regenerate and commit whenever an annotation changes.
+
+# Local zcode tool state.
+/.zcode/

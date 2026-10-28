@@ -1,0 +1,22 @@
+{
+  "data": {
+    "items": [
+      {
+        "id": "b1:unhandled-error",
+        "ruleId": "unhandled-error",
+        "status": "applied"
+      },
+      {
+        "id": "b2:unhandled-error",
+        "message": "deselected by the user — nothing was changed for this fix",
+        "ruleId": "unhandled-error",
+        "status": "skipped"
+      }
+    ],
+    "message": "all fixes applied and verified",
+    "proposalId": "proposal-1",
+    "status": "applied"
+  },
+  "streamId": "stream-1",
+  "type": "fix_decision"
+}

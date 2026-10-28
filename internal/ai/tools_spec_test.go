@@ -45,8 +45,8 @@ func toolNames(defs []ToolDefinition) []string {
 // need, and the approval-gated ones say which scope and which preview kind they need.
 func TestToolSpecs_Complete(t *testing.T) {
 	specs := ToolSpecs()
-	if len(specs) != 8 {
-		t.Fatalf("expected 8 tools, got %d", len(specs))
+	if len(specs) != 9 {
+		t.Fatalf("expected 9 tools, got %d", len(specs))
 	}
 	approvalGated := 0
 	for _, s := range specs {

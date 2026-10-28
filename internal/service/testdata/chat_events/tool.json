@@ -1,0 +1,8 @@
+{
+  "data": {
+    "label": "Listing findings",
+    "name": "list_findings"
+  },
+  "streamId": "stream-1",
+  "type": "tool"
+}

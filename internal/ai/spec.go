@@ -217,8 +217,10 @@ type ProviderSpec struct {
 	// DefaultModel is the model offered first.
 	DefaultModel string
 	Wire         WireFamily
-	// Resolver, when set, reads the credential itself (Copilot's OAuth-token-then-PAT rule); nil reads
-	// Keys.Primary under the builder's member/org rule.
+	// Resolver, when set, reads the credential itself (Copilot's OAuth-token-then-PAT rule), always the member's own:
+	// it is not given the builder's member/org rule, so a spec with a Resolver may not be CapOrgShared
+	// (mustRegisterSpec refuses it; every org builder then collapses onto the member's key, and ForOrgCredential
+	// reports ErrKeyNotConfigured before the Resolver runs). nil reads Keys.Primary under the builder's rule.
 	Resolver func(f *ProviderFactory, scope, orgID string) (cred Credential, memoScope, usageOrg string, err error)
 	// Ctor builds the raw provider; Ctor(Credential{}) is the metadata provider.
 	Ctor func(Credential) Provider
@@ -254,6 +256,11 @@ func mustRegisterSpec(spec ProviderSpec) {
 		panic("ai: provider spec " + spec.ID + " names no keystore key")
 	case spec.Order <= 0:
 		panic("ai: provider spec " + spec.ID + " has no display order")
+	case spec.Resolver != nil && spec.Caps.Has(CapOrgShared):
+		// resolveCredential hands a Resolver neither the member/org rule nor ForOrgCredential's org-only refusal
+		// (R-provider-30): an org-shareable Resolver provider would run an admin's org-only test, or embed an org
+		// corpus, on a member's credential.
+		panic("ai: provider spec " + spec.ID + " has a Resolver and CapOrgShared: a Resolver does not apply the member/org credential rule")
 	}
 	providerMu.Lock()
 	defer providerMu.Unlock()

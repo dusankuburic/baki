@@ -161,8 +161,8 @@ func TestPostgres_ExportSections_BothPathsCarryEverySection(t *testing.T) {
 	if bufOrder, streamOrder := topLevelKeys(t, bufJSON), topLevelKeys(t, buf.Bytes()); strings.Join(bufOrder, ",") != strings.Join(streamOrder, ",") {
 		t.Errorf("top-level key order differs:\n buffered %v\n streamed %v", bufOrder, streamOrder)
 	}
-	if !strings.Contains(strings.Join(topLevelKeys(t, bufJSON), ","), "sessions,azureRegistry,exportedAt") {
-		t.Errorf("the azure registry section must sit between sessions and exportedAt: %v", topLevelKeys(t, bufJSON))
+	if !strings.Contains(strings.Join(topLevelKeys(t, bufJSON), ","), "sessions,azureRegistry,aiUsage,exportedAt") {
+		t.Errorf("the azure registry section must sit between sessions and aiUsage, the last section before exportedAt: %v", topLevelKeys(t, bufJSON))
 	}
 	// Both writers asked the hook for this user's resources, and only those.
 	for _, call := range hookCalls {

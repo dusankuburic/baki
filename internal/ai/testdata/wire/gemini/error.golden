@@ -1,0 +1,6 @@
+# gemini/error.sse through parseGeminiSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 text="Looking at the" served="gemini-2.5-flash"
+02 error=provider_down msg="The model is overloaded. Please try again later." in=388 out=3 served="gemini-2.5-flash"
+return nil
+summary chunks=2 keepalives=0 text="Looking at the"

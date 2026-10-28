@@ -1,0 +1,8 @@
+# anthropic/error.sse through parseClaudeSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 in=388 served="claude-sonnet-4-5-20250929"
+02 keepalive served="claude-sonnet-4-5-20250929"
+03 text="Looking at the" served="claude-sonnet-4-5-20250929"
+04 error=provider_down msg="Overloaded" in=388 served="claude-sonnet-4-5-20250929"
+return nil
+summary chunks=4 keepalives=1 text="Looking at the"

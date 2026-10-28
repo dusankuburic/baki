@@ -8,6 +8,7 @@ import (
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/cache"
 )
 
@@ -51,6 +52,16 @@ type searchCaches struct {
 	gen    eventbus.Gen[string]
 	counts *cache.Typed[int]       // total chunks of an org
 	embeds *cache.Typed[[]float32] // a query's embedding
+	// embedders memoises the caller's resolved embedder per (scope, org) (embedder_cache.go). Its keys carry the
+	// generations of the caller's scope and of the org, which a credential, settings or membership change bumps: a
+	// key built before the bump is never asked for again, and the entry ages out.
+	embedders *cache.Typed[embedderMemo]
+	scopeGen  eventbus.Gen[string]
+	orgGen    eventbus.Gen[string]
+	// census and strandedByDoc are an org's chunk census and stranded-by-document map relative to one embedding
+	// identity, keyed by the org's corpus generation (gen), which InvalidateCorpus moves.
+	census        *cache.Typed[interfaces.KnowledgeChunkCounts]
+	strandedByDoc *cache.Typed[map[string]int]
 }
 
 func (s *KnowledgeService) caches() *searchCaches {
@@ -58,6 +69,10 @@ func (s *KnowledgeService) caches() *searchCaches {
 		s.search = &searchCaches{
 			counts: cache.New[int](corpusCounts, corpusCountCacheSize, cache.WithTTL(corpusCountTTL)),
 			embeds: cache.New[[]float32](queryEmbeddings, queryEmbeddingCacheSize, cache.WithTTL(queryEmbeddingTTL)),
+
+			embedders:     cache.New[embedderMemo](embedderMemos, embedderMemoCacheSize, cache.WithTTL(embedderMemoTTL)),
+			census:        cache.New[interfaces.KnowledgeChunkCounts](identityCensus, censusCacheSize, cache.WithTTL(corpusCountTTL)),
+			strandedByDoc: cache.New[map[string]int](strandedDocs, strandedDocsCacheSize, cache.WithTTL(corpusCountTTL)),
 		}
 	})
 	return s.search

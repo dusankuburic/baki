@@ -2,8 +2,10 @@ import i18n from '@/i18n'
 import {useEffect, useRef, useCallback} from 'react'
 import {chatApi} from '@/api'
 import {logger} from '@/lib/logger'
+import {onBackendRestarted} from '@/lib/backendRestart'
 import {utf8ByteLength} from '@/lib/utf8'
-import {CHAT_ERROR_CODES, isReplicaUnreachable, isStreamGone} from '@/lib/chatErrors'
+import {CHAT_ERROR_CODES, isStreamGone} from '@/lib/chatErrors'
+import {isStreamControlRetryable} from '@/lib/streamControl'
 import {
   parseChatEvent,
   chatEventStreamId,
@@ -49,7 +51,7 @@ export interface StreamHandler {
   onAppend?: (delta: string, streamId: string) => void
   getAccLength?: (streamId: string) => number
   /** A stop could not reach the server running the stream, after the api layer's retries; the stream is torn down here but still runs there. */
-  onStopUnreachable?: (streamId: string) => void
+  onStopUnreachable?: (streamId: string, err?: unknown) => void
 }
 
 function doneArg(src: DoneMeta, resumed?: DoneMeta): DoneMeta | undefined {
@@ -60,6 +62,8 @@ function doneArg(src: DoneMeta, resumed?: DoneMeta): DoneMeta | undefined {
       meta.conversationVersion = from.conversationVersion
       meta.conversationBase = from.conversationBase
     }
+    // The server could not store its answer (R-tool-loop-20): the commit saves the turn from the client.
+    if (from.answerStored === false) meta.answerStored = false
   }
   return Object.keys(meta).length > 0 ? meta : undefined
 }
@@ -82,6 +86,8 @@ function errorUsageFromResult(res: {tokensIn?: number; tokensOut?: number; error
   })
 }
 
+type ResumeAnswer = Awaited<ReturnType<typeof chatApi.resumeStream>>
+
 interface StreamSub {
   unsub: () => void
   received: number
@@ -89,6 +95,8 @@ interface StreamSub {
   stallTimer: ReturnType<typeof setTimeout> | null
   probeMisses: number
   live: boolean
+  // A stop was sent: the subscription stays, unprobed, until the server confirms the stop or the stream ends.
+  stopping?: boolean
 }
 
 export function useStreamingMessage(handler: StreamHandler) {
@@ -105,10 +113,50 @@ export function useStreamingMessage(handler: StreamHandler) {
   const probeStallRef = useRef<(streamId: string) => void>(() => {})
   const armStall = useCallback((streamId: string) => {
     const sub = subsRef.current.get(streamId)
-    if (!sub) return
+    if (!sub || sub.stopping) return
     if (sub.stallTimer) clearTimeout(sub.stallTimer)
     sub.stallTimer = setTimeout(() => probeStallRef.current(streamId), STALL_PROBE_MS)
   }, [])
+
+  // One resume answer, applied the same way whichever call fetched it (R-streaming-5): its text (replacing the
+  // buffer, or appended after it), then its events, so the trail and the cards are current, then its end — error or
+  // done (a known finish ends it too) — or, while the stream runs on, onLive (by default the next stall timer).
+  // Returns whether the answer ended the stream.
+  const applyResume = useCallback(
+    (
+      streamId: string,
+      res: ResumeAnswer,
+      opts: {
+        mode: 'replace' | 'append'
+        finish?: {tokensOut: number; tokensIn: number; meta?: DoneMeta}
+        onLive?: () => void
+      },
+    ): boolean => {
+      if (res.text) {
+        if (opts.mode === 'append') handlerRef.current.onAppend?.(res.text, streamId)
+        else handlerRef.current.onReplace(res.text, streamId)
+      }
+      if (res.events) handlerRef.current.onResumeState?.(parseResumeEvents(res.events), streamId)
+      if (res.error) {
+        handlerRef.current.onError(res.error, streamId, res.errorCode, errorUsageFromResult(res))
+        return true
+      }
+      const finish = opts.finish
+      if (res.done || finish) {
+        handlerRef.current.onDone(
+          res.tokensOut || finish?.tokensOut || 0,
+          res.tokensIn || finish?.tokensIn || 0,
+          streamId,
+          doneArg(finish?.meta ?? {}, res),
+        )
+        return true
+      }
+      if (opts.onLive) opts.onLive()
+      else armStall(streamId)
+      return false
+    },
+    [armStall],
+  )
 
   const resumeInto = useCallback(
     (
@@ -123,53 +171,34 @@ export function useStreamingMessage(handler: StreamHandler) {
       const mode = opts?.mode ?? 'full'
       const useDelta = mode === 'delta' && handlerRef.current.onAppend && handlerRef.current.getAccLength
       const from = useDelta ? (handlerRef.current.getAccLength?.(streamId) ?? 0) : 0
+      const failed = (err: unknown) => {
+        if (!subsRef.current.has(streamId)) return
+        if (finish) handlerRef.current.onDone(finish.tokensOut, finish.tokensIn, streamId, finish.meta)
+        else opts?.onGone?.(err)
+      }
       chatApi
         .resumeStream(streamId, from)
         .then(res => {
           const sub = subsRef.current.get(streamId)
           if (!sub) return
           sub.live = true
-          if (res.text) {
-            if (useDelta) {
-              const now = handlerRef.current.getAccLength?.(streamId) ?? 0
-              if (now > from) {
-                chatApi
-                  .resumeStream(streamId, 0)
-                  .then(fullRes => {
-                    if (!subsRef.current.has(streamId)) return
-                    if (fullRes.text) handlerRef.current.onReplace(fullRes.text, streamId)
-                  })
-                  .catch(() => {})
-                return
-              }
-              handlerRef.current.onAppend!(res.text, streamId)
-            } else {
-              handlerRef.current.onReplace(res.text, streamId)
-            }
+          // A live chunk landed while the delta was on its way: the offset is stale, so the whole answer is fetched
+          // again and applied in full — its text, and its events and end, which the delta also carried.
+          if (useDelta && res.text && (handlerRef.current.getAccLength?.(streamId) ?? 0) > from) {
+            chatApi
+              .resumeStream(streamId, 0)
+              .then(fullRes => {
+                if (!subsRef.current.has(streamId)) return
+                applyResume(streamId, fullRes, {mode: 'replace', finish})
+              })
+              .catch(failed)
+            return
           }
-          if (res.events) {
-            handlerRef.current.onResumeState?.(parseResumeEvents(res.events), streamId)
-          }
-          if (res.error) {
-            handlerRef.current.onError(res.error, streamId, res.errorCode, errorUsageFromResult(res))
-          } else if (res.done || finish) {
-            handlerRef.current.onDone(
-              res.tokensOut || finish?.tokensOut || 0,
-              res.tokensIn || finish?.tokensIn || 0,
-              streamId,
-              doneArg(finish?.meta ?? {}, res),
-            )
-          } else {
-            armStall(streamId)
-          }
+          applyResume(streamId, res, {mode: useDelta ? 'append' : 'replace', finish})
         })
-        .catch((err: unknown) => {
-          if (!subsRef.current.has(streamId)) return
-          if (finish) handlerRef.current.onDone(finish.tokensOut, finish.tokensIn, streamId, finish.meta)
-          else opts?.onGone?.(err)
-        })
+        .catch(failed)
     },
-    [armStall],
+    [applyResume],
   )
 
   const teardownStream = useCallback((streamId: string) => {
@@ -185,13 +214,28 @@ export function useStreamingMessage(handler: StreamHandler) {
     }
   }, [])
 
+  // Stops a stream (R-streaming-c20). Its subscription stays until the server confirms the stop, so a stop that did
+  // not get through (a relay failure, a rate limit, after the api layer's retries) still hears the stream's end,
+  // which tears it down; the handler offers the stop again meanwhile. The stopping stream is not probed: what it
+  // still sends has nothing left to commit.
   const cancel = useCallback(
     (streamId: string) => {
-      chatApi.cancelStream(streamId).catch(err => {
-        logger.warn('Failed to cancel stream', err)
-        if (isReplicaUnreachable(err)) handlerRef.current.onStopUnreachable?.(streamId)
-      })
-      teardownStream(streamId)
+      const sub = subsRef.current.get(streamId)
+      if (sub) {
+        sub.stopping = true
+        if (sub.stallTimer) clearTimeout(sub.stallTimer)
+        sub.stallTimer = null
+      }
+      chatApi
+        .cancelStream(streamId)
+        .then(() => teardownStream(streamId))
+        .catch(err => {
+          logger.warn('Failed to cancel stream', err)
+          // Unmounted meanwhile: its cleanup took the subscriptions, and no one is left to tell.
+          if (isCanceledRef.current) return
+          if (isStreamControlRetryable(err)) handlerRef.current.onStopUnreachable?.(streamId, err)
+          else teardownStream(streamId)
+        })
     },
     [teardownStream],
   )
@@ -201,12 +245,14 @@ export function useStreamingMessage(handler: StreamHandler) {
       const sub = subsRef.current.get(streamId)
       if (!sub) return
       sub.stallTimer = null
-      if (getEventConnectionState() !== 'open') {
-        armStall(streamId)
-        return
-      }
+      // The probe is plain HTTP: it runs while the event stream is down too, so a stream that finished meanwhile
+      // commits instead of waiting for a reconnect that may be minutes away (R-streaming-6).
       sub.countsInvalid = true
       const before = handlerRef.current.getAccLength?.(streamId) ?? 0
+      // Only an answered probe that shows no progress is a miss, and only while the events stream is open: then
+      // events should have been arriving. While it is down, the server answering that the stream still runs is
+      // all a probe can learn, so it is progress.
+      const sseDown = getEventConnectionState() !== 'open'
       const miss = () => {
         if (++sub.probeMisses >= STALL_PROBE_LIMIT) {
           handlerRef.current.onError(i18n.t('chat:errors.stalled'), streamId)
@@ -218,28 +264,28 @@ export function useStreamingMessage(handler: StreamHandler) {
         .resumeStream(streamId, 0)
         .then(res => {
           if (!subsRef.current.has(streamId)) return
-          if (res.error) {
-            handlerRef.current.onError(res.error, streamId, res.errorCode, errorUsageFromResult(res))
-            return
-          }
-          if (res.text) handlerRef.current.onReplace(res.text, streamId)
-          if (res.done) {
-            handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId, doneArg(res))
-            return
-          }
-          if (res.text && utf8ByteLength(res.text) > before) {
-            sub.probeMisses = 0
-            armStall(streamId)
-          } else {
-            miss()
-          }
+          applyResume(streamId, res, {
+            mode: 'replace',
+            onLive: () => {
+              if (sseDown || (res.text && utf8ByteLength(res.text) > before)) {
+                sub.probeMisses = 0
+                armStall(streamId)
+              } else {
+                miss()
+              }
+            },
+          })
         })
-        .catch(() => {
+        .catch((err: unknown) => {
           if (!subsRef.current.has(streamId)) return
-          miss()
+          // An error status is the server's answer: no progress. No answer at all (offline, the server unreachable,
+          // a timeout) says nothing about the stream: probe again later.
+          const status = typeof err === 'object' && err !== null ? (err as {status?: unknown}).status : undefined
+          if (typeof status === 'number' && status > 0) miss()
+          else armStall(streamId)
         })
     },
-    [armStall],
+    [armStall, applyResume],
   )
 
   useEffect(() => {
@@ -258,7 +304,7 @@ export function useStreamingMessage(handler: StreamHandler) {
   }, [])
 
   const registerStream = useCallback(
-    async (streamId: string, begin = true) => {
+    async (streamId: string) => {
       if (!unregisterConnRef.current) {
         // What a reconnect does for the streams it may have cut off: the chunks that arrived during the gap are lost, so each
         // stream resumes by offset. A replay gap (the server could not replay what was missed) is the same situation.
@@ -278,9 +324,22 @@ export function useStreamingMessage(handler: StreamHandler) {
           }
         })
         const offGap = subscribeEventGap(resumeAll)
+        // The backend process was replaced (R-frontend-c7): the streams it ran died with it, so each ends here as
+        // interrupted, and none is resumed or cancelled against the new process, which never knew it. A stream the
+        // old process never confirmed (a send still waiting to be created) is left to go on against the new one.
+        const offRestart = onBackendRestarted(() => {
+          for (const [sid, s] of [...subsRef.current]) {
+            if (!s.live) continue
+            if (s.stallTimer) clearTimeout(s.stallTimer)
+            s.unsub()
+            subsRef.current.delete(sid)
+            handlerRef.current.onError(i18n.t('chat:errors.backendRestarted'), sid, CHAT_ERROR_CODES.backendRestarted)
+          }
+        })
         unregisterConnRef.current = () => {
           offState()
           offGap()
+          offRestart()
         }
       }
 
@@ -299,6 +358,16 @@ export function useStreamingMessage(handler: StreamHandler) {
         const parsed = parseChatEvent(event.data)
         if (!parsed) return
         sub.live = true
+        // A stopped stream's end: handed on as it is (nothing is left to resume into) and the subscription goes.
+        if (sub.stopping && (parsed.kind === 'done' || parsed.kind === 'error')) {
+          if (parsed.kind === 'done') {
+            handlerRef.current.onDone(parsed.tokensOut, parsed.tokensIn, streamId, doneArg(parsed))
+          } else {
+            handlerRef.current.onError(parsed.message, streamId, parsed.code, errorUsageFromEvent(parsed))
+          }
+          teardownStream(streamId)
+          return
+        }
         if (parsed.kind !== 'done' && parsed.kind !== 'error') {
           sub.probeMisses = 0
           armStall(streamId)
@@ -390,25 +459,8 @@ export function useStreamingMessage(handler: StreamHandler) {
         })
       }
 
-      if (isCanceledRef.current) return false
-
-      if (!begin) return true
-
-      const res = await chatApi.beginStream(streamId)
-      sub.live = true
-
-      if (res?.status === 'finished') {
-        if (isCanceledRef.current || !subsRef.current.has(streamId)) return false
-        if (res.text) {
-          handlerRef.current.onReplace(res.text, streamId)
-        }
-        if (res.error) {
-          handlerRef.current.onError(res.error, streamId, res.errorCode, errorUsageFromResult(res))
-        } else if (res.done) {
-          handlerRef.current.onDone(res.tokensOut || 0, res.tokensIn || 0, streamId, doneArg(res))
-        }
-      }
-      return true
+      // Gone while it waited: torn down, or ended by a backend restart.
+      return !isCanceledRef.current && subsRef.current.has(streamId)
     },
     [resumeInto, armStall, teardownStream, reportLost],
   )
@@ -422,7 +474,8 @@ export function useStreamingMessage(handler: StreamHandler) {
       for (const [sid, s] of subs) {
         if (s.stallTimer) clearTimeout(s.stallTimer)
         s.unsub()
-        chatApi.cancelStream(sid).catch(() => {})
+        // A stopping stream's stop is already on its way, retries and all.
+        if (!s.stopping) chatApi.cancelStream(sid).catch(() => {})
       }
       subs.clear()
       for (const t of openWaitTimers) clearTimeout(t)

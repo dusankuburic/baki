@@ -3,7 +3,7 @@ import type {MutableRefObject} from 'react'
 import {useChatStore} from '@/stores/chatStore'
 import {utf8ByteLength} from '@/lib/utf8'
 import type {NoticePayload, ToolResultPayload} from '@/lib/chatEvent'
-import {NOTICE_HISTORY_TRUNCATED} from '@/lib/chatEvent'
+import {NOTICE_HISTORY_TRUNCATED, NOTICE_KNOWLEDGE} from '@/lib/chatEvent'
 import type {ChatStoreState, StreamAcc, AccMeta} from './types'
 
 interface AccDeps {
@@ -96,6 +96,8 @@ export function useStreamAccumulators({streamAccRef, teardownRef, updateStream, 
       if (!acc) return
       if (notice.notice === NOTICE_HISTORY_TRUNCATED && notice.keptFrom != null && notice.keptFrom > 0) {
         setStreamMeta(acc.threadId, {truncated: notice.keptFrom})
+      } else if (notice.notice === NOTICE_KNOWLEDGE && notice.status) {
+        setStreamMeta(acc.threadId, {knowledge: notice.status})
       }
     },
     [streamAccRef, setStreamMeta],

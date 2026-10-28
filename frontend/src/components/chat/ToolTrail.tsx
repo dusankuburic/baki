@@ -58,11 +58,13 @@ const OUTCOME_DOT: Record<string, string> = {
   cancelled: 'bg-text-disabled',
   applied: 'bg-semantic-success/70',
   'applied-unresolved': 'bg-amber-400/80',
+  'already-resolved': 'bg-text-tertiary/60',
   declined: 'bg-text-tertiary/60',
   timeout: 'bg-amber-400/80',
   error: 'bg-red-400/80',
   applying: 'bg-brand-400',
   pending: 'bg-brand-400',
+  unknown: 'bg-amber-400/80',
 }
 
 const ITEM_OUTCOME_DOT: Record<string, string> = {
@@ -70,6 +72,7 @@ const ITEM_OUTCOME_DOT: Record<string, string> = {
   'applied-unresolved': 'bg-amber-400/80',
   error: 'bg-red-400/80',
   'already-resolved': 'bg-text-tertiary/60',
+  skipped: 'bg-text-tertiary/60',
 }
 
 const DEFAULT_PREVIEW_KIND = 'fix-patch'

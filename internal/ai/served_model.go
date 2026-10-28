@@ -4,6 +4,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"pad-core/cache"
 )
 
 // The providers whose model IDs are user-chosen ALIASES, not model names (a Foundry deployment called
@@ -23,64 +25,50 @@ const (
 type servedEntry struct {
 	model string
 	seen  time.Time
-	// resource is the scope's resource segment — the servedByResource bucket the key belongs to, kept so
-	// eviction can unindex an entry without re-deriving it.
-	resource string
 	// varied records that the alias has been served by more than one model (compared after
 	// normalizeServedModel, so a date-version bump does not count) within the TTL — a model-router: no
 	// single context window or output cap.
 	varied bool
 }
 
+// The served-model memo (R-provider-31): declared caches, least recently used first at servedMemoMax. servedMemo is
+// per credential scope and resource (ai.served-models); servedByResource is the resource-wide view
+// (ai.served-by-resource): per resource and deployment, each caller's latest stable observation (resourceObservations),
+// charged one per observation. servedMu serialises recordServedModel's read-compare-write across the two.
 var (
-	servedMu   sync.Mutex
-	servedMemo = map[string]servedEntry{}
-	// servedByResource indexes the memo, resource → the full keys of every entry whose scope ends in that
-	// resource: lookups scan only this bucket, exact by verifying the full suffix per key. Maintained in
-	// lockstep with servedMemo (indexServedKeyLocked / deleteServedKeyLocked).
-	servedByResource = map[string]map[string]struct{}{}
+	servedMu         sync.Mutex
+	servedMemo       = cache.New[servedEntry](servedModelsSpec, servedMemoMax, cache.WithMaxEntries(servedMemoMax), cache.WithTTL(servedMemoTTL))
+	servedByResource = cache.New[resourceObservations](servedByResourceSpec, servedMemoMax, cache.WithMaxEntries(servedMemoMax), cache.WithTTL(servedMemoTTL))
 )
+
+// resourceObservations are one deployment's stable observations on one resource, by the observing scope's owner:
+// one caller's varied observation (a re-pointed deployment) drops that caller's alone, never another's stable one.
+// Never mutated once stored: recordServedModel stores a changed copy.
+type resourceObservations map[string]servedEntry
+
+// servedResourceOwnersMax bounds one deployment's observations (a resource's callers); the oldest go first.
+const servedResourceOwnersMax = 64
 
 // servedKey scopes the memo per user AND resource: two users' resources may both have a deployment called
 // "chat" pointing at different models, and one user's observation must never leak into another's model list.
-func servedKey(scope, providerID, requestModel string) string {
-	return scope + "\x00" + providerID + "\x00" + requestModel
+func servedKey(scope, providerID, requestModel string) cache.Key {
+	return scopedMemoKey(servedModelsSpec, scope, providerID, requestModel)
 }
 
-// servedResourceOf returns the resource a scope is keyed to: the segment after its last separator (a scope
-// with no separator is its own resource).
-func servedResourceOf(scope string) string {
-	if i := strings.LastIndex(scope, "\x00"); i >= 0 {
-		return scope[i+1:]
+// splitServedScope splits a memo scope into its owner (the credential scope) and its resource: everything after the
+// owner's separator, which for Azure AI Foundry is the endpoint AND the project (servedMemoResource), the same
+// string lookupServedModelForResource is asked with. A scope with no separator is its own resource.
+func splitServedScope(scope string) (owner, resource string) {
+	if owner, resource, ok := strings.Cut(scope, "\x00"); ok {
+		return owner, resource
 	}
-	return scope
+	return scope, scope
 }
 
-// indexServedKeyLocked files key under res in servedByResource. Called
-// with servedMu held, for every key that enters servedMemo.
-func indexServedKeyLocked(key, res string) {
-	bucket := servedByResource[res]
-	if bucket == nil {
-		bucket = map[string]struct{}{}
-		servedByResource[res] = bucket
-	}
-	bucket[key] = struct{}{}
-}
-
-// deleteServedKeyLocked drops key from servedMemo AND its servedByResource bucket (whose emptied remains go
-// too — the index must never outgrow the memo). Called with servedMu held.
-func deleteServedKeyLocked(key string) {
-	e, ok := servedMemo[key]
-	if !ok {
-		return
-	}
-	delete(servedMemo, key)
-	if bucket := servedByResource[e.resource]; bucket != nil {
-		delete(bucket, key)
-		if len(bucket) == 0 {
-			delete(servedByResource, e.resource)
-		}
-	}
+// servedResourceKey keys servedByResource: the resource, the provider and the requested deployment.
+func servedResourceKey(resource, providerID, requestModel string) cache.Key {
+	k, _ := servedByResourceSpec.Key(cache.Param("resource", resource), cache.Param("provider", providerID), cache.Param("model", requestModel))
+	return k
 }
 
 // isModelRouterAlias reports whether a deployment name denotes a model router ("model-router",
@@ -104,24 +92,9 @@ func recordServedModel(scope, providerID, requestModel, served string) {
 	now := time.Now()
 	servedMu.Lock()
 	defer servedMu.Unlock()
-	if len(servedMemo) >= servedMemoMax {
-		for k, e := range servedMemo {
-			if now.Sub(e.seen) > servedMemoTTL {
-				deleteServedKeyLocked(k)
-			}
-		}
-		// Still full after expiring: drop entries until there is room — random map order, acceptable for a
-		// cache this cheap to repopulate (one chat turn).
-		for k := range servedMemo {
-			if len(servedMemo) < servedMemoMax {
-				break
-			}
-			deleteServedKeyLocked(k)
-		}
-	}
 	key := servedKey(scope, providerID, requestModel)
 	varied := false
-	if prev, ok := servedMemo[key]; ok && now.Sub(prev.seen) <= servedMemoTTL {
+	if prev, ok := servedMemo.Get(key); ok && now.Sub(prev.seen) <= servedMemoTTL {
 		changed := normalizeServedModel(prev.model) != normalizeServedModel(served)
 		varied = prev.varied || changed
 		// A stable alias now answered by a different model was re-pointed: the window its earlier rejection
@@ -130,23 +103,50 @@ func recordServedModel(scope, providerID, requestModel, served string) {
 			forgetContextWindow(scope, providerID, requestModel)
 		}
 	}
-	res := servedResourceOf(scope)
-	servedMemo[key] = servedEntry{model: served, seen: now, varied: varied, resource: res}
-	indexServedKeyLocked(key, res)
+	e := servedEntry{model: served, seen: now, varied: varied}
+	servedMemo.Set(key, e, 1, 0)
+	// The resource-wide view keeps each caller's stable observation: an alias this caller saw served by more than one
+	// model (a router, or a deployment re-pointed within the TTL) drops this caller's observation only.
+	owner, resource := splitServedScope(scope)
+	rk := servedResourceKey(resource, providerID, requestModel)
+	cur, _ := servedByResource.Get(rk)
+	next := make(resourceObservations, len(cur)+1)
+	for o, prev := range cur {
+		if now.Sub(prev.seen) <= servedMemoTTL {
+			next[o] = prev
+		}
+	}
+	if varied {
+		delete(next, owner)
+	} else {
+		next[owner] = e
+	}
+	for len(next) > servedResourceOwnersMax {
+		oldest := ""
+		for o, prev := range next {
+			if oldest == "" || prev.seen.Before(next[oldest].seen) {
+				oldest = o
+			}
+		}
+		delete(next, oldest)
+	}
+	if len(next) == 0 {
+		servedByResource.Delete(rk)
+		return
+	}
+	servedByResource.Set(rk, next, int64(len(next)), 0)
 }
 
 // lookupServedEntry returns the memo entry for requestModel (expired entries
 // are dropped and reported as missing).
 func lookupServedEntry(scope, providerID, requestModel string) (servedEntry, bool) {
-	servedMu.Lock()
-	defer servedMu.Unlock()
 	key := servedKey(scope, providerID, requestModel)
-	e, ok := servedMemo[key]
+	e, ok := servedMemo.Get(key)
 	if !ok {
 		return servedEntry{}, false
 	}
 	if time.Since(e.seen) > servedMemoTTL {
-		deleteServedKeyLocked(key)
+		servedMemo.Delete(key)
 		return servedEntry{}, false
 	}
 	return e, true
@@ -154,20 +154,16 @@ func lookupServedEntry(scope, providerID, requestModel string) (servedEntry, boo
 
 // lookupServedModelForResource returns the model most recently seen serving requestModel on one resource,
 // whichever user's call observed it (a deployment serves the same model for every caller of its resource);
-// safe for decisions about the request, never reaches a model list. Varied aliases (routers) are skipped.
+// safe for decisions about the request, never reaches a model list. Varied aliases (routers) are not answered.
 func lookupServedModelForResource(resource, providerID, requestModel string) (string, bool) {
 	if resource == "" || requestModel == "" {
 		return "", false
 	}
-	suffix := "\x00" + resource + "\x00" + providerID + "\x00" + requestModel
-	now := time.Now()
-	servedMu.Lock()
-	defer servedMu.Unlock()
+	obs, _ := servedByResource.Get(servedResourceKey(resource, providerID, requestModel))
 	var best servedEntry
 	found := false
-	for k := range servedByResource[resource] {
-		e := servedMemo[k] // a missing key reads as long-expired and skips
-		if !strings.HasSuffix(k, suffix) || e.varied || now.Sub(e.seen) > servedMemoTTL {
+	for _, e := range obs {
+		if e.varied || time.Since(e.seen) > servedMemoTTL {
 			continue
 		}
 		if !found || e.seen.After(best.seen) {
@@ -187,8 +183,8 @@ func lookupServedModel(scope, providerID, requestModel string) (string, bool) {
 func resetServedModels() {
 	servedMu.Lock()
 	defer servedMu.Unlock()
-	servedMemo = map[string]servedEntry{}
-	servedByResource = map[string]map[string]struct{}{}
+	servedMemo.Clear()
+	servedByResource.Clear()
 }
 
 // enrichServedModels fills in what the memo knows about each alias entry: the served model (ServedModel plus

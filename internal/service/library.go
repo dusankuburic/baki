@@ -390,7 +390,8 @@ func (s *LibraryService) DeleteLibraryFlow(ctx context.Context, flowID string) (
 	if err := s.authorize(ctx, FlowDelete, doc); err != nil {
 		return nil, err
 	}
-	if err := s.storage.DeleteFlow(ctx, flowID); err != nil {
+	// Checked: the store may delete every user's conversations on the flow with it (R-security-3).
+	if err := s.storage.DeleteFlow(storageif.WithFlowDeletionAuthorized(ctx, flowID), flowID); err != nil {
 		return nil, err
 	}
 	s.publish(ctx, events.FlowDeleted, doc)

@@ -19,7 +19,7 @@ import (
 func commandHandler(t *testing.T, c *redisreplica.Cluster) *ChatHandler {
 	t.Helper()
 	svc := service.NewChatService(nil, t.TempDir(), nil, nil, nil, nil, nil, "", service.ChatOptions{Resume: c.Replicas[1].Client, Instance: "replica-2"})
-	return NewChatHandler(svc, nil, &SecurityConfig{JWTEnabled: true}, nil)
+	return NewChatHandler(svc, nil, &SecurityConfig{JWTEnabled: true}, nil, nil)
 }
 
 func callCommand(h *ChatHandler, handler func(http.ResponseWriter, *http.Request), user, body string) *httptest.ResponseRecorder {
@@ -89,7 +89,7 @@ func TestChatCommands_NotTheCallersStreamIsRefused(t *testing.T) {
 // No Redis: the handlers answer exactly as they did.
 func TestChatCommands_WithoutRedisUnchanged(t *testing.T) {
 	svc := service.NewChatService(nil, t.TempDir(), nil, nil, nil, nil, nil, "", service.ChatOptions{})
-	h := NewChatHandler(svc, nil, &SecurityConfig{JWTEnabled: true}, nil)
+	h := NewChatHandler(svc, nil, &SecurityConfig{JWTEnabled: true}, nil, nil)
 	rr := callCommand(h, h.handleCancelStream, "u1", `{"id":"unknown"}`)
 	if rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "STREAM_NOT_FOUND") {
 		t.Errorf("cancel of an unknown stream: %d %s, want 403 STREAM_NOT_FOUND", rr.Code, rr.Body.String())

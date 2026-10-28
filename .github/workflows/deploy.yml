@@ -338,6 +338,28 @@ jobs:
             exit 1
           fi
 
+      # infra/main.bicep requires encryptionKey (at least 32 characters), so an
+      # unset PAD_ENCRYPTION_KEY secret would fail the deployment's validation
+      # with a bare parameter error. Refuse here, before anything reaches Azure,
+      # with what to set: a deployment that ran on the PAD_AUTH_SECRET fallback
+      # sealed its stored credentials under that secret, so the new key goes
+      # with PAD_ENCRYPTION_KEY_PREVIOUS = the current PAD_AUTH_SECRET value
+      # (docs/architecture/operations.md, "Encryption keys"). The value is only
+      # tested for emptiness and length, never printed.
+      - name: Refuse a deploy without PAD_ENCRYPTION_KEY
+        env:
+          PAD_ENCRYPTION_KEY: ${{ secrets.PAD_ENCRYPTION_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PAD_ENCRYPTION_KEY" ]; then
+            echo "::error::The PAD_ENCRYPTION_KEY repository secret is unset, and infra/main.bicep requires it. Set PAD_ENCRYPTION_KEY to a new random value (openssl rand -hex 32). If this deployment ran without it until now, also set PAD_ENCRYPTION_KEY_PREVIOUS to the current PAD_AUTH_SECRET value, so the first boot re-seals the stored credentials (docs/architecture/operations.md, Encryption keys)."
+            exit 1
+          fi
+          if [ "${#PAD_ENCRYPTION_KEY}" -lt 32 ]; then
+            echo "::error::The PAD_ENCRYPTION_KEY repository secret is shorter than 32 characters; the app and infra/main.bicep refuse it. Use openssl rand -hex 32."
+            exit 1
+          fi
+
       - name: Deploy infrastructure
         id: deploy
         uses: azure/arm-deploy@a1361c2c2cd398621955b16ca32e01c65ea340f5  # v2

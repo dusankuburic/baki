@@ -6,9 +6,38 @@ export const CHAT_ERROR_CODES = {
   modelNotAvailable: 'MODEL_NOT_AVAILABLE',
   serverRestarting: 'SERVER_RESTARTING',
   interrupted: 'STREAM_INTERRUPTED',
+  /** The server's watchdog stopped a stream that made no progress; the message names the phase that stalled (setup,
+   * the provider, a tool, an approval, an apply). A generic failure: the bubble shows that copy, with Retry. */
+  idleTimeout: 'STREAM_IDLE_TIMEOUT',
+  /** The server's watchdog stopped a stream whose client had no live event connection. A generic failure. */
+  clientGone: 'STREAM_CLIENT_GONE',
   replicaUnreachable: 'REPLICA_UNREACHABLE',
   streamIdInUse: 'STREAM_ID_IN_USE',
+  contextLimit: 'CONTEXT_LIMIT',
+  toolLoopLimit: 'TOOL_LOOP_LIMIT',
+  /** Client-side: the desktop backend process was replaced while the stream ran (R-frontend-c7). */
+  backendRestarted: 'BACKEND_RESTARTED',
 } as const
+
+/** What an error bubble offers for a server code that is not a provider error, beside Retry: Compact and a hint
+ * for a context overflow (compacting helps when the history is what overflowed; when the current question or its
+ * tool results are, it must be narrowed), a hint for the tool loop's step limit. */
+export interface ChatErrorGuidance {
+  action?: 'compact'
+  hintKey?: 'errors.toolLoopLimitHint' | 'errors.contextLimitHint'
+  hideRetry: boolean
+}
+
+export function chatErrorGuidance(code?: string | null): ChatErrorGuidance | null {
+  switch (code) {
+    case CHAT_ERROR_CODES.contextLimit:
+      return {action: 'compact', hintKey: 'errors.contextLimitHint', hideRetry: false}
+    case CHAT_ERROR_CODES.toolLoopLimit:
+      return {hintKey: 'errors.toolLoopLimitHint', hideRetry: false}
+    default:
+      return null
+  }
+}
 
 export function classifyChatFailure(message: string, code?: string | null): ChatFailureKind {
   if (code === CHAT_ERROR_CODES.capacity) return 'capacity'
@@ -24,6 +53,11 @@ export function isReplicaUnreachable(err: unknown): boolean {
   return (
     typeof err === 'object' && err !== null && (err as {code?: unknown}).code === CHAT_ERROR_CODES.replicaUnreachable
   )
+}
+
+/** A request a draining server refused (503 SERVER_RESTARTING): nothing was done, and it may be sent again. */
+export function isServerRestarting(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as {code?: unknown}).code === CHAT_ERROR_CODES.serverRestarting
 }
 
 export function isStreamGone(err: unknown): boolean {

@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"sync"
 
+	"pad-analyzer/internal/storage/interfaces"
 	"pad-core/logger"
 
 	"github.com/zalando/go-keyring"
@@ -17,6 +19,14 @@ const keyringService = "pad-analyzer"
 type keyringStore struct{}
 
 var warnUnavailableOnce sync.Once
+
+// The provider catalogue and listing read keys under the request's context and by scope (R-provider-19). The OS
+// keychain takes no context and cannot enumerate its entries: a read checks the context before it starts, and a
+// scope's states are its keys read one by one, as before.
+var (
+	_ interfaces.SecretContextReader = keyringStore{}
+	_ interfaces.SecretStateLister   = keyringStore{}
+)
 
 // keyringUnavailable reports whether err indicates the OS secret service is
 // unreachable (as opposed to the key simply not being present).
@@ -63,6 +73,45 @@ func (keyringStore) Get(scope, provider string) (string, error) {
 	return v, nil
 }
 
+// GetCtx is Get once ctx is still live (the keychain call itself cannot be cancelled).
+func (s keyringStore) GetCtx(ctx context.Context, scope, provider string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return s.Get(scope, provider)
+}
+
+// HasCtx is Has once ctx is still live.
+func (s keyringStore) HasCtx(ctx context.Context, scope, provider string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return s.Has(scope, provider)
+}
+
+// KeyStates reads each of keys in turn, stopping when ctx ends; an absent key (or an unavailable keychain) has
+// no entry, an empty value is SecretEmpty. The keychain holds no ciphertext, so no key is unreadable.
+func (s keyringStore) KeyStates(ctx context.Context, scope string, keys []string) (map[string]interfaces.SecretState, error) {
+	out := make(map[string]interfaces.SecretState, len(keys))
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		v, err := keyring.Get(keyringService, keyringEntry(scope, key))
+		switch {
+		case err != nil:
+			if keyringUnavailable(err) {
+				warnUnavailable("get", err)
+			}
+		case v == "":
+			out[key] = interfaces.SecretEmpty
+		default:
+			out[key] = interfaces.SecretUsable
+		}
+	}
+	return out, nil
+}
+
 func (keyringStore) Has(scope, provider string) (bool, error) {
 	_, err := keyring.Get(keyringService, keyringEntry(scope, provider))
 	if err != nil {
@@ -80,7 +129,8 @@ func (keyringStore) Delete(scope, provider string) error {
 	if err == nil || errors.Is(err, keyring.ErrNotFound) {
 		return nil
 	}
-	// Backend unavailable: nothing to delete, don't surface as an error.
+	// Backend unavailable: the key may still be there, so a removal that did not happen is not reported as done
+	// (the settings form would show the provider as not configured while the key stays in the keychain).
 	warnUnavailable("delete", err)
-	return nil
+	return ErrSecretStorageUnavailable
 }

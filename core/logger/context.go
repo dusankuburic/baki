@@ -14,6 +14,16 @@ type ContextAttrs func(ctx context.Context) []slog.Attr
 
 var contextAttrs atomic.Pointer[ContextAttrs]
 
+// attrsKey carries the attributes WithAttrs added to a context.
+type attrsKey struct{}
+
+// WithAttrs returns ctx carrying attrs (after any it already carries): every FromContext line under it has them. For
+// what a layer knows that the request does not, such as the chat stream a detached worker serves.
+func WithAttrs(ctx context.Context, attrs ...slog.Attr) context.Context {
+	prev, _ := ctx.Value(attrsKey{}).([]slog.Attr)
+	return context.WithValue(ctx, attrsKey{}, append(prev[:len(prev):len(prev)], attrs...))
+}
+
 // SetContextAttrs installs the extractor FromContext uses. Intended to be called once at startup; nil removes it.
 func SetContextAttrs(fn ContextAttrs) {
 	if fn == nil {
@@ -23,16 +33,21 @@ func SetContextAttrs(fn ContextAttrs) {
 	contextAttrs.Store(&fn)
 }
 
-// FromContext returns the default logger carrying the attributes the registered extractor finds on ctx, so a
-// line logged while serving a request can be joined with that request's access-log line and trace. Without an
-// extractor, or when ctx carries nothing it knows, it is slog.Default() itself.
+// FromContext returns the default logger carrying the attributes the registered extractor finds on ctx, then those
+// WithAttrs added, so a line logged while serving a request can be joined with that request's access-log line and
+// trace. When ctx carries none, it is slog.Default() itself.
 func FromContext(ctx context.Context) *slog.Logger {
 	l := slog.Default()
-	fn := contextAttrs.Load()
-	if fn == nil || ctx == nil {
+	if ctx == nil {
 		return l
 	}
-	attrs := (*fn)(ctx)
+	var attrs []slog.Attr
+	if fn := contextAttrs.Load(); fn != nil {
+		attrs = (*fn)(ctx)
+	}
+	if own, _ := ctx.Value(attrsKey{}).([]slog.Attr); len(own) > 0 {
+		attrs = append(attrs[:len(attrs):len(attrs)], own...)
+	}
 	if len(attrs) == 0 {
 		return l
 	}

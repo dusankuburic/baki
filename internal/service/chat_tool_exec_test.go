@@ -16,7 +16,7 @@ import (
 // panic would kill the process.
 func TestGuardedToolRun_ConvertsPanicToErrorResult(t *testing.T) {
 	call := ai.ToolCall{ID: "t7", Name: "search_flow", Input: []byte(`{"query":"x"}`)}
-	res := guardedToolRun(call, func() toolExecResult {
+	res := guardedToolRun(context.Background(), call, func() toolExecResult {
 		panic("index out of range")
 	})
 	if res.id != "t7" || res.name != "search_flow" {
@@ -35,7 +35,7 @@ func TestGuardedToolRun_ConvertsPanicToErrorResult(t *testing.T) {
 func TestGuardedToolRun_PassesSuccessThrough(t *testing.T) {
 	call := ai.ToolCall{ID: "t1", Name: "get_block"}
 	want := toolExecResult{id: "t1", name: "get_block", result: "block b1", took: 3 * time.Millisecond}
-	got := guardedToolRun(call, func() toolExecResult { return want })
+	got := guardedToolRun(context.Background(), call, func() toolExecResult { return want })
 	if got.id != want.id || got.name != want.name || got.result != want.result || got.took != want.took {
 		t.Errorf("guarded run altered the result: %+v, want %+v", got, want)
 	}

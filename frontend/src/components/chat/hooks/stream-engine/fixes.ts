@@ -2,20 +2,27 @@ import {useCallback, useEffect, useRef} from 'react'
 import type {MutableRefObject} from 'react'
 import i18n from '@/i18n'
 import {chatApi, flowApi, analysisApi, ApiError} from '@/api'
-import {isReplicaUnreachable} from '@/lib/chatErrors'
+import {isReplicaUnreachable, isServerRestarting} from '@/lib/chatErrors'
+import {isRateLimited} from '@/lib/streamControl'
 import {logger} from '@/lib/logger'
 import {useFlowStore} from '@/stores/flowStore'
 import {useAnalysisStore} from '@/stores/analysisStore'
 import type {ChatEvent, FixDecisionEventItem, FixProposalPayload} from '@/lib/chatEvent'
-import {NOTICE_HISTORY_TRUNCATED} from '@/lib/chatEvent'
+import {NOTICE_HISTORY_TRUNCATED, NOTICE_KNOWLEDGE} from '@/lib/chatEvent'
+import type {KnowledgeStatus} from '@/lib/chatEvent'
 import type {ToolCallRecord} from '@/types'
 import type {ApprovalCard} from '@/stores/chatStore'
 import {useChatStore} from '@/stores/chatStore'
 import type {ChatStoreState, StreamAcc, ToastApi} from './types'
+import type {ClosingStreams} from './closing'
+import {reloadLibraryDocument} from '@/lib/libraryReload'
 import {pendingCard, asCardStatus, asItemStatus, decisionTargets} from './helpers'
 
 interface FixDeps {
   streamAccRef: MutableRefObject<Map<string, StreamAcc>>
+  closing: ClosingStreams
+  persistThread: (threadId: string, flowId: string) => void
+  updateMessage: ChatStoreState['updateMessage']
   toastRef: MutableRefObject<ToastApi | null>
   setFixProposal: ChatStoreState['setFixProposal']
   patchFixProposal: ChatStoreState['patchFixProposal']
@@ -26,6 +33,9 @@ interface FixDeps {
 
 export function useFixEvents({
   streamAccRef,
+  closing,
+  persistThread,
+  updateMessage,
   toastRef,
   setFixProposal,
   patchFixProposal,
@@ -51,9 +61,55 @@ export function useFixEvents({
             if (updated) useFlowStore.getState().applyRemoteDocumentUpdate(updated)
           })
           .catch(err => logger.warn('Post-fix document reload failed', err))
+      } else if (curDoc && curDoc.id === thread.flowId) {
+        // A library flow: reloaded here, not only through the presence socket's flow.changed, which a disconnected
+        // or reconnecting socket never delivers (R-frontend-8).
+        reloadLibraryDocument(thread.flowId).catch(err => logger.warn('Post-fix document reload failed', err))
       }
     },
     [],
+  )
+
+  // The decision of a stream stopped mid-apply: the message was committed at the stop with the card "applying", and
+  // takes the outcome now, saved again (R-approvals-5).
+  const settleCommittedCard = useCallback(
+    (streamId: string, proposalId: string, status: string, message?: string, items?: FixDecisionEventItem[]) => {
+      const entry = closing.closing(streamId)
+      if (!entry) return
+      const cardStatus = asCardStatus(status)
+      if (cardStatus === 'applying') return
+      updateMessage(entry.threadId, entry.messageId, m => ({
+        ...m,
+        fixProposals: m.fixProposals?.map(fp => {
+          if (fp.proposalId !== proposalId) return fp
+          const rows = fp.items ?? []
+          const next = rows.map(it => ({...it}))
+          const targets = decisionTargets(
+            rows.map(it => ({
+              id: it.id ?? '',
+              label: it.blockLabel,
+              ruleId: it.ruleId,
+              summary: it.summary,
+              status: 'pending' as const,
+            })),
+            items ?? [],
+          )
+          for (const {index, item} of targets) {
+            next[index] = {...next[index]!, status: asItemStatus(item.status), message: item.message}
+          }
+          if (targets.length === 0 && next.length === 1) {
+            const sole =
+              cardStatus === 'declined' || cardStatus === 'timeout' || cardStatus === 'cancelled' ? 'error' : cardStatus
+            next[0] = {...next[0]!, status: sole, message}
+          }
+          return {...fp, status: cardStatus, message: message ?? fp.message, items: next}
+        }),
+      }))
+      const thread = useChatStore.getState().threads.find(t => t.id === entry.threadId)
+      if (thread) persistThread(entry.threadId, thread.flowId)
+      if (cardStatus === 'applied' || cardStatus === 'applied-unresolved') refreshAfterFix(entry.threadId)
+    },
+    [closing, persistThread, refreshAfterFix, updateMessage],
   )
 
   const onFixProposal = useCallback(
@@ -74,7 +130,10 @@ export function useFixEvents({
       items?: FixDecisionEventItem[],
     ) => {
       const acc = streamAccRef.current.get(streamId)
-      if (!acc) return
+      if (!acc) {
+        settleCommittedCard(streamId, proposalId, status, message, items)
+        return
+      }
       const cardStatus = asCardStatus(status)
       const slot = useChatStore.getState().streams[acc.threadId]
       const card = slot?.approvals.find(c => c.proposalId === proposalId)
@@ -110,7 +169,7 @@ export function useFixEvents({
         refreshAfterFix(acc.threadId)
       }
     },
-    [streamAccRef, patchFixProposal, refreshAfterFix],
+    [streamAccRef, patchFixProposal, refreshAfterFix, settleCommittedCard],
   )
 
   // The retry action of the unreachable-server toast calls the latest respond (it cannot name itself).
@@ -130,8 +189,9 @@ export function useFixEvents({
       // of it now instead of waiting out the server's decision timer.
       const readOnlyDecline = approvedClick && useFlowStore.getState().readOnly
       const approved = approvedClick && !readOnlyDecline
+      const sent = approved ? 'applying' : 'declined'
       patchFixProposal(threadId, card.proposalId, {
-        status: approved ? 'applying' : 'declined',
+        status: sent,
         ...(readOnlyDecline ? {message: i18n.t('chat:fixCard.readOnly')} : {}),
       })
       const args = [slot.streamId, card.proposalId, approved, excludedItemIndices] as const
@@ -143,12 +203,26 @@ export function useFixEvents({
             })
           : chatApi.respondFixDecision(...args)
       respond.catch(err => {
-        if (isReplicaUnreachable(err)) {
-          // The server running the stream did not answer: nothing was decided, so the card goes back to pending and the
-          // decision can be sent again.
+        // The server may have settled the card meanwhile (its decision timed out, the stream ended): that outcome
+        // stands, and nothing is left to send again.
+        const now = useChatStore.getState().streams[threadId]?.approvals.find(c => c.proposalId === card.proposalId)
+        if (now?.status !== sent) {
+          logger.warn('Approval decision failed after the card was settled', err)
+          return
+        }
+        const restarting = isServerRestarting(err)
+        const limited = isRateLimited(err)
+        if (isReplicaUnreachable(err) || restarting || limited) {
+          // The server running the stream did not answer, or is restarting and refused the approve: nothing was
+          // decided, so the card goes back to pending and the decision can be sent again.
           logger.warn('Approval decision could not reach the server running the stream', err)
           patchFixProposal(threadId, card.proposalId, {status: 'pending'})
-          toastRef.current?.warning(i18n.t('chat:fixCard.decisionUnreachable'), {
+          const notice = restarting
+            ? 'chat:fixCard.decisionRestarting'
+            : limited
+              ? 'chat:fixCard.decisionRateLimited'
+              : 'chat:fixCard.decisionUnreachable'
+          toastRef.current?.warning(i18n.t(notice), {
             action: {
               label: i18n.t('chat:fixCard.decisionRetry'),
               onClick: () => respondRef.current(threadId, approved, card.proposalId, excludedItemIndices),
@@ -174,9 +248,11 @@ export function useFixEvents({
       const cards: ApprovalCard[] = []
       const byId = new Map<string, ApprovalCard>()
       let truncated = 0
+      let knowledge: KnowledgeStatus | undefined
       for (const ev of events) {
         if (ev.kind === 'notice') {
           if (ev.notice === NOTICE_HISTORY_TRUNCATED && ev.keptFrom != null) truncated = Math.max(truncated, ev.keptFrom)
+          if (ev.notice === NOTICE_KNOWLEDGE && ev.status) knowledge = ev.status
         } else if (ev.kind === 'tool-result') {
           calls.push({name: ev.name, label: ev.label, ok: ev.ok, durationMs: ev.durationMs, summary: ev.summary})
         } else if (ev.kind === 'fix-proposal') {
@@ -198,6 +274,7 @@ export function useFixEvents({
       replaceStreamTools(acc.threadId, calls)
       replaceStreamFixes(acc.threadId, cards)
       if (truncated > 0) setStreamMeta(acc.threadId, {truncated})
+      if (knowledge) setStreamMeta(acc.threadId, {knowledge})
     },
     [streamAccRef, replaceStreamTools, replaceStreamFixes, setStreamMeta],
   )

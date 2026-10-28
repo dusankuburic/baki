@@ -17,6 +17,7 @@ const StreamingBubble = memo(() => {
           content: slot.text,
           timestamp,
           ...(slot.truncated ? {truncated: slot.truncated} : {}),
+          ...(slot.knowledge ? {knowledge: slot.knowledge} : {}),
         }}
         isStreaming
       />

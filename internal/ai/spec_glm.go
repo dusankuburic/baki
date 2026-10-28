@@ -1,8 +1,12 @@
 package ai
 
+// glmProviderID is the registry id: the constructors label their counters with it (a reference to glmSpec.ID from a
+// constructor would be an initialization cycle through Ctor).
+const glmProviderID = "glm"
+
 // glmSpec: z.ai's OpenAI-compatible endpoint with a bare key.
 var glmSpec = ProviderSpec{
-	ID:           "glm",
+	ID:           glmProviderID,
 	Name:         "GLM (z.ai)",
 	AuthType:     AuthAPIKey,
 	Caps:         CapChat | CapStream | CapEmbeddings | CapTools | CapReasoning | CapOrgShared,

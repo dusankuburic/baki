@@ -1,12 +1,15 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
+import type {BackendEvent} from '@/platform/types'
 
+// The backend's address: the desktop shell respawns a dead sidecar on a new port with a new token (R-frontend-c7).
+const backend = vi.hoisted(() => ({port: 9999, token: 'mock-token'}))
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
-    getBackendConfig: vi.fn().mockResolvedValue({
-      apiUrl: 'http://localhost:9999',
-      token: 'mock-token',
-      port: 9999,
-    }),
+    getBackendConfig: vi.fn(async () => ({
+      apiUrl: `http://localhost:${backend.port}`,
+      token: backend.token,
+      port: backend.port,
+    })),
   }),
 }))
 
@@ -40,9 +43,13 @@ async function getClient() {
 
 beforeEach(() => {
   vi.useFakeTimers()
+  backend.port = 9999
+  backend.token = 'mock-token'
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // A stream a test left subscribed would keep its online/visibility listeners, and its reconnects, into the next.
+  ;(await getClient()).resetEventStreamForTest()
   vi.useRealTimers()
   vi.restoreAllMocks()
   vi.resetModules()
@@ -184,29 +191,137 @@ describe('connectEvents server-close and backoff', () => {
   })
 })
 
-describe('connectEvents retry budget (bounded reconnects)', () => {
-  it('stops retrying after the budget is exhausted, then recovers on the online event', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
-      return new Response('service unavailable', {status: 503})
+describe('connectEvents never gives up while a listener exists (R-streaming-6)', () => {
+  // /api/events answers 503 until the test lets it open; every other path answers 200.
+  // A down /api/events either answers an error status (a proxy 5xx, too many connections) or is not reached at all.
+  function mockOutage(failure: 'status' | 'network' = 'status') {
+    const state = {eventsUp: false}
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      if (!String(url).endsWith('/api/events')) {
+        return new Response('{}', {status: 200, headers: {'Content-Type': 'application/json'}})
+      }
+      if (!state.eventsUp) {
+        if (failure === 'network') throw new TypeError('Failed to fetch')
+        return new Response('service unavailable', {status: 503})
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(ctl) {
+          init?.signal?.addEventListener('abort', () => {
+            try {
+              ctl.error(new DOMException('The operation was aborted.', 'AbortError'))
+            } catch {
+            }
+          })
+        },
+      })
+      return new Response(body, {status: 200, headers: {'Content-Type': 'text/event-stream'}})
     })
+    const eventFetches = () => spy.mock.calls.filter(([u]) => String(u).endsWith('/api/events')).length
+    return {state, eventFetches}
+  }
 
-    const {subscribeToEvents, getEventConnectionState} = await getClient()
-    await subscribeToEvents(() => {})
-    await vi.advanceTimersByTimeAsync(0)
-    expect(fetch).toHaveBeenCalledTimes(1)
-
+  async function exhaustOldBudget(failure: 'status' | 'network' = 'status') {
+    const out = mockOutage(failure)
+    const client = await getClient()
+    await client.subscribeToEvents(() => {})
     await vi.advanceTimersByTimeAsync(181_000)
-    const attemptsAfterBudget = (fetch as ReturnType<typeof vi.fn>).mock.calls.length
-    expect(attemptsAfterBudget).toBe(11)
+    expect(out.eventFetches()).toBe(11)
+    return {...out, client}
+  }
 
-    expect(getEventConnectionState()).toBe('idle')
+  it('keeps retrying at the 30 s ceiling and never reports idle', async () => {
+    const {eventFetches, client} = await exhaustOldBudget()
+    const seen: string[] = []
+    client.subscribeConnectionState(s => seen.push(s))
+
     await vi.advanceTimersByTimeAsync(120_000)
-    expect(fetch).toHaveBeenCalledTimes(11)
+
+    expect(eventFetches()).toBe(15)
+    expect(client.getEventConnectionState()).not.toBe('idle')
+    expect(seen).not.toContain('idle')
+  })
+
+  it('reconnects within 1 s of any successful API response after a network failure', async () => {
+    const {state, eventFetches, client} = await exhaustOldBudget('network')
+    state.eventsUp = true
+
+    await client.request('/api/flows', {method: 'GET'})
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(eventFetches()).toBe(12)
+    expect(client.getEventConnectionState()).toBe('open')
+  })
+
+  it('keeps the backoff after an error status from /api/events: other answers do not override it', async () => {
+    const {eventFetches, client} = await exhaustOldBudget('status')
+
+    await client.request('/api/flows', {method: 'GET'})
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(eventFetches()).toBe(11)
+
+    await vi.advanceTimersByTimeAsync(29_000)
+    expect(eventFetches()).toBe(12)
+  })
+
+  it('reconnects within 1 s when the tab becomes visible', async () => {
+    const {eventFetches} = await exhaustOldBudget()
+
+    Object.defineProperty(document, 'visibilityState', {value: 'visible', configurable: true})
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(eventFetches()).toBe(12)
+  })
+
+  it('reconnects when the browser comes back online, every time, not only the first', async () => {
+    const {eventFetches} = await exhaustOldBudget()
 
     window.dispatchEvent(new Event('online'))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(eventFetches()).toBe(12)
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    window.dispatchEvent(new Event('online'))
     await vi.advanceTimersByTimeAsync(0)
-    expect(fetch).toHaveBeenCalledTimes(12)
-    expect(['connecting', 'reconnecting']).toContain(getEventConnectionState())
+    expect(eventFetches()).toBe(13)
+  })
+
+  it('a new subscriber (a stream registering) reconnects at once instead of waiting out the backoff', async () => {
+    const {eventFetches, client} = await exhaustOldBudget()
+
+    await client.subscribeToEvents(() => {})
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(eventFetches()).toBe(12)
+  })
+
+  it('does not hammer the server: nudges never start more than one attempt a second', async () => {
+    const {eventFetches, client} = await exhaustOldBudget('network')
+
+    for (let i = 0; i < 10; i++) {
+      await client.request(`/api/flows?i=${i}`, {method: 'GET'})
+      await vi.advanceTimersByTimeAsync(100)
+    }
+
+    expect(eventFetches()).toBeLessThanOrEqual(13)
+  })
+
+  it('stops listening for online and visibility once torn down', async () => {
+    const {eventFetches} = mockOutage()
+    const client = await getClient()
+    const unsub = await client.subscribeToEvents(() => {})
+    await vi.advanceTimersByTimeAsync(0)
+    unsub()
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(client.getEventConnectionState()).toBe('idle')
+    const before = eventFetches()
+
+    window.dispatchEvent(new Event('online'))
+    document.dispatchEvent(new Event('visibilitychange'))
+    await client.request('/api/flows', {method: 'GET'})
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(eventFetches()).toBe(before)
   })
 })
 
@@ -398,5 +513,120 @@ describe('connectEvents replay gap marker', () => {
     conns[0]!.push(GAP)
     await vi.advanceTimersByTimeAsync(0)
     expect(second).toHaveBeenCalledTimes(1)
+  })
+})
+
+interface Call {
+  url: string
+  auth: string
+  lastEventId: string | undefined
+}
+
+function mockRestartingBackend() {
+  const calls: Call[] = []
+  // Every events connection starts with a frame that carries an id: a reconnect has a cursor it could send.
+  let frameId = 40
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    const headers = (init?.headers ?? {}) as Record<string, string>
+    calls.push({url: String(url), auth: headers.Authorization ?? '', lastEventId: headers['Last-Event-ID']})
+    if (!String(url).endsWith('/api/events')) {
+      return new Response('{"ok":true}', {status: 200, headers: {'Content-Type': 'application/json'}})
+    }
+    const encoder = new TextEncoder()
+    const body = new ReadableStream<Uint8Array>({
+      start(ctl) {
+        ctl.enqueue(encoder.encode(`id: ${++frameId}\ndata: {"name":"x","data":{}}\n\n`))
+        init?.signal?.addEventListener('abort', () => {
+          try {
+            ctl.error(new DOMException('The operation was aborted.', 'AbortError'))
+          } catch {
+          }
+        })
+      },
+    })
+    return new Response(body, {status: 200, headers: {'Content-Type': 'text/event-stream'}})
+  })
+  const events = () => calls.filter(c => c.url.endsWith('/api/events'))
+  const others = () => calls.filter(c => !c.url.endsWith('/api/events'))
+  return {calls, events, others}
+}
+
+function fakeShell() {
+  let emit: ((e: BackendEvent) => void) | null = null
+  const onBackendEvent = (cb: (e: BackendEvent) => void) => {
+    emit = cb
+    return () => {
+      emit = null
+    }
+  }
+  return {onBackendEvent, emit: (e: BackendEvent) => emit?.(e)}
+}
+
+describe('a backend that restarted (R-frontend-c7)', () => {
+  beforeEach(() => {
+    backend.port = 1111
+    backend.token = 'tok-a'
+  })
+
+  it("after 'terminated' then 'ready' with a new port, requests and the events stream use the new url and token", async () => {
+    const be = mockRestartingBackend()
+    const shell = fakeShell()
+    const client = await getClient()
+    client.watchBackendRestarts(shell.onBackendEvent)
+    await client.subscribeToEvents(() => {})
+    await vi.advanceTimersByTimeAsync(0)
+    await client.request('/api/flows', {method: 'GET'})
+    expect(be.others()[0]).toMatchObject({url: 'http://localhost:1111/api/flows', auth: 'Bearer tok-a'})
+
+    shell.emit({kind: 'terminated', message: 'exit code 1'})
+    backend.port = 2222
+    backend.token = 'tok-b'
+    shell.emit({kind: 'ready', message: ''})
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Same path inside the GET cache's lifetime: the answer of the old process is not reused either.
+    await client.request('/api/flows', {method: 'GET'})
+    expect(be.others().at(-1)).toMatchObject({url: 'http://localhost:2222/api/flows', auth: 'Bearer tok-b'})
+    const ev = be.events()
+    expect(ev).toHaveLength(2)
+    // The new process has its own event log: the old one's cursor means nothing to it.
+    expect(ev[1]).toMatchObject({url: 'http://localhost:2222/api/events', auth: 'Bearer tok-b', lastEventId: undefined})
+    expect(client.getEventConnectionState()).toBe('open')
+  })
+
+  it("adopts the config a 'ready' event carries", async () => {
+    const be = mockRestartingBackend()
+    const shell = fakeShell()
+    const client = await getClient()
+    client.watchBackendRestarts(shell.onBackendEvent)
+    await client.request('/api/a', {method: 'GET'})
+
+    shell.emit({kind: 'error', message: 'spawn failed'})
+    shell.emit({
+      kind: 'ready',
+      message: '',
+      config: {apiUrl: 'http://localhost:3333', token: 'tok-c', port: 3333},
+    })
+    await client.request('/api/b', {method: 'GET'})
+
+    expect(be.others().at(-1)).toMatchObject({url: 'http://localhost:3333/api/b', auth: 'Bearer tok-c'})
+  })
+
+  it("tells the restart subscribers once, and only for a 'ready' that follows a failure", async () => {
+    mockRestartingBackend()
+    const shell = fakeShell()
+    const client = await getClient()
+    const {onBackendRestarted} = await import('@/lib/backendRestart')
+    const seen = vi.fn()
+    onBackendRestarted(seen)
+    client.watchBackendRestarts(shell.onBackendEvent)
+
+    shell.emit({kind: 'ready', message: ''})
+    expect(seen).not.toHaveBeenCalled()
+
+    shell.emit({kind: 'terminated', message: ''})
+    shell.emit({kind: 'ready', message: ''})
+    shell.emit({kind: 'ready', message: ''})
+    expect(seen).toHaveBeenCalledTimes(1)
   })
 })

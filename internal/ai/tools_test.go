@@ -228,8 +228,8 @@ func TestExecuteTool_NameLiteralsMasked(t *testing.T) {
 
 func TestToolDefinitions_StableAndComplete(t *testing.T) {
 	defs := ToolDefinitions()
-	if len(defs) != 8 {
-		t.Fatalf("expected 8 tools, got %d", len(defs))
+	if len(defs) != 9 {
+		t.Fatalf("expected 9 tools, got %d", len(defs))
 	}
 	for _, d := range defs {
 		if d.Name == "" || len(d.InputSchema) == 0 {

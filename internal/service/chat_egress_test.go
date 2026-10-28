@@ -286,6 +286,8 @@ func (fx *egressFixture) readToolCalls() []ai.ToolCall {
 		call("sf", "get_subflow_blocks", map[string]any{"subflowId": fx.subflow}),
 		call("lf", "list_findings", map[string]any{}),
 		call("vl", "get_variable_lineage", map[string]any{"name": "DbPassword"}),
+		// The org's knowledge base: the guideline chunk carries the rag-guidelines canary (R-knowledge-6).
+		call("kb", "search_knowledge", map[string]any{"query": "service account rotation"}),
 	)
 }
 
@@ -600,6 +602,10 @@ func TestChatEgress_ToolResultsCarryNoCanary(t *testing.T) {
 				results := run.toolResults(tool)
 				if len(results) == 0 {
 					t.Fatalf("%s left no result in the run", tool)
+				}
+				// The knowledge search must have found the guideline chunk, or its check below would be vacuous.
+				if tool == "search_knowledge" && !strings.Contains(strings.Join(results, " "), "guidelines.md") {
+					t.Fatalf("search_knowledge found no guideline: %v", results)
 				}
 				for canary, channel := range egressCanaries() {
 					for _, res := range results {

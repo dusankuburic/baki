@@ -1,0 +1,15 @@
+# responses/reasoning.sse through parseResponsesSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="o4-mini-2025-04-16"
+02 silentStep=+1 served="o4-mini-2025-04-16"
+03 keepalive served="o4-mini-2025-04-16"
+04 keepalive served="o4-mini-2025-04-16"
+05 keepalive served="o4-mini-2025-04-16"
+06 keepalive served="o4-mini-2025-04-16"
+07 silentStep=-1 served="o4-mini-2025-04-16"
+08 keepalive served="o4-mini-2025-04-16"
+09 text="Yes: block 14 exits once LoopIndex reaches the row count." served="o4-mini-2025-04-16"
+10 keepalive served="o4-mini-2025-04-16"
+11 done finish="stop" in=640 out=214 items=[{"encrypted_content":"gAAAAAWIREFIXTURENOTREALENCRYPTEDCONTENT==","id":"rs_WIRE0000000000000000000000000007","summary":[{"type":"summary_text","text":"**Checking the loop exit** Block 14 compares LoopIndex."}],"type":"reasoning"},{"content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"Yes: block 14 exits once LoopIndex reaches the row count."}],"id":"msg_WIRE0000000000000000000000000007","role":"assistant","status":"completed","type":"message"}] served="o4-mini-2025-04-16"
+return nil
+summary chunks=11 keepalives=7 text="Yes: block 14 exits once LoopIndex reaches the row count."

@@ -1,0 +1,20 @@
+{
+  "why": "The user declines the approval card: the answer must say nothing changed and explain the manual edit.",
+  "flow": "web_automation",
+  "selectedBlock": "B9",
+  "decision": "decline",
+  "question": "Add a timeout to the Get Details Of Element action.",
+  "expect": {
+    "toolsSubset": [
+      "apply_fix"
+    ],
+    "mustMention": [
+      "B9"
+    ],
+    "mustLink": [
+      "block:",
+      "finding:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

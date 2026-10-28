@@ -1,0 +1,27 @@
+{
+  "data": {
+    "blockId": "b1",
+    "blockLabel": "Call API",
+    "fixType": "wrap-error-handler",
+    "items": [
+      {
+        "blockId": "b1",
+        "blockLabel": "Call API",
+        "fixType": "wrap-error-handler",
+        "id": "b1:unhandled-error",
+        "line": 3,
+        "ruleId": "unhandled-error",
+        "summary": "Fix \"wrap-error-handler\" for rule \"unhandled-error\" on block b1 (HTTPClient.InvokeUrl, line 3):\n  wrap lines 3-3 (re-indent +1 level):\n    + ON BLOCK ERROR\n    · lines 3-3 kept, re-indented\n    + END"
+      }
+    ],
+    "line": 3,
+    "previewKind": "fix-patch",
+    "proposalId": "proposal-1",
+    "requiredScope": "write",
+    "ruleId": "unhandled-error",
+    "summary": "Fix \"wrap-error-handler\" for rule \"unhandled-error\" on block b1 (HTTPClient.InvokeUrl, line 3):\n  wrap lines 3-3 (re-indent +1 level):\n    + ON BLOCK ERROR\n    · lines 3-3 kept, re-indented\n    + END",
+    "tool": "apply_fix"
+  },
+  "streamId": "stream-1",
+  "type": "fix_proposal"
+}

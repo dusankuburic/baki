@@ -232,3 +232,36 @@ describe('persisted approvals', () => {
     expect(wire(loaded)).toEqual(stored)
   })
 })
+
+// What a stored turn carries about itself survives a reload: the knowledge notice (R-knowledge-1), the omitted-history
+// chip (R-streaming-7) and a failure's code and shared-credential flag.
+describe('parseChatMessage turn record fields', () => {
+  const base = {id: 'm1', role: 'assistant', content: 'a', timestamp: 't'}
+
+  it('keeps a known knowledge status, the omitted count and the error classification', () => {
+    expect(
+      parseChatMessage({
+        ...base,
+        knowledge: 'identity_mismatch',
+        truncated: 4,
+        finishReason: 'error',
+        errorCode: 'CONTEXT_LIMIT',
+        errorShared: true,
+      }),
+    ).toEqual({
+      ...base,
+      knowledge: 'identity_mismatch',
+      truncated: 4,
+      finishReason: 'error',
+      errorCode: 'CONTEXT_LIMIT',
+      errorShared: true,
+    })
+  })
+
+  it('drops values it cannot trust', () => {
+    expect(parseChatMessage({...base, knowledge: 'melted', truncated: -2, errorCode: 7, errorShared: 'yes'})).toEqual(
+      base,
+    )
+    expect(parseChatMessage({...base, truncated: 1.5})).toEqual(base)
+  })
+})

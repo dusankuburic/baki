@@ -58,7 +58,6 @@ vi.mock('@/api', () => ({
     clearConversation: vi.fn(),
     exportConversation: vi.fn(),
     cancelStream: vi.fn(),
-    beginStream: vi.fn(),
     previewContext: vi.fn(),
     respondFixDecision: vi.fn().mockResolvedValue(undefined),
   },
@@ -540,5 +539,174 @@ describe('AITab retry placement', () => {
       useFlowStore.getState().selectBlock('b3')
     })
     expect(listRenders).toHaveBeenCalledTimes(before)
+  })
+})
+
+// R-frontend-5: the message list is not a live region; each committed answer is announced once, as a capped prefix,
+// through the AITab status region, and nothing is announced for history or on re-render.
+describe('AITab turn announcements', () => {
+  const user = (id: string, content: string): ChatMessage => ({id, role: 'user', content, timestamp: 't'})
+  const answer = (id: string, content: string): ChatMessage => ({
+    id,
+    role: 'assistant',
+    content,
+    timestamp: 't',
+    finishReason: 'stop',
+  })
+  const slot = (messageId: string) => ({
+    streamId: 's-' + messageId,
+    messageId,
+    text: '',
+    isThinking: true,
+    tokens: 0,
+    toolStatus: null,
+    toolCalls: [],
+    approvals: [],
+  })
+
+  function seed(messages: ChatMessage[], streamingMessageId?: string) {
+    vi.mocked(providersApi.listProviders).mockResolvedValue([
+      {id: 'claude', name: 'Claude', configured: true, authType: 'apiKey', models: [], defaultModel: 'm1'},
+    ] as unknown as ProviderInfo[])
+    vi.mocked(chatApi.cancelStream).mockResolvedValue(undefined)
+    useFlowStore.setState({document: {id: 'f1', name: 'Flow', subflows: []} as never})
+    useChatStore.setState({
+      activeThreadId: 't1',
+      threads: [
+        {
+          id: 't1',
+          flowId: 'f1',
+          title: 'T',
+          createdAt: '2024-01-01T00:00:00Z',
+          contextBlockId: null,
+          selectedSourceFiles: [],
+          tokensIn: 0,
+          tokensOut: 0,
+        },
+      ],
+      conversations: new Map([['t1', messages]]),
+      historyStatus: {t1: {state: 'loaded', token: 1}},
+      streams: streamingMessageId ? {t1: slot(streamingMessageId) as never} : {},
+    })
+  }
+
+  const region = () => screen.getByTestId('ai-turn-region')
+
+  /** Every non-empty text inserted into the region (a node added, or a text node rewritten): one per announcement. */
+  function recordAnnouncements(el: HTMLElement) {
+    const seen: string[] = []
+    const mo = new MutationObserver(records => {
+      for (const r of records) {
+        if (r.type === 'characterData' && r.target.textContent?.trim()) seen.push(el.textContent!.trim())
+        r.addedNodes.forEach(n => {
+          if (n.textContent?.trim()) seen.push(el.textContent!.trim())
+        })
+      }
+    })
+    mo.observe(el, {subtree: true, childList: true, characterData: true})
+    return {seen, stop: () => mo.disconnect()}
+  }
+
+  it('announces nothing for the history already in the thread', async () => {
+    seed([user('u1', 'What does it do?'), answer('a1', 'An old answer from yesterday.')])
+    await act(async () => {
+      render(<ChatShell />)
+    })
+    await screen.findByText('An old answer from yesterday.')
+    expect(region()).toHaveTextContent(/^$/)
+  })
+
+  it('a committed answer produces exactly one announcement, its capped prefix', async () => {
+    seed([user('u1', 'What does it do?')], 'a1')
+    await act(async () => {
+      render(<ChatShell />)
+    })
+    const log = recordAnnouncements(region())
+
+    const long =
+      'The flow fetches open orders from the ERP and posts one invoice per order. ' + 'More detail. '.repeat(60)
+    await act(async () => {
+      useChatStore.getState().appendMessage('t1', answer('a1', long))
+      useChatStore.getState().endStream('t1')
+    })
+    await act(async () => {
+      useFlowStore.getState().selectBlock('b2')
+      useChatStore.setState({drafts: {t1: 'typing'}})
+    })
+    log.stop()
+
+    expect(log.seen).toHaveLength(1)
+    expect(log.seen[0]).toContain('The flow fetches open orders from the ERP')
+    expect(log.seen[0]!.length).toBeLessThan(long.length)
+    expect(log.seen[0]!.endsWith('…')).toBe(true)
+  })
+
+  // Review of R-frontend-5: the turn line was never cleared, so an answer identical to the last one was silent.
+  it('announces two identical answers in a row, each once', async () => {
+    seed([user('u1', 'Is it valid?')], 'a1')
+    await act(async () => {
+      render(<ChatShell />)
+    })
+    const log = recordAnnouncements(region())
+    await act(async () => {
+      useChatStore.getState().appendMessage('t1', answer('a1', 'Yes.'))
+      useChatStore.getState().endStream('t1')
+    })
+    await act(async () => {
+      useChatStore.getState().appendMessage('t1', user('u2', 'Still valid?'))
+      useChatStore.getState().startStream('t1', 's-a2', 'a2')
+    })
+    await act(async () => {
+      useChatStore.getState().appendMessage('t1', answer('a2', 'Yes.'))
+      useChatStore.getState().endStream('t1')
+    })
+    log.stop()
+    expect(log.seen).toEqual(['Answer: Yes.', 'Answer: Yes.'])
+  })
+
+  // Review of R-frontend-5: a queued follow-up drained in the same tick as the answer hid the answer.
+  it('announces an answer whose next queued turn starts in the same update', async () => {
+    seed([user('u1', 'What does it do?')], 'a1')
+    await act(async () => {
+      render(<ChatShell />)
+    })
+    const log = recordAnnouncements(region())
+    await act(async () => {
+      const st = useChatStore.getState()
+      st.appendMessage('t1', answer('a1', 'It posts invoices.'))
+      st.endStream('t1')
+      st.appendMessage('t1', user('u2', 'And then?'))
+      st.startStream('t1', 's-a2', 'a2')
+    })
+    log.stop()
+    expect(log.seen).toEqual(['Answer: It posts invoices.'])
+  })
+
+  it('a thread switch announces nothing, and clears the last answer', async () => {
+    seed([user('u1', 'Is it valid?')], 'a1')
+    useChatStore.setState(s => ({
+      threads: [...s.threads, {...s.threads[0]!, id: 't2', title: 'Other'}],
+      conversations: new Map([...s.conversations, ['t2', [user('v1', 'Older'), answer('v2', 'Older answer.')]]]),
+      historyStatus: {...s.historyStatus, t2: {state: 'loaded', token: 1}},
+    }))
+    await act(async () => {
+      render(<ChatShell />)
+    })
+    await act(async () => {
+      useChatStore.getState().appendMessage('t1', answer('a1', 'Yes.'))
+      useChatStore.getState().endStream('t1')
+    })
+    expect(region()).toHaveTextContent('Answer: Yes.')
+
+    const log = recordAnnouncements(region())
+    await act(async () => {
+      useChatStore.getState().switchThread('t2')
+    })
+    await act(async () => {
+      useChatStore.getState().switchThread('t1')
+    })
+    log.stop()
+    expect(log.seen).toEqual([])
+    expect(region()).toHaveTextContent(/^$/)
   })
 })

@@ -148,3 +148,60 @@ describe('LiveToolTrail expand (V1.3)', () => {
     expect(screen.queryByTestId('tool-trail-expand')).toBeNull()
   })
 })
+
+// R-frontend-4: the trail polled the store every 400 ms; it now follows the store on every update.
+describe('LiveToolTrail store subscription', () => {
+  const streaming = (toolStatus: string | null, toolCalls: {name: string; label: string; ok: boolean}[] = []) => ({
+    activeThreadId: 't1',
+    streams: {
+      t1: {
+        streamId: 's1',
+        messageId: 'm1',
+        text: '',
+        isThinking: true,
+        tokens: 0,
+        toolStatus,
+        toolCalls,
+        approvals: [],
+      },
+    },
+  })
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('re-renders on a store update without advancing timers', () => {
+    useChatStore.setState(streaming(null))
+    render(<LiveToolTrail />)
+    expect(screen.queryByTestId('live-tool-trail')).not.toBeInTheDocument()
+
+    act(() => {
+      useChatStore.setState(streaming('Searching flow'))
+    })
+    expect(screen.getByText('Searching flow…')).toBeInTheDocument()
+
+    act(() => {
+      useChatStore.setState(streaming(null, [{name: 'search_flow', label: 'Searched flow', ok: true}]))
+    })
+    expect(screen.queryByText('Searching flow…')).not.toBeInTheDocument()
+    expect(screen.getByText('Searched flow')).toBeInTheDocument()
+  })
+
+  it('starts no interval, streaming or not', () => {
+    const spy = vi.spyOn(globalThis, 'setInterval')
+    const windowSpy = vi.spyOn(window, 'setInterval')
+    useChatStore.setState(streaming('Searching flow'))
+    const {unmount} = render(<LiveToolTrail />)
+    act(() => {
+      useChatStore.setState(streaming('Reading block'))
+    })
+    unmount()
+    expect(spy).not.toHaveBeenCalled()
+    expect(windowSpy).not.toHaveBeenCalled()
+  })
+})

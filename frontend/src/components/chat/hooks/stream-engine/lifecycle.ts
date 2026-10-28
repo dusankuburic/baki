@@ -21,6 +21,7 @@ import {buildChatRequest} from '../useChatRequestBuilder'
 import type {AccMeta, ChatStoreState, SendOptions, StreamAcc, StreamMeta, ToastApi} from './types'
 import {messageModel, resumedTurn, providerErrorLine} from './helpers'
 import type {useCommit} from './commit'
+import type {ClosingStreams} from './closing'
 
 type StreamingApi = ReturnType<typeof useStreamingMessage>
 
@@ -36,6 +37,9 @@ interface LifecycleDeps {
   dropAcc: (streamId: string) => void
   beginAcc: (streamId: string, threadId: string, meta: AccMeta) => void
   commitAssistantMessage: ReturnType<typeof useCommit>['commitAssistantMessage']
+  closing: ClosingStreams
+  /** Asks the server to stop the stream and keeps its events coming (the late decision of an apply). */
+  stopKeepListening: (streamId: string) => void
   startStream: ChatStoreState['startStream']
   endStream: ChatStoreState['endStream']
   updateStream: ChatStoreState['updateStream']
@@ -55,6 +59,8 @@ export function useTurnLifecycle({
   dropAcc,
   beginAcc,
   commitAssistantMessage,
+  closing,
+  stopKeepListening,
   startStream,
   endStream,
   updateStream,
@@ -82,18 +88,28 @@ export function useTurnLifecycle({
     [endStream],
   )
 
+  // Stops a stream and keeps what it produced: the text, and the approval cards even without text (R-approvals-5).
+  // A card still being applied keeps the stream's events coming until its decision settles the committed card.
   const stopAndCommit = useCallback(
     (streamId: string, threadId: string, messageId: string) => {
       const acc = streamAccRef.current.get(streamId)
+      const cards = useChatStore.getState().streams[threadId]?.approvals ?? []
+      let committed = false
       if (acc) {
         dropAcc(streamId)
-        if (acc.text) {
+        if (acc.text || cards.length > 0) {
           commitAssistantMessage({...acc, threadId}, messageId, acc.text, {finishReason: 'interrupted'})
+          committed = true
         }
+      }
+      if (committed && cards.some(c => c.status === 'applying')) {
+        closing.linger(streamId, threadId, messageId)
+        stopKeepListening(streamId)
+        return
       }
       cancelStream(streamId)
     },
-    [streamAccRef, commitAssistantMessage, cancelStream, dropAcc],
+    [streamAccRef, commitAssistantMessage, cancelStream, closing, dropAcc, stopKeepListening],
   )
 
   const send = useCallback(
@@ -133,12 +149,9 @@ export function useTurnLifecycle({
         assistantMessageId: msgId,
       })
 
-      const isFirstMessage = st.getMessages(threadId).length === 0
       const hadTitle = !!thread.title
+      // appendMessage titles an untitled thread (autoTitle, R-frontend-19); the inFlight updateThread below persists it.
       appendMessage(threadId, userMsg)
-      if (isFirstMessage && !hadTitle && text.trim()) {
-        updateThread(threadId, {title: text.replace(/\n+/g, ' ').trim().slice(0, 50)})
-      }
 
       const repickedSince = opts.pinnedAs !== undefined && opts.pinnedAs !== threadPinKey(thread)
       if (opts.pinThread !== false && meta.model && !repickedSince) {
@@ -204,7 +217,7 @@ export function useTurnLifecycle({
 
       const run = async () => {
         try {
-          const registered = await registerStream(sid,  false)
+          const registered = await registerStream(sid)
           if (!registered || !isCurrentGen(threadId, myGen)) {
             abortSend()
             return
@@ -225,7 +238,7 @@ export function useTurnLifecycle({
               return
             }
             teardownRef.current(sid)
-            if (!(await registerStream(sid,  false)) || !isCurrentGen(threadId, myGen)) {
+            if (!(await registerStream(sid)) || !isCurrentGen(threadId, myGen)) {
               abortSend()
               return
             }
@@ -392,7 +405,7 @@ export function useTurnLifecycle({
       void (async () => {
         let registered: boolean
         try {
-          registered = await registerStream(streamId,  false)
+          registered = await registerStream(streamId)
         } catch (e) {
           logger.warn('chat stream reattach failed', e)
           gone()
@@ -423,11 +436,15 @@ export function useTurnLifecycle({
     [bumpGen, endStream, stopAndCommit],
   )
 
+  // The stream of a thread being closed: dropped with nothing committed or saved from the client, approvals and
+  // all. The thread and its stored conversation go next (R-frontend-c26); a save of the stopped turn would race
+  // that clear and could bring the conversation back. A send still starting sees its generation gone and aborts.
   const abandon = useCallback(
     (threadId: string) => {
       const slot = useChatStore.getState().streams[threadId]
-      if (!slot?.streamId || slot.streamId === 'pending') return
+      if (!slot?.streamId) return
       bumpGen(threadId)
+      if (slot.streamId === 'pending') return
       dropAcc(slot.streamId)
       cancelStream(slot.streamId)
     },

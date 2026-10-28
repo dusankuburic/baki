@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
+	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-core/ai/scrubber"
 	"pad-core/logger"
 	"pad-core/models"
@@ -135,12 +138,12 @@ func (a *chatFixApplier) decide(run *fixRun, status, message string) {
 // fixer, a patch builder or the flow write) becomes the error-shaped result tool failures surface to the model, and a
 // card still open is resolved as error — not left waiting while the stream ends as interrupted (R-tool-loop-7). The
 // write may already have landed, so the result says to check the flow.
-func (a *chatFixApplier) recoverFixPanic(tool string, run *fixRun, out *string, err *error) {
+func (a *chatFixApplier) recoverFixPanic(ctx context.Context, tool string, run *fixRun, out *string, err *error) {
 	r := recover()
 	if r == nil {
 		return
 	}
-	logger.Error("chat: fix applier panicked", "tool", tool, "panic", r, "stack", string(debug.Stack()))
+	logger.FromContext(ctx).Error("chat: fix applier panicked", "tool", tool, "panic", r, "stack", string(debug.Stack()))
 	if run.open {
 		a.decide(run, "error", "the fix failed unexpectedly")
 	}
@@ -152,7 +155,7 @@ func (a *chatFixApplier) recoverFixPanic(tool string, run *fixRun, out *string, 
 // paths; an error means the stream context died and the loop's failure handling takes over.
 func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixProposal) (out string, err error) {
 	run := &fixRun{id: prop.ProposalID}
-	defer a.recoverFixPanic("apply_fix", run, &out, &err)
+	defer a.recoverFixPanic(ctx, "apply_fix", run, &out, &err)
 	if a.touch != nil {
 		a.touch()
 	}
@@ -171,6 +174,8 @@ func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixPr
 	}
 	run.open = true
 	dec, ended := a.svc.requestApproval(ctx, a.streamID, approvalRequestFor(fixToolSpec("apply_fix"), prop.ProposalID, []map[string]interface{}{item}, flat), a.emit, a.touch)
+	fixMeta := map[string]string{"ruleId": prop.RuleID, "fixType": prop.FixType, "blockId": prop.BlockID}
+	a.auditDecision(ctx, prop.ProposalID, dec, ended, fixMeta)
 	switch ended {
 	case approvalCancelled:
 		run.open = false
@@ -178,11 +183,21 @@ func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixPr
 	case approvalTimedOut:
 		run.open = false
 		return "the user did not respond to the approval prompt in time — nothing was changed. Ask them whether to try again or apply it manually.", nil
+	case approvalRefused:
+		run.open = false
+		return drainingApprovalRefusal, nil
 	}
 	if !dec.approved {
 		a.decide(run, "declined", "")
 		return "the user DECLINED this fix — nothing was changed. Do not call apply_fix again for the same finding unless the user explicitly asks; explain the change instead.", nil
 	}
+	// From here the approved fix is a critical section: a stop (the user's or the server's) waits for it.
+	release, held := a.svc.holdStreamCancel(a.streamID)
+	if !held {
+		a.decide(run, "cancelled", approvalEndedBeforeApply)
+		return "", context.Canceled
+	}
+	defer release()
 
 	a.emitFixDecision(prop.ProposalID, "applying", "")
 	// Keepalive through the apply+verify window (L4): no provider chunks flow then — a >90s re-analysis would
@@ -194,12 +209,14 @@ func (a *chatFixApplier) ApplyFixWithApproval(ctx context.Context, prop ai.FixPr
 	applyCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	outcome, updated, err := a.svc.applyApprovedFix(applyCtx, a.doc, prop)
+	a.auditApply(ctx, prop.ProposalID, outcome.Status, err, fixMeta)
 	if err != nil {
 		if applyTimedOut(ctx, applyCtx) {
 			a.decide(run, "error", "the fix did not finish in time")
 			return fixApplyTimeoutResult("apply_fix", budget), nil
 		}
-		a.decide(run, "error", err.Error())
+		// Only an ended stream returns an error: the card says why, never the raw context error.
+		a.decide(run, "error", a.svc.endedDuringApply(a.streamID))
 		return "", err
 	}
 	// A1: hand the fresh post-fix document to the owning loop BEFORE the decision event, so the model's next
@@ -233,7 +250,7 @@ func toolDocSwap(tctx *ai.ToolContext) func(*models.FlowDocument) error {
 		tctx.RealDoc = fresh
 		sd, err := scrubDocument(fresh)
 		if err != nil {
-			logger.Error("chat: the post-fix flow's redacting clone could not be made; tools keep the previous clone", "error", err)
+			logger.FromContext(tctx.Ctx).Error("chat: the post-fix flow's redacting clone could not be made; tools keep the previous clone", "error", err)
 			return err
 		}
 		tctx.Doc = sd
@@ -302,7 +319,7 @@ func (a *chatFixApplier) beginApplyKeepalive(ctx context.Context) chan struct{} 
 // a sequential apply with per-item verification (see applyApprovedFixes).
 func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.FixProposal) (out string, err error) {
 	run := &fixRun{}
-	defer a.recoverFixPanic("apply_fixes", run, &out, &err)
+	defer a.recoverFixPanic(ctx, "apply_fixes", run, &out, &err)
 	if len(props) == 0 {
 		return "error: empty batch", nil
 	}
@@ -320,6 +337,12 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 	run.id, run.open = batchID, true
 	dec, ended := a.svc.requestApproval(ctx, a.streamID, approvalRequestFor(fixToolSpec("apply_fixes"), batchID, items,
 		map[string]interface{}{"batch": true, "count": len(props)}), a.emit, a.touch)
+	batchMeta := map[string]string{"count": strconv.Itoa(len(props))}
+	if dec.approved {
+		batchMeta["excludedCount"] = strconv.Itoa(len(dec.excluded))
+	}
+	a.auditDecision(ctx, batchID, dec, ended, batchMeta)
+	delete(batchMeta, "excludedCount")
 	switch ended {
 	case approvalCancelled:
 		run.open = false
@@ -327,6 +350,9 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 	case approvalTimedOut:
 		run.open = false
 		return "the user did not respond to the batch approval in time — nothing was changed. Ask whether to try again.", nil
+	case approvalRefused:
+		run.open = false
+		return drainingApprovalRefusal, nil
 	}
 	// excluded is the winning decision's per-item opt-outs, received with it.
 	excluded := dec.excluded
@@ -335,29 +361,33 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 		return "the user DECLINED the batch — nothing was changed. Do not re-propose the same batch unless asked; explain the changes instead.", nil
 	}
 
-	// Per-item opt-out (U4.1): apply only the items the user left checked (indices == props order).
-	if len(excluded) > 0 {
-		skip := make(map[int]bool, len(excluded))
-		for _, i := range excluded {
-			if i >= 0 && i < len(props) {
-				skip[i] = true
+	// Per-item opt-out (U4.1): apply only the items the user left checked (indices == props order); the others are
+	// reported as skipped, in their place.
+	all, skip := props, make(map[int]bool, len(excluded))
+	for _, i := range excluded {
+		if i >= 0 && i < len(all) {
+			skip[i] = true
+		}
+	}
+	if len(skip) > 0 {
+		props = make([]ai.FixProposal, 0, len(all))
+		for i, p := range all {
+			if !skip[i] {
+				props = append(props, p)
 			}
 		}
-		if len(skip) > 0 {
-			kept := props[:0]
-			for i, p := range props {
-				if !skip[i] {
-					kept = append(kept, p)
-				}
-			}
-			props = kept
-			if len(props) == 0 {
-				a.decide(run, "declined", "every fix in the batch was deselected")
-				return "the user deselected every fix in the batch — nothing was changed.", nil
-			}
+		if len(props) == 0 {
+			a.decide(run, "declined", "every fix in the batch was deselected")
+			return "the user deselected every fix in the batch — nothing was changed.", nil
 		}
 	}
 
+	release, held := a.svc.holdStreamCancel(a.streamID)
+	if !held {
+		a.decide(run, "cancelled", approvalEndedBeforeApply)
+		return "", context.Canceled
+	}
+	defer release()
 	a.emitFixDecision(batchID, "applying", "")
 	// Keepalive through the whole multi-apply window (see ApplyFixWithApproval); closed via defer.
 	applyDone := a.beginApplyKeepalive(ctx)
@@ -365,19 +395,145 @@ func (a *chatFixApplier) ApplyFixesWithApproval(ctx context.Context, props []ai.
 	budget := fixApplyTimeout(len(props))
 	applyCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	outcome, updated, err := a.svc.applyApprovedFixes(applyCtx, a.doc, props)
+	outcome, updated, err := a.svc.applyApprovedFixes(applyCtx, a.doc, props, a.svc.stopBetweenFixes(a.streamID))
+	batchMeta["applied"] = strconv.Itoa(outcome.appliedCount())
+	a.auditApply(ctx, batchID, outcome.Status, err, batchMeta)
 	if err != nil {
 		if applyTimedOut(ctx, applyCtx) {
 			a.decide(run, "error", "the batch did not finish in time")
 			return fixApplyTimeoutResult("apply_fixes", budget), nil
 		}
-		a.decide(run, "error", err.Error())
+		a.decide(run, "error", a.svc.endedDuringApply(a.streamID))
 		return "", err
 	}
+	outcome.Items = withSkipped(all, skip, outcome.Items, outcome.Detail)
 	note := a.handOver(updated)
 	run.open = false
 	a.emitBatchDecision(batchID, outcome)
 	return outcome.ModelSummary() + a.followGrounded(updated) + note, nil
+}
+
+// auditDecision records the user's decision on a card (chat.fix_decision), under the stream's owner: the stream's
+// context carries the claims of the request that started it. A card never shown (draining) records nothing.
+func (a *chatFixApplier) auditDecision(ctx context.Context, proposalID string, dec approvalDecision, ended approvalOutcome, meta map[string]string) {
+	status := ""
+	switch ended {
+	case approvalDecided:
+		status = "declined"
+		if dec.approved {
+			status = "approved"
+		}
+	case approvalTimedOut:
+		status = "timeout"
+	case approvalCancelled:
+		status = "cancelled"
+	default:
+		return
+	}
+	a.recordAudit(ctx, audit.ActionChatFixDecision, proposalID, meta, map[string]string{"status": status})
+}
+
+// auditApply records an approved fix's write (flow.fix_apply) with how it ended; an ended stream is an "error". An
+// apply that wrote nothing (the finding was already gone) is no write: the decision's row is its record.
+func (a *chatFixApplier) auditApply(ctx context.Context, proposalID, status string, err error, meta map[string]string) {
+	if err == nil && (status == "already-resolved" || meta["applied"] == "0" && status != "error") {
+		return
+	}
+	if err != nil || status == "" {
+		status = "error"
+	}
+	a.recordAudit(ctx, audit.ActionFlowFixApply, proposalID, meta, map[string]string{"source": "chat", "unsafe": "false", "outcome": status})
+}
+
+func (a *chatFixApplier) recordAudit(ctx context.Context, action, proposalID string, metas ...map[string]string) {
+	if a.svc.audit == nil || a.doc == nil {
+		return
+	}
+	m := map[string]string{"streamId": a.streamID, "proposalId": proposalID}
+	for _, meta := range metas {
+		for k, v := range meta {
+			m[k] = v
+		}
+	}
+	a.svc.audit.Record(ctx, audit.Entry{Action: action, ResourceType: "flow", ResourceID: a.doc.ID, OrgID: a.doc.OrganizationID, Meta: m})
+}
+
+// skippedItemMessage is the outcome of a batch item the user deselected.
+const skippedItemMessage = "deselected by the user — nothing was changed for this fix"
+
+// withSkipped puts the deselected items of all back in their place among the outcomes of the applied ones. A batch
+// that failed before its first fix has no outcome per item: each kept item then reports the batch's reason.
+func withSkipped(all []ai.FixProposal, skip map[int]bool, applied []batchItemOutcome, detail string) []batchItemOutcome {
+	out := make([]batchItemOutcome, 0, len(all))
+	next := 0
+	for i, p := range all {
+		if skip[i] {
+			out = append(out, batchItemOutcome{ID: fixItemID(p), RuleID: p.RuleID, Status: "skipped", Message: skippedItemMessage})
+			continue
+		}
+		if next < len(applied) {
+			out = append(out, applied[next])
+			next++
+			continue
+		}
+		msg := detail
+		if msg == "" {
+			msg = "not attempted"
+		}
+		out = append(out, batchItemOutcome{ID: fixItemID(p), RuleID: p.RuleID, Status: "error", Message: msg})
+	}
+	return out
+}
+
+// approvalEndedBeforeApply is the card's message when the stream was ending as the approval arrived.
+const approvalEndedBeforeApply = "the response ended before the fix was applied — nothing was changed"
+
+// holdStreamCancel holds the stream's cancel through an approved apply (streamCtl.holdCancel); a stream this service
+// does not run (tests driving an applier directly) has nothing to hold.
+func (s *ChatService) holdStreamCancel(streamID string) (release func(), ok bool) {
+	v, found := s.activeStreams.Load(streamID)
+	if !found {
+		return func() {}, true
+	}
+	return v.(*streamCtl).holdCancel()
+}
+
+// stopBetweenFixes returns the batch's check before each fix: once a stop was asked for (held by the apply), the
+// fixes not yet written are not attempted, and its answer says why; "" to go on.
+func (s *ChatService) stopBetweenFixes(streamID string) func() string {
+	return func() string {
+		v, found := s.activeStreams.Load(streamID)
+		if !found {
+			return ""
+		}
+		code, asked := v.(*streamCtl).stopRequested()
+		switch {
+		case !asked:
+			return ""
+		case code == ChatErrServerRestarting:
+			return "not attempted: the server is restarting — nothing was changed for this fix"
+		case code == ChatErrIdleTimeout:
+			return "not attempted: the response was stopped because it stopped making progress — nothing was changed for this fix"
+		case code == ChatErrClientGone:
+			return "not attempted: the response was stopped because you were disconnected — nothing was changed for this fix"
+		default:
+			return "not attempted: the response was stopped — nothing was changed for this fix"
+		}
+	}
+}
+
+// endedDuringApply is the card's message when the stream ended while an approved fix was being applied.
+func (s *ChatService) endedDuringApply(streamID string) string {
+	if v, ok := s.activeStreams.Load(streamID); ok {
+		ctl := v.(*streamCtl)
+		ctl.mu.Lock()
+		code := ctl.cancelCode
+		ctl.mu.Unlock()
+		if code == ChatErrServerRestarting {
+			return "the server restarted before the fix finished — check the flow before trying again"
+		}
+	}
+	return "the response ended before the fix finished — check the flow before trying again"
 }
 
 func (a *chatFixApplier) emitBatchDecision(batchID string, outcome batchOutcome) {
@@ -403,7 +559,7 @@ func (a *chatFixApplier) emitBatchDecision(batchID string, outcome batchOutcome)
 
 // chatFixOutcome is the verified result of an approved apply.
 type chatFixOutcome struct {
-	Status string // "applied" | "applied-unresolved" | "error"
+	Status string // "applied" | "applied-unresolved" | "already-resolved" | "error"
 	Detail string
 	// Unverified: applied, but the verifying re-analysis ran out of the apply window, so the outcome is
 	// unknown rather than unresolved (R-approvals-3).
@@ -423,6 +579,8 @@ func (o chatFixOutcome) ModelSummary() string {
 		return scrubber.ScrubText("APPLIED and verified: " + o.Detail)
 	case "applied-unresolved":
 		return scrubber.ScrubText("APPLIED, but " + o.Detail)
+	case "already-resolved":
+		return scrubber.ScrubText("NOT APPLIED, nothing to do: " + o.Detail)
 	default:
 		return scrubber.ScrubText("apply failed: " + o.Detail)
 	}
@@ -443,32 +601,55 @@ func (s *ChatService) applyFixHook() applyFixFunc {
 	}
 }
 
+// fixConflictAttempts bounds the writes of one approved fix: a version conflict (a save between the version read and
+// the write) is retried once on the flow as it is then.
+const fixConflictAttempts = 2
+
+// alreadyResolvedDetail is the outcome of an approved fix whose finding was gone before it could be applied.
+const alreadyResolvedDetail = "the finding no longer appears on the flow (an edit since the proposal resolved or removed it) — nothing was changed"
+
 // applyApprovedFix applies an approved proposal against the REAL flow and verifies it: re-resolves a fresh
-// document the stream's actor may edit (FlowEdit; the stream itself only required ChatUse), runs the fix (patch
+// document the stream's actor may edit (FlowEdit; the stream itself only required ChatUse), finds the proposal's
+// finding on it again (an edit during the approval wait re-parses the flow: new block ids), runs the fix (patch
 // recomputed on the unscrubbed source), invalidates the cached chat context, and re-analyzes to check whether the
 // finding (by its re-parse-stable fingerprint) disappeared. The updated document is returned for the caller's
-// refresh (A1).
+// refresh (A1). A fix that could not be applied is an "error" outcome in words the model can act on; an error is
+// returned only when ctx ended.
 //
 // ctx carries the apply window's deadline (fixApplyTimeout). The window is keepalive-touched: without touches the
 // idle watchdog would cancel a healthy stream during a >90s re-analysis.
 func (s *ChatService) applyApprovedFix(ctx context.Context, snapshot *models.FlowDocument, prop ai.FixProposal) (chatFixOutcome, *models.FlowDocument, error) {
 	if snapshot == nil {
-		return chatFixOutcome{Status: "error", Detail: "no flow loaded"}, nil, fmt.Errorf("no flow loaded")
+		return chatFixOutcome{Status: "error", Detail: "no flow is loaded — nothing was changed"}, nil, nil
 	}
 	// Re-checked at apply time (defense in depth): this is the mutation itself.
 	if err := requireFixWriteScope(ctx); err != nil {
-		return chatFixOutcome{Status: "error", Detail: err.Error()}, nil, err
+		return s.fixFailure(ctx, err)
 	}
-	// Fresh doc + FlowEdit check at apply time: the stream was authorized for ChatUse and the snapshot may be stale.
-	doc, err := s.GetAuthorizedFlow(ctx, snapshot.ID, FlowEdit)
-	if err != nil {
-		return chatFixOutcome{Status: "error", Detail: "not allowed to edit this flow: " + err.Error()}, nil, err
-	}
-
-	RecordFlowOp("chat_apply_fix")
-	updated, err := s.applyFixHook()(ctx, doc, prop.BlockID, prop.FixType, prop.RuleID, prop.Variable, prop.Property)
-	if err != nil {
-		return chatFixOutcome{Status: "error", Detail: err.Error()}, nil, err
+	var doc, updated *models.FlowDocument
+	for attempt := 1; ; attempt++ {
+		// Fresh doc + FlowEdit check at apply time: the stream was authorized for ChatUse and the snapshot may be stale.
+		var err error
+		doc, err = s.GetAuthorizedFlow(ctx, snapshot.ID, FlowEdit)
+		if err != nil {
+			return s.fixFailure(ctx, err)
+		}
+		blockID, gone, err := s.locateApproved(ctx, doc, fixTargetOf(prop, snapshot, doc))
+		if err != nil {
+			return s.fixFailure(ctx, err)
+		}
+		if gone {
+			return chatFixOutcome{Status: "already-resolved", Detail: alreadyResolvedDetail}, nil, nil
+		}
+		RecordFlowOp("chat_apply_fix")
+		updated, err = s.applyFixHook()(ctx, doc, blockID, prop.FixType, prop.RuleID, prop.Variable, prop.Property)
+		if errors.Is(err, storageif.ErrVersionConflict) && attempt < fixConflictAttempts {
+			continue
+		}
+		if err != nil {
+			return s.fixFailure(ctx, err)
+		}
+		break
 	}
 
 	// The flow changed under the chat's cached (scrubbed) context — drop it for the fixed source.
@@ -481,6 +662,53 @@ func (s *ChatService) applyApprovedFix(ctx context.Context, snapshot *models.Flo
 		out.Detail += reparsedNote
 	}
 	return out, updated, nil
+}
+
+// fixFailure is an approved fix that was not applied, in words the card and the model can act on: the raw error
+// (storage text, a wrapped context error) is logged, never shown. An ended ctx is returned as the error — the
+// stream is going, and the applier words that.
+func (s *ChatService) fixFailure(ctx context.Context, err error) (chatFixOutcome, *models.FlowDocument, error) {
+	if ctx.Err() != nil {
+		return chatFixOutcome{Status: "error"}, nil, ctx.Err()
+	}
+	logger.FromContext(ctx).Warn("chat: an approved fix was not applied", "error", err)
+	return chatFixOutcome{Status: "error", Detail: fixFailureDetail(err)}, nil, nil
+}
+
+// fixFailureDetail words why an approved fix was not applied.
+func fixFailureDetail(err error) string {
+	switch {
+	case errors.Is(err, storageif.ErrVersionConflict):
+		return "the flow changed while the fix was being applied, so nothing was changed — call list_findings and try again"
+	case errors.Is(err, errFixNeedsWriteScope):
+		return "this session's API token is not allowed to modify flows (it lacks the write scope) — nothing was changed"
+	case errors.Is(err, ErrPermissionDenied):
+		return "the user is not allowed to edit this flow — nothing was changed"
+	case errors.Is(err, ErrNotFound), errors.Is(err, storageif.ErrNotFound):
+		return "the flow could not be found (it may have been deleted) — nothing was changed"
+	default:
+		return "the fix could not be applied to the flow as it is now, so nothing was changed — call list_findings and try again"
+	}
+}
+
+// locateApproved finds the approved finding on doc as it is now: the block id to fix, or gone when the finding no
+// longer appears. Without an analysis it trusts the proposal's id, as before re-association.
+func (s *ChatService) locateApproved(ctx context.Context, doc *models.FlowDocument, t fixTarget) (blockID string, gone bool, err error) {
+	if s.analysisCache == nil {
+		return t.prop.BlockID, false, nil
+	}
+	report, aerr := s.analysisCache.AnalyzeFlowReadOnly(ctx, doc)
+	if aerr != nil || report == nil {
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
+		return t.prop.BlockID, false, nil
+	}
+	f := t.locate(report, doc, map[int]bool{})
+	if f == nil {
+		return "", true, nil
+	}
+	return f.BlockID, false, nil
 }
 
 // reparsedNote ends the outcome of every apply that returned a re-parsed document.
@@ -535,21 +763,21 @@ func (s *ChatService) verifyAppliedFix(ctx context.Context, prop ai.FixProposal,
 			Detail: fmt.Sprintf("the finding still appears after re-analysis (flow now has %d findings) — the automated fix was not sufficient, manual review recommended", len(report.Findings)),
 		}
 	}
-	logger.Info("chat-driven fix applied", "flow", updated.ID, "rule", prop.RuleID, "fix", prop.FixType)
+	logger.FromContext(ctx).Info("chat-driven fix applied", "flow", updated.ID, "rule", prop.RuleID, "fix", prop.FixType)
 	detail := fmt.Sprintf("the finding no longer appears after re-analysis (flow now has %d findings)", len(report.Findings))
 	return chatFixOutcome{Status: "applied", Detail: detail}
 }
 
-// fixContentKey re-associates a batch target across sequential applies: a patch shifts line numbers and the
-// re-parse mints fresh block IDs + fingerprints, so neither survives; the block's identity content does.
-// Truly identical sibling blocks share a key — items consume matches in order, which may swap siblings, but
-// identical siblings get identical fixes.
+// fixContentKey is a finding's identity by content, the last resort of re-association (fixTarget.locate) when a
+// block's anchor no longer resolves: a patch shifts line numbers and the re-parse mints fresh block IDs +
+// fingerprints, so neither survives. Truly identical sibling blocks share a key — items consume matches in order,
+// which may swap siblings, but identical siblings get identical fixes.
 type fixContentKey struct {
 	RuleID, Subflow, RawType, Name, Subject string
 }
 
 func fixContentKeyOf(ruleID string, f *models.Finding, doc *models.FlowDocument) fixContentKey {
-	k := fixContentKey{RuleID: ruleID}
+	k := fixContentKey{RuleID: ruleID, Subject: findingSubject(f)}
 	if doc == nil {
 		return k
 	}
@@ -559,19 +787,89 @@ func fixContentKeyOf(ruleID string, f *models.Finding, doc *models.FlowDocument)
 			k.Subflow = sf.Name
 		}
 	}
-	if v, ok := f.Metadata["property"].(string); ok && v != "" {
-		k.Subject = "property:" + v
-	} else if v, ok := f.Metadata["variable"].(string); ok && v != "" {
-		k.Subject = "variable:" + v
-	}
 	return k
+}
+
+// findingSubject is the property or variable a finding is about ("" for a block-level finding).
+func findingSubject(f *models.Finding) string {
+	if v, ok := f.Metadata["property"].(string); ok && v != "" {
+		return "property:" + v
+	}
+	if v, ok := f.Metadata["variable"].(string); ok && v != "" {
+		return "variable:" + v
+	}
+	return ""
+}
+
+// proposalSubject is findingSubject of the finding a proposal was made for.
+func proposalSubject(p ai.FixProposal) string {
+	switch {
+	case p.Property != "":
+		return "property:" + p.Property
+	case p.Variable != "":
+		return "variable:" + p.Variable
+	}
+	return ""
+}
+
+// fixTarget is where an approved proposal's finding is looked for on a flow that may have been re-parsed since the
+// proposal (an edit during the approval wait, an earlier fix of the same batch) — R-approvals-2.
+type fixTarget struct {
+	prop   ai.FixProposal
+	anchor *models.BlockAnchor
+	key    fixContentKey
+}
+
+// fixTargetOf takes the anchor the proposal carries (taken on the document it was made on); a proposal without one
+// gets its block's anchor in the first of docs that has the block.
+func fixTargetOf(prop ai.FixProposal, docs ...*models.FlowDocument) fixTarget {
+	anchor := prop.Anchor
+	for _, d := range docs {
+		if anchor != nil {
+			break
+		}
+		anchor = d.AnchorOf(prop.BlockID)
+	}
+	key := fixContentKey{RuleID: prop.RuleID, Subject: proposalSubject(prop), Name: prop.BlockLabel}
+	if anchor != nil {
+		key.Subflow, key.RawType, key.Name = anchor.Subflow, anchor.RawType, anchor.Name
+	}
+	return fixTarget{prop: prop, anchor: anchor, key: key}
+}
+
+// locate finds the target's finding in report (an analysis of doc), skipping and then marking consumed indices:
+// the finding on the proposal's own block id while the flow was not re-parsed; else the one on the block at the
+// anchor's place, where a block still standing without it means the finding is gone (never a sibling's); else, the
+// anchor no longer resolving, the first finding with the content key. nil: the finding is gone.
+func (t fixTarget) locate(report *models.AnalysisReport, doc *models.FlowDocument, consumed map[int]bool) *models.Finding {
+	match := func(onBlock func(f *models.Finding) bool) *models.Finding {
+		for j := range report.Findings {
+			f := &report.Findings[j]
+			if consumed[j] || f.RuleID != t.prop.RuleID || !onBlock(f) {
+				continue
+			}
+			consumed[j] = true
+			return f
+		}
+		return nil
+	}
+	subject := t.key.Subject
+	if doc.BlocksByID[t.prop.BlockID] != nil {
+		return match(func(f *models.Finding) bool { return f.BlockID == t.prop.BlockID && findingSubject(f) == subject })
+	}
+	if t.anchor != nil {
+		if id := doc.ResolveAnchor(*t.anchor); id != "" {
+			return match(func(f *models.Finding) bool { return f.BlockID == id && findingSubject(f) == subject })
+		}
+	}
+	return match(func(f *models.Finding) bool { return fixContentKeyOf(f.RuleID, f, doc) == t.key })
 }
 
 // batchItemOutcome is one fix's verified result inside a batch; ID is the request item's (fixItemID).
 type batchItemOutcome struct {
 	ID      string
 	RuleID  string
-	Status  string // "applied" | "applied-unresolved" | "error" | "already-resolved"
+	Status  string // "applied" | "applied-unresolved" | "error" | "already-resolved" | "skipped"
 	Message string
 }
 
@@ -582,6 +880,17 @@ type batchOutcome struct {
 	Detail string
 	Items  []batchItemOutcome
 	Final  *models.FlowDocument
+}
+
+// appliedCount is how many items of the batch were written.
+func (o batchOutcome) appliedCount() int {
+	n := 0
+	for _, it := range o.Items {
+		if it.Status == "applied" || it.Status == "applied-unresolved" {
+			n++
+		}
+	}
+	return n
 }
 
 func (o batchOutcome) ModelSummary() string {
@@ -600,83 +909,42 @@ func (o batchOutcome) ModelSummary() string {
 }
 
 // applyApprovedFixes applies an approved batch against the REAL flow one fix at a time: each apply re-parses
-// (new block IDs), so the next target is re-associated on the fresh analysis by content key. Per-item failures
-// don't abort the batch; the final analysis verifies every item. The final document is returned for A1.
-func (s *ChatService) applyApprovedFixes(ctx context.Context, snapshot *models.FlowDocument, props []ai.FixProposal) (batchOutcome, *models.FlowDocument, error) {
+// (new block IDs), so each target is found again on the flow as it is when its turn comes (fixTarget.locate). An
+// item whose write hits a version conflict is retried once on the flow as it is then. Per-item failures don't
+// abort the batch; the final analysis verifies every item. The final document is returned for A1. As for a single
+// fix, an error is returned only when ctx ended. stop, when set, is asked before each fix: a non-empty answer (a
+// stop asked for during the batch) leaves that fix and the rest not attempted, with it as their message.
+func (s *ChatService) applyApprovedFixes(ctx context.Context, snapshot *models.FlowDocument, props []ai.FixProposal, stop func() string) (batchOutcome, *models.FlowDocument, error) {
 	out := batchOutcome{Status: "error", Items: make([]batchItemOutcome, 0, len(props))}
+	fail := func(err error) (batchOutcome, *models.FlowDocument, error) {
+		o, _, ferr := s.fixFailure(ctx, err)
+		out.Detail = o.Detail
+		return out, nil, ferr
+	}
 	if snapshot == nil {
-		out.Detail = "no flow loaded"
-		return out, nil, fmt.Errorf("no flow loaded")
+		out.Detail = "no flow is loaded — nothing was changed"
+		return out, nil, nil
 	}
 	if err := requireFixWriteScope(ctx); err != nil {
-		out.Detail = err.Error()
-		return out, nil, err
+		return fail(err)
 	}
 	doc, err := s.GetAuthorizedFlow(ctx, snapshot.ID, FlowEdit)
 	if err != nil {
-		out.Detail = "not allowed to edit this flow: " + err.Error()
-		return out, nil, err
+		return fail(err)
 	}
-
-	RecordFlowOp("chat_apply_fixes")
-
-	type pending struct {
-		prop ai.FixProposal
-		key  fixContentKey
-	}
-	pend := make([]pending, len(props))
-	appliedFlags := make([]bool, len(props))
-
-	// Associate every target with the CURRENT doc's analysis: exact BlockID first; a miss means a concurrent
-	// edit — the content key still gives a chance. A nil analysis cache must bail gracefully (a call through it
-	// panics inside the apply window).
+	// A nil analysis cache must bail gracefully (a call through it panics inside the apply window).
 	if s.analysisCache == nil {
 		out.Detail = "analysis not available — could not prepare the batch"
 		return out, nil, nil
 	}
-	initReport, err := s.analysisCache.AnalyzeFlowReadOnly(ctx, doc)
-	if err != nil || initReport == nil {
-		out.Detail = "analysis not available — could not prepare the batch"
-		return out, nil, err
-	}
-	for i, p := range props {
-		pend[i] = pending{prop: p}
-		for j := range initReport.Findings {
-			f := &initReport.Findings[j]
-			if f.BlockID == p.BlockID && f.RuleID == p.RuleID {
-				pend[i].key = fixContentKeyOf(p.RuleID, f, doc)
-				break
-			}
-		}
-		if pend[i].key == (fixContentKey{}) {
-			pend[i].key = fixContentKey{RuleID: p.RuleID, Name: p.BlockLabel}
-		}
-	}
 
-	// findFinding locates the not-yet-consumed finding matching key, preferring an exact BlockID+Rule hit.
-	findFinding := func(report *models.AnalysisReport, d *models.FlowDocument, key fixContentKey, prop ai.FixProposal, consumed map[int]bool) *models.Finding {
-		for j := range report.Findings {
-			if consumed[j] {
-				continue
-			}
-			f := &report.Findings[j]
-			if f.RuleID == prop.RuleID && f.BlockID == prop.BlockID {
-				consumed[j] = true
-				return f
-			}
-		}
-		for j := range report.Findings {
-			if consumed[j] {
-				continue
-			}
-			f := &report.Findings[j]
-			if fixContentKeyOf(f.RuleID, f, d) == key {
-				consumed[j] = true
-				return f
-			}
-		}
-		return nil
+	RecordFlowOp("chat_apply_fixes")
+
+	targets := make([]fixTarget, len(props))
+	for i, p := range props {
+		targets[i] = fixTargetOf(p, snapshot, doc)
 	}
+	appliedFlags := make([]bool, len(props))
 
 	var anyApplied, anyUnresolvedOrErr, unverified bool
 	// outOfTime: the apply window's deadline ended the batch; later items are reported as not attempted.
@@ -686,56 +954,76 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, snapshot *models.F
 	// doubles as the verification report when nothing applied after it — a 20-item batch with k failures used to
 	// run k+1 redundant full 41-rule walks.
 	var curReport *models.AnalysisReport
-	for i := range pend {
+	for i := range targets {
+		prop := targets[i].prop
 		if outOfTime() {
-			out.Items = append(out.Items, batchItemOutcome{RuleID: pend[i].prop.RuleID, Status: "error", Message: notAttemptedInTime})
+			out.Items = append(out.Items, batchItemOutcome{RuleID: prop.RuleID, Status: "error", Message: notAttemptedInTime})
 			anyUnresolvedOrErr = true
 			continue
 		}
-		if curReport == nil {
-			r, aerr := s.analysisCache.AnalyzeFlowReadOnly(ctx, doc)
-			if aerr != nil || r == nil {
-				msg := "re-analysis failed mid-batch"
-				if outOfTime() {
-					msg = notAttemptedInTime
-				}
-				out.Items = append(out.Items, batchItemOutcome{RuleID: pend[i].prop.RuleID, Status: "error", Message: msg})
+		if stop != nil {
+			if why := stop(); why != "" {
+				out.Items = append(out.Items, batchItemOutcome{RuleID: prop.RuleID, Status: "error", Message: why})
 				anyUnresolvedOrErr = true
 				continue
 			}
-			curReport = r
 		}
-		report := curReport
-		consumed := map[int]bool{}
-		// Mark findings consumed by EARLIER items of this same analysis pass, so identical-sibling association
-		// stays one-to-one.
-		for k := 0; k < i; k++ {
-			for j := range report.Findings {
-				f := &report.Findings[j]
-				if !consumed[j] && fixContentKeyOf(f.RuleID, f, doc) == pend[k].key && f.RuleID == pend[k].prop.RuleID {
-					consumed[j] = true
+		var item *batchItemOutcome
+		var updated *models.FlowDocument
+		for attempt := 1; ; attempt++ {
+			if curReport == nil {
+				r, aerr := s.analysisCache.AnalyzeFlowReadOnly(ctx, doc)
+				if aerr != nil || r == nil {
+					msg := "re-analysis failed mid-batch"
+					if outOfTime() {
+						msg = notAttemptedInTime
+					}
+					item = &batchItemOutcome{RuleID: prop.RuleID, Status: "error", Message: msg}
 					break
 				}
+				curReport = r
 			}
+			// The findings of the targets before this one are theirs, so identical siblings stay one-to-one.
+			consumed := map[int]bool{}
+			for k := 0; k < i; k++ {
+				targets[k].locate(curReport, doc, consumed)
+			}
+			f := targets[i].locate(curReport, doc, consumed)
+			if f == nil {
+				// Gone before we touched it: an earlier fix cascaded it away, or a concurrent edit removed it.
+				item = &batchItemOutcome{RuleID: prop.RuleID, Status: "already-resolved", Message: "the finding no longer appears on the flow"}
+				break
+			}
+			var ferr error
+			updated, ferr = s.applyFixHook()(ctx, doc, f.BlockID, prop.FixType, prop.RuleID, prop.Variable, prop.Property)
+			if errors.Is(ferr, storageif.ErrVersionConflict) && attempt < fixConflictAttempts {
+				// Someone saved the flow since this batch read it: once more on the flow as it is now.
+				fresh, gerr := s.GetAuthorizedFlow(ctx, snapshot.ID, FlowEdit)
+				if gerr == nil {
+					doc, curReport = fresh, nil
+					continue
+				}
+				ferr = gerr
+			}
+			if ferr != nil || updated == nil {
+				msg := "the fix could not be applied"
+				if ferr != nil {
+					logger.FromContext(ctx).Warn("chat: an approved batch fix was not applied", "rule", prop.RuleID, "error", ferr)
+					msg = fixFailureDetail(ferr)
+				}
+				// Relabel only a failure the window caused, not a quick error of its own that returned after it.
+				if outOfTime() && (ferr == nil || errors.Is(ferr, context.DeadlineExceeded)) {
+					msg = "the batch ran out of time during this fix — check whether it changed the flow"
+				}
+				item = &batchItemOutcome{RuleID: prop.RuleID, Status: "error", Message: msg}
+			}
+			break
 		}
-		f := findFinding(report, doc, pend[i].key, pend[i].prop, consumed)
-		if f == nil {
-			// Gone before we touched it: an earlier fix cascaded it away, or a concurrent edit removed it.
-			out.Items = append(out.Items, batchItemOutcome{RuleID: pend[i].prop.RuleID, Status: "already-resolved", Message: "the finding no longer appears on the flow"})
-			continue
-		}
-		updated, ferr := s.applyFixHook()(ctx, doc, f.BlockID, pend[i].prop.FixType, pend[i].prop.RuleID, pend[i].prop.Variable, pend[i].prop.Property)
-		if ferr != nil || updated == nil {
-			msg := "apply failed"
-			if ferr != nil {
-				msg = ferr.Error()
+		if item != nil {
+			out.Items = append(out.Items, *item)
+			if item.Status == "error" {
+				anyUnresolvedOrErr = true
 			}
-			// Relabel only a failure the window caused, not a quick error of its own that returned after it.
-			if outOfTime() && (ferr == nil || errors.Is(ferr, context.DeadlineExceeded)) {
-				msg = "the batch ran out of time during this fix — check whether it changed the flow"
-			}
-			out.Items = append(out.Items, batchItemOutcome{RuleID: pend[i].prop.RuleID, Status: "error", Message: msg})
-			anyUnresolvedOrErr = true
 			continue
 		}
 		doc = updated
@@ -744,11 +1032,11 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, snapshot *models.F
 		appliedFlags[i] = true
 		anyApplied = true
 		RecordFlowOp("chat_apply_fix")
-		// Placeholder keeps out.Items index-aligned with pend; the verification pass fills it.
-		out.Items = append(out.Items, batchItemOutcome{RuleID: pend[i].prop.RuleID})
+		// Placeholder keeps out.Items index-aligned with targets; the verification pass fills it.
+		out.Items = append(out.Items, batchItemOutcome{RuleID: prop.RuleID})
 	}
 
-	// Final verification: an applied item whose finding (by content key) still exists did not actually resolve.
+	// Final verification: an applied item whose finding can still be found did not actually resolve.
 	if anyApplied {
 		// B1.11: reuse the last mid-loop analysis when no apply staled it.
 		fin := curReport
@@ -760,42 +1048,45 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, snapshot *models.F
 			}
 		}
 		if fin != nil {
-			for i := range pend {
+			// The items not applied claim their findings first, so an applied item is never verified against a
+			// sibling's.
+			consumed := map[int]bool{}
+			for i := range targets {
+				if !appliedFlags[i] {
+					targets[i].locate(fin, doc, consumed)
+				}
+			}
+			for i := range targets {
 				if !appliedFlags[i] {
 					continue
 				}
-				for j := range fin.Findings {
-					if fixContentKeyOf(fin.Findings[j].RuleID, &fin.Findings[j], doc) == pend[i].key {
-						out.Items[i].Status = "applied-unresolved"
-						out.Items[i].Message = "the finding still appears after re-analysis"
-						anyUnresolvedOrErr = true
-						break
-					}
+				if targets[i].locate(fin, doc, consumed) != nil {
+					out.Items[i] = batchItemOutcome{RuleID: targets[i].prop.RuleID, Status: "applied-unresolved", Message: "the finding still appears after re-analysis"}
+					anyUnresolvedOrErr = true
+					continue
 				}
-				if out.Items[i].Status == "" {
-					out.Items[i] = batchItemOutcome{RuleID: pend[i].prop.RuleID, Status: "applied"}
-				}
+				out.Items[i] = batchItemOutcome{RuleID: targets[i].prop.RuleID, Status: "applied"}
 			}
 		} else {
-			for i := range pend {
+			for i := range targets {
 				if !appliedFlags[i] || out.Items[i].Status != "" {
 					continue
 				}
 				if outOfTime() {
 					// Applied; only the check ran out of time — not evidence the fix failed.
-					out.Items[i] = batchItemOutcome{RuleID: pend[i].prop.RuleID, Status: "applied", Message: "verification skipped: re-analysis ran out of time"}
+					out.Items[i] = batchItemOutcome{RuleID: targets[i].prop.RuleID, Status: "applied", Message: "verification skipped: re-analysis ran out of time"}
 					unverified = true
 					continue
 				}
-				out.Items[i] = batchItemOutcome{RuleID: pend[i].prop.RuleID, Status: "applied-unresolved", Message: "final re-analysis failed; could not verify"}
+				out.Items[i] = batchItemOutcome{RuleID: targets[i].prop.RuleID, Status: "applied-unresolved", Message: "final re-analysis failed; could not verify"}
 				anyUnresolvedOrErr = true
 			}
 		}
 	}
-	// Fill statuses for skipped items ("already-resolved" already set above); out.Items[i] is pend[i]'s (one
+	// Fill statuses for skipped items ("already-resolved" already set above); out.Items[i] is targets[i]'s (one
 	// outcome appended per item, in order), so the request item's id is stamped here for all of them.
 	for i := range out.Items {
-		out.Items[i].ID = fixItemID(pend[i].prop)
+		out.Items[i].ID = fixItemID(targets[i].prop)
 		if out.Items[i].Status == "" {
 			out.Items[i].Status = "error"
 			out.Items[i].Message = "not attempted"
@@ -824,7 +1115,7 @@ func (s *ChatService) applyApprovedFixes(ctx context.Context, snapshot *models.F
 			}
 		}
 	}
-	logger.Info("chat-driven batch fix applied", "flow", doc.ID, "items", len(props), "status", out.Status)
+	logger.FromContext(ctx).Info("chat-driven batch fix applied", "flow", doc.ID, "items", len(props), "status", out.Status)
 	out.Final = doc
 	return out, doc, nil
 }

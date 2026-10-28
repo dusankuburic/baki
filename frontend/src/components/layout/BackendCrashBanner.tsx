@@ -5,6 +5,7 @@ import {usePlatform} from '@/hooks/usePlatform'
 import {logger} from '@/lib/logger'
 import type {BackendEvent} from '@/platform/types'
 import {getErrorMessage} from '@/lib/getErrorMessage'
+import {watchBackendRestarts} from '@/api/client'
 
 type Phase = 'terminated' | 'error' | 'restarting'
 
@@ -13,6 +14,10 @@ export default function BackendCrashBanner() {
   const platform = usePlatform()
   const [phase, setPhase] = useState<Phase | null>(null)
   const [detail, setDetail] = useState('')
+
+  // The shell respawns a dead sidecar on a new port with a new token: the api client, the events stream and the
+  // chat streams move to it, so closing the banner leaves a working app rather than one bound to the old process.
+  useEffect(() => watchBackendRestarts(cb => platform.onBackendEvent(cb)), [platform])
 
   useEffect(() => {
     return platform.onBackendEvent((event: BackendEvent) => {

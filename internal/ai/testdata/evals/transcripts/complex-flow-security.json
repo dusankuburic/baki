@@ -1,0 +1,36 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "list_findings",
+          "input": {
+            "category": "Security"
+          }
+        }
+      ],
+      "tokensIn": 2105,
+      "tokensOut": 20
+    },
+    {
+      "toolCalls": [
+        {
+          "id": "call_2",
+          "name": "get_block",
+          "input": {
+            "blockId": "B4"
+          }
+        }
+      ],
+      "tokensIn": 2290,
+      "tokensOut": 24
+    },
+    {
+      "text": "Two security findings, most important first:\n\n1. **`hardcoded-credential` (error)** — [Set Password](block:B4) on line 5 assigns a literal to `Password` ([finding](finding:hardcoded-credential:de29037c23a9c4cf)). The value is redacted here, but it is stored in the flow in clear text. Move it to a credential store (e.g. a Windows credential or an Azure Key Vault secret) and read it at run time.\n2. **`path-traversal-risk` (warning)** — [Write Text](block:B14) builds its file path from variables without validation ([finding](finding:path-traversal-risk:2dff43de0795cabf)); restrict it to a known folder.",
+      "tokensIn": 2465,
+      "tokensOut": 168
+    }
+  ]
+}

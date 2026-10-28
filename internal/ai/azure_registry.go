@@ -302,12 +302,23 @@ func newAzureFoundryConnectionProvider(raw string, models []AzureRegisteredModel
 
 // newAzureRegistryProvider is the registry provider's constructor proper; tests hand it a parsed (unvalidated) config.
 func newAzureRegistryProvider(cfg AzureFoundryConfig, cfgErr error, models []AzureRegisteredModel, embeddingDeployment string, client *http.Client, sources entraSourceFactory) *AzureFoundryProvider {
-	cfg = cfg.withoutDeployments()
 	entries := sortedAzureRegistry(models)
 	embeddingDeployment = strings.TrimSpace(embeddingDeployment)
 	if cfgErr == nil && embeddingDeployment != "" && !azureDeploymentName.MatchString(embeddingDeployment) {
 		cfgErr = azureCfgErr(AzureCfgErrInvalidDeploy, "deployment name %q may only contain letters, digits, '.', '_' and '-' (max 64)", embeddingDeployment)
 	}
+	cfg = registryProviderConfig(cfg, entries, embeddingDeployment)
+	p := newAzureFoundryProviderFrom(cfg, cfgErr, client, sources)
+	p.fromRegistry = true
+	p.registry = entries
+	return p
+}
+
+// registryProviderConfig is the document a registry provider runs on: the resource's credential without the
+// legacy deployment fields, its chat and Claude entries as the deployments (entries sorted), and the embedding
+// deployment ("" for chat) — which also keys its listing cache (azureModelsCacheKey).
+func registryProviderConfig(cfg AzureFoundryConfig, entries []AzureRegisteredModel, embeddingDeployment string) AzureFoundryConfig {
+	cfg = cfg.withoutDeployments()
 	for _, e := range entries {
 		switch e.Kind {
 		case AzureModelKindChat:
@@ -317,10 +328,7 @@ func newAzureRegistryProvider(cfg AzureFoundryConfig, cfgErr error, models []Azu
 		}
 	}
 	cfg.EmbeddingDeployment = embeddingDeployment
-	p := newAzureFoundryProviderFrom(cfg, cfgErr, client, sources)
-	p.fromRegistry = true
-	p.registry = entries
-	return p
+	return cfg
 }
 
 // sortedAzureRegistry is the provider's view of an entry set: valid entries only (out-of-bounds overrides
@@ -494,7 +502,9 @@ func RefreshAzureFoundryListing(ctx context.Context, raw string, models []AzureR
 	return newAzureFoundryConnectionProvider(raw, models, "", azureHTTPClient(), processEntraSources).refreshListing(ctx)
 }
 
-// refreshListing is RefreshAzureFoundryListing for a built provider.
+// refreshListing is RefreshAzureFoundryListing for a built provider. Nothing is asked before the listing is due —
+// live, or a failed refresh's retry pending (storeAzureListing); the flight runs within a budget taken from ctx's
+// deadline (listingBudget), which the detached flight would otherwise lose.
 func (p *AzureFoundryProvider) refreshListing(ctx context.Context) error {
 	if p.configErr != nil {
 		return p.configErr
@@ -503,13 +513,31 @@ func (p *AzureFoundryProvider) refreshListing(ctx context.Context) error {
 		return nil
 	}
 	key := azureModelsCacheKey(p.cfg)
-	if _, live := cachedAzureModels(key); live {
+	if !azureListingDue(key) {
 		return nil
 	}
 	select {
-	case <-azureModelsFlight.DoChan(key, p.listingFlight(ctx, key)):
+	case <-azureModelsFlight.DoChan(key, p.listingFlight(ctx, key, listingBudget(ctx))):
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// AzureFoundryListingOf is the ModelsListing of one resource's cached project listing — cfg its parsed
+// credential, models its entries, as RefreshAzureFoundryListing keys it — read without the network: whether
+// the chat path's registry provider is served a complete listing, as of when, and whether a refresh is due.
+// A resource that lists no project reports complete and never due.
+func AzureFoundryListingOf(cfg AzureFoundryConfig, models []AzureRegisteredModel) ModelsListing {
+	if !cfg.Configured() || !cfg.listsProjectDeployments() {
+		return ModelsListing{Complete: true}
+	}
+	return azureListingState(azureModelsCacheKey(registryProviderConfig(cfg, sortedAzureRegistry(models), "")), azureModelsStaleGrace)
+}
+
+// AzureFoundryListingDue is AzureFoundryListingOf's Due for a resource that lists a project, keyed by its
+// credential's fingerprint (AzureFoundryConfig.Fingerprint) instead of the credential: a caller that remembers the
+// fingerprint decides whether a refresh is due without reading the credential again.
+func AzureFoundryListingDue(fingerprint string, models []AzureRegisteredModel) bool {
+	return azureListingDue(azureModelsCacheKeyFor(fingerprint, registryProviderConfig(AzureFoundryConfig{}, sortedAzureRegistry(models), "")))
 }

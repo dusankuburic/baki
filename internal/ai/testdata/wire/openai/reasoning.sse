@@ -1,0 +1,17 @@
+: hand-built from the reasoning_content channel of DeepSeek-R1 / open reasoning models on OpenAI-compatible servers (Foundry /openai/v1, vLLM), NOT a live capture; see ../README.md
+data: {"id":"chatcmpl-WIRE0000000000000000000000007","object":"chat.completion.chunk","created":1761523206,"model":"DeepSeek-R1-0528","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000007","object":"chat.completion.chunk","created":1761523206,"model":"DeepSeek-R1-0528","choices":[{"index":0,"delta":{"content":null,"reasoning_content":"The user asks whether the loop exits. "},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000007","object":"chat.completion.chunk","created":1761523206,"model":"DeepSeek-R1-0528","choices":[{"index":0,"delta":{"content":null,"reasoning_content":"Block 14 compares LoopIndex."},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000007","object":"chat.completion.chunk","created":1761523206,"model":"DeepSeek-R1-0528","choices":[{"index":0,"delta":{"content":"Yes: block 14 exits ","reasoning_content":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000007","object":"chat.completion.chunk","created":1761523206,"model":"DeepSeek-R1-0528","choices":[{"index":0,"delta":{"content":"once LoopIndex reaches the row count.","reasoning_content":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000007","object":"chat.completion.chunk","created":1761523206,"model":"DeepSeek-R1-0528","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000007","object":"chat.completion.chunk","created":1761523206,"model":"DeepSeek-R1-0528","choices":[],"usage":{"prompt_tokens":640,"completion_tokens":96,"total_tokens":736,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":71}}}
+
+data: [DONE]
+

@@ -1,0 +1,9 @@
+{
+  "data": {
+    "dropped": 20,
+    "keptFrom": 20,
+    "kind": "history_truncated"
+  },
+  "streamId": "stream-1",
+  "type": "notice"
+}

@@ -501,3 +501,41 @@ func (b *backendWithUsers) LoadUserByID(_ context.Context, id string) (*interfac
 	}
 	return nil, interfaces.ErrNotFound
 }
+
+// TestMigrator_ConversationsAreTheImportersAndNeverOverwriteAnOwnedThread: a desktop thread is imported as the
+// importing user's (their thread index lists it; R-security-3), and an owned conversation already under the key —
+// even an empty one, a thread named before its first turn — is never replaced.
+func TestMigrator_ConversationsAreTheImportersAndNeverOverwriteAnOwnedThread(t *testing.T) {
+	d := contract.NewLegacyDir(t)
+	dst := testutil.NewFakeBackend()
+	ctx := context.Background()
+	const fresh, named = "0b7c4c1e-6a65-4cf4-9a49-6f7d3b1f2a10", "1b7c4c1e-6a65-4cf4-9a49-6f7d3b1f2a10"
+	d.Conversation(fresh, "flow-1", models.ChatMessage{ID: "m1", Role: "user", Content: "from the desktop", Timestamp: time.Now()})
+	d.Conversation(named, "flow-1", models.ChatMessage{ID: "m2", Role: "user", Content: "would overwrite", Timestamp: time.Now()})
+	v, err := dst.SetConversationTitle(ctx, "flow-1", named, "operator-1", "named in the browser")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := migration.New(openSource(t, d), dst).WithDefaultOwner("operator-1").Migrate(ctx)
+	if err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if res.ConversationsMigrated != 1 || res.ConversationsSkipped != 1 {
+		t.Errorf("migrated %d, skipped %d; want 1 and 1", res.ConversationsMigrated, res.ConversationsSkipped)
+	}
+	threads, err := dst.ListConversations(ctx, "flow-1", "operator-1", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]interfaces.ConversationSummary{}
+	for _, c := range threads {
+		byKey[c.Scope] = c
+	}
+	if c, ok := byKey[fresh]; !ok || c.MessageCount != 1 {
+		t.Errorf("the imported thread is not the importer's: %+v", threads)
+	}
+	if c := byKey[named]; c.Title != "named in the browser" || c.MessageCount != 0 || c.Version != v {
+		t.Errorf("the owned empty thread = %+v, want it untouched (title kept, no messages, version %d)", c, v)
+	}
+}

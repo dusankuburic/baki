@@ -47,6 +47,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
   const [verificationURI, setVerificationURI] = useState('')
   const [username, setUsername] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  const [tokenUnreadable, setTokenUnreadable] = useState(false)
   const [starting, setStarting] = useState(false)
   const attemptRef = useRef(0)
   const startingRef = useRef(false)
@@ -54,6 +55,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
 
   useEffect(() => {
     const attempts = attemptRef
+    const started = attempts.current
     provider
       .getUser()
       .then(user => {
@@ -64,6 +66,11 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
       })
       .catch(err => {
         logger.warn('Failed to check existing auth', err)
+        // A token the server holds but cannot decrypt: signed in once, but only signing in again repairs it.
+        if (getErrorCode(err) === 'KEY_UNREADABLE' && attempts.current === started) {
+          setState('error')
+          setTokenUnreadable(true)
+        }
       })
     return () => {
       attempts.current++
@@ -77,6 +84,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
     setStarting(true)
     clearTimeout(timeoutRef.current)
     const attempt = ++attemptRef.current
+    setTokenUnreadable(false)
     try {
       const resp = await provider.startAuth()
       if (attempt !== attemptRef.current || !resp) return
@@ -216,7 +224,7 @@ export default function DeviceAuthLoginButton({provider, onAuthComplete}: Props)
     case 'error':
       return (
         <div className="space-y-2">
-          <p className="text-sm text-semantic-error">{errorMsg}</p>
+          <p className="text-sm text-semantic-error">{tokenUnreadable ? t('deviceAuth.tokenUnreadable') : errorMsg}</p>
           <button
             className="text-xs text-brand-400 hover:text-brand-300 disabled:opacity-60"
             onClick={startAuth}

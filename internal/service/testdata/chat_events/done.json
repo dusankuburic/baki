@@ -1,0 +1,12 @@
+{
+  "data": {
+    "chunks": 1,
+    "conversationBase": 0,
+    "conversationVersion": 2,
+    "servedModel": "fake-model-2026-10",
+    "tokensIn": 30,
+    "tokensOut": 13
+  },
+  "streamId": "stream-1",
+  "type": "done"
+}

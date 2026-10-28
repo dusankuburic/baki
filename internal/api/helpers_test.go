@@ -272,7 +272,7 @@ func newTestRouterSSO(backend storageif.StorageBackend, jwtEnabled bool, ssoClie
 		NewSystemHandler(sysSvc, security, auditRec, nil, authzSvc, service.NewHealthService(backend, testBlob(backend))),
 		NewFlowHandler(flowSvc, docProv, backend, security, shareSvc, auditRec),
 		NewLibraryHandler(libSvc, backend, security, auditRec),
-		NewChatHandler(chatSvc, flowSvc, security, auditRec),
+		NewChatHandler(chatSvc, flowSvc, security, auditRec, authzSvc),
 		analysisHandler,
 		NewDashboardHandler(dashboardSvc, security),
 		NewExportHandler(exportSvc, flowSvc, analysisSvc, security, auditRec),

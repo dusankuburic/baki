@@ -23,8 +23,10 @@ import (
 func (b *PostgresStorageBackend) SaveKnowledgeDocument(ctx context.Context, userID string, doc *interfaces.KnowledgeDocument) error {
 	return b.withTxAs(ctx, userID, func(_ context.Context, tx *sql.Tx) error {
 		// chunker_version 0 is "unsaid": the column's default (1), the geometry every document before the column had.
-		_, err := tx.ExecContext(ctx, `INSERT INTO knowledge_documents (id, org_id, filename, chunker_version) VALUES ($1, $2, $3, $4)`,
-			doc.ID, doc.OrgID, doc.Filename, max(doc.ChunkerVersion, 1))
+		// An unsaid state is ready (the column's default); an empty source text is none (NULL, v51).
+		_, err := tx.ExecContext(ctx, `INSERT INTO knowledge_documents (id, org_id, filename, chunker_version, state, content)
+			VALUES ($1, $2, $3, $4, COALESCE(NULLIF($5::text, ''), 'ready'), NULLIF($6::text, ''))`,
+			doc.ID, doc.OrgID, doc.Filename, max(doc.ChunkerVersion, 1), doc.State, doc.Content)
 		if isUnknownOrg(err, "knowledge_documents_org_id_fkey") {
 			return interfaces.ErrOrgNotFound
 		}
@@ -73,29 +75,31 @@ func (b *PostgresStorageBackend) DeleteKnowledgeDocumentByName(ctx context.Conte
 func listKnowledgeDocumentsSQL(pgvector bool) string {
 	if pgvector {
 		return `
-		SELECT d.id, d.org_id, d.filename, d.created_at, d.chunker_version, c.chunk_count, c.indexed_count
-		FROM (SELECT id, org_id, filename, created_at, chunker_version FROM knowledge_documents
+		SELECT d.id, d.org_id, d.filename, d.created_at, d.chunker_version, d.state, d.has_source, c.chunk_count, c.indexed_count, c.pending_count
+		FROM (SELECT id, org_id, filename, created_at, chunker_version, state, content IS NOT NULL AS has_source FROM knowledge_documents
 		      WHERE org_id = $1
 		      ORDER BY created_at DESC, id
 		      LIMIT CASE WHEN $2 > 0 THEN $2 ELSE NULL END
 		      OFFSET GREATEST($3, 0)) d
 		CROSS JOIN LATERAL (
 			SELECT COUNT(*)::int AS chunk_count,
-			       COUNT(*) FILTER (WHERE c.embedding_vec IS NOT NULL)::int AS indexed_count
+			       COUNT(*) FILTER (WHERE c.embedding_vec IS NOT NULL)::int AS indexed_count,
+			       COUNT(*) FILTER (WHERE c.pending AND c.embedding IS NULL)::int AS pending_count
 			FROM knowledge_chunks c
 			WHERE c.org_id = d.org_id AND c.doc_id = d.id) c
 		ORDER BY d.created_at DESC, d.id`
 	}
 	return `
-		SELECT d.id, d.org_id, d.filename, d.created_at, d.chunker_version, c.chunk_count, c.indexed_count
-		FROM (SELECT id, org_id, filename, created_at, chunker_version FROM knowledge_documents
+		SELECT d.id, d.org_id, d.filename, d.created_at, d.chunker_version, d.state, d.has_source, c.chunk_count, c.indexed_count, c.pending_count
+		FROM (SELECT id, org_id, filename, created_at, chunker_version, state, content IS NOT NULL AS has_source FROM knowledge_documents
 		      WHERE org_id = $1
 		      ORDER BY created_at DESC, id
 		      LIMIT CASE WHEN $2 > 0 THEN $2 ELSE NULL END
 		      OFFSET GREATEST($3, 0)) d
 		CROSS JOIN LATERAL (
 			SELECT COUNT(*)::int AS chunk_count,
-			       0::int AS indexed_count
+			       0::int AS indexed_count,
+			       COUNT(*) FILTER (WHERE c.pending AND c.embedding IS NULL)::int AS pending_count
 			FROM knowledge_chunks c
 			WHERE c.org_id = d.org_id AND c.doc_id = d.id) c
 		ORDER BY d.created_at DESC, d.id`
@@ -112,7 +116,7 @@ func (b *PostgresStorageBackend) ListKnowledgeDocuments(ctx context.Context, org
 	var docs []*interfaces.KnowledgeDocument
 	for rows.Next() {
 		var d interfaces.KnowledgeDocument
-		if err := rows.Scan(&d.ID, &d.OrgID, &d.Filename, &d.CreatedAt, &d.ChunkerVersion, &d.ChunkCount, &d.VectorIndexed); err != nil {
+		if err := rows.Scan(&d.ID, &d.OrgID, &d.Filename, &d.CreatedAt, &d.ChunkerVersion, &d.State, &d.HasSource, &d.ChunkCount, &d.VectorIndexed, &d.PendingChunks); err != nil {
 			return nil, err
 		}
 		docs = append(docs, &d)
@@ -180,18 +184,19 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID
 		// embedding (JSONB) is always written (portability + pgvector backfill source); embedding_vec
 		// only when pgvector is active AND the width is the configured one (inVectorIndex) — mismatched
 		// chunks stay NULL so the HNSW index never sees an incomparable vector. embedding_identity is
-		// NULL for a chunk whose embedder named none. Multi-row INSERTs.
+		// NULL for a chunk whose embedder named none. A chunk stored without an embedding (a pending
+		// chunk still to embed, v51) has none: NULL, in no index and through no width filter. Multi-row INSERTs.
 		const rowsPerStmt = 2000
 		for start := 0; start < len(chunks); start += rowsPerStmt {
 			end := min(start+rowsPerStmt, len(chunks))
 			batch := chunks[start:end]
 
 			var sb strings.Builder
-			args := make([]any, 0, len(batch)*7)
+			args := make([]any, 0, len(batch)*8)
 			if b.hasPgvector {
-				sb.WriteString(`INSERT INTO knowledge_chunks (id, doc_id, org_id, content, embedding, embedding_vec, embedding_identity) VALUES `)
+				sb.WriteString(`INSERT INTO knowledge_chunks (id, doc_id, org_id, content, embedding, embedding_vec, embedding_identity, pending) VALUES `)
 				for i, c := range batch {
-					embJSON, _ := json.Marshal(c.Embedding)
+					embJSON := knowledgeEmbeddingJSON(c.Embedding)
 					var vec any
 					if inVectorIndex(b.embeddingDim, len(c.Embedding)) {
 						vec = FormatVector(c.Embedding)
@@ -199,20 +204,20 @@ func (b *PostgresStorageBackend) SaveKnowledgeChunks(ctx context.Context, userID
 					if i > 0 {
 						sb.WriteByte(',')
 					}
-					base := i*7 + 1
-					fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d::vector,NULLIF($%d::text,''))", base, base+1, base+2, base+3, base+4, base+5, base+6)
-					args = append(args, c.ID, c.DocID, c.OrgID, c.Content, embJSON, vec, c.EmbeddingIdentity)
+					base := i*8 + 1
+					fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d::vector,NULLIF($%d::text,''),$%d)", base, base+1, base+2, base+3, base+4, base+5, base+6, base+7)
+					args = append(args, c.ID, c.DocID, c.OrgID, c.Content, embJSON, vec, c.EmbeddingIdentity, c.Pending)
 				}
 			} else {
-				sb.WriteString(`INSERT INTO knowledge_chunks (id, doc_id, org_id, content, embedding, embedding_identity) VALUES `)
+				sb.WriteString(`INSERT INTO knowledge_chunks (id, doc_id, org_id, content, embedding, embedding_identity, pending) VALUES `)
 				for i, c := range batch {
-					embJSON, _ := json.Marshal(c.Embedding)
+					embJSON := knowledgeEmbeddingJSON(c.Embedding)
 					if i > 0 {
 						sb.WriteByte(',')
 					}
-					base := i*6 + 1
-					fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,NULLIF($%d::text,''))", base, base+1, base+2, base+3, base+4, base+5)
-					args = append(args, c.ID, c.DocID, c.OrgID, c.Content, embJSON, c.EmbeddingIdentity)
+					base := i*7 + 1
+					fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,NULLIF($%d::text,''),$%d)", base, base+1, base+2, base+3, base+4, base+5, base+6)
+					args = append(args, c.ID, c.DocID, c.OrgID, c.Content, embJSON, c.EmbeddingIdentity, c.Pending)
 				}
 			}
 			if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
@@ -294,7 +299,9 @@ const (
 // SearchKnowledge ranks the org's chunks by similarity to the query. identity restricts the candidates to the
 // chunks embedded under it and the legacy rows without one (ADR 0027): a chunk of another identity is the same
 // width but another model's vector, which cosine cannot tell from a miss; "" = any. The width filters stay
-// separate — the identity string is not parsed for the width (a provider may retry at its native width).
+// separate — the identity string is not parsed for the width (a provider may retry at its native width). A pending
+// chunk (v51) is never a candidate: one still to embed has no vector and no width, and one already embedded belongs
+// to an upload that is not finished (NOT c.pending), whose document must not answer beside the version it replaces.
 func (b *PostgresStorageBackend) SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int, identity string) ([]interfaces.KnowledgeChunk, error) {
 	// pgvector path: push the similarity ordering + LIMIT into the database; only chunks at the
 	// configured width are indexed (inVectorIndex), and <=> is cosine distance, so ORDER BY it ASC
@@ -368,13 +375,14 @@ const hnswMaxScanTuples = 100000
 // width or a non-iterating pgvector. Args: $1 org, $2 query vector, $3 limit, $4 max cosine distance, $5 width (0 = any),
 // $6 embedding identity ("" = any; else that identity or none).
 const knowledgeVectorSearchExactSQL = `
-		SELECT nearest.id, nearest.doc_id, nearest.content, d.filename
+		SELECT nearest.id, nearest.doc_id, nearest.content, d.filename, d.chunker_version
 		FROM (
 			SELECT c.id, c.doc_id, c.content,
 			       c.embedding_vec <=> $2::vector AS dist
 			FROM knowledge_chunks c
 			WHERE c.org_id = $1
 			  AND c.embedding_vec IS NOT NULL
+			  AND NOT c.pending
 			  AND ($5 <= 0 OR vector_dims(c.embedding_vec) = $5)
 			  AND ($6::text = '' OR c.embedding_identity IS NULL OR c.embedding_identity = $6::text)
 			  AND c.embedding_vec <=> $2::vector <= $4
@@ -392,13 +400,14 @@ const knowledgeVectorSearchExactSQL = `
 // the document join is outside the LIMIT too.
 func knowledgeVectorSearchSQL(dims int) string {
 	return fmt.Sprintf(`
-		SELECT nearest.id, nearest.doc_id, nearest.content, d.filename
+		SELECT nearest.id, nearest.doc_id, nearest.content, d.filename, d.chunker_version
 		FROM (
 			SELECT c.id, c.doc_id, c.content,
 			       c.embedding_vec::vector(%[1]d) <=> $2::vector(%[1]d) AS dist
 			FROM knowledge_chunks c
 			WHERE c.org_id = $1
 			  AND vector_dims(c.embedding_vec) = %[1]d
+			  AND NOT c.pending
 			  AND ($5::text = '' OR c.embedding_identity IS NULL OR c.embedding_identity = $5::text)
 			ORDER BY dist
 			LIMIT $3
@@ -408,12 +417,21 @@ func knowledgeVectorSearchSQL(dims int) string {
 		ORDER BY nearest.dist`, dims)
 }
 
-// scanKnowledgeHits reads (id, doc_id, content, filename) rows.
+// scanKnowledgeHits reads (id, doc_id, content, filename[, chunker_version]) rows: a statement that also selects the
+// document's chunker version (the vector searches do) hands it to every hit, for rag.stripOverlapPrefix.
 func scanKnowledgeHits(rows *sql.Rows) ([]interfaces.KnowledgeChunk, error) {
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
 	var chunks []interfaces.KnowledgeChunk
 	for rows.Next() {
 		var c interfaces.KnowledgeChunk
-		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &c.Filename); err != nil {
+		dest := []any{&c.ID, &c.DocID, &c.Content, &c.Filename}
+		if len(cols) > len(dest) {
+			dest = append(dest, &c.ChunkerVersion)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, err
 		}
 		chunks = append(chunks, c)
@@ -431,11 +449,12 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 	// BEFORE transfer (cosine is undefined across widths; a 1536-dim embedding is ~15-30 KB of JSON).
 	const maxChunks = 500
 	rows, err := b.query(ctx).QueryContext(ctx, `
-		SELECT c.id, c.doc_id, c.content, c.embedding, d.filename
+		SELECT c.id, c.doc_id, c.content, c.embedding, d.filename, d.chunker_version
 		FROM knowledge_chunks c
 		JOIN knowledge_documents d ON d.id = c.doc_id
 		WHERE c.org_id = $1
 		  AND jsonb_array_length(c.embedding) = $2
+		  AND NOT c.pending
 		  AND ($4::text = '' OR c.embedding_identity IS NULL OR c.embedding_identity = $4::text)
 		ORDER BY c.doc_id, c.id
 		LIMIT $3`, orgID, len(queryEmbedding), maxChunks, identity)
@@ -448,7 +467,7 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 	for rows.Next() {
 		var c interfaces.KnowledgeChunk
 		var embJSON []byte
-		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &embJSON, &c.Filename); err != nil {
+		if err := rows.Scan(&c.ID, &c.DocID, &c.Content, &embJSON, &c.Filename, &c.ChunkerVersion); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(embJSON, &c.Embedding); err != nil {
@@ -475,7 +494,8 @@ func (b *PostgresStorageBackend) searchKnowledgeGo(ctx context.Context, orgID st
 // ListKnowledgeChunkContents returns one page of chunks (no embeddings) strictly after the (doc_id, id) cursor,
 // for re-indexing: the embedding provider changed, but the chunked TEXT is still the source of truth. With
 // notIdentity the page skips the chunks already embedded under it (legacy rows without one are walked), so a
-// re-index converts only what is not yet at the current model and a restarted run never re-buys a page.
+// re-index converts only what is not yet at the current model and a restarted run never re-buys a page. A
+// pending chunk (v51) is its upload's to embed and is never on a page.
 func (b *PostgresStorageBackend) ListKnowledgeChunkContents(ctx context.Context, orgID string, after interfaces.KnowledgeChunkCursor, limit int, notIdentity string) ([]interfaces.KnowledgeChunk, error) {
 	return b.listKnowledgeChunkContents(ctx, orgID, after, limit, notIdentity, false)
 }
@@ -499,6 +519,7 @@ func listKnowledgeChunkContentsSQL(unindexedOnly bool) string {
 		FROM knowledge_chunks c
 		WHERE c.org_id = $1
 		  AND (c.doc_id, c.id) > ($2::text, $3::text)
+		  AND NOT c.pending
 		  AND ($5::text = '' OR c.embedding_identity IS DISTINCT FROM $5::text)` + unindexed + `
 		ORDER BY c.doc_id, c.id
 		LIMIT $4`
@@ -541,6 +562,7 @@ func sampleKnowledgeChunkEmbeddingsSQL(pgvector bool) string {
 				SELECT DISTINCT ON (c.doc_id) c.id, c.doc_id, (c.embedding_vec IS NULL) AS unindexed
 				FROM knowledge_chunks c
 				WHERE c.org_id = $1
+				  AND NOT c.pending
 				  AND (c.embedding_vec IS NOT NULL
 				       OR CASE WHEN jsonb_typeof(c.embedding) = 'array'
 				               THEN jsonb_array_length(c.embedding) ELSE 0 END > 0)
@@ -557,6 +579,7 @@ func sampleKnowledgeChunkEmbeddingsSQL(pgvector bool) string {
 			SELECT DISTINCT ON (c.doc_id) c.id, c.doc_id, c.content, c.embedding
 			FROM knowledge_chunks c
 			WHERE c.org_id = $1
+			  AND NOT c.pending
 			  AND CASE WHEN jsonb_typeof(c.embedding) = 'array'
 			           THEN jsonb_array_length(c.embedding) ELSE 0 END > 0
 			ORDER BY c.doc_id, c.id
@@ -569,7 +592,8 @@ func sampleKnowledgeChunkEmbeddingsSQL(pgvector bool) string {
 // document — for the RAG embedding-model mismatch guard (DISTINCT ON spreads the sample over the corpus; "the
 // n lowest ids" would be a fixed subset a partially converted corpus can hide from). With pgvector, each
 // document's indexed chunk is picked first; the CASE-form jsonb guard keeps rows without an embedding array
-// out (jsonb_array_length would error on a scalar, and Postgres need not short-circuit an AND).
+// out (jsonb_array_length would error on a scalar, and Postgres need not short-circuit an AND). A pending chunk (v51)
+// is not in the corpus yet, embedded or not: never sampled, here or by the probes below.
 func (b *PostgresStorageBackend) SampleKnowledgeChunkEmbeddings(ctx context.Context, orgID string, n int) ([]interfaces.KnowledgeChunk, error) {
 	if n <= 0 {
 		return nil, nil
@@ -604,6 +628,7 @@ const unindexedKnowledgeChunkWidthSQL = `
 		FROM knowledge_chunks c
 		WHERE c.org_id = $1
 		  AND c.embedding_vec IS NULL
+		  AND NOT c.pending
 		  AND CASE WHEN jsonb_typeof(c.embedding) = 'array' THEN jsonb_array_length(c.embedding) ELSE 0 END > 0
 		LIMIT 1`
 
@@ -632,6 +657,7 @@ func (b *PostgresStorageBackend) SampleKnowledgeChunkEmbeddingsUpTo(ctx context.
 		FROM knowledge_chunks c
 		WHERE c.org_id = $1
 		  AND (c.doc_id, c.id) <= ($2::text, $3::text)
+		  AND NOT c.pending
 		  AND CASE WHEN jsonb_typeof(c.embedding) = 'array'
 		           THEN jsonb_array_length(c.embedding) ELSE 0 END > 0
 		ORDER BY c.doc_id DESC, c.id DESC
@@ -684,7 +710,8 @@ func (b *PostgresStorageBackend) UpdateKnowledgeChunkEmbeddings(ctx context.Cont
 // buildKnowledgeEmbeddingUpdate renders one multi-row UPDATE ... FROM (VALUES ...) statement (200 rows per
 // statement). knowledge_chunks.id is TEXT and Postgres has no implicit text/uuid cast — the explicit ::text
 // keeps the VALUES column typed so a NULL vector still plans (vec is NULL for vectors whose width is not embeddingDim).
-// The identity is replaced along with the vector: NULL when the embedder named none.
+// The identity is replaced along with the vector: NULL when the embedder named none. A pending chunk (v51) stays
+// pending — out of the corpus — until its document is finished (FinishKnowledgeDocument).
 func buildKnowledgeEmbeddingUpdate(batch []interfaces.KnowledgeChunk, hasPgvector bool, embeddingDim int) (string, []any) {
 	var sb strings.Builder
 	args := make([]any, 0, len(batch)*4)
@@ -724,17 +751,18 @@ func buildKnowledgeEmbeddingUpdate(batch []interfaces.KnowledgeChunk, hasPgvecto
 
 // CountKnowledgeChunks reports the org's total chunks and how many sit in the pgvector index at the
 // configured dimension — total>0 with 0 indexed (pgvector active) means an embedding switch stranded the corpus.
+// A pending chunk (v51) is not in the corpus until its upload embeds it, here and in the census by identity.
 func (b *PostgresStorageBackend) CountKnowledgeChunks(ctx context.Context, orgID string) (int, int, error) {
 	var total, indexed int
 	query := `
 		SELECT COUNT(c.id), 0
 		FROM knowledge_chunks c
-		WHERE c.org_id = $1`
+		WHERE c.org_id = $1 AND NOT c.pending`
 	if b.hasPgvector {
 		query = `
 		SELECT COUNT(c.id), COUNT(c.id) FILTER (WHERE c.embedding_vec IS NOT NULL)
 		FROM knowledge_chunks c
-		WHERE c.org_id = $1`
+		WHERE c.org_id = $1 AND NOT c.pending`
 	}
 	err := b.query(ctx).QueryRowContext(ctx, query, orgID).Scan(&total, &indexed)
 	return total, indexed, err
@@ -749,14 +777,14 @@ func (b *PostgresStorageBackend) CountKnowledgeChunksByIdentity(ctx context.Cont
 		       COUNT(c.id) FILTER (WHERE $2::text <> '' AND c.embedding_identity = $2::text),
 		       COUNT(c.id) FILTER (WHERE $2::text <> '' AND c.embedding_identity IS NOT NULL AND c.embedding_identity <> $2::text)
 		FROM knowledge_chunks c
-		WHERE c.org_id = $1`
+		WHERE c.org_id = $1 AND NOT c.pending`
 	if b.hasPgvector {
 		query = `
 		SELECT COUNT(c.id), COUNT(c.id) FILTER (WHERE c.embedding_vec IS NOT NULL),
 		       COUNT(c.id) FILTER (WHERE $2::text <> '' AND c.embedding_identity = $2::text),
 		       COUNT(c.id) FILTER (WHERE $2::text <> '' AND c.embedding_identity IS NOT NULL AND c.embedding_identity <> $2::text)
 		FROM knowledge_chunks c
-		WHERE c.org_id = $1`
+		WHERE c.org_id = $1 AND NOT c.pending`
 	}
 	err := b.query(ctx).QueryRowContext(ctx, query, orgID, identity).Scan(&c.Total, &c.VectorIndexed, &c.Current, &c.Stranded)
 	return c, err

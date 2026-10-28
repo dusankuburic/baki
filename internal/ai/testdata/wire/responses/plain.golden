@@ -1,0 +1,15 @@
+# responses/plain.sse through parseResponsesSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="gpt-4.1-2025-04-14"
+02 keepalive served="gpt-4.1-2025-04-14"
+03 keepalive served="gpt-4.1-2025-04-14"
+04 keepalive served="gpt-4.1-2025-04-14"
+05 text="The flow reads " served="gpt-4.1-2025-04-14"
+06 text="the workbook, then loops " served="gpt-4.1-2025-04-14"
+07 text="over each row — café names included." served="gpt-4.1-2025-04-14"
+08 keepalive served="gpt-4.1-2025-04-14"
+09 keepalive served="gpt-4.1-2025-04-14"
+10 keepalive served="gpt-4.1-2025-04-14"
+11 done finish="stop" in=1290 out=18 cacheRead=1024 items=[{"content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"The flow reads the workbook, then loops over each row — café names included."}],"id":"msg_WIRE0000000000000000000000000001","role":"assistant","status":"completed","type":"message"}] served="gpt-4.1-2025-04-14"
+return nil
+summary chunks=11 keepalives=7 text="The flow reads the workbook, then loops over each row — café names included."

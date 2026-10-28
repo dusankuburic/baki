@@ -1,7 +1,26 @@
 import type {StateCreator} from 'zustand'
 import type {ChatState} from './state'
-import {MAX_CONCURRENT_STREAMS} from './types'
+import {MAX_CONCURRENT_STREAMS, MAX_QUEUED_MESSAGES, type QueuedMessage} from './types'
 import {persistFlowThreads} from './persistence'
+import {uuid} from '@/lib/uuid'
+
+type QueueState = Pick<ChatState, 'queuedByThread' | 'queuePausedByThread'>
+
+/** The thread's queue replaced; an empty queue drops the thread's key, and its pause with it. */
+function withQueue(state: QueueState, threadId: string, queue: QueuedMessage[]): QueueState {
+  const queuedByThread = {...state.queuedByThread}
+  let queuePausedByThread = state.queuePausedByThread
+  if (queue.length > 0) {
+    queuedByThread[threadId] = queue
+  } else {
+    delete queuedByThread[threadId]
+    if (threadId in queuePausedByThread) {
+      queuePausedByThread = {...queuePausedByThread}
+      delete queuePausedByThread[threadId]
+    }
+  }
+  return {queuedByThread, queuePausedByThread}
+}
 
 type StreamSlice = Pick<
   ChatState,
@@ -12,8 +31,12 @@ type StreamSlice = Pick<
   | 'replaceStreamFixes'
   | 'endStream'
   | 'queueMessage'
+  | 'removeQueuedMessage'
   | 'clearQueuedMessage'
   | 'takeQueuedMessage'
+  | 'requeueMessage'
+  | 'pauseQueue'
+  | 'resumeQueue'
   | 'setFixProposal'
   | 'patchFixProposal'
   | 'setStreamMeta'
@@ -84,19 +107,47 @@ export const createStreamSlice: StateCreator<ChatState, [], [], StreamSlice> = (
     if (endsTurn && thread) persistFlowThreads(thread.flowId, get().threads)
   },
 
-  queueMessage: (threadId, msg) => set(state => ({queuedByThread: {...state.queuedByThread, [threadId]: msg}})),
+  queueMessage: (threadId, msg) => {
+    const queue = get().queuedByThread[threadId] ?? []
+    if (queue.length >= MAX_QUEUED_MESSAGES) return false
+    set(state => ({queuedByThread: {...state.queuedByThread, [threadId]: [...queue, {...msg, id: uuid()}]}}))
+    return true
+  },
+  removeQueuedMessage: (threadId, id) =>
+    set(state => {
+      const queue = state.queuedByThread[threadId]
+      if (!queue?.some(q => q.id === id)) return state
+      return withQueue(
+        state,
+        threadId,
+        queue.filter(q => q.id !== id),
+      )
+    }),
   clearQueuedMessage: threadId =>
     set(state => {
       if (!(threadId in state.queuedByThread)) return state
-      const next = {...state.queuedByThread}
-      delete next[threadId]
-      return {queuedByThread: next}
+      return withQueue(state, threadId, [])
     }),
   takeQueuedMessage: threadId => {
-    const msg = get().queuedByThread[threadId]
-    if (msg) get().clearQueuedMessage(threadId)
-    return msg
+    const [head, ...rest] = get().queuedByThread[threadId] ?? []
+    if (head) set(state => withQueue(state, threadId, rest))
+    return head
   },
+  requeueMessage: (threadId, msg) =>
+    set(state => withQueue(state, threadId, [msg, ...(state.queuedByThread[threadId] ?? [])])),
+  pauseQueue: (threadId, reason) =>
+    set(state => {
+      // The first reason stands: a Stop that leaves no answer is a Stop, not a failure.
+      if (!state.queuedByThread[threadId]?.length || threadId in state.queuePausedByThread) return state
+      return {queuePausedByThread: {...state.queuePausedByThread, [threadId]: reason}}
+    }),
+  resumeQueue: threadId =>
+    set(state => {
+      if (!(threadId in state.queuePausedByThread)) return state
+      const queuePausedByThread = {...state.queuePausedByThread}
+      delete queuePausedByThread[threadId]
+      return {queuePausedByThread}
+    }),
 
   setFixProposal: (threadId, card) =>
     set(state => {

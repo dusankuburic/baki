@@ -2,6 +2,7 @@ package ai
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"pad-core/cache"
 	"pad-core/logger"
 )
 
@@ -29,10 +31,16 @@ type openaiBase struct {
 	apiKey string
 	// tokenFn resolves the bearer token per-call for dynamic tokens (Copilot's session token, an Entra access
 	// token); takes precedence over apiKey; errors propagate — a stale token wastes no round trip.
-	tokenFn       func(ctx context.Context) (string, error)
-	client        *http.Client
-	baseURL       *string
-	providerLabel string
+	tokenFn func(ctx context.Context) (string, error)
+	client  *http.Client
+	// longWaitClient, when set, serves the non-streaming chat requests (chat, streamViaChat): the fixed-host
+	// family's client with the long header floor (fixedHostClientFor(false)). nil uses client, whose own floor
+	// already allows the wait (Azure, local) or is a test's.
+	longWaitClient *http.Client
+	baseURL        *string
+	providerLabel  string
+	// providerID is the registry id (the spec's): the provider label of the repair and fallback counters.
+	providerID string
 	// embeddingModel is the model name sent to /embeddings. Empty means the provider does not expose embeddings
 	// and embed() refuses without a network call.
 	embeddingModel string
@@ -92,7 +100,36 @@ func (b *openaiBase) unauthorized(status int, apiErr openAIErrorResp, respBody [
 			return err
 		}
 	}
+	if status == http.StatusForbidden && b.handle403 == nil {
+		// The key was read: a 403 is the provider refusing this account (region, project, billing), and
+		// re-entering the key cannot help (R-provider-25).
+		return &accessDeniedError{msg: cmp.Or(vendorMessage(apiErr.Error.Message), "the provider answered 403")}
+	}
 	return unauthorizedError(apiErr)
+}
+
+// vendorMessage is a provider's error message on one line, cut at 500 bytes.
+func vendorMessage(msg string) string {
+	msg = strings.Join(strings.Fields(msg), " ")
+	if len(msg) > 500 {
+		msg = strings.ToValidUTF8(msg[:500], "") + "…"
+	}
+	return msg
+}
+
+// quotaExhausted is the handle429 of the OpenAI-family providers that bill by account (OpenAI, xAI, GitHub
+// Models, Copilot): a 429 saying the quota is exhausted (OpenAI's insufficient_quota) is the
+// balance error — retried three times and told to "wait a moment" it never recovers. nil keeps the rate limit.
+func quotaExhausted(_ *http.Response, apiErr openAIErrorResp) error {
+	code := strings.ToLower(apiErr.Error.Code + " " + apiErr.Error.Type)
+	if strings.Contains(code, "rate_limit_exceeded") {
+		return nil // a per-minute limit, whatever its text links to (OpenAI's lower tiers link the billing page)
+	}
+	msg := strings.ToLower(apiErr.Error.Message)
+	if strings.Contains(code, "insufficient_quota") || strings.Contains(msg, "exceeded your current quota") {
+		return fmt.Errorf("%w: %s", ErrInsufficientBalance, vendorMessage(apiErr.Error.Message))
+	}
+	return nil
 }
 
 // setEmbeddingModel overrides the model sent to /embeddings; empty resets to the shipped default. Satisfies
@@ -168,7 +205,11 @@ func (b *openaiBase) post(ctx context.Context, jsonBody []byte, model string, st
 	if b.extraHeaders != nil {
 		b.extraHeaders(httpReq, model)
 	}
-	return b.client.Do(httpReq)
+	client := b.client
+	if !stream && b.longWaitClient != nil {
+		client = b.longWaitClient
+	}
+	return doProviderRequest(client, httpReq)
 }
 
 // send POSTs body to the chat endpoint; a 200 comes back with its body UNREAD, any other status read and closed.
@@ -257,7 +298,7 @@ func (b *openaiBase) sendWith(ctx context.Context, body openAIRequest, stream bo
 		}
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		resp.Body.Close()
-		b.logUpstreamRejection(resp, body.Model)
+		b.logUpstreamRejection(ctx, resp, body.Model)
 		if roundTrips >= maxSendRepairs {
 			return resp, errBody, nil, false
 		}
@@ -272,7 +313,8 @@ func (b *openaiBase) sendWith(ctx context.Context, body openAIRequest, stream bo
 			repaired[reasoningEffortNoneRepair] = true
 			toolsNone = true
 			toolsResp, toolsBody = resp, errBody
-			logger.Debug("model rejects function tools with reasoning on chat completions — retrying with reasoning_effort=none",
+			recordParamRepair(b.providerID, reasoningEffortNoneRepair)
+			logger.FromContext(ctx).Debug("model rejects function tools with reasoning on chat completions — retrying with reasoning_effort=none",
 				"provider", b.providerLabel, "model", body.Model)
 			if err := remarshal(); err != nil {
 				return nil, nil, err, false
@@ -303,7 +345,8 @@ func (b *openaiBase) sendWith(ctx context.Context, body openAIRequest, stream bo
 			parameterValueRejected(resp.StatusCode, errBody) && ensurePayload() {
 			if _, present := payload[reasoningEffortParam]; present {
 				delete(payload, reasoningEffortParam)
-				logger.Warn("the model refused the configured reasoning effort — retrying without it (the provider default applies)",
+				recordParamRepair(b.providerID, reasoningEffortParam)
+				logger.FromContext(ctx).Warn("the model refused the configured reasoning effort — retrying without it (the provider default applies)",
 					"provider", b.providerLabel, "model", body.Model)
 				if err := remarshal(); err != nil {
 					return nil, nil, err, false
@@ -321,7 +364,8 @@ func (b *openaiBase) sendWith(ctx context.Context, body openAIRequest, stream bo
 		}
 		if !repaired[param] && ensurePayload() && repairParam(payload, param) {
 			repaired[param] = true
-			logger.Debug("AI request parameter rejected by the model — retrying without it",
+			recordParamRepair(b.providerID, param)
+			logger.FromContext(ctx).Debug("AI request parameter rejected by the model — retrying without it",
 				"provider", b.providerLabel, "model", body.Model, "param", param)
 			if err := remarshal(); err != nil {
 				return nil, nil, err, false
@@ -336,12 +380,13 @@ func (b *openaiBase) sendWith(ctx context.Context, body openAIRequest, stream bo
 // maxSendRepairs caps send's repair round trips per request (each parameter once; bounds a server naming new ones).
 const maxSendRepairs = 4
 
-// learnedRepairs remembers, per endpoint and model, the parameters send had to repair — bounded and short-lived
-// (a deployment can be re-pointed); shared with the Responses path via repairsFor / rememberRepairs.
-var learnedRepairs = struct {
-	sync.Mutex
-	m map[string]learnedRepair
-}{m: map[string]learnedRepair{}}
+// learnedRepairs remembers, per endpoint and model, the parameters send had to repair — bounded (least recently
+// used first, ai.param-repairs) and short-lived (a deployment can be re-pointed); shared with the Responses path via
+// repairsFor / rememberRepairs. learnedRepairsMu serialises rememberRepairs's read-merge-write.
+var (
+	learnedRepairs   = cache.New[learnedRepair](paramRepairsSpec, learnedRepairsMax, cache.WithMaxEntries(learnedRepairsMax), cache.WithTTL(learnedRepairsTTL))
+	learnedRepairsMu sync.Mutex
+)
 
 type learnedRepair struct {
 	params []string
@@ -363,48 +408,60 @@ func (b *openaiBase) repairsKey(model string) string {
 
 // repairsFor returns the remembered repairs for key, sorted; nil when none or expired.
 func repairsFor(key string) []string {
-	learnedRepairs.Lock()
-	defer learnedRepairs.Unlock()
-	e, ok := learnedRepairs.m[key]
+	e, ok := liveRepair(key)
 	if !ok {
-		return nil
-	}
-	if time.Since(e.seen) > learnedRepairsTTL {
-		delete(learnedRepairs.m, key)
 		return nil
 	}
 	return e.params
 }
 
+// liveRepair is key's memo entry within its TTL; an expired one is dropped.
+func liveRepair(key string) (learnedRepair, bool) {
+	k := memoKey(paramRepairsSpec, key)
+	e, ok := learnedRepairs.Get(k)
+	if !ok {
+		return learnedRepair{}, false
+	}
+	if time.Since(e.seen) > learnedRepairsTTL {
+		learnedRepairs.Delete(k)
+		return learnedRepair{}, false
+	}
+	return e, true
+}
+
+// rememberRepairs records the repairs a 200 confirmed for key, MERGED with the live entry (R-provider-31): a request
+// that did not send a learned parameter (no temperature, no tools for reasoning_effort=none) did not apply that
+// repair, and must not make the memo forget it. A repair the model now refuses is dropped by forgetRepairs instead.
 func rememberRepairs(key string, repaired map[string]bool) {
-	params := make([]string, 0, len(repaired))
+	learnedRepairsMu.Lock()
+	defer learnedRepairsMu.Unlock()
+	merged := make(map[string]bool, len(repaired))
 	for p := range repaired {
+		merged[p] = true
+	}
+	if live, ok := liveRepair(key); ok {
+		for _, p := range live.params {
+			merged[p] = true
+		}
+	}
+	params := make([]string, 0, len(merged))
+	for p := range merged {
 		params = append(params, p)
 	}
 	sort.Strings(params)
-	learnedRepairs.Lock()
-	defer learnedRepairs.Unlock()
-	if len(learnedRepairs.m) >= learnedRepairsMax {
-		// Cheap to repopulate (one rejection per deployment): start over.
-		learnedRepairs.m = map[string]learnedRepair{}
-	}
-	learnedRepairs.m[key] = learnedRepair{params: params, seen: time.Now()}
+	learnedRepairs.Set(memoKey(paramRepairsSpec, key), learnedRepair{params: params, seen: time.Now()}, 1, 0)
 }
 
 // forgetRepairs drops key's memo (a remembered repair the model now refuses).
 func forgetRepairs(key string) {
-	learnedRepairs.Lock()
-	delete(learnedRepairs.m, key)
-	learnedRepairs.Unlock()
+	learnedRepairsMu.Lock()
+	defer learnedRepairsMu.Unlock()
+	learnedRepairs.Delete(memoKey(paramRepairsSpec, key))
 }
 
 func resetLearnedRepairs() {
-	learnedRepairs.Lock()
-	learnedRepairs.m = map[string]learnedRepair{}
-	learnedRepairs.Unlock()
-	streamRefusals.Lock()
-	streamRefusals.m = map[string]time.Time{}
-	streamRefusals.Unlock()
+	learnedRepairs.Clear()
+	streamRefusals.Clear()
 }
 
 // reasoningEffortParam is the chat-completions reasoning control; as a learnedRepairs entry it is the generic drop repair.
@@ -448,8 +505,24 @@ func reasoningToolsRejected(status int, errBody []byte) bool {
 // {status,code,message,detail} shape (param from `param` else detail.loc[1]; adopted only with a code/detail, so
 // API Management's 401 envelope keeps an empty Error). ok is false when not JSON at all.
 func decodeOpenAIError(body []byte) (openAIErrorResp, bool) {
+	// code, type and param are decoded raw (rawText): vLLM sends the HTTP status as an integer code, which a
+	// string field failed to decode — the whole envelope, message included, was lost (R-provider-33).
+	var raw struct {
+		Error struct {
+			Message string          `json:"message"`
+			Type    json.RawMessage `json:"type"`
+			Code    json.RawMessage `json:"code"`
+			Param   json.RawMessage `json:"param"`
+		} `json:"error"`
+	}
 	var apiErr openAIErrorResp
-	strictOK := json.Unmarshal(body, &apiErr) == nil
+	strictOK := json.Unmarshal(body, &raw) == nil
+	if strictOK {
+		apiErr.Error.Message = raw.Error.Message
+		apiErr.Error.Type = rawText(raw.Error.Type)
+		apiErr.Error.Code = rawText(raw.Error.Code)
+		apiErr.Error.Param = rawText(raw.Error.Param)
+	}
 	if strictOK && (apiErr.Error.Message != "" || apiErr.Error.Code != "") {
 		return apiErr, true
 	}
@@ -715,18 +788,26 @@ func requestIDSuffix(resp *http.Response) string {
 	return ""
 }
 
-// logUpstreamRejection records a non-200's status and the gateway's request id, when it sent one, for Azure
-// support. A parameter rejection may still be repaired by send, so it logs at debug.
-func (b *openaiBase) logUpstreamRejection(resp *http.Response, model string) {
-	rid := upstreamRequestID(resp)
-	if rid == "" {
+// logUpstreamRejection records every non-200 once: its status and, when the gateway sent one, its request id
+// for Azure support. A rejection without an id is logged too: a bare gateway 503 is exactly the outage that
+// must leave a line. A parameter rejection may still be repaired by send, so it logs at debug.
+func (b *openaiBase) logUpstreamRejection(ctx context.Context, resp *http.Response, model string) {
+	logUpstreamStatus(ctx, b.providerLabel, model, resp, parameterRejectionStatus(resp.StatusCode))
+}
+
+// logUpstreamStatus logs one non-2xx upstream response through the caller's context (R-observability-2): status,
+// provider, model and the vendor's request id when it sent one. repairable logs at debug: the caller may still
+// repair the request and succeed.
+func logUpstreamStatus(ctx context.Context, provider, model string, resp *http.Response, repairable bool) {
+	attrs := []any{"provider", provider, "model", model, "status", resp.StatusCode}
+	if rid := upstreamRequestID(resp); rid != "" {
+		attrs = append(attrs, "requestId", rid)
+	}
+	if repairable {
+		logger.FromContext(ctx).Debug("AI upstream rejection", attrs...)
 		return
 	}
-	if parameterRejectionStatus(resp.StatusCode) {
-		logger.Debug("AI upstream rejection", "provider", b.providerLabel, "model", model, "status", resp.StatusCode, "requestId", rid)
-		return
-	}
-	logger.Warn("AI upstream error", "provider", b.providerLabel, "model", model, "status", resp.StatusCode, "requestId", rid)
+	logger.FromContext(ctx).Warn("AI upstream error", attrs...)
 }
 
 func (b *openaiBase) stream(ctx context.Context, req Request, onChunk func(Chunk)) error {
@@ -750,7 +831,8 @@ func (b *openaiBase) streamInner(ctx context.Context, req Request, onChunk func(
 		if param, ok := unsupportedParam(resp.StatusCode, errBody); ok && param == "stream" {
 			// The model does not stream at all (o1 on Azure): answer the turn non-streaming and remember the deployment.
 			rememberStreamRefusal(key)
-			logger.Debug("model rejects streaming — answering non-streaming",
+			recordRouteFallback(b.providerID, fallbackStreamRefused)
+			logger.FromContext(ctx).Debug("model rejects streaming — answering non-streaming",
 				"provider", b.providerLabel, "model", req.Model)
 			return b.streamViaChat(ctx, req, onChunk)
 		}
@@ -827,33 +909,24 @@ func (b *openaiBase) streamViaChat(ctx context.Context, req Request, onChunk fun
 }
 
 // streamRefusals remembers, per endpoint and deployment (repairsKey), the models that refused `stream: true` —
-// separate from learnedRepairs, which every repaired 200 overwrites.
-var streamRefusals = struct {
-	sync.Mutex
-	m map[string]time.Time
-}{m: map[string]time.Time{}}
+// separate from learnedRepairs, whose forget path must not sweep it. The value is when the refusal was seen.
+var streamRefusals = cache.New[time.Time](streamRefusalsSpec, learnedRepairsMax, cache.WithMaxEntries(learnedRepairsMax), cache.WithTTL(learnedRepairsTTL))
 
 func streamRefused(key string) bool {
-	streamRefusals.Lock()
-	defer streamRefusals.Unlock()
-	seen, ok := streamRefusals.m[key]
+	k := memoKey(streamRefusalsSpec, key)
+	seen, ok := streamRefusals.Get(k)
 	if !ok {
 		return false
 	}
 	if time.Since(seen) > learnedRepairsTTL {
-		delete(streamRefusals.m, key)
+		streamRefusals.Delete(k)
 		return false
 	}
 	return true
 }
 
 func rememberStreamRefusal(key string) {
-	streamRefusals.Lock()
-	defer streamRefusals.Unlock()
-	if len(streamRefusals.m) >= learnedRepairsMax {
-		streamRefusals.m = map[string]time.Time{}
-	}
-	streamRefusals.m[key] = time.Now()
+	streamRefusals.Set(memoKey(streamRefusalsSpec, key), time.Now(), 1, 0)
 }
 
 // Bounds for drainAndClose: a server that keeps the stream open must not hold the caller.
@@ -945,11 +1018,9 @@ func (b *openaiBase) embeddingDimensions() int {
 }
 
 // embedDimsRefusals remembers embedding endpoints (URL + model) that refused `dimensions`, so the repair round
-// trip is paid once per process (the factory builds a fresh provider per request) instead of on every Embed.
-var embedDimsRefusals = struct {
-	mu sync.Mutex
-	m  map[string]time.Time
-}{m: map[string]time.Time{}}
+// trip is paid once per process (the factory builds a fresh provider per request) instead of on every Embed. The value
+// is when the refusal was seen.
+var embedDimsRefusals = cache.New[time.Time](embedDimsRefusalsSpec, servedMemoMax, cache.WithMaxEntries(servedMemoMax), cache.WithTTL(servedMemoTTL))
 
 func (b *openaiBase) embedDimsKey() string {
 	url := ""
@@ -961,37 +1032,23 @@ func (b *openaiBase) embedDimsKey() string {
 
 // dimensionsRefused reports whether this endpoint + model refused `dimensions` within the TTL.
 func (b *openaiBase) dimensionsRefused() bool {
-	key := b.embedDimsKey()
-	embedDimsRefusals.mu.Lock()
-	defer embedDimsRefusals.mu.Unlock()
-	seen, ok := embedDimsRefusals.m[key]
+	k := memoKey(embedDimsRefusalsSpec, b.embedDimsKey())
+	seen, ok := embedDimsRefusals.Get(k)
 	if !ok {
 		return false
 	}
 	if time.Since(seen) > servedMemoTTL {
-		delete(embedDimsRefusals.m, key)
+		embedDimsRefusals.Delete(k)
 		return false
 	}
 	return true
 }
 
 func (b *openaiBase) rememberDimensionsRefusal() {
-	embedDimsRefusals.mu.Lock()
-	defer embedDimsRefusals.mu.Unlock()
-	if len(embedDimsRefusals.m) >= servedMemoMax {
-		for k := range embedDimsRefusals.m {
-			delete(embedDimsRefusals.m, k)
-			break
-		}
-	}
-	embedDimsRefusals.m[b.embedDimsKey()] = time.Now()
+	embedDimsRefusals.Set(memoKey(embedDimsRefusalsSpec, b.embedDimsKey()), time.Now(), 1, 0)
 }
 
-func resetEmbedDimsRefusals() {
-	embedDimsRefusals.mu.Lock()
-	embedDimsRefusals.m = map[string]time.Time{}
-	embedDimsRefusals.mu.Unlock()
-}
+func resetEmbedDimsRefusals() { embedDimsRefusals.Clear() }
 
 // rejectsEmbeddingDimensions reports whether an /embeddings failure (400 or the Model Inference layer's 422) is
 // the model refusing `dimensions` — prose, a structured `param: "dimensions"`, or a width it cannot produce.
@@ -1075,7 +1132,8 @@ func (b *openaiBase) embedBatch(ctx context.Context, text []string, budget *embe
 			// Deleting the key makes this branch unreachable next time.
 			delete(payload, "dimensions")
 			b.rememberDimensionsRefusal()
-			logger.Debug("embedding model rejected `dimensions` — retrying at its native width",
+			recordRouteFallback(b.providerID, fallbackDimensionsDropped)
+			logger.FromContext(ctx).Debug("embedding model rejected `dimensions` — retrying at its native width",
 				"provider", b.providerLabel, "model", b.embeddingModel)
 			continue
 		}
@@ -1084,7 +1142,8 @@ func (b *openaiBase) embedBatch(ctx context.Context, text []string, budget *embe
 			if budget.remaining < 2 {
 				return nil, &embedTerminalError{cause: fmt.Errorf("%s embeddings: %w", b.providerLabel, b.handleChatError(resp, errBody))}
 			}
-			logger.Debug("embedding batch exceeded the resource's input cap — splitting",
+			recordRouteFallback(b.providerID, fallbackEmbedSplit)
+			logger.FromContext(ctx).Debug("embedding batch exceeded the resource's input cap — splitting",
 				"provider", b.providerLabel, "model", b.embeddingModel, "inputs", len(text))
 			mid := len(text) / 2
 			left, err := b.embedSubBatch(ctx, text[:mid], budget)
@@ -1156,7 +1215,7 @@ func (b *openaiBase) postEmbeddings(ctx context.Context, payload map[string]any)
 	if b.extraHeaders != nil {
 		b.extraHeaders(httpReq, b.embeddingModel)
 	}
-	return b.client.Do(httpReq)
+	return doProviderRequest(b.client, httpReq)
 }
 
 // maxJSONBodyBytes caps a 200 JSON body before decoding: an unbounded decode let a hostile or broken server buffer arbitrary memory.

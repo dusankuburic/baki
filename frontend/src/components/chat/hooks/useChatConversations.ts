@@ -5,6 +5,7 @@ import {logger} from '@/lib/logger'
 import type {SourceFileInfo, FlowDocument} from '@/types'
 import {conversationHistoryEnabled} from '@/lib/chatHistory'
 import {saveThreadConversation} from '@/lib/conversationSync'
+import {startTitleSync, syncThreadIndex} from '@/lib/threadIndex'
 import {isTauri} from '@/platform/guards'
 
 const EMPTY_SOURCE_FILES: SourceFileInfo[] = []
@@ -151,6 +152,13 @@ export function useChatConversations({
     }
     if (isTauri()) importLegacyConversation(docId, id)
   }, [docId, flowThreads.length, createThread, hydrateThreads, updateThread])
+
+  // The server's index of the user's threads (R-frontend-c26 c): merged in once the flow's chat opens, in the
+  // background, after the local index; names the user gives go back to it.
+  useEffect(() => {
+    if (docId) void syncThreadIndex(docId)
+  }, [docId])
+  useEffect(() => startTitleSync(), [])
 
   useEffect(() => {
     if (!docId) return

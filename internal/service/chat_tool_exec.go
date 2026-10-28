@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -31,11 +32,11 @@ const maxParallelTools = 4
 // a parallel goroutine runs outside the stream worker's recover (a panic there would kill
 // the process), and on the sequential and prompt-loop paths the worker's recover would end
 // the stream as interrupted instead of letting the model read the failure (R-tool-loop-7).
-func guardedToolRun(call ai.ToolCall, run func() toolExecResult) (res toolExecResult) {
+func guardedToolRun(ctx context.Context, call ai.ToolCall, run func() toolExecResult) (res toolExecResult) {
 	start := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Warn("chat tool panicked", "tool", call.Name, "panic", r)
+			logger.FromContext(ctx).Warn("chat tool panicked", "tool", call.Name, "panic", r)
 			recordChatToolResult(metricToolLabel(call.Name), false)
 			res = toolExecResult{
 				id:   call.ID,
@@ -65,6 +66,7 @@ func (s *ChatService) execTurnTools(
 	calls []ai.ToolCall,
 ) []toolExecResult {
 	results := make([]toolExecResult, len(calls))
+	ctl.setPhase(phaseTool)
 
 	run := func(i int) toolExecResult {
 		tc := calls[i]
@@ -95,7 +97,7 @@ func (s *ChatService) execTurnTools(
 				return nil
 			}
 			emitTool(i)
-			results[i] = guardedToolRun(calls[i], func() toolExecResult { return run(i) })
+			results[i] = guardedToolRun(tctx.Ctx, calls[i], func() toolExecResult { return run(i) })
 			emitToolResult(emit, calls[i].Name, results[i].result, results[i].took)
 		}
 		return results
@@ -116,7 +118,7 @@ func (s *ChatService) execTurnTools(
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				results[i] = guardedToolRun(calls[i], func() toolExecResult { return run(i) })
+				results[i] = guardedToolRun(tctx.Ctx, calls[i], func() toolExecResult { return run(i) })
 			}(i)
 		}
 		wg.Wait()

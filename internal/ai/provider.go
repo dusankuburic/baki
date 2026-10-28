@@ -147,6 +147,10 @@ type Chunk struct {
 	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
 	// FinishReason mirrors the provider stop reason on the Done chunk (optional).
 	FinishReason string `json:"finishReason,omitempty"`
+	// attemptDiscarded marks the retry wrapper's report of an attempt it discarded and is about to retry:
+	// TokensIn/TokensOut/ServedModel are what that attempt was billed. The audited wrapper records it as its own
+	// usage row and forwards nothing (R-budget-1).
+	attemptDiscarded bool
 	// ServedModel mirrors Response.ServedModel on the Done chunk (optional).
 	ServedModel string `json:"servedModel,omitempty"`
 	// ToolEvent reports a tool the PROVIDER ran server-side (a hosted agent's web search, MCP or code-interpreter
@@ -212,7 +216,32 @@ var (
 	// the operation (Foundry's 401 PermissionDenied for a principal without a data-plane role); the concrete
 	// error also matches ErrApiKeyInvalid, so retry/breaker treat it as any auth failure.
 	ErrProviderPermissionDenied = errors.New("permission denied")
+	// ErrProviderAccessDenied marks a provider refusing the ACCOUNT rather than the key: an OpenAI-family 403 for a
+	// region block, a project permission or a billing hard limit. It also matches ErrProviderPermissionDenied and
+	// ErrApiKeyInvalid (retry and the breaker treat it as any auth failure), but the copy is vendor-neutral.
+	ErrProviderAccessDenied = errors.New("the provider refused access for this account")
 )
+
+// accessDeniedError is ErrProviderAccessDenied carrying the vendor's own message.
+type accessDeniedError struct{ msg string }
+
+func (e *accessDeniedError) Error() string { return "the provider refused access: " + e.msg }
+
+func (e *accessDeniedError) Unwrap() []error {
+	return []error{ErrProviderAccessDenied, ErrProviderPermissionDenied, ErrApiKeyInvalid}
+}
+
+// NewAccessDeniedError is ErrProviderAccessDenied with the vendor's message msg (the OpenAI-family 403).
+func NewAccessDeniedError(msg string) error { return &accessDeniedError{msg: msg} }
+
+// AccessDeniedMessage is the vendor's message of an ErrProviderAccessDenied error, "" for any other.
+func AccessDeniedMessage(err error) string {
+	var denied *accessDeniedError
+	if errors.As(err, &denied) {
+		return denied.msg
+	}
+	return ""
+}
 
 // permissionDeniedError is a permission-denied answer carrying the provider's
 // explanation (see ErrProviderPermissionDenied).

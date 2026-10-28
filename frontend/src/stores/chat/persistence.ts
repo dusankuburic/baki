@@ -158,7 +158,8 @@ export function readStoredThreads(flowId: string): ChatThread[] {
         : [],
       tokensIn: typeof t.tokensIn === 'number' ? t.tokensIn : 0,
       tokensOut: typeof t.tokensOut === 'number' ? t.tokensOut : 0,
-      useTools: t.useTools === true ? true : undefined,
+      // false is a choice too (tools are on by default, R-frontend-6); only a missing value means "the default".
+      useTools: typeof t.useTools === 'boolean' ? t.useTools : undefined,
       usedTools: t.usedTools === true ? true : undefined,
       appliedFixes: t.appliedFixes === true ? true : undefined,
       ...readThreadPin(t),

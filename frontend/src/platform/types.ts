@@ -25,6 +25,8 @@ export interface FileSaveOptions {
 export interface BackendEvent {
   kind: 'terminated' | 'error' | 'ready'
   message: string
+  /** On 'ready': the new process's address and token, when the shell sends them. */
+  config?: BackendConfig
 }
 
 export interface PlatformAdapter {

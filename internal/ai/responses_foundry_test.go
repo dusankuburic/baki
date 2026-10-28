@@ -470,8 +470,8 @@ func TestParseResponsesSSE_ServedModelRidesOnDeltasAndErrors(t *testing.T) {
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("truncated stream error = %v", err)
 	}
-	if len(got) != 2 || !isKeepalive(got[0]) || got[1].Text != "hi" || got[1].ServedModel != "gpt-4.1" {
-		t.Errorf("chunks = %+v, want a keepalive and a text chunk carrying the model", got)
+	if len(got) != 2 || !isKeepalive(got[0]) || got[0].ServedModel != "gpt-4.1" || got[1].Text != "hi" || got[1].ServedModel != "gpt-4.1" {
+		t.Errorf("chunks = %+v, want a keepalive and a text chunk, both carrying the model", got)
 	}
 	got = parseChunks(t, sseEvents(created, `{"type":"error","code":"server_error","message":"boom"}`))
 	if len(got) != 2 || got[1].Error == nil || got[1].ServedModel != "gpt-4.1" {

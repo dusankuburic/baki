@@ -58,8 +58,8 @@ func TestChat_UnknownProviderIsClientError(t *testing.T) {
 	}
 	// A stream that nevertheless meets the factory's refusal (a provider unregistered mid-flight) is classified
 	// for the client, not replaced by the setup error.
-	if got := providerSetupError("u1", "nope", ai.ErrUnknownProvider); !errors.Is(got, ai.ErrUnknownProvider) {
-		t.Errorf("providerSetupError(ErrUnknownProvider) = %v, want the sentinel kept", got)
+	if got := providerSetupError(context.Background(), "u1", "nope", ai.ErrUnknownProvider); !errors.Is(got, ai.ErrUnknownProvider) {
+		t.Errorf("providerSetupError(context.Background(), ErrUnknownProvider) = %v, want the sentinel kept", got)
 	}
 	ctl := &streamCtl{}
 	if code, msg := ctl.classifyFailure(context.Background(), ai.ErrUnknownProvider); code != ChatErrProviderUnknown || !strings.Contains(msg, "unknown") {

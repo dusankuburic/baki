@@ -1,0 +1,24 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "propose_fix",
+          "input": {
+            "blockId": "B4",
+            "ruleId": "hardcoded-credential"
+          }
+        }
+      ],
+      "tokensIn": 2380,
+      "tokensOut": 33
+    },
+    {
+      "text": "I can't apply this one from chat: replacing the literal in [Set Password](block:B4) changes what the flow does at run time, so it has to be done deliberately. Nothing was changed.\n\nTo fix the [hardcoded-credential finding](finding:hardcoded-credential:de29037c23a9c4cf) yourself:\n\n1. Store the password in a credential store (Windows Credential Manager or an Azure Key Vault secret).\n2. Replace the `SET Password` on line 5 with an action that reads that secret into `Password`.\n3. Or apply the fix from the findings list, or with `bakicli fix -unsafe`, after reviewing the diff.",
+      "tokensIn": 2520,
+      "tokensOut": 151
+    }
+  ]
+}

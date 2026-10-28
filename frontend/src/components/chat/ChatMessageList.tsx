@@ -29,8 +29,10 @@ const Scroller = React.forwardRef<HTMLDivElement, {context?: ListContext} & Reac
         onWheel={context?.onWheel}
         className="custom-scrollbar overflow-y-auto overflow-x-hidden"
         role="log"
-        aria-live="polite"
-        aria-relevant="additions text"
+        // Not a live region (R-frontend-5): Virtuoso mounts earlier items as the user scrolls up, which a live log
+        // reads out as new. role=log is implicitly polite, so "off" is explicit; AITab's status region announces
+        // each committed answer once.
+        aria-live="off"
         aria-label={context?.label}
       />
     )

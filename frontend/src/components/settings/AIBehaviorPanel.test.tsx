@@ -6,13 +6,16 @@ vi.mock('@/api', async importOriginal => {
   return {
     ...actual,
     providersApi: {...actual.providersApi, listProviders: vi.fn().mockResolvedValue([]), getProviderCatalog: vi.fn()},
+    settingsApi: {...actual.settingsApi, getSettings: vi.fn(), updateSettings: vi.fn()},
   }
 })
 
-import {providersApi} from '@/api'
+import {providersApi, settingsApi} from '@/api'
+import {ApiError} from '@/api/client'
+import {__resetPersistQueueForTest} from '@/stores/settingsStore'
+import {EMBEDDING_MODEL_MAX_LENGTH, SYSTEM_PROMPT_SUFFIX_MAX_LENGTH} from '@/lib/constraints'
 import AIBehaviorPanel from './AIBehaviorPanel'
 import {useSettingsStore} from '@/stores/settingsStore'
-import {useChatStore} from '@/stores/chatStore'
 import {useSystemStore} from '@/stores/systemStore'
 import type {AppInfo, ProviderSpec} from '@/types'
 
@@ -28,8 +31,10 @@ const systemInfo = (sessionAnalytics: boolean): AppInfo => ({
 })
 
 beforeEach(() => {
-  useSettingsStore.setState({settings: initialSettings})
-  useChatStore.setState({selectedProvider: 'claude'})
+  useSettingsStore.setState({settings: initialSettings, saveError: null})
+  __resetPersistQueueForTest()
+  vi.mocked(settingsApi.updateSettings).mockReset().mockResolvedValue(undefined)
+  vi.mocked(settingsApi.getSettings).mockResolvedValue(null as never)
   useSystemStore.setState({info: null, isLoaded: false})
   vi.mocked(providersApi.listProviders).mockResolvedValue([])
   vi.mocked(providersApi.getProviderCatalog).mockRejectedValue(new Error('404'))
@@ -45,11 +50,20 @@ describe('AIBehaviorPanel', () => {
     expect(useSettingsStore.getState().settings.ai.systemPromptSuffix).toBe('Always answer in Serbian.')
   })
 
-  it('switches the chat to the chosen active assistant right away', () => {
+  // R-frontend-6: tools are on by default; the setting turns them off for every chat that has not chosen.
+  it('shows tools on by default and stores toolsOffByDefault when switched off', () => {
+    render(<AIBehaviorPanel />)
+    const toggle = screen.getByRole('switch', {name: 'Use tools by default'})
+    expect(toggle).toBeChecked()
+    fireEvent.click(toggle)
+    expect(useSettingsStore.getState().settings.ai.toolsOffByDefault).toBe(true)
+    expect(screen.getByRole('switch', {name: 'Use tools by default'})).not.toBeChecked()
+  })
+
+  it('stores the chosen active assistant right away', () => {
     render(<AIBehaviorPanel />)
     fireEvent.click(screen.getAllByRole('radio', {name: 'Gemini'})[0]!)
     expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('gemini')
-    expect(useChatStore.getState().selectedProvider).toBe('gemini')
   })
 
   it('offers "Default for new chats" as free text, but points Azure AI Foundry to Make default', () => {
@@ -78,7 +92,6 @@ describe('AIBehaviorPanel local model gating', () => {
     render(<AIBehaviorPanel />)
     fireEvent.click(within(activeAssistant()).getByRole('radio', {name: 'Local model'}))
     expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('local')
-    expect(useChatStore.getState().selectedProvider).toBe('local')
   })
 
   it('does not offer the local model as an assistant on a cloud backend', () => {
@@ -183,7 +196,6 @@ describe('AIBehaviorPanel providers the bundle does not know', () => {
     const seg = await within(activeAssistant()).findByRole('radio', {name: 'Mistral'})
     fireEvent.click(seg)
     expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('mistral')
-    expect(useChatStore.getState().selectedProvider).toBe('mistral')
     expect(seg).toHaveAttribute('aria-checked', 'true')
     expect(within(activeAssistant()).getAllByRole('radio', {name: 'Claude'})).toHaveLength(1)
   })
@@ -250,5 +262,97 @@ describe('AIBehaviorPanel embedding providers from the catalogue', () => {
       'false',
     )
     expect(within(embeddingAssistant()).getByRole('radio', {name: 'voyage'})).toHaveAttribute('aria-checked', 'true')
+  })
+})
+
+describe('AIBehaviorPanel failed saves (R-frontend-10)', () => {
+  const activeAssistant = () => screen.getAllByRole('radiogroup')[0]!
+
+  it('returns the active assistant to the stored one and shows the server refusal', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(settingsApi.updateSettings).mockRejectedValue(
+        new ApiError(
+          'invalid settings: ai.activeProvider "gemini" is not a provider this server knows',
+          400,
+          'BAD_REQUEST',
+        ),
+      )
+      // The re-read never answers: the control must come back by the store's own rollback.
+      vi.mocked(settingsApi.getSettings).mockReturnValue(new Promise(() => {}))
+      render(<AIBehaviorPanel />)
+      fireEvent.click(within(activeAssistant()).getByRole('radio', {name: 'Gemini'}))
+      expect(within(activeAssistant()).getByRole('radio', {name: 'Gemini'})).toHaveAttribute('aria-checked', 'true')
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000)
+      })
+
+      expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('claude')
+      expect(within(activeAssistant()).getByRole('radio', {name: 'Claude'})).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('status')).toHaveTextContent(/is not a provider this server knows/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('posts only the ai section', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<AIBehaviorPanel />)
+      fireEvent.click(within(activeAssistant()).getByRole('radio', {name: 'Gemini'}))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000)
+      })
+      expect(settingsApi.updateSettings).toHaveBeenCalledOnce()
+      expect(Object.keys(vi.mocked(settingsApi.updateSettings).mock.calls[0]![0]).sort()).toEqual(['ai', 'version'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('AIBehaviorPanel caps and the cloud embedding writer (R-config-2)', () => {
+  it('stops custom instructions at the server cap', () => {
+    render(<AIBehaviorPanel />)
+    expect(screen.getByRole('textbox', {name: 'Custom Instructions'})).toHaveAttribute(
+      'maxLength',
+      String(SYSTEM_PROMPT_SUFFIX_MAX_LENGTH),
+    )
+  })
+
+  it('stops the embedding model at the server cap', () => {
+    render(<AIBehaviorPanel />)
+    expect(screen.getByRole('textbox', {name: 'Embedding Model'})).toHaveAttribute(
+      'maxLength',
+      String(EMBEDDING_MODEL_MAX_LENGTH),
+    )
+  })
+
+  it('shows the stored custom instructions again after they change without a keystroke', () => {
+    render(<AIBehaviorPanel />)
+    const field = screen.getByRole('textbox', {name: 'Custom Instructions'})
+    fireEvent.change(field, {target: {value: 'refused text'}})
+    act(() => {
+      useSettingsStore.setState(s => ({
+        settings: {...s.settings, ai: {...s.settings.ai, systemPromptSuffix: 'stored'}},
+      }))
+    })
+    expect(field).toHaveValue('stored')
+  })
+
+  it('points a cloud member at the administrator for the embedding choice', () => {
+    useSystemStore.setState({info: systemInfo(false), isLoaded: true})
+    render(<AIBehaviorPanel />)
+    expect(screen.queryByRole('radiogroup', {name: 'Embedding Assistant'})).toBeNull()
+    expect(screen.queryByRole('textbox', {name: 'Embedding Model'})).toBeNull()
+    expect(screen.getByText(/administrator chooses the provider and model/)).toBeInTheDocument()
+  })
+
+  it('keeps the embedding choice on a local backend, where this panel writes it', () => {
+    useSystemStore.setState({info: systemInfo(true), isLoaded: true})
+    render(<AIBehaviorPanel />)
+    expect(screen.getByRole('radiogroup', {name: 'Embedding Assistant'})).toBeInTheDocument()
+    expect(screen.queryByText(/administrator chooses the provider and model/)).toBeNull()
   })
 })

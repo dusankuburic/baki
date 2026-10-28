@@ -86,9 +86,11 @@ func statusCode(status int) string {
 }
 
 // Error writes a structured JSON error response. An *apperr.Error in err's chain decides the status, the code and
-// the details itself, whatever code says. For any other error, pass code=0 to auto-map domain errors
+// the details itself, whatever code says, and so does a secret store failure (service.SecretStoreError: 503
+// SECRET_STORAGE_UNAVAILABLE, 422 KEY_UNREADABLE). For any other error, pass code=0 to auto-map domain errors
 // (ErrNotFound → 404, ErrPermissionDenied → 403, etc.).
 func Error(w http.ResponseWriter, err error, code int) {
+	err = service.SecretStoreError(err)
 	code, machineCode, details := resolve(err, code)
 	writeErrorWithDetails(w, err, code, machineCode, details)
 }
@@ -99,6 +101,7 @@ func Error(w http.ResponseWriter, err error, code int) {
 // at will: the unconfigured CI webhook once answered each call with a 503 AND an ERROR line, so
 // anyone could flood the error log and its alerting. The caller owns reporting, once per process.
 func ErrorUnlogged(w http.ResponseWriter, err error, code int) {
+	err = service.SecretStoreError(err)
 	code, machineCode, details := resolve(err, code)
 	writeErrorBody(w, err, code, machineCode, details)
 }

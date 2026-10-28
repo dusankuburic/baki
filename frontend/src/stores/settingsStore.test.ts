@@ -9,6 +9,7 @@ vi.mock('@/api', () => ({
 }))
 
 import {settingsApi} from '@/api'
+import {ApiError} from '@/api/client'
 
 const mockGet = settingsApi.getSettings as ReturnType<typeof vi.fn>
 const mockUpdate = settingsApi.updateSettings as ReturnType<typeof vi.fn>
@@ -291,5 +292,192 @@ describe('persist queue', () => {
     await second
 
     expect(mockUpdate).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('section-only writes (R-frontend-10)', () => {
+  const postedKeys = (call = 0) => Object.keys(mockUpdate.mock.calls[call]![0] as object).sort()
+
+  it('posts only the section a write changed, with the document version', async () => {
+    const p = useSettingsStore.getState().updateAI({activeProvider: 'gemini'})
+    await flushPersist()
+    await p
+    expect(postedKeys()).toEqual(['ai', 'version'])
+  })
+
+  it('posts every section the coalesced writes changed', async () => {
+    const store = useSettingsStore.getState()
+    const p1 = store.updateAI({activeProvider: 'gemini'})
+    const p2 = store.updateLayout({sidebarWidth: 300})
+    await flushPersist()
+    await Promise.all([p1, p2])
+    expect(mockUpdate).toHaveBeenCalledOnce()
+    expect(postedKeys()).toEqual(['ai', 'layout', 'version'])
+  })
+
+  it('posts the whole document for a reset', async () => {
+    const p = useSettingsStore.getState().resetToDefaults()
+    await flushPersist()
+    await p
+    expect(postedKeys()).toEqual(Object.keys(initialState.settings).sort())
+  })
+})
+
+describe('failed saves (R-frontend-10)', () => {
+  it('reports a refused save and re-syncs the document from the server', async () => {
+    const server = {...initialState.settings, ai: {...initialState.settings.ai, activeProvider: 'openai'}}
+    mockUpdate.mockRejectedValue(
+      new ApiError('invalid settings: ai.systemPromptSuffix is 4500 characters, at most 4000', 400, 'BAD_REQUEST'),
+    )
+    mockGet.mockResolvedValue(server)
+
+    const p = useSettingsStore.getState().updateAI({systemPromptSuffix: 'x'.repeat(4500)})
+    await flushPersist()
+    await p
+    await vi.waitFor(() => expect(mockGet).toHaveBeenCalledOnce())
+
+    const state = useSettingsStore.getState()
+    expect(state.saveError).toMatchObject({
+      message: 'invalid settings: ai.systemPromptSuffix is 4500 characters, at most 4000',
+      sections: ['ai'],
+    })
+    await vi.waitFor(() => expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('openai'))
+    expect(useSettingsStore.getState().settings.ai.systemPromptSuffix ?? '').toBe('')
+  })
+
+  it('does not re-sync over a change still waiting to be saved, and keeps it', async () => {
+    let rejectFirst: (err: unknown) => void = () => {}
+    mockUpdate.mockImplementationOnce(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectFirst = reject
+        }),
+    )
+    const originalTheme = useSettingsStore.getState().settings.appearance.theme
+    const store = useSettingsStore.getState()
+    const first = store.updateAppearance({theme: 'nord'})
+    await flushPersist()
+    const second = store.updateLayout({sidebarWidth: 333})
+
+    rejectFirst(new ApiError('offline', 0, 'NETWORK'))
+    await first
+    expect(mockGet).not.toHaveBeenCalled()
+    expect(useSettingsStore.getState().settings.appearance.theme).toBe(originalTheme)
+    expect(useSettingsStore.getState().settings.layout.sidebarWidth).toBe(333)
+
+    await flushPersist()
+    await second
+    expect(mockUpdate).toHaveBeenCalledTimes(2)
+    expect(Object.keys(mockUpdate.mock.calls[1]![0] as object).sort()).toEqual(['layout', 'version'])
+    expect(useSettingsStore.getState().settings.layout.sidebarWidth).toBe(333)
+  })
+
+  it('clears the error once a later save succeeds', async () => {
+    mockUpdate.mockRejectedValueOnce(new ApiError('nope', 400, 'BAD_REQUEST'))
+    const p1 = useSettingsStore.getState().updateAI({activeProvider: 'gemini'})
+    await flushPersist()
+    await p1
+    expect(useSettingsStore.getState().saveError).not.toBeNull()
+
+    const p2 = useSettingsStore.getState().updateAI({activeProvider: 'claude'})
+    await flushPersist()
+    await p2
+    expect(useSettingsStore.getState().saveError).toBeNull()
+  })
+})
+
+describe('refused writes after review (R-frontend-10)', () => {
+  it('reports a refused write once, however many changes it carried, and re-reads once', async () => {
+    mockUpdate.mockRejectedValue(new ApiError('nope', 400, 'BAD_REQUEST'))
+    const errors: unknown[] = []
+    const unsub = useSettingsStore.subscribe((s, prev) => {
+      if (s.saveError && s.saveError !== prev.saveError) errors.push(s.saveError)
+    })
+    const store = useSettingsStore.getState()
+    const writes = ['a', 'ab', 'abc', 'abcd', 'abcde'].map(v => store.updateAI({systemPromptSuffix: v}))
+    await flushPersist()
+    await Promise.all(writes)
+    await vi.waitFor(() => expect(mockGet).toHaveBeenCalled())
+    unsub()
+    expect(mockUpdate).toHaveBeenCalledOnce()
+    expect(mockGet).toHaveBeenCalledOnce()
+    expect(errors).toHaveLength(1)
+  })
+
+  it('a re-read from the server keeps a change still waiting to be saved', async () => {
+    mockGet.mockResolvedValue({
+      ...initialState.settings,
+      ai: {...initialState.settings.ai, systemPromptSuffix: 'server'},
+    })
+    const pending = useSettingsStore.getState().updateAI({systemPromptSuffix: 'mine'})
+    await useSettingsStore.getState().loadFromBackend()
+    expect(useSettingsStore.getState().settings.ai.systemPromptSuffix).toBe('mine')
+    await flushPersist()
+    await pending
+    expect((mockUpdate.mock.calls[0]![0] as {ai: {systemPromptSuffix: string}}).ai.systemPromptSuffix).toBe('mine')
+  })
+
+  it('a reset of the queue does not stop later refused writes from re-reading', async () => {
+    const dropped = useSettingsStore.getState().updateLayout({sidebarWidth: 301})
+    __resetPersistQueueForTest()
+    await dropped
+    mockUpdate.mockRejectedValue(new ApiError('nope', 400, 'BAD_REQUEST'))
+    const p = useSettingsStore.getState().updateAI({activeProvider: 'gemini'})
+    await flushPersist()
+    await p
+    await vi.waitFor(() => expect(mockGet).toHaveBeenCalledOnce())
+  })
+
+  it('puts back only the fields the refused write changed, and never posts them again', async () => {
+    let rejectFirst: (err: unknown) => void = () => {}
+    mockUpdate.mockImplementationOnce(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectFirst = reject
+        }),
+    )
+    const store = useSettingsStore.getState()
+    const first = store.updateAI({systemPromptSuffix: 'refused'})
+    await flushPersist()
+    const second = store.updateAI({activeProvider: 'gemini'})
+    rejectFirst(new ApiError('invalid settings: ai.systemPromptSuffix', 400, 'BAD_REQUEST'))
+    await first
+    expect(useSettingsStore.getState().settings.ai.systemPromptSuffix ?? '').toBe('')
+    expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('gemini')
+    await flushPersist()
+    await second
+    const body = mockUpdate.mock.calls[1]![0] as {ai: {systemPromptSuffix?: string; activeProvider: string}}
+    expect(body.ai.activeProvider).toBe('gemini')
+    expect(body.ai.systemPromptSuffix ?? '').toBe('')
+  })
+
+  it('keeps an ai refusal until an ai save succeeds', async () => {
+    mockUpdate.mockRejectedValueOnce(new ApiError('nope', 400, 'BAD_REQUEST'))
+    const p1 = useSettingsStore.getState().updateAI({activeProvider: 'gemini'})
+    await flushPersist()
+    await p1
+    const p2 = useSettingsStore.getState().updateLayout({sidebarWidth: 290})
+    await flushPersist()
+    await p2
+    expect(useSettingsStore.getState().saveError?.sections).toEqual(['ai'])
+    const p3 = useSettingsStore.getState().updateAI({activeProvider: 'claude'})
+    await flushPersist()
+    await p3
+    expect(useSettingsStore.getState().saveError).toBeNull()
+  })
+
+  it('puts a refused layout write back without a report, and ignores an aborted write', async () => {
+    mockUpdate.mockRejectedValueOnce(new ApiError('offline', 0, 'NETWORK'))
+    const p1 = useSettingsStore.getState().updateLayout({sidebarWidth: 290})
+    await flushPersist()
+    await p1
+    expect(useSettingsStore.getState().saveError).toBeNull()
+    expect(useSettingsStore.getState().settings.layout.sidebarWidth).toBe(initialState.settings.layout.sidebarWidth)
+
+    mockUpdate.mockRejectedValueOnce(new DOMException('Aborted', 'AbortError'))
+    const p2 = useSettingsStore.getState().updateAI({activeProvider: 'gemini'})
+    await flushPersist()
+    await p2
+    expect(useSettingsStore.getState().saveError).toBeNull()
   })
 })

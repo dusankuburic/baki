@@ -1,0 +1,23 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "get_block",
+          "input": {
+            "blockId": "B6"
+          }
+        }
+      ],
+      "tokensIn": 2860,
+      "tokensOut": 22
+    },
+    {
+      "text": "Yes. [LOOP FOREACH CurrentNode IN ArtikalNodes](block:B4) is flagged [wide-loop](finding:wide-loop:8ed5f3985799ba8c): its body repeats the same pattern five times — an `On block error` region such as [Extract Id](block:B6) that runs an XPath query, reads the element value and stores it in `CurrArtikal`.\n\nI would:\n\n1. Move the extract-one-field pattern into a subflow that takes the XPath and the field name.\n2. Call it once per field inside the loop.\n3. Initialise `ArtikalNodes` before the loop — it is also reported as [uninitialized](finding:uninitialized-variable:7b555c8bf1cf727a).",
+      "tokensIn": 2960,
+      "tokensOut": 160
+    }
+  ]
+}

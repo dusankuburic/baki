@@ -112,7 +112,7 @@ func newXRReplica(t *testing.T, rep *redisreplica.Replica, backend storageif.Sto
 
 	analyzer := ProvideAnalyzer()
 	// The flow service decides flow permissions as in production; the chat gate asks it whether the caller may edit.
-	r.flows = ProvideFlowService(cfg, r.events, r.settings, r.docs, backend, service.NewAuthzService(backend, nil), ProvideASTCache(), r.bus, analyzer, rep.Client)
+	r.flows = ProvideFlowService(cfg, "", r.events, r.settings, r.docs, backend, service.NewAuthzService(backend, nil), ProvideASTCache(), r.bus, analyzer, rep.Client)
 	analysis, err := service.NewAnalysisService(r.events, r.settings, nil, service.AnalysisOptions{Analyzer: analyzer, Bus: r.bus, Shared: replicatedClient(rep.Client, cfg)})
 	if err != nil {
 		t.Fatal(err)
@@ -452,7 +452,7 @@ func scenarioConversationSaves(t *testing.T, s *xrStack) {
 			go func() {
 				defer wg.Done()
 				msgs := []models.ChatMessage{{ID: fmt.Sprintf("m-%d-%d", round, i), Role: "user", Content: "from " + r.id}}
-				saved[i], results[i] = r.chat.SaveClientConversation(ctx, s.flowID, key, &base, msgs)
+				saved[i], results[i] = r.chat.SaveClientConversation(ctx, s.flowID, key, &base, msgs, true)
 			}()
 		}
 		wg.Wait()
@@ -745,7 +745,7 @@ func scenarioRedisOutage(t *testing.T, s *xrStack) {
 	if err != nil {
 		t.Fatalf("read with Redis down: %v", err)
 	}
-	if _, err := s.b.chat.SaveClientConversation(ctx, s.flowID, "xr-outage", &read.Version, []models.ChatMessage{{ID: "o1", Role: "user", Content: "offline"}}); err != nil {
+	if _, err := s.b.chat.SaveClientConversation(ctx, s.flowID, "xr-outage", &read.Version, []models.ChatMessage{{ID: "o1", Role: "user", Content: "offline"}}, true); err != nil {
 		t.Errorf("a conversation save with Redis down: %v", err)
 	}
 	uploadFlow(t, s.a, "during-outage")

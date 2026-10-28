@@ -54,6 +54,22 @@ var (
 // copilotModelsCacheSize bounds the listing cache (one entry per credential).
 const copilotModelsCacheSize = 512
 
+// copilotErrorBodyMax bounds the read of a failed listing's body: only its first line (at most 500 bytes) is kept.
+const copilotErrorBodyMax = 4 << 10
+
+// copilotRequestIDSuffix names GitHub's request id (else the generic upstream ones), so a failure can be correlated
+// with GitHub's side; "" when the response carries none.
+func copilotRequestIDSuffix(resp *http.Response) string {
+	rid := resp.Header.Get("X-GitHub-Request-Id")
+	if rid == "" {
+		rid = upstreamRequestID(resp)
+	}
+	if rid = oneLine(rid, 128); rid == "" {
+		return ""
+	}
+	return ", request id " + rid
+}
+
 // NewCopilotProvider creates a provider that uses a static token (manual PAT).
 func NewCopilotProvider(token string) *CopilotProvider {
 	key := ""
@@ -63,11 +79,14 @@ func NewCopilotProvider(token string) *CopilotProvider {
 	return &CopilotProvider{
 		modelsKey: key,
 		openaiBase: openaiBase{
-			tokenFn:       func(_ context.Context) (string, error) { return token, nil },
-			client:        fixedHostClient(),
-			baseURL:       &copilotBaseURL,
-			providerLabel: "copilot",
-			extraHeaders:  func(req *http.Request, _ string) { setCopilotHeaders(req.Header) },
+			tokenFn:        func(_ context.Context) (string, error) { return token, nil },
+			client:         fixedHostClient(),
+			longWaitClient: fixedHostClientFor(false),
+			handle429:      quotaExhausted,
+			baseURL:        &copilotBaseURL,
+			providerLabel:  "copilot",
+			providerID:     copilotProviderID,
+			extraHeaders:   func(req *http.Request, _ string) { setCopilotHeaders(req.Header) },
 		},
 	}
 }
@@ -84,10 +103,13 @@ func NewCopilotProviderWithAuth(auth *CopilotAuth, githubToken string) *CopilotP
 			tokenFn: func(ctx context.Context) (string, error) {
 				return auth.GetSessionToken(ctx, githubToken)
 			},
-			client:        fixedHostClient(),
-			baseURL:       &copilotBaseURL,
-			providerLabel: "copilot",
-			extraHeaders:  func(req *http.Request, _ string) { setCopilotHeaders(req.Header) },
+			client:         fixedHostClient(),
+			longWaitClient: fixedHostClientFor(false),
+			handle429:      quotaExhausted,
+			baseURL:        &copilotBaseURL,
+			providerLabel:  "copilot",
+			providerID:     copilotProviderID,
+			extraHeaders:   func(req *http.Request, _ string) { setCopilotHeaders(req.Header) },
 		},
 	}
 }
@@ -138,16 +160,19 @@ func (p *CopilotProvider) fetchModels(ctx context.Context) (models []ModelInfo, 
 		return nil, false, err
 	}
 
-	resp, err := p.client.Do(req)
+	resp, err := doProviderRequest(p.client, req)
 	if err != nil {
 		return nil, false, fmt.Errorf("fetch copilot models: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if resp.StatusCode != http.StatusOK {
-		return nil, false, fmt.Errorf("copilot models API error: status %d, body: %s", resp.StatusCode, string(body))
+		// The error is cached for copilotModelsErrCacheTTL and logged by every listing in that window: the status, one
+		// line of the body and the request id, never the upstream's page (R-observability-16).
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, copilotErrorBodyMax))
+		return nil, false, fmt.Errorf("copilot models API error: status %d%s, body: %s", resp.StatusCode, copilotRequestIDSuffix(resp), oneLine(string(body), 500))
 	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 
 	var parsed struct {
 		Data []struct {
@@ -157,7 +182,7 @@ func (p *CopilotProvider) fetchModels(ctx context.Context) (models []ModelInfo, 
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, false, fmt.Errorf("decode copilot models: %w, body: %s", err, string(body))
+		return nil, false, fmt.Errorf("decode copilot models%s: %w, body: %s", copilotRequestIDSuffix(resp), err, oneLine(string(body), 500))
 	}
 
 	models = make([]ModelInfo, 0, len(parsed.Data))

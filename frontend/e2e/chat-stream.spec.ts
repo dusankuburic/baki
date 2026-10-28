@@ -6,6 +6,7 @@ import {
   setupAuthenticatedPage,
   SAMPLE_FLOW_CONTENT,
 } from './helpers'
+import {chatEventGolden} from '../src/testing/chatEventGoldens'
 
 const STREAM_ID = 'e2e-fixed-stream-id'
 
@@ -20,12 +21,12 @@ interface ChatBootOptions {
   resume?: unknown
 }
 
-const DEFAULT_SSE: SseEvent[] = [
-  {name: 'chat:event', data: {streamId: STREAM_ID, type: 'tool', data: {label: 'analyzing'}}},
-  {name: 'chat:event', data: {streamId: STREAM_ID, type: 'chunk', data: {content: 'This flow has '}}},
-  {name: 'chat:event', data: {streamId: STREAM_ID, type: 'chunk', data: {content: '1 error to fix.'}}},
-  {name: 'chat:event', data: {streamId: STREAM_ID, type: 'done', data: {tokensIn: 42, tokensOut: 7}}},
-]
+/** A backend event golden (internal/service/testdata/chat_events, R-testing-3) on the e2e stream. */
+function golden(name: string): SseEvent {
+  return {name: 'chat:event', data: chatEventGolden(name, STREAM_ID)}
+}
+
+const DEFAULT_SSE: SseEvent[] = [golden('tool'), golden('chunk'), golden('done')]
 
 async function stubChatBoot(page: Page, options: ChatBootOptions = {}) {
   await setupAuthenticatedPage(page)
@@ -80,18 +81,11 @@ async function stubChatBoot(page: Page, options: ChatBootOptions = {}) {
     '/api/chat/get': [],
     '/api/chat/suggested-prompts': ['Summarize this flow'],
     '/api/flow/source-files': [],
-    '/api/chat/begin': {status: 'ok'},
     '/api/flow/upload': mockFlowDocument(),
     '/api/chat/stream': STREAM_ID,
     '/api/chat/save': {status: 'ok'},
     '/api/chat/cancel': {status: 'ok'},
-    '/api/chat/resume': options.resume ?? {
-      text: 'This flow has 1 error to fix.',
-      done: true,
-      error: '',
-      tokensIn: 42,
-      tokensOut: 7,
-    },
+    '/api/chat/resume': options.resume ?? {...chatEventGolden('resume'), events: []},
     '/api/chat/fix-decision': {status: 'ok'},
     '/api/analysis/triage/list': [],
     '/api/analysis/baseline/get': null,
@@ -210,5 +204,72 @@ test.describe('Approval card', () => {
     expect(body).toMatchObject({streamId: STREAM_ID, proposalId: 'approval-1', approved: false})
     await expect(card.getByText('Dismissed')).toBeVisible()
     await expect(card.getByRole('button', {name: 'Approve'})).toBeHidden()
+  })
+})
+
+test.describe('Fix card', () => {
+  test('approving a batch with one fix deselected posts its index', async ({page}) => {
+    const proposal = golden('fix_proposal_batch')
+    const request = (proposal.data as {data: Record<string, unknown>}).data
+    await stubChatBoot(page, {
+      sse: [golden('chunk'), proposal],
+      resume: {
+        text: 'Fixed it.',
+        done: false,
+        error: '',
+        tokensIn: 0,
+        tokensOut: 0,
+        events: [{type: 'fix_proposal', data: request}],
+      },
+    })
+    await openChatWithFlow(page)
+
+    const input = page.locator('textarea[placeholder*="Ask anything"]')
+    await input.waitFor({timeout: 10_000})
+    await input.fill('Fix the HTTP calls')
+    await input.press('Enter')
+
+    const card = page.getByRole('alertdialog', {name: 'Proposed 2 fixes: approval needed'})
+    await expect(card).toBeVisible({timeout: 10_000})
+    await card.getByRole('checkbox', {name: 'Include fix for Invoke Url'}).nth(1).uncheck()
+    const decision = page.waitForRequest(req => req.url().endsWith('/api/chat/fix-decision') && req.method() === 'POST')
+    await card.getByRole('button', {name: 'Approve & apply 1 fix'}).click()
+    const body = (await decision).postDataJSON() as Record<string, unknown>
+    expect(body).toMatchObject({
+      streamId: STREAM_ID,
+      proposalId: 'proposal-1',
+      approved: true,
+      excludedItemIndices: [1],
+    })
+  })
+})
+
+// R-frontend-6: a new chat runs with tools on; the header says what the request sends.
+test.describe('Tools default', () => {
+  test('a new chat sends useTools: true, the header says Tools on, and switching off shows the composer hint', async ({
+    page,
+  }) => {
+    await stubChatBoot(page)
+    await openChatWithFlow(page)
+
+    const chat = page.locator('.chat-root')
+    const input = chat.locator('textarea[placeholder*="Ask anything"]')
+    await input.waitFor({timeout: 10_000})
+    await expect(chat.getByText(/Tools are off/)).toBeHidden()
+
+    await chat.getByRole('button', {name: 'More actions'}).click()
+    await expect(page.getByRole('menuitem', {name: /^Tools on/})).toBeVisible()
+    await page.keyboard.press('Escape')
+
+    const stream = page.waitForRequest(req => req.url().endsWith('/api/chat/stream') && req.method() === 'POST')
+    await input.fill('Which blocks call the API?')
+    await input.press('Enter')
+    expect(((await stream).postDataJSON() as Record<string, unknown>).useTools).toBe(true)
+
+    await chat.getByRole('button', {name: 'More actions'}).click()
+    await page.getByRole('menuitem', {name: /^Tools on/}).click()
+    await expect(chat.getByText(/Tools are off/)).toBeVisible()
+    await chat.getByRole('button', {name: 'More actions'}).click()
+    await expect(page.getByRole('menuitem', {name: /^Tools off/})).toBeVisible()
   })
 })

@@ -149,3 +149,43 @@ func TestBuild_WithRunsMiddlewareInsideTheEndpoint(t *testing.T) {
 		t.Fatalf("order = %v", order)
 	}
 }
+
+// Billed marks a route that reaches a billed provider call and charges it to a cost bucket: the chat bucket when the
+// route named none (or the general one), the route's own cost bucket otherwise (R-security-c22).
+func TestBilled_MarksTheRouteAndDerivesItsCostBucket(t *testing.T) {
+	mux := chi.NewRouter()
+	rb := NewBuilder(mux)
+	rb.Post("/a", ok, Billed())
+	rb.Post("/b", ok, RateLimit(RateEmbed), Billed())
+	rb.Post("/c", ok, Billed(), RateLimit(RateEmbed))
+	rb.Post("/d", ok)
+	tbl, err := rb.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		path   string
+		billed bool
+		bucket string
+	}{
+		{"/a", true, RateChat},
+		{"/b", true, RateEmbed},
+		{"/c", true, RateEmbed},
+		{"/d", false, RateGeneral},
+	} {
+		p := tbl.Lookup(http.MethodPost, tc.path)
+		if p.Billed != tc.billed || p.RateLimit != tc.bucket {
+			t.Errorf("POST %s: billed %v bucket %q, want %v %q", tc.path, p.Billed, p.RateLimit, tc.billed, tc.bucket)
+		}
+	}
+	for _, b := range []string{RateChat, RateEmbed} {
+		if !CostBucket(b) {
+			t.Errorf("CostBucket(%q) = false", b)
+		}
+	}
+	for _, b := range []string{"", RateGeneral, RateNone, RateAnalysis, RateUpload, RateControl, RateAuth} {
+		if CostBucket(b) {
+			t.Errorf("CostBucket(%q) = true: a billed route there shares a bucket with free traffic", b)
+		}
+	}
+}

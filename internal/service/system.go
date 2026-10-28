@@ -16,6 +16,7 @@ import (
 	"pad-analyzer/internal/errreport"
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/platform/eventbus"
+	"pad-analyzer/internal/storage"
 	storageif "pad-analyzer/internal/storage/interfaces"
 	"pad-analyzer/internal/storage/settingsdoc"
 	"pad-core/logger"
@@ -70,12 +71,21 @@ type SystemService struct {
 	// means "has a resource", and deleting the azure-foundry key removes resource
 	// "default" with its models. nil = the single document.
 	azure *AzureModelService
+	// keyReads reads a key under the request's context (WithKeyReads); nil reads through secrets.
+	keyReads KeyReads
 }
 
 // NewSystemService builds the system service; azure is the Azure AI Foundry model registry /api/keys acts on for
 // azure-foundry (nil keeps the single document). bus announces credential and settings changes (nil: none).
 func NewSystemService(settings SettingsProvider, secrets KeyStore, notifier EventNotifier, backend storageif.StorageBackend, mode config.DeploymentMode, azure *AzureModelService, bus *eventbus.Bus) *SystemService {
 	return &SystemService{settings: settings, secrets: secrets, notifier: notifier, backend: backend, mode: mode, azure: azure, bus: bus}
+}
+
+// WithKeyReads gives the key-status route the keystore's request-scoped reads (R-provider-19): a client that goes
+// away ends the read. DI sets it once, before the service is used; nil reads through the KeyStore.
+func (s *SystemService) WithKeyReads(reads KeyReads) *SystemService {
+	s.keyReads = reads
+	return s
 }
 
 // B5: the settings methods thread the caller's context.Context through to the storage
@@ -181,12 +191,12 @@ func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, s
 		return err
 	}
 	if s.backend == nil || userID == "" {
-		if sections != nil {
-			stored, err := s.GetSettings(ctx)
-			if err != nil {
-				return err
-			}
-			sections.keepUnnamed(&settings, stored)
+		stored, err := s.GetSettings(ctx)
+		if err != nil {
+			return err
+		}
+		if err := checkUserWrite(&settings, stored, sections); err != nil {
+			return err
 		}
 		return s.UpdateSettings(ctx, settings)
 	}
@@ -194,9 +204,8 @@ func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, s
 	if err != nil {
 		return fmt.Errorf("load user settings: %w", err)
 	}
-	storedModel := settingsToModel(stored)
-	if sections != nil {
-		sections.keepUnnamed(&settings, storedModel)
+	if err := checkUserWrite(&settings, settingsToModel(stored), sections); err != nil {
+		return err
 	}
 	if err := s.backend.SaveUserSettings(ctx, userID, settingsFromModel(&settings)); err != nil {
 		return err
@@ -204,6 +213,16 @@ func (s *SystemService) UpdateUserSettings(ctx context.Context, userID string, s
 	s.bus.Publish(ctx, events.SettingsChanged{Scope: events.UserSettings, ID: userID})
 	s.notifier.EmitTo(userID, "settings:changed", settings)
 	return nil
+}
+
+// checkUserWrite keeps the sections a write does not name at their stored values, then checks the ai section
+// against the stored one (validateAISection), so a write that leaves the section out is never refused for it.
+func checkUserWrite(settings, stored *models.AppSettings, sections SettingsSections) error {
+	if stored == nil {
+		stored = models.DefaultSettings()
+	}
+	sections.keepUnnamed(settings, stored)
+	return validateAISection(settings.AI, stored.AI)
 }
 
 // DeploymentAISettings is the deployment-wide part of the ai section: the embedding choice every knowledge base
@@ -317,7 +336,9 @@ func (e *UnknownProvidersError) Unwrap() error { return ErrProviderUnknown }
 // UpdateOrgSettings replaces the sections of the org's settings document the write names (OrgSettingsWrite),
 // keeping the stored allowed-provider list unless the write names it. A named list is validated: ids the registry
 // does not know are an *UnknownProvidersError, which is ErrProviderUnknown (the list is fail-closed, so a typo would
-// lock the org out of every provider).
+// lock the org out of every provider). Like UpdateUserSettings it reads the stored document before the write, not
+// under its lock: two writers naming different fields of one section can lose one's change. The section write
+// (PatchOrgSettingsSection, R-config-4) merges under the lock and takes a revision precondition.
 func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, settings models.AppSettings, write OrgSettingsWrite) (err error) {
 	defer logger.Guard("SystemService.UpdateOrgSettings", &err)
 	if write.AllowedProvidersSet {
@@ -331,13 +352,18 @@ func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, set
 			return &UnknownProvidersError{IDs: unknown}
 		}
 	}
+	if err := validateProfileSection(settings.Profile); err != nil {
+		return err
+	}
 	if s.backend == nil {
-		if write.Sections != nil {
-			stored, err := s.GetSettings(ctx)
-			if err != nil {
-				return err
-			}
-			write.Sections.keepUnnamed(&settings, stored)
+		// Without a server store this route writes the deployment's document, the one every turn reads its
+		// custom instructions from: it is checked like the member route's write.
+		stored, err := s.GetSettings(ctx)
+		if err != nil {
+			return err
+		}
+		if err := checkUserWrite(&settings, stored, write.Sections); err != nil {
+			return err
 		}
 		return s.UpdateSettings(ctx, settings)
 	}
@@ -346,8 +372,12 @@ func (s *SystemService) UpdateOrgSettings(ctx context.Context, orgID string, set
 		if err != nil {
 			return fmt.Errorf("load org settings: %w", err)
 		}
+		storedModel := models.DefaultSettings()
 		if stored != nil {
-			write.Sections.keepUnnamed(&settings, settingsToModel(stored))
+			storedModel = settingsToModel(stored)
+		}
+		if err := checkUserWrite(&settings, storedModel, write.Sections); err != nil {
+			return err
 		}
 		if !write.AllowedProvidersSet {
 			settings.AI.AllowedProviders = nil
@@ -414,8 +444,14 @@ func truncateForLog(s string, max int) string {
 
 // SaveApiKey stores a credential and announces it: the provider's cached live listing must not outlive the key
 // it was listed with (a replacement key may carry other entitlements), nor may a listing in flight write it back.
+// The key is stored trimmed; an empty one, one over MaxAPIKeyBytes or one with a control character is refused
+// with KEY_INVALID (checkAPIKey), so the catalogue never calls a provider configured on a key no request can use.
 func (s *SystemService) SaveApiKey(ctx context.Context, scope, provider string, key string) (err error) {
 	defer logger.Guard("SystemService.SaveApiKey", &err)
+	key, err = checkAPIKey(key)
+	if err != nil {
+		return err
+	}
 	if err := s.secrets.Save(scope, provider, key); err != nil {
 		return err
 	}
@@ -439,13 +475,31 @@ func (s *SystemService) listingHook(provider string) ai.ListingHook {
 	return nil
 }
 
+// HasApiKey is ApiKeyStatus told as held or not, for a caller without a request (the route reads ApiKeyStatus).
 func (s *SystemService) HasApiKey(scope, provider string) (result bool, err error) {
-	defer logger.Guard("SystemService.HasApiKey", &err)
+	status, err := s.ApiKeyStatus(context.Background(), scope, provider)
+	return status != CredentialMissing, err
+}
+
+// ApiKeyStatus is HasApiKey with the unreadable state told apart: a key the keystore holds but cannot decrypt
+// (the server's encryption key changed) is CredentialUnreadable, which the settings form asks to be entered
+// again. The key is read, not checked for a row, so a legacy empty row is missing, as every turn finds it. The
+// read runs under ctx: a request that ends aborts it (R-provider-19).
+func (s *SystemService) ApiKeyStatus(ctx context.Context, scope, provider string) (status CredentialStatus, err error) {
+	defer logger.Guard("SystemService.ApiKeyStatus", &err)
 	if hook := s.listingHook(provider); hook != nil {
 		// A family (several Azure resources): any resource of the caller's own.
-		return hook.Configured(context.Background(), scope)
+		ok, err := hook.Configured(ctx, scope)
+		if err != nil || !ok {
+			return CredentialMissing, err
+		}
+		return CredentialConfigured, nil
 	}
-	return s.secrets.Has(scope, provider)
+	v, err := getKeyCtx(ctx, s.secrets, s.keyReads, scope, provider)
+	if err != nil && !errors.Is(err, storage.ErrSecretNotFound) && !errors.Is(err, storage.ErrSecretDecryptFailed) {
+		return CredentialMissing, err
+	}
+	return keyStatus(v, err), nil
 }
 
 // DeleteApiKey removes a credential (for azure-foundry with the registry, resource "default" with its models) and

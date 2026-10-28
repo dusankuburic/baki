@@ -1,0 +1,13 @@
+: hand-built from the Responses API streaming "error" event (type, code, message, param), NOT a live capture; see ../README.md
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_WIRE0000000000000000000000000003","object":"response","created_at":1761523302,"status":"in_progress","error":null,"incomplete_details":null,"model":"gpt-4.1-2025-04-14","output":[],"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_WIRE0000000000000000000000000003","type":"message","status":"in_progress","content":[],"role":"assistant"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":2,"item_id":"msg_WIRE0000000000000000000000000003","output_index":0,"content_index":0,"delta":"Looking at the","logprobs":[]}
+
+event: error
+data: {"type":"error","sequence_number":3,"code":"server_error","message":"The server had an error while processing your request.","param":null}
+

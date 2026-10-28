@@ -42,7 +42,9 @@ type FakeBackend struct {
 	Settings     *interfaces.AppSettings
 	UserSettings map[string]*interfaces.AppSettings
 	OrgSettings  map[string]*interfaces.AppSettings
-	PingErr      error
+	// orgSettingsWrites serialises UpdateOrgSettingsWith, as Postgres's row locks do.
+	orgSettingsWrites sync.Mutex
+	PingErr           error
 	// Conversations stores chat history keyed by scope+"\x00"+flowID; nil-safe
 	// (the methods below tolerate a zero-valued struct-literal FakeBackend).
 	Conversations map[string][]interfaces.ChatMessage
@@ -480,6 +482,7 @@ func (m *FakeBackend) DeleteFlow(_ context.Context, id string) error {
 	for key := range m.Conversations {
 		if _, flowID, _ := strings.Cut(key, "\x00"); flowID == id {
 			delete(m.Conversations, key)
+			m.convVersions.drop(key)
 		}
 	}
 	if _, ok := m.Flows[id]; !ok {
@@ -634,6 +637,21 @@ func (m *FakeBackend) LoadOrgSettings(_ context.Context, orgID string) (*interfa
 	return &interfaces.AppSettings{Version: 1}, nil
 }
 
+// UpdateOrgSettingsWith is Postgres's locked read-modify-write: writers take turns, each reading what the one
+// before wrote. An error from mutate writes nothing.
+func (m *FakeBackend) UpdateOrgSettingsWith(ctx context.Context, orgID string, mutate func(*interfaces.AppSettings) error) error {
+	m.orgSettingsWrites.Lock()
+	defer m.orgSettingsWrites.Unlock()
+	s, err := m.LoadOrgSettings(ctx, orgID)
+	if err != nil {
+		return err
+	}
+	if err := mutate(s); err != nil {
+		return err
+	}
+	return m.SaveOrgSettings(ctx, orgID, s)
+}
+
 // ---- Conversations ----
 
 func (m *FakeBackend) SaveConversation(_ context.Context, flowID, scope string, messages []interfaces.ChatMessage) error {
@@ -643,7 +661,7 @@ func (m *FakeBackend) SaveConversation(_ context.Context, flowID, scope string, 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, err = m.storeConversationLocked(convKey(flowID, scope), cp)
+	_, err = m.storeConversationLocked(convKey(flowID, scope), "", cp)
 	return err
 }
 
@@ -980,9 +998,14 @@ func (m *FakeBackend) DeleteUser(_ context.Context, id string) error {
 	}
 	// Before the comment and triage identities go: they say which flows the user worked on.
 	m.eraseActorFromAlertsLocked(id, email, displayName)
+	// The owned flows' conversations (every user's threads on them), and the user's own threads on other people's
+	// flows (owner_id, v52).
 	for key := range m.Conversations {
-		if _, flowID, _ := strings.Cut(key, "\x00"); m.Flows[flowID] != nil && m.Flows[flowID].OwnerID == id {
+		_, flowID, _ := strings.Cut(key, "\x00")
+		owned := m.Flows[flowID] != nil && m.Flows[flowID].OwnerID == id
+		if meta := m.convVersions.meta[key]; owned || meta != nil && meta.owner == id {
 			delete(m.Conversations, key)
+			m.convVersions.drop(key)
 		}
 	}
 	for flowID, f := range m.Flows {
@@ -1177,16 +1200,21 @@ func (m *FakeBackend) ExportUserData(ctx context.Context, id string) (*interface
 	}
 	slices.SortFunc(out.Flows, func(a, b *interfaces.FlowDocument) int { return strings.Compare(a.ID, b.ID) })
 	out.Conversations = []*interfaces.ExportedConversation{}
+	// The user's own threads on any flow, and the unowned (pre-v52) conversations of the owned flows.
 	for key, msgs := range m.Conversations {
 		scope, flowID, _ := strings.Cut(key, "\x00")
-		if !owned[flowID] {
+		var rowOwner, title string
+		if meta := m.convVersions.meta[key]; meta != nil {
+			rowOwner, title = meta.owner, meta.title
+		}
+		if rowOwner != id && (rowOwner != "" || !owned[flowID]) {
 			continue
 		}
 		cp, err := jsonClone(msgs)
 		if err != nil {
 			return nil, fmt.Errorf("export: conversations: %w", err)
 		}
-		out.Conversations = append(out.Conversations, &interfaces.ExportedConversation{FlowID: flowID, Scope: scope, Messages: cp})
+		out.Conversations = append(out.Conversations, &interfaces.ExportedConversation{FlowID: flowID, Scope: scope, Title: title, Messages: cp})
 	}
 	slices.SortFunc(out.Conversations, func(a, b *interfaces.ExportedConversation) int {
 		return cmp.Or(strings.Compare(a.FlowID, b.FlowID), strings.Compare(a.Scope, b.Scope))
@@ -1213,13 +1241,15 @@ func (m *FakeBackend) ExportUserData(ctx context.Context, id string) (*interface
 	slices.SortFunc(out.TriageDecisions, func(a, b *interfaces.FindingStatus) int {
 		return cmp.Or(strings.Compare(a.FlowID, b.FlowID), strings.Compare(a.FindingKey, b.FindingKey))
 	})
+	out.AIUsage = m.userAIUsage(id)
 	out.ExportedAt = time.Now().UTC()
 	return out, nil
 }
 
 // PurgeExpiredData removes what the Postgres retention sweep removes from the rows the fake keeps: expired
 // sessions, API tokens, user tokens, share links, idempotency keys and invitations (and those accepted more than
-// seven days ago), CI credentials expired more than 30 days ago, CI delivery records older than an hour, and with auditRetentionDays > 0 the audit, usage and alert rows older than that.
+// seven days ago), CI credentials expired more than 30 days ago, CI delivery records older than an hour, unfinished
+// knowledge uploads older than KnowledgePendingTTL (the oldest KnowledgePendingPurgeBatch), and with auditRetentionDays > 0 the audit, usage and alert rows older than that.
 func (m *FakeBackend) PurgeExpiredData(_ context.Context, auditRetentionDays int) (*interfaces.PurgeResult, error) {
 	now := time.Now()
 	out := &interfaces.PurgeResult{IdempotencyKeys: m.idem.purge()}
@@ -1234,6 +1264,7 @@ func (m *FakeBackend) PurgeExpiredData(_ context.Context, auditRetentionDays int
 	out.CICredentials = m.purgeCICredentialsLocked(now)
 	out.CIDeliveries = m.purgeCIDeliveriesLocked(now)
 	out.FlowSnapshots = m.purgeFlowSnapshots(now)
+	out.KnowledgeUploads = m.purgeAbandonedKnowledgeUploadsLocked(now)
 	if auditRetentionDays <= 0 {
 		m.mu.Unlock()
 		return out, nil
@@ -1482,6 +1513,25 @@ func (m *FakeBackend) SavedUsageMetrics() []*interfaces.UsageMetric {
 	return append([]*interfaces.UsageMetric(nil), m.UsageMetrics...)
 }
 
+// userAIUsage is the export's aiUsage section: the user's usage rows, personal and organisation-billed, oldest first
+// (ties by id), [] when there are none.
+func (m *FakeBackend) userAIUsage(userID string) []interfaces.UsageMetric {
+	m.usageMu.Lock()
+	defer m.usageMu.Unlock()
+	out := []interfaces.UsageMetric{}
+	for _, u := range m.UsageMetrics {
+		if u.UserID == userID {
+			cp := *u
+			cp.CreatedAt = cp.CreatedAt.UTC()
+			out = append(out, cp)
+		}
+	}
+	slices.SortFunc(out, func(a, b interfaces.UsageMetric) int {
+		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+	})
+	return out
+}
+
 // ---- Dashboard ----
 
 // SaveFlowAnalysis upserts the flow's health snapshot (AnalyzedAt defaults to now) and the rule set it records.
@@ -1705,7 +1755,12 @@ func (m *FakeBackend) checkKnowledgeChunksLocked(chunks []interfaces.KnowledgeCh
 }
 
 func (m *FakeBackend) saveKnowledgeDocumentLocked(doc *interfaces.KnowledgeDocument) {
-	m.KnowledgeDocs[doc.ID] = &interfaces.KnowledgeDocument{ID: doc.ID, OrgID: doc.OrgID, Filename: doc.Filename, CreatedAt: time.Now().UTC(), ChunkerVersion: max(doc.ChunkerVersion, 1)}
+	state := doc.State
+	if state == "" {
+		state = interfaces.KnowledgeDocumentReady
+	}
+	m.KnowledgeDocs[doc.ID] = &interfaces.KnowledgeDocument{ID: doc.ID, OrgID: doc.OrgID, Filename: doc.Filename, CreatedAt: time.Now().UTC(), ChunkerVersion: max(doc.ChunkerVersion, 1),
+		State: state, Content: doc.Content, HasSource: doc.Content != ""}
 }
 
 // SaveKnowledgeDocumentWithChunks checks every row before storing any, as the Postgres transaction rolls back: a
@@ -1787,17 +1842,26 @@ func (m *FakeBackend) ListKnowledgeDocuments(_ context.Context, orgID string, li
 	var out []*interfaces.KnowledgeDocument
 	for _, d := range docs {
 		cp := *d
-		for _, c := range m.KnowledgeChunks {
-			if c.DocID == d.ID {
-				cp.ChunkCount++
-				if m.vectorIndexed(c) {
-					cp.VectorIndexed++
-				}
-			}
-		}
+		cp.Content = "" // never listed
+		m.countDocumentChunksLocked(&cp)
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+// countDocumentChunksLocked fills d's chunk counts: every chunk, those in the vector index, those pending.
+func (m *FakeBackend) countDocumentChunksLocked(d *interfaces.KnowledgeDocument) {
+	for _, c := range m.KnowledgeChunks {
+		if c.DocID == d.ID {
+			d.ChunkCount++
+			if m.vectorIndexed(c) {
+				d.VectorIndexed++
+			}
+			if c.Pending && len(c.Embedding) == 0 {
+				d.PendingChunks++
+			}
+		}
+	}
 }
 
 // ListKnowledgeDocumentIDsByFilename returns the ids of the org's documents named filename, oldest first, and the
@@ -1854,14 +1918,14 @@ func (m *FakeBackend) SearchKnowledge(_ context.Context, orgID string, queryEmbe
 	var hits []scored
 	for _, c := range m.KnowledgeChunks {
 		d, ok := m.KnowledgeDocs[c.DocID]
-		if !ok || d.OrgID != orgID || len(c.Embedding) != len(queryEmbedding) {
+		if !ok || d.OrgID != orgID || len(c.Embedding) != len(queryEmbedding) || c.Pending {
 			continue
 		}
 		if identity != "" && c.EmbeddingIdentity != "" && c.EmbeddingIdentity != identity {
 			continue
 		}
 		if sim := cosineSimilarity(c.Embedding, queryEmbedding); sim >= knowledgeMinSimilarity {
-			hits = append(hits, scored{interfaces.KnowledgeChunk{ID: c.ID, DocID: c.DocID, Content: c.Content, Filename: d.Filename}, sim})
+			hits = append(hits, scored{interfaces.KnowledgeChunk{ID: c.ID, DocID: c.DocID, Content: c.Content, Filename: d.Filename, ChunkerVersion: d.ChunkerVersion}, sim})
 		}
 	}
 	m.mu.RUnlock()
@@ -1918,6 +1982,9 @@ func (m *FakeBackend) listKnowledgeChunkContents(orgID string, after interfaces.
 		if c.DocID < after.DocID || (c.DocID == after.DocID && c.ID <= after.ID) {
 			continue
 		}
+		if c.Pending {
+			continue // its upload's to embed, never a re-index page's
+		}
 		if notIdentity != "" && c.EmbeddingIdentity == notIdentity {
 			continue
 		}
@@ -1961,7 +2028,7 @@ func (m *FakeBackend) UnindexedKnowledgeChunkWidth(_ context.Context, orgID stri
 	var first *interfaces.KnowledgeChunk
 	for _, c := range m.KnowledgeChunks {
 		d, ok := m.KnowledgeDocs[c.DocID]
-		if !ok || d.OrgID != orgID || len(c.Embedding) == 0 || m.vectorIndexed(c) {
+		if !ok || d.OrgID != orgID || len(c.Embedding) == 0 || m.vectorIndexed(c) || c.Pending {
 			continue
 		}
 		if first == nil || c.DocID < first.DocID || (c.DocID == first.DocID && c.ID < first.ID) {
@@ -1987,7 +2054,7 @@ func (m *FakeBackend) SampleKnowledgeChunkEmbeddings(_ context.Context, orgID st
 	defer m.mu.RUnlock()
 	var all []interfaces.KnowledgeChunk
 	for _, c := range m.KnowledgeChunks {
-		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID && len(c.Embedding) > 0 {
+		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID && len(c.Embedding) > 0 && !c.Pending {
 			all = append(all, interfaces.KnowledgeChunk{
 				ID: c.ID, DocID: c.DocID, Content: c.Content,
 				Embedding: append([]float32(nil), c.Embedding...),
@@ -2036,7 +2103,7 @@ func (m *FakeBackend) SampleKnowledgeChunkEmbeddingsUpTo(_ context.Context, orgI
 	var out []interfaces.KnowledgeChunk
 	for _, c := range m.KnowledgeChunks {
 		d, ok := m.KnowledgeDocs[c.DocID]
-		if !ok || d.OrgID != orgID || len(c.Embedding) == 0 {
+		if !ok || d.OrgID != orgID || len(c.Embedding) == 0 || c.Pending {
 			continue
 		}
 		if c.DocID > upTo.DocID || (c.DocID == upTo.DocID && c.ID > upTo.ID) {
@@ -2080,7 +2147,7 @@ func (m *FakeBackend) CountKnowledgeChunks(_ context.Context, orgID string) (int
 	defer m.mu.RUnlock()
 	total, indexed := 0, 0
 	for _, c := range m.KnowledgeChunks {
-		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID {
+		if d, ok := m.KnowledgeDocs[c.DocID]; ok && d.OrgID == orgID && !c.Pending {
 			total++
 			if m.vectorIndexed(c) {
 				indexed++
@@ -2098,7 +2165,7 @@ func (m *FakeBackend) CountKnowledgeChunksByIdentity(_ context.Context, orgID, i
 	var counts interfaces.KnowledgeChunkCounts
 	for _, c := range m.KnowledgeChunks {
 		d, ok := m.KnowledgeDocs[c.DocID]
-		if !ok || d.OrgID != orgID {
+		if !ok || d.OrgID != orgID || c.Pending {
 			continue
 		}
 		counts.Total++

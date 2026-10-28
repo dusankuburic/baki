@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"pad-analyzer/internal/storage/interfaces"
 )
@@ -31,9 +32,8 @@ func init() {
 				erase: erasedByCascade, org: orgNotKeyed},
 			{table: "provider_keys", noExport: "encrypted credentials: secrets never leave the keystore (the Azure resources' public configuration is in azureRegistry)",
 				erase: erasedByStep, org: orgNotKeyed, noPurge: "a credential lives until its owner removes it"},
-			{table: "usage_metrics", noExport: "not in the bundle yet (open: AI usage records)",
-				erase: erasedByStep,
-				org:   orgKept, orgWhy: "spend history attributed to the organisation; nothing reads a deleted organisation's rows and the retention window ages them out"},
+			{table: "usage_metrics", export: "aiUsage", erase: erasedByStep,
+				org: orgKept, orgWhy: "spend history attributed to the organisation; nothing reads a deleted organisation's rows and the retention window ages them out"},
 			{table: "audit_events", export: "auditEvents", erase: erasedByStep,
 				org: orgKept, orgWhy: "the audit trail keeps the organisation each action happened in"},
 		},
@@ -64,6 +64,11 @@ func init() {
 				}
 				return sessions, err
 			}, func(out *interfaces.UserDataExport, v []interfaces.RefreshTokenInfo) { out.Sessions = v }),
+			// The user's AI usage, personal and organisation-billed (R-security-11). An erasure takes the user's id
+			// off the organisation-billed rows, so they leave the export with the account, as they leave the user.
+			section("aiUsage", func(ctx context.Context, b *PostgresStorageBackend, x *exportRun) ([]interfaces.UsageMetric, error) {
+				return b.exportAIUsage(ctx, x.userID, aiUsageExportPageSize)
+			}, func(out *interfaces.UserDataExport, v []interfaces.UsageMetric) { out.AIUsage = v }),
 		},
 		erase: []eraseStep{
 			// The forensic trail stays; the user's personal data on it goes: the email, IP, token and user agent of
@@ -139,4 +144,60 @@ func (b *PostgresStorageBackend) exportAuditEvents(ctx context.Context, userID s
 		last := page[len(page)-1]
 		after = &auditCursor{createdAt: last.CreatedAt, id: last.ID}
 	}
+}
+
+// aiUsageExportPageSize is the rows one page of the AI usage walk reads.
+const aiUsageExportPageSize = 1000
+
+// exportAIUsageSQL reads one page of the user's usage rows after the keyset (created_at, id), oldest first. The
+// created_at bound is spelled out beside the row comparison so the walk range-scans usage_metrics_user_created_idx
+// (user_id, created_at); id only orders the rows that share a timestamp.
+const exportAIUsageSQL = `
+	SELECT id, user_id, org_id, provider, model, served_model, prompt_tokens, completion_tokens, created_at
+	  FROM usage_metrics
+	 WHERE user_id = $1 AND created_at >= $2 AND (created_at, id) > ($2, $3)
+	 ORDER BY created_at, id
+	 LIMIT $4`
+
+// exportAIUsage walks the user's AI usage rows, personal and organisation-billed, as a keyset over
+// (created_at, id), the pattern of exportAuditEvents: a row recorded mid-walk lands after the cursor or before it,
+// never shifting a page boundary. [] when there are none.
+func (b *PostgresStorageBackend) exportAIUsage(ctx context.Context, userID string, pageSize int) ([]interfaces.UsageMetric, error) {
+	out := []interfaces.UsageMetric{}
+	afterAt, afterID := time.Unix(0, 0).UTC(), ""
+	for {
+		page, err := b.aiUsagePage(ctx, userID, afterAt, afterID, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page...)
+		if len(page) < pageSize {
+			return out, nil
+		}
+		last := page[len(page)-1]
+		afterAt, afterID = last.CreatedAt, last.ID
+	}
+}
+
+// aiUsagePage is one page of exportAIUsage's walk: the user's rows after (afterAt, afterID).
+func (b *PostgresStorageBackend) aiUsagePage(ctx context.Context, userID string, afterAt time.Time, afterID string, pageSize int) ([]interfaces.UsageMetric, error) {
+	rows, err := b.query(ctx).QueryContext(ctx, exportAIUsageSQL, userID, afterAt, afterID, pageSize)
+	if err != nil {
+		return nil, fmt.Errorf("list ai usage: %w", err)
+	}
+	defer rows.Close()
+	var page []interfaces.UsageMetric
+	for rows.Next() {
+		var m interfaces.UsageMetric
+		if err := rows.Scan(&m.ID, &m.UserID, &m.OrgID, &m.Provider, &m.Model, &m.ServedModel,
+			&m.PromptTokens, &m.CompletionTokens, &m.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan ai usage: %w", err)
+		}
+		m.CreatedAt = m.CreatedAt.UTC()
+		page = append(page, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list ai usage: %w", err)
+	}
+	return page, nil
 }

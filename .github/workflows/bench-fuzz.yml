@@ -83,6 +83,21 @@ jobs:
             package: ./core/analyzer
           - target: FuzzParser
             package: ./core/parser
+          # The AI parsers that read untrusted bytes: the four provider SSE state
+          # machines, the prompt-mode <tool_call> marker parser and tool-input
+          # decoding (docs/architecture/ai-roadmap/testing.md, R-testing-2).
+          - target: FuzzParseClaudeSSE
+            package: ./internal/ai
+          - target: FuzzParseOpenAISSE
+            package: ./internal/ai
+          - target: FuzzParseGeminiSSE
+            package: ./internal/ai
+          - target: FuzzParseResponsesSSE
+            package: ./internal/ai
+          - target: FuzzParsePromptToolCalls
+            package: ./internal/ai
+          - target: FuzzExecuteTool
+            package: ./internal/ai
       fail-fast: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -107,5 +122,6 @@ jobs:
           path: |
             core/analyzer/testdata/fuzz/
             core/parser/testdata/fuzz/
+            internal/ai/testdata/fuzz/
           if-no-files-found: ignore
           retention-days: 30

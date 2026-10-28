@@ -51,13 +51,13 @@ func TestConversationConflicts_AreCountedBySource(t *testing.T) {
 
 	t.Run("client_save", func(t *testing.T) {
 		svc := cloudChat(tu.NewFakeBackend())
-		saved, err := svc.SaveClientConversation(ctx, "f", "k", new(int64), []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}})
+		saved, err := svc.SaveClientConversation(ctx, "f", "k", new(int64), []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
 		before := conflicts()
 		stale := saved.Version - 1
-		if _, err := svc.SaveClientConversation(ctx, "f", "k", &stale, []models.ChatMessage{{ID: "m2", Role: "user"}}); err == nil {
+		if _, err := svc.SaveClientConversation(ctx, "f", "k", &stale, []models.ChatMessage{{ID: "m2", Role: "user"}}, true); err == nil {
 			t.Fatal("a stale save was accepted")
 		}
 		wantConflicts(t, before, map[string]float64{"client_save": 1})
@@ -65,12 +65,12 @@ func TestConversationConflicts_AreCountedBySource(t *testing.T) {
 
 	t.Run("client_clear", func(t *testing.T) {
 		svc := cloudChat(tu.NewFakeBackend())
-		saved, err := svc.SaveClientConversation(ctx, "f", "k", new(int64), []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}})
+		saved, err := svc.SaveClientConversation(ctx, "f", "k", new(int64), []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
 		before := conflicts()
-		if err := svc.ClearConversationIf(ctx, "f", "k", saved.Version-1); err == nil {
+		if err := svc.ClearConversationIf(ctx, "f", "k", saved.Version-1, true); err == nil {
 			t.Fatal("a stale clear was accepted")
 		}
 		wantConflicts(t, before, map[string]float64{"client_clear": 1})

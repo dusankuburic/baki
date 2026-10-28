@@ -1,0 +1,20 @@
+{
+  "why": "The user asks for a fix and approves the card: apply_fix reports APPLIED, so the answer may say it changed the flow.",
+  "flow": "web_automation",
+  "selectedBlock": "B2",
+  "decision": "approve",
+  "question": "Add a timeout to the Launch Firefox action.",
+  "expect": {
+    "toolsSubset": [
+      "apply_fix"
+    ],
+    "mustMention": [
+      "B2",
+      "missing-timeout"
+    ],
+    "mustLink": [
+      "block:",
+      "finding:"
+    ]
+  }
+}

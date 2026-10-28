@@ -2,6 +2,8 @@ import {createAdapter} from '@/platform/adapters'
 import {logger} from '@/lib/logger'
 import {decodeJwtPayload} from '@/lib/jwt'
 import {noteServerVersion, serverVersionOf} from '@/lib/buildVersion'
+import {notifyBackendRestarted} from '@/lib/backendRestart'
+import type {BackendConfig, BackendEvent} from '@/platform/types'
 import type {z} from 'zod'
 
 export class ApiError extends Error {
@@ -179,6 +181,7 @@ async function doFetch(
       signal: controller.signal,
     })
     noteServerVersion(serverVersionOf(response))
+    if (response.ok) noteServerReachable()
     return response
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
@@ -361,6 +364,12 @@ function offlineMutation(method: string): boolean {
 
 async function errorFor(response: Response): Promise<ApiError> {
   const env = await parseErrorEnvelope(response)
+  // A 429 (or 503) that says when to come back only in its Retry-After header: the wait joins the details, where
+  // retryAfterHint reads it, unless the body already named one.
+  const retryAfter = Number(response.headers.get('Retry-After'))
+  if (Number.isFinite(retryAfter) && retryAfter > 0 && env.details?.retryAfterSeconds === undefined) {
+    env.details = {...env.details, retryAfterSeconds: retryAfter}
+  }
   if (response.status === 403) return new PermissionDeniedError(env.message, env.code, env.requestId, env.details)
   if (response.status === 409) return new VersionConflictError(env.message, env.code, env.requestId, env.details)
   return new ApiError(env.message, response.status, env.code, env.requestId, env.details)
@@ -530,15 +539,49 @@ function parseEventId(line: string): string | null {
   return value
 }
 
-const SSE_MAX_RECONNECT_ATTEMPTS = 10
-let sseGivenUp = false
-let onlineRetryHandler: (() => void) | null = null
+// While a listener exists the stream never gives up (R-streaming-6): the backoff tops out at 30 s and keeps going,
+// and every sign that the server or the network is back (an answered API request, the browser coming online, the
+// tab becoming visible, a new subscriber) reconnects at once, at most one attempt a second.
+const SSE_MAX_RECONNECT_DELAY_MS = 30_000
+const SSE_NUDGE_MIN_INTERVAL_MS = 1_000
+// The attempt between its start and the answer to its fetch (or its failure): one at a time. A teardown or a backend
+// restart forgets it, so the attempt it abandoned cannot block, or race, the next one.
+let pendingConnect: object | null = null
+let lastConnectAt = Number.NEGATIVE_INFINITY
+// Whether the stream's last failure was the network kind (not reached, cut, stalled) rather than an error status
+// from /api/events (a proxy 5xx, too many connections): only then does another answered request mean it may work now.
+let lastFailureNetwork = false
+let recoveryListening = false
 
-function clearOnlineRetry(): void {
-  if (onlineRetryHandler) {
-    window.removeEventListener('online', onlineRetryHandler)
-    onlineRetryHandler = null
+function reconnectNow(): void {
+  if (!streamActive || connectionState === 'open' || pendingConnect) return
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  const wait = Math.max(0, lastConnectAt + SSE_NUDGE_MIN_INTERVAL_MS - Date.now())
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    void connectEvents()
+  }, wait)
+}
+
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'visible') reconnectNow()
+}
+
+function listenForRecovery(on: boolean): void {
+  if (on === recoveryListening || typeof window === 'undefined') return
+  recoveryListening = on
+  if (on) {
+    window.addEventListener('online', reconnectNow)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+  } else {
+    window.removeEventListener('online', reconnectNow)
+    document.removeEventListener('visibilitychange', onVisibilityChange)
   }
+}
+
+/** An API request was answered: the server is reachable, so a stream that is down reconnects now. */
+function noteServerReachable(): void {
+  if (streamActive && connectionState !== 'open' && lastFailureNetwork) reconnectNow()
 }
 
 function setConnectionState(s: EventConnectionState): void {
@@ -591,26 +634,7 @@ function deliverEvent(data: unknown): void {
 
 function scheduleReconnect(): void {
   if (!streamActive || reconnectTimer) return
-  if (reconnectAttempt >= SSE_MAX_RECONNECT_ATTEMPTS) {
-    if (!sseGivenUp) {
-      sseGivenUp = true
-      setConnectionState('idle')
-      logger.warn(
-        `SSE reconnect budget exhausted (${SSE_MAX_RECONNECT_ATTEMPTS} attempts); waiting for network recovery`,
-      )
-      onlineRetryHandler = () => {
-        onlineRetryHandler = null
-        if (sseGivenUp && streamActive) {
-          sseGivenUp = false
-          reconnectAttempt = 0
-          void connectEvents()
-        }
-      }
-      window.addEventListener('online', onlineRetryHandler, {once: true})
-    }
-    return
-  }
-  const delay = Math.min(30_000, 1_000 * 2 ** reconnectAttempt)
+  const delay = Math.min(SSE_MAX_RECONNECT_DELAY_MS, 1_000 * 2 ** Math.min(reconnectAttempt, 15))
   reconnectAttempt++
   setConnectionState('reconnecting')
   reconnectTimer = setTimeout(() => {
@@ -620,17 +644,39 @@ function scheduleReconnect(): void {
 }
 
 async function connectEvents(): Promise<void> {
-  if (!streamActive) return
+  if (!streamActive || pendingConnect) return
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  const attempt = {}
+  pendingConnect = attempt
+  const settleAttempt = () => {
+    if (pendingConnect === attempt) pendingConnect = null
+  }
+  lastConnectAt = Date.now()
   setConnectionState(reconnectAttempt === 0 ? 'connecting' : 'reconnecting')
 
-  await ensureFreshToken('/api/events')
-
-  const cfg = await getBackendConfig()
+  let cfg: ResolvedConfig
+  try {
+    await ensureFreshToken('/api/events')
+    cfg = await getBackendConfig()
+  } catch (err) {
+    if (pendingConnect !== attempt) return
+    settleAttempt()
+    // No backend to reach yet (a desktop sidecar still starting): a failed attempt like any other.
+    logger.warn('SSE could not resolve the backend', err)
+    lastFailureNetwork = true
+    scheduleReconnect()
+    return
+  }
+  if (pendingConnect !== attempt) return
   const token = sessionToken || cfg.token
   const controller = new AbortController()
   eventAbortController = controller
 
   let stalled = false
+  let answered = false
   let inactivityTimer: ReturnType<typeof setTimeout> | null = null
   const armInactivity = () => {
     if (inactivityTimer) clearTimeout(inactivityTimer)
@@ -658,6 +704,10 @@ async function connectEvents(): Promise<void> {
       },
       signal: controller.signal,
     })
+    settleAttempt()
+    // Answered: a failure from here on is the status kind, until the stream opens and is cut.
+    answered = true
+    lastFailureNetwork = false
     noteServerVersion(serverVersionOf(response))
 
     if (response.status === 401 && refreshCallback) {
@@ -673,8 +723,7 @@ async function connectEvents(): Promise<void> {
     }
 
     reconnectAttempt = 0
-    sseGivenUp = false
-    clearOnlineRetry()
+    lastFailureNetwork = true
     setConnectionState('open')
     armInactivity()
 
@@ -722,15 +771,18 @@ async function connectEvents(): Promise<void> {
       }
     }
     disarmInactivity()
-    if (eventAbortController === controller) eventAbortController = null
+    // A connection dropped on purpose (a teardown, a backend restart) is not reconnected: its successor, if any, runs.
+    if (eventAbortController !== controller) return
+    eventAbortController = null
     scheduleReconnect()
-  } catch (err: unknown) {
+  } catch {
+    settleAttempt()
+    if (!answered) lastFailureNetwork = true
     disarmInactivity()
     if (eventAbortController === controller) eventAbortController = null
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      if (!stalled) return
-      logger.warn(`SSE inactive for ${SSE_INACTIVITY_TIMEOUT_MS / 1000}s, reconnecting`)
-    }
+    // Aborted on purpose (a teardown, a backend restart): not reconnected, its successor (if any) runs.
+    if (controller.signal.aborted && !stalled) return
+    if (stalled) logger.warn(`SSE inactive for ${SSE_INACTIVITY_TIMEOUT_MS / 1000}s, reconnecting`)
     scheduleReconnect()
   }
 }
@@ -748,11 +800,12 @@ export async function subscribeToEvents(callback: EventCallback) {
   if (!streamActive) {
     streamActive = true
     reconnectAttempt = 0
-    if (sseGivenUp) {
-      sseGivenUp = false
-      clearOnlineRetry()
-    }
+    listenForRecovery(true)
     void connectEvents()
+  } else {
+    // A stream registering while the connection is down waits for it to open: it reconnects now, not after the
+    // backoff (up to 30 s, longer than a send waits).
+    reconnectNow()
   }
 
   return () => {
@@ -761,20 +814,70 @@ export async function subscribeToEvents(callback: EventCallback) {
       teardownTimer = setTimeout(() => {
         teardownTimer = null
         if (listeners.size > 0) return
-        streamActive = false
-        lastEventId = ''
-        sseGivenUp = false
-        clearOnlineRetry()
-        if (reconnectTimer) {
-          clearTimeout(reconnectTimer)
-          reconnectTimer = null
-        }
-        if (eventAbortController) {
-          eventAbortController.abort()
-          eventAbortController = null
-        }
-        setConnectionState('idle')
+        stopEventStream()
       }, TEARDOWN_GRACE_MS)
     }
   }
+}
+
+// Drops the connection and any attempt or retry in progress.
+function dropConnection(): void {
+  pendingConnect = null
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  if (eventAbortController) {
+    eventAbortController.abort()
+    eventAbortController = null
+  }
+}
+
+function stopEventStream(): void {
+  streamActive = false
+  lastEventId = ''
+  listenForRecovery(false)
+  dropConnection()
+  setConnectionState('idle')
+}
+
+/**
+ * Follows the platform's backend events (R-frontend-c7). A 'ready' that follows 'terminated' or 'error' is a new
+ * backend process, on a new port with a new token: the client drops the cached config (taking the one the event
+ * carries, when it does) and the cached reads, tells the restart subscribers (a chat stream the old process ran is
+ * over), and reopens the events stream against the new process without the old one's cursor. Returns the
+ * unsubscribe function.
+ */
+export function watchBackendRestarts(onBackendEvent: (cb: (event: BackendEvent) => void) => () => void): () => void {
+  let down = false
+  return onBackendEvent(event => {
+    if (event.kind === 'terminated' || event.kind === 'error') {
+      down = true
+    } else if (event.kind === 'ready' && down) {
+      down = false
+      adoptNewBackend(event.config)
+    }
+  })
+}
+
+function adoptNewBackend(cfg: BackendConfig | undefined): void {
+  configCache = cfg ? {apiUrl: cfg.apiUrl, token: cfg.token ?? ''} : null
+  configPromise = null
+  clearRequestCache()
+  lastEventId = ''
+  notifyBackendRestarted()
+  if (!streamActive) return
+  dropConnection()
+  reconnectAttempt = 0
+  void connectEvents()
+}
+
+/** Tears the event stream down at once, as the last unsubscribe does after its grace period. For tests. */
+export function resetEventStreamForTest(): void {
+  listeners.clear()
+  if (teardownTimer) {
+    clearTimeout(teardownTimer)
+    teardownTimer = null
+  }
+  stopEventStream()
 }

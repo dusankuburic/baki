@@ -27,7 +27,7 @@ var updateRateLimitGroups = flag.Bool("update-ratelimit-groups", false, "rewrite
 // renaming one splits its buckets (the limit doubles) and orphans its series.
 var rateLimitGroups = []string{
 	route.RateGeneral, route.RateAuth, route.RateAnalysis, route.RateChat, route.RateUpload, route.RateChannelTest,
-	route.RatePerUser, route.RateAvatar,
+	route.RatePerUser, route.RateAvatar, route.RateControl, route.RateEmbed,
 }
 
 // rateLimitExceeded reads rate_limit_exceeded_total by its group label.

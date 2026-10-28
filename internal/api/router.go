@@ -238,7 +238,7 @@ func (rt *Router) corsHeaders(next http.Handler) http.Handler {
 			// A cross-origin client (the desktop webview, a dev server) may read only the headers listed here.
 			w.Header().Set("Access-Control-Expose-Headers", BuildVersionHeader+", "+idempotentReplayedHeader+", "+nextCursorHeader)
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, PATCH, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key, Last-Event-ID")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"pad-analyzer/internal/ai"
@@ -73,16 +74,20 @@ func TestApplyFix_ChatOnlyTokenRefusedBeforePrompt(t *testing.T) {
 	})
 }
 
-// TestApplyApprovedFix_RechecksWriteScope: the apply step itself refuses, so no path to the mutation skips the check.
+// TestApplyApprovedFix_RechecksWriteScope: the apply step itself refuses, so no path to the mutation skips the check
+// (failingApplyHook fails the test if the mutation runs). The refusal is an error outcome the model reads, not a
+// stream error (R-approvals-2).
 func TestApplyApprovedFix_RechecksWriteScope(t *testing.T) {
 	doc := fixTestDoc()
 	svc, _ := newFixTestService(doc, failingApplyHook(t))
 	ctx := scopedCtx(auth.ScopeChat)
 
-	if _, _, err := svc.applyApprovedFix(ctx, doc, fixTestProposal()); !errors.Is(err, ErrPermissionDenied) {
-		t.Errorf("applyApprovedFix err = %v, want ErrPermissionDenied", err)
+	out, _, err := svc.applyApprovedFix(ctx, doc, fixTestProposal())
+	if err != nil || out.Status != "error" || !strings.Contains(out.Detail, "write scope") {
+		t.Errorf("applyApprovedFix = %+v, %v; want an error outcome naming the write scope", out, err)
 	}
-	if _, _, err := svc.applyApprovedFixes(ctx, doc, []ai.FixProposal{fixTestProposal()}); !errors.Is(err, ErrPermissionDenied) {
-		t.Errorf("applyApprovedFixes err = %v, want ErrPermissionDenied", err)
+	batch, _, err := svc.applyApprovedFixes(ctx, doc, []ai.FixProposal{fixTestProposal()}, nil)
+	if err != nil || batch.Status != "error" || !strings.Contains(batch.Detail, "write scope") {
+		t.Errorf("applyApprovedFixes = %+v, %v; want an error outcome naming the write scope", batch, err)
 	}
 }

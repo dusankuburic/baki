@@ -4,7 +4,7 @@ import {useOrgStore} from '@/stores/orgStore'
 import {useAuthStore} from '@/stores/authStore'
 import {azureScopeKey, useAzureFoundryStore} from '@/stores/azureFoundryStore'
 import {request, ApiError} from '@/api/client'
-import {Trash2, FileText, Loader2, Upload, RefreshCw, Square} from 'lucide-react'
+import {Trash2, FileText, Loader2, Upload, RefreshCw, Square, Scissors} from 'lucide-react'
 import Button from '@/components/shared/Button'
 import {useConfirm, useToast, ErrorState} from '@/components/shared'
 import {logger} from '@/lib/logger'
@@ -26,6 +26,12 @@ interface KnowledgeDoc {
   // True on a deployment without a vector index: no chunk is ever in one there, which says nothing about
   // searchability (searches run in-process), so nothing is "not searchable" for being outside it.
   noVectorIndex?: boolean
+  // The chunker the document was cut with; hasSource: its text is kept, so a re-chunk can cut it again.
+  chunkerVersion?: number
+  hasSource?: boolean
+  // "pending": an upload whose pendingChunks are still to embed; none of it is searched until it is "ready".
+  state?: 'pending' | 'ready'
+  pendingChunks?: number
 }
 
 interface ReindexResult {
@@ -33,6 +39,57 @@ interface ReindexResult {
   docs: number
   truncated?: boolean
   nextCursor?: Record<string, unknown> | null
+  // A rechunk run: documents cut again this request, and those it could not (no kept text, too many passages).
+  rechunked?: number
+  skippedNoSource?: number
+  skippedTooLarge?: number
+  // Left alone because an unfinished upload of the same filename exists (a re-chunk would supersede it).
+  skippedPending?: number
+}
+
+interface UploadCursor {
+  docId: string
+  id: string
+}
+
+// One upload request: the document is stored first, then embedded page by page within the server's budget; a
+// pending answer is continued by its id ({docId, cursor?}) until no passage is left.
+interface UploadResult {
+  id: string
+  filename: string
+  state: 'pending' | 'ready'
+  chunkerVersion: number
+  chunks: number
+  embedded: number
+  pendingChunks: number
+  resumed?: boolean
+  truncated?: boolean
+  nextCursor?: UploadCursor | null
+}
+
+// An upload to continue: the stored document and, when known, where the last request stopped (a hint only) and how
+// far it got.
+interface UploadResume {
+  docId: string
+  cursor?: UploadCursor
+  progress?: UploadProgress
+}
+
+// A type, not an interface: it is passed as i18next interpolation values, which need an index signature.
+type UploadProgress = {
+  embedded: number
+  chunks: number
+}
+
+// The reason a run is aborted when the panel unmounts or switches organisation: the run then ends without touching
+// the panel's state, which belongs to another organisation or to nothing.
+const PANEL_GONE = new DOMException('The knowledge panel closed or switched organisation', 'AbortError')
+
+/** The chunker version new uploads are cut with; a document below it can be re-chunked when its text is kept. */
+const CURRENT_CHUNKER_VERSION = 2
+
+function isUploadCursor(v: unknown): v is UploadCursor {
+  return !!v && typeof v === 'object' && typeof (v as UploadCursor).docId === 'string'
 }
 
 function isAbortError(e: unknown): boolean {
@@ -45,6 +102,10 @@ function isReindexCursor(v: unknown): v is Record<string, unknown> {
 
 const KNOWLEDGE_BULK_TIMEOUT_MS = 5 * 60_000 + 30_000
 
+// One upload or re-chunk request: the server stops at its request budget (90 s) and answers what is left, so a
+// request is bounded well under the ingress cut (240 s on Azure Container Apps); the panel loops for the rest.
+const KNOWLEDGE_UPLOAD_REQUEST_TIMEOUT_MS = 3 * 60_000
+
 const VERBATIM_ERROR_CODES = new Set([
   'KNOWLEDGE_BUSY',
   'EMBEDDING_WIDTH_OFF',
@@ -54,6 +115,7 @@ const VERBATIM_ERROR_CODES = new Set([
   'EMBEDDING_PROVIDER_REJECTED',
   'KNOWLEDGE_DOCUMENT_TOO_LARGE',
   'EMBEDDING_ORG_NOT_CONFIGURED',
+  'KNOWLEDGE_FILENAME_INVALID',
 ])
 
 export default function KnowledgeBasePanel() {
@@ -76,7 +138,27 @@ export default function KnowledgeBasePanel() {
   const [reindexProgress, setReindexProgress] = useState<number | null>(null)
   const reindexAbortRef = useRef<AbortController | null>(null)
   const [resumable, setResumable] = useState<{cursor: Record<string, unknown>; force: boolean} | null>(null)
-  useEffect(() => () => reindexAbortRef.current?.abort(), [])
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null)
+  const [uploadResumable, setUploadResumable] = useState<UploadResume | null>(null)
+  const uploadAbortRef = useRef<AbortController | null>(null)
+  const [rechunking, setRechunking] = useState(false)
+  // A run belongs to the organisation it started in: switching (or leaving) stops it quietly, and what it left to
+  // resume or report is forgotten, so nothing of one organisation is ever posted to another.
+  useEffect(
+    () => () => {
+      reindexAbortRef.current?.abort(PANEL_GONE)
+      uploadAbortRef.current?.abort(PANEL_GONE)
+    },
+    [activeOrgId],
+  )
+  const [orgSeen, setOrgSeen] = useState(activeOrgId)
+  if (orgSeen !== activeOrgId) {
+    setOrgSeen(activeOrgId)
+    setUploadResumable(null)
+    setUploadError(null)
+    setResumable(null)
+    setSelectedFile(null)
+  }
   const {confirm} = useConfirm()
   const {success: toastSuccess, error: toastError, info: toastInfo} = useToast()
   const modelChanged = useAzureFoundryStore(
@@ -122,36 +204,190 @@ export default function KnowledgeBasePanel() {
       setUploadError(t('knowledge.fileTooLarge', {size: (selectedFile.size / 1024 / 1024).toFixed(1)}))
       return
     }
-    setUploading(true)
-    try {
-      const content = await selectedFile.text()
-      await request(`/api/orgs/${activeOrgId}/knowledge/upload`, {
-        body: {
-          filename: selectedFile.name,
-          content,
-        },
-        timeoutMs: KNOWLEDGE_BULK_TIMEOUT_MS,
+    const file = selectedFile
+    await runUpload(async () => ({filename: file.name, content: await file.text()}))
+  }
+
+  // Uploads a document, or continues a stored one, until none of its passages is pending (R-knowledge-2). Each
+  // request embeds what fits in the server's budget; the loop follows the document by id, stoppable, and a stop or a
+  // failure after the document was stored leaves a Resume that continues it, so no passage is paid for twice.
+  const runUpload = async (first: () => Promise<Record<string, unknown>>, resume?: UploadResume) => {
+    if (!activeOrgId) return
+    setUploadError(null)
+    setUploadResumable(null)
+    const controller = new AbortController()
+    uploadAbortRef.current = controller
+    const post = async (body: Record<string, unknown>) => {
+      const res = await request<UploadResult>(`/api/orgs/${activeOrgId}/knowledge/upload`, {
+        body,
+        timeoutMs: KNOWLEDGE_UPLOAD_REQUEST_TIMEOUT_MS,
+        signal: controller.signal,
       })
-      setSelectedFile(null)
+      // An answer that arrives after a stop (or after the panel went) ends the run all the same.
+      if (controller.signal.aborted) throw controller.signal.reason
+      return res
+    }
+    const continuation = (at: UploadResume) => ({docId: at.docId, ...(at.cursor ? {cursor: at.cursor} : {})})
+    let at: UploadResume | undefined = resume
+    let progress: UploadProgress | null = resume?.progress ?? null
+    setUploading(true)
+    setUploadProgress(progress)
+    try {
+      let res = await post(resume ? continuation(resume) : await first())
+      for (;;) {
+        at = {docId: res.id, ...(isUploadCursor(res.nextCursor) ? {cursor: res.nextCursor} : {})}
+        progress = {embedded: res.chunks - res.pendingChunks, chunks: res.chunks}
+        if (res.pendingChunks <= 0) break
+        setUploadProgress(progress)
+        const before = res.pendingChunks
+        res = await post(continuation(at))
+        if (res.pendingChunks > 0 && res.pendingChunks >= before && !res.embedded) {
+          // A continuation that embedded nothing would only repeat itself: leave it to a Resume.
+          at = {docId: res.id, ...(isUploadCursor(res.nextCursor) ? {cursor: res.nextCursor} : {})}
+          setUploadError(t('knowledge.uploadStalled'))
+          setUploadResumable({...at, ...(progress ? {progress} : {})})
+          loadDocs()
+          return
+        }
+      }
+      // The file is done once its document is: a resume of another document leaves a file picked meanwhile.
+      const doneName = res.filename
+      setSelectedFile(f => (!resume || f?.name === doneName ? null : f))
       toastSuccess(t('knowledge.uploaded'))
       loadDocs()
     } catch (e) {
+      if (controller.signal.reason === PANEL_GONE) return
+      // The server may have stored the document whatever failed: the list shows it, pending, with its Resume.
+      loadDocs()
+      if (isAbortError(e)) {
+        if (at) setUploadResumable({...at, ...(progress ? {progress} : {})})
+        toastInfo(progress ? t('knowledge.uploadStopped', progress) : t('knowledge.uploadStoppedUnknown'))
+        return
+      }
+      logger.warn(e)
+      const code = getErrorCode(e)
+      if (code === 'KNOWLEDGE_DOCUMENT_NOT_FOUND') {
+        // The upload to continue was replaced by a newer one of its name, or deleted: nothing is left to resume.
+        setUploadError(t('knowledge.uploadDocumentGone'))
+        return
+      }
+      // A request that fails after the document was stored names it, and where to continue.
+      const details = e instanceof ApiError ? e.details : undefined
+      const storedId = typeof details?.id === 'string' && details.id ? details.id : at?.docId
+      if (storedId) {
+        const cursor = isUploadCursor(details?.nextCursor) ? details.nextCursor : at?.cursor
+        setUploadResumable({docId: storedId, ...(cursor ? {cursor} : {}), ...(progress ? {progress} : {})})
+      }
       const verdict = providerVerdict(e)
-      const embeddingMissing = getErrorCode(e) === 'EMBEDDING_NOT_CONFIGURED' || /embedding provider/i.test(String(e))
+      const embeddingMissing = code === 'EMBEDDING_NOT_CONFIGURED' || /embedding provider/i.test(String(e))
       if (verdict) {
         setUploadError(verdict)
       } else if (embeddingMissing) {
         setUploadError(t('knowledge.embeddingMissingUpload'))
-      } else if (e instanceof ApiError && e.code === 'EMBEDDING_MODEL_CHANGED') {
+      } else if (code === 'EMBEDDING_MODEL_CHANGED') {
         setUploadError(t('knowledge.modelChangedUpload'))
       } else {
         setUploadError(t('knowledge.uploadFailedDetail', {message: getErrorMessage(e)}))
         toastError(t('knowledge.uploadFailed'))
       }
     } finally {
-      setUploading(false)
+      if (uploadAbortRef.current === controller) uploadAbortRef.current = null
+      if (controller.signal.reason !== PANEL_GONE) {
+        setUploading(false)
+        setUploadProgress(null)
+      }
     }
   }
+
+  const resumeUpload = (at: UploadResume) => void runUpload(() => Promise.resolve({}), at)
+
+  // A pending row's Resume starts from what the list knows of it, so a stop before the first answer still says how
+  // far it got.
+  const resumePendingDoc = (doc: KnowledgeDoc) =>
+    resumeUpload({
+      docId: doc.id,
+      ...(doc.chunkCount
+        ? {progress: {embedded: Math.max(0, doc.chunkCount - (doc.pendingChunks ?? 0)), chunks: doc.chunkCount}}
+        : {}),
+    })
+
+  // Re-chunks the documents an older chunker cut, from their kept text (R-knowledge-9). The server picks the
+  // documents below the current version itself, so the run repeats {rechunk: true} while it reports more to do; a
+  // stopped run is simply started again. Each re-chunked document becomes a new version with a new id.
+  const handleRechunk = async () => {
+    if (!activeOrgId) return
+    const ok = await confirm({
+      title: t('knowledge.rechunkConfirmTitle'),
+      message: t('knowledge.rechunkConfirmMessage'),
+      confirmLabel: t('knowledge.rechunk'),
+    })
+    if (!ok) return
+    const controller = new AbortController()
+    reindexAbortRef.current = controller
+    setReindexing(true)
+    setRechunking(true)
+    setReindexProgress(null)
+    let rechunked = 0
+    let skippedNoSource = 0
+    let skippedTooLarge = 0
+    let skippedPending = 0
+    let incomplete = false
+    try {
+      for (;;) {
+        const res = await request<ReindexResult>(`/api/orgs/${activeOrgId}/knowledge/reindex`, {
+          body: {rechunk: true},
+          timeoutMs: KNOWLEDGE_UPLOAD_REQUEST_TIMEOUT_MS,
+          signal: controller.signal,
+        })
+        if (controller.signal.aborted) throw controller.signal.reason
+        rechunked += res?.rechunked ?? 0
+        // Every request walks the documents still below the current version: one it skips is counted again.
+        skippedNoSource = Math.max(skippedNoSource, res?.skippedNoSource ?? 0)
+        skippedTooLarge = Math.max(skippedTooLarge, res?.skippedTooLarge ?? 0)
+        skippedPending = Math.max(skippedPending, res?.skippedPending ?? 0)
+        if (!res?.nextCursor) break
+        if (!res.rechunked && !res.chunks) {
+          // More is left but this request got nowhere: repeating it would loop. The run can simply be started again.
+          incomplete = true
+          break
+        }
+        setReindexProgress(rechunked)
+      }
+      if (incomplete) toastInfo(t('knowledge.rechunkIncomplete', {count: rechunked}))
+      else toastSuccess(rechunked > 0 ? t('knowledge.rechunkDone', {count: rechunked}) : t('knowledge.rechunkNothing'))
+      if (skippedNoSource > 0) toastInfo(t('knowledge.rechunkSkippedNoSource', {count: skippedNoSource}))
+      if (skippedTooLarge > 0) toastInfo(t('knowledge.rechunkSkippedTooLarge', {count: skippedTooLarge}))
+      if (skippedPending > 0) toastInfo(t('knowledge.rechunkSkippedPending', {count: skippedPending}))
+    } catch (e) {
+      if (controller.signal.reason === PANEL_GONE) return
+      if (isAbortError(e)) {
+        toastInfo(t('knowledge.rechunkStopped', {count: rechunked}))
+      } else {
+        logger.warn(e)
+        toastError(rechunkVerdict(e))
+      }
+    } finally {
+      if (controller.signal.reason !== PANEL_GONE) loadDocs()
+      if (reindexAbortRef.current === controller) reindexAbortRef.current = null
+      setReindexing(false)
+      setRechunking(false)
+      setReindexProgress(null)
+    }
+  }
+
+  const rechunkVerdict = (e: unknown): string => {
+    const code = getErrorCode(e)
+    if (code === 'EMBEDDING_MODEL_CHANGED') return t('knowledge.rechunkModelChanged')
+    if (code === 'EMBEDDING_NOT_CONFIGURED') return t('knowledge.embeddingMissingReindex')
+    return providerVerdict(e) ?? t('knowledge.rechunkFailed')
+  }
+
+  // Not while an upload is pending or running: a re-chunk supersedes documents by name, a paused upload with them.
+  const canRechunk =
+    !uploading &&
+    !uploadResumable &&
+    !docs.some(d => d.state === 'pending') &&
+    docs.some(d => !!d.hasSource && (d.chunkerVersion ?? 1) < CURRENT_CHUNKER_VERSION)
 
   const handleDelete = async (docId: string) => {
     if (!activeOrgId) return
@@ -186,12 +422,15 @@ export default function KnowledgeBasePanel() {
     setResumable(null)
     const controller = new AbortController()
     reindexAbortRef.current = controller
-    const reindex = (force: boolean, cursor?: Record<string, unknown>) =>
-      request<ReindexResult>(`/api/orgs/${activeOrgId}/knowledge/reindex`, {
+    const reindex = async (force: boolean, cursor?: Record<string, unknown>) => {
+      const res = await request<ReindexResult>(`/api/orgs/${activeOrgId}/knowledge/reindex`, {
         body: {...(force ? {force: true} : {}), ...(cursor ? {cursor} : {})},
         timeoutMs: KNOWLEDGE_BULK_TIMEOUT_MS,
         signal: controller.signal,
       })
+      if (controller.signal.aborted) throw controller.signal.reason
+      return res
+    }
     setReindexing(true)
     setReindexProgress(null)
     let chunks = 0
@@ -255,6 +494,7 @@ export default function KnowledgeBasePanel() {
       }
       loadDocs()
     } catch (e) {
+      if (controller.signal.reason === PANEL_GONE) return
       if (isAbortError(e)) {
         toastInfo(
           lastCursor
@@ -278,8 +518,10 @@ export default function KnowledgeBasePanel() {
       }
     } finally {
       if (reindexAbortRef.current === controller) reindexAbortRef.current = null
-      setReindexing(false)
-      setReindexProgress(null)
+      if (controller.signal.reason !== PANEL_GONE) {
+        setReindexing(false)
+        setReindexProgress(null)
+      }
     }
   }
 
@@ -301,6 +543,7 @@ export default function KnowledgeBasePanel() {
       <div className="bg-brand-500/5 border border-brand-500/20 rounded-lg p-3 mb-6 text-xs text-text-secondary">
         <strong className="text-text-primary">{t('knowledge.embeddingNoticePrefix')}</strong>{' '}
         {t('knowledge.embeddingNoticeSuffix')}
+        <p className="mt-2">{t('knowledge.memberEmbeddingHint')}</p>
       </div>
 
       {modelChanged && docs.length > 0 && (
@@ -335,10 +578,34 @@ export default function KnowledgeBasePanel() {
                 }}
               />
             </label>
-            <Button variant="primary" disabled={!selectedFile || uploading} onClick={handleUpload}>
+            <Button
+              variant="primary"
+              disabled={!selectedFile || uploading}
+              onClick={handleUpload}
+              aria-label={uploading ? t('knowledge.indexing') : undefined}
+            >
               {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('knowledge.indexDocument')}
             </Button>
+            {uploading && (
+              <Button variant="secondary" onClick={() => uploadAbortRef.current?.abort()}>
+                <Square className="w-3 h-3" />
+                {t('knowledge.uploadStop')}
+              </Button>
+            )}
+            {uploadResumable && !uploading && (
+              <Button variant="secondary" onClick={() => resumeUpload(uploadResumable)}>
+                <RefreshCw className="w-3.5 h-3.5" />
+                {t('knowledge.uploadResume')}
+              </Button>
+            )}
           </div>
+          <p
+            role="status"
+            aria-label={t('knowledge.uploadProgressLabel')}
+            className="text-xs text-text-secondary mt-2 empty:hidden"
+          >
+            {uploadProgress ? t('knowledge.uploadProgress', uploadProgress) : null}
+          </p>
           <p className="text-2xs text-text-tertiary mt-2">{t('knowledge.uploadHint')}</p>
           <p className="text-2xs text-text-tertiary mt-1">{t('knowledge.uploadScrubHint')}</p>
           {uploadError && (
@@ -374,6 +641,16 @@ export default function KnowledgeBasePanel() {
                   {t('knowledge.reindexStop')}
                 </button>
               )}
+              {canRechunk && !reindexing && (
+                <button
+                  onClick={() => void handleRechunk()}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-secondary hover:text-brand-400 border border-border-default hover:border-brand-500/50 rounded-md transition-colors"
+                  title={t('knowledge.rechunkTitle')}
+                >
+                  <Scissors className="w-3.5 h-3.5" />
+                  {t('knowledge.rechunk')}
+                </button>
+              )}
               <button
                 onClick={() => void handleReindex()}
                 disabled={reindexing}
@@ -381,16 +658,26 @@ export default function KnowledgeBasePanel() {
                 title={t('knowledge.reindexTitle')}
               >
                 {reindexing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                {reindexing ? t('knowledge.reindexing') : t('knowledge.reindex')}
+                {rechunking
+                  ? t('knowledge.rechunking')
+                  : reindexing
+                    ? t('knowledge.reindexing')
+                    : t('knowledge.reindex')}
               </button>
             </div>
           )}
         </div>
-        {reindexProgress !== null && (
-          <p role="status" className="text-xs text-text-secondary">
-            {t('knowledge.reindexProgress', {count: reindexProgress})}
-          </p>
-        )}
+        <p
+          role="status"
+          aria-label={t('knowledge.reindexProgressLabel')}
+          className="text-xs text-text-secondary empty:hidden"
+        >
+          {reindexProgress === null
+            ? null
+            : rechunking
+              ? t('knowledge.rechunkProgress', {count: reindexProgress})
+              : t('knowledge.reindexProgress', {count: reindexProgress})}
+        </p>
         {loading ? (
           <div className="flex justify-center p-8">
             <Loader2 className="w-6 h-6 animate-spin text-brand-500" />
@@ -418,7 +705,7 @@ export default function KnowledgeBasePanel() {
                     </div>
                     <div className="text-xs text-text-tertiary" title={absoluteTime(doc.createdAt)}>
                       {t('knowledge.indexedAgo', {when: relativeTime(doc.createdAt)})}
-                      {doc.chunkCount != null && doc.chunkCount > 0 && (
+                      {doc.state !== 'pending' && doc.chunkCount != null && doc.chunkCount > 0 && (
                         <>
                           {' · '}
                           {doc.vectorIndexed != null
@@ -427,7 +714,14 @@ export default function KnowledgeBasePanel() {
                         </>
                       )}
                     </div>
-                    {doc.embeddingWidthMismatch ? (
+                    {doc.state === 'pending' ? (
+                      <div className="text-xs text-amber-400">
+                        {t('knowledge.pending', {
+                          embedded: Math.max(0, (doc.chunkCount ?? 0) - (doc.pendingChunks ?? 0)),
+                          chunks: doc.chunkCount ?? 0,
+                        })}
+                      </div>
+                    ) : doc.embeddingWidthMismatch ? (
                       <div className="text-xs text-amber-400">
                         {t(
                           doc.embeddingWidthMismatch.source === 'stored'
@@ -443,13 +737,30 @@ export default function KnowledgeBasePanel() {
                         <div className="text-xs text-amber-400">{t('knowledge.dimensionMismatch')}</div>
                       )
                     )}
-                    {(doc.embeddingStranded ?? 0) > 0 && (
+                    {doc.state !== 'pending' && (doc.embeddingStranded ?? 0) > 0 && (
                       <div className="text-xs text-amber-400">
                         {t('knowledge.identityMismatch', {count: doc.embeddingStranded})}
                       </div>
                     )}
+                    {canManage &&
+                      doc.state !== 'pending' &&
+                      !doc.hasSource &&
+                      (doc.chunkerVersion ?? 1) < CURRENT_CHUNKER_VERSION && (
+                        <div className="text-xs text-text-tertiary">{t('knowledge.noSourceHint')}</div>
+                      )}
                   </div>
                 </div>
+                {canManage && doc.state === 'pending' && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={uploading}
+                    onClick={() => resumePendingDoc(doc)}
+                    aria-label={t('knowledge.resumePendingAria', {filename: doc.filename})}
+                  >
+                    {t('knowledge.resumePending')}
+                  </Button>
+                )}
                 {canManage && (
                   <button
                     onClick={() => handleDelete(doc.id)}

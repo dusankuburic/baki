@@ -66,16 +66,21 @@ func TestRunToolLoop_SecondFixAfterDocRefresh(t *testing.T) {
 
 	var calls int32
 	var mu sync.Mutex
+	var ldp *LocalDocumentProvider
+	// Like FlowService.ApplyFix, an apply saves the flow: the next apply's fresh read is the fixed flow.
 	hook := func(_ context.Context, _ *models.FlowDocument, blockID, _, _, _, _ string) (*models.FlowDocument, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
 		if calls == 1 {
+			ldp.SetCurrentDoc(fresh)
 			return fresh, nil
 		}
+		ldp.SetCurrentDoc(clean)
 		return clean, nil
 	}
-	svc, _ := newFixTestService(doc, hook)
+	svc, l := newReassocService(doc, hook)
+	ldp = l
 
 	rec := &fixEventRecorder{}
 	var tctx ai.ToolContext

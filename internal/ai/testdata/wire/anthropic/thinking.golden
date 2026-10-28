@@ -1,0 +1,18 @@
+# anthropic/thinking.sse through parseClaudeSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 in=1664 cacheRead=1024 served="claude-opus-4-1-20250805"
+02 keepalive served="claude-opus-4-1-20250805"
+03 keepalive served="claude-opus-4-1-20250805"
+04 keepalive served="claude-opus-4-1-20250805"
+05 keepalive served="claude-opus-4-1-20250805"
+06 keepalive served="claude-opus-4-1-20250805"
+07 keepalive served="claude-opus-4-1-20250805"
+08 keepalive served="claude-opus-4-1-20250805"
+09 keepalive served="claude-opus-4-1-20250805"
+10 keepalive served="claude-opus-4-1-20250805"
+11 text="Yes: block 14 exits once LoopIndex reaches the row count." served="claude-opus-4-1-20250805"
+12 keepalive served="claude-opus-4-1-20250805"
+13 done finish="end_turn" in=1664 out=214 cacheRead=1024 items=[{"signature":"EqQBCgIYAhIMWIREFIXTURENOTAREALSIGNATURE0000000000==","thinking":"The user asks whether the loop exits. Block 12 sets LoopIndex; block 14 compares it.","type":"thinking"},{"data":"EmwKAhgBEgyWIREFIXTURENOTREALREDACTEDDATA000000==","type":"redacted_thinking"},{"text":"Yes: block 14 exits once LoopIndex reaches the row count.","type":"text"}] served="claude-opus-4-1-20250805"
+14 keepalive served="claude-opus-4-1-20250805"
+return nil
+summary chunks=14 keepalives=11 text="Yes: block 14 exits once LoopIndex reaches the row count."

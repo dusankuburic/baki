@@ -15,17 +15,22 @@ import (
 	"pad-core/logger"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // UsageRecorder represents a function capable of saving usage metrics.
 type UsageRecorder func(ctx context.Context, metric *interfaces.UsageMetric) error
 
 type auditedProvider struct {
-	inner      Provider
-	recorder   UsageRecorder
-	scope      string
-	providerID string
-	recordSem  chan struct{}
+	// saveRetryDelay is the wait before a failed usage save is tried again (usageSaveRetryDelay; tests shorten it).
+	saveRetryDelay time.Duration
+	inner          Provider
+	recorder       UsageRecorder
+	scope          string
+	providerID     string
+	recordSem      chan struct{}
 	// countTimeout overrides countTokensTimeout when non-zero (tests: proving the bound on a hung count
 	// endpoint need not take the full 5 s).
 	countTimeout time.Duration
@@ -73,12 +78,13 @@ func (u usage) clamped() usage {
 
 func newAuditedProvider(inner Provider, recorder UsageRecorder, scope, providerID string) *auditedProvider {
 	return &auditedProvider{
-		inner:      inner,
-		recorder:   recorder,
-		scope:      scope,
-		providerID: providerID,
-		recordSem:  make(chan struct{}, maxConcurrentRecords),
-		memoScope:  scope,
+		inner:          inner,
+		recorder:       recorder,
+		scope:          scope,
+		providerID:     providerID,
+		recordSem:      make(chan struct{}, maxConcurrentRecords),
+		saveRetryDelay: usageSaveRetryDelay,
+		memoScope:      scope,
 	}
 }
 
@@ -116,10 +122,14 @@ func (p *auditedProvider) adoptRawHints(raw Provider) {
 	}
 }
 
-// user is who a call under ctx is recorded for: the context's usage scope, else the chain's scope with the
-// request's org (reqOrgID) or, without one, the shared credential's.
+// user is who a call under ctx is recorded for: the context's usage scope (its scope and its org, a blank scope
+// read as the chain's), else the chain's scope with the request's org (reqOrgID) or, without one, the shared
+// credential's.
 func (p *auditedProvider) user(ctx context.Context, reqOrgID string) (scope, orgID string) {
 	if s, o, ok := UsageScopeFrom(ctx); ok {
+		if s == "" {
+			s = p.scope
+		}
 		return s, o
 	}
 	if reqOrgID == "" {
@@ -131,9 +141,9 @@ func (p *auditedProvider) user(ctx context.Context, reqOrgID string) (scope, org
 func (p *auditedProvider) Chat(ctx context.Context, req Request) (*Response, error) {
 	start := time.Now()
 	resp, err := p.inner.Chat(ctx, req)
-	observeAIRequest(p.providerID, time.Since(start).Seconds())
+	observeAICall(p.providerID, aiCallChat, time.Since(start).Seconds())
 	if err != nil {
-		recordAIError(p.providerID)
+		p.recordFailure(ctx, err)
 		// A context-length rejection that states the window sizes the next request to this deployment (learned_window.go).
 		learnContextWindow(p.memoScope, p.providerID, req.Model, err)
 		// A failed non-streamed call can still have been billed (a content-filter finish, a stopped agent run):
@@ -160,12 +170,36 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 	// content's token estimate, summed per delta (over-counting at boundaries) and folded early on long streams
 	// so memory stays bounded.
 	var sawChunkErr, sawDone, sawAny, sawContent bool
+	var chunkErr error // the last error chunk: what a stream that returned nil failed with
 	estOut := deltaEstimate{estimate: p.inner.EstimateTokens}
 	var servedModel string
 
+	firstToken := false
 	wrappedOnChunk := func(c Chunk) {
+		if c.attemptDiscarded {
+			// The retry wrapper discarded an attempt the provider billed: its usage is a row of its own, and the
+			// next attempt starts from nothing — its counts, its evidence of reaching the provider, its output
+			// estimate. The discarded attempt's reasoning, which a pre-content error reports no count for, is
+			// its estimated output. The marker is ours: never forwarded.
+			out := c.TokensOut
+			if out == 0 {
+				out = estOut.total()
+			}
+			if c.TokensIn > 0 || out > 0 {
+				recordAITokens(p.providerID, c.TokensIn, out)
+				p.record(ctx, req.Model, c.ServedModel, req.OrgID, usage{In: c.TokensIn, Out: out})
+			}
+			tokensIn, tokensOut = 0, 0
+			sawAny, sawContent = false, false
+			estOut = deltaEstimate{estimate: p.inner.EstimateTokens}
+			return
+		}
 		if !c.LocalKeepalive {
 			sawAny = true
+		}
+		if !firstToken && (c.Text != "" || c.Reasoning != "" || len(c.ToolCalls) > 0) {
+			firstToken = true
+			aiFirstToken.WithLabelValues(p.providerID).Observe(time.Since(start).Seconds())
 		}
 		if c.TokensIn > 0 {
 			tokensIn = c.TokensIn
@@ -177,7 +211,7 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 			servedModel = c.ServedModel
 		}
 		if c.Error != nil {
-			sawChunkErr = true
+			sawChunkErr, chunkErr = true, c.Error
 			learnContextWindow(p.memoScope, p.providerID, req.Model, c.Error)
 		}
 		if c.Text != "" {
@@ -200,9 +234,15 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 			recordServedModel(p.memoScope, p.providerID, req.Model, servedModel)
 			// Compat servers that ignore stream_options (older vLLM/Ollama/proxies — reachable because base
 			// URLs are env-overridable) end with Done(0,0); without this fallback every such stream recorded no tokens.
-			if tokensIn == 0 && tokensOut == 0 && (sawContent || len(c.ToolCalls) > 0) {
-				tokensOut = estOut.total()
-				tokensIn = p.estimateRequestTokens(req)
+			// A tool call is output too: its arguments can be kilobytes (apply_fixes). Each side the provider
+			// left at zero is estimated on its own, as on the path without Done.
+			if sawContent || len(c.ToolCalls) > 0 {
+				if tokensOut == 0 {
+					tokensOut = estOut.total() + p.estimateToolCalls(c.ToolCalls)
+				}
+				if tokensIn == 0 {
+					tokensIn = p.estimateRequestTokens(req)
+				}
 			}
 			recordAITokens(p.providerID, tokensIn, tokensOut)
 			p.record(ctx, req.Model, servedModel, req.OrgID, usage{In: tokensIn, Out: tokensOut})
@@ -211,9 +251,16 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 	}
 
 	err := p.inner.Stream(ctx, req, wrappedOnChunk)
-	observeAIRequest(p.providerID, time.Since(start).Seconds())
-	if err != nil || sawChunkErr {
-		recordAIError(p.providerID)
+	observeAICall(p.providerID, aiCallStream, time.Since(start).Seconds())
+	switch {
+	case err != nil:
+		p.recordFailure(ctx, err)
+	case sawChunkErr:
+		p.recordFailure(ctx, chunkErr)
+	case !sawDone && ctx.Err() != nil:
+		// Ended without its terminal chunk because the caller's context ended: a cancellation, whatever the reader
+		// returned.
+		p.recordFailure(ctx, nil)
 	}
 	if err != nil {
 		learnContextWindow(p.memoScope, p.providerID, req.Model, err)
@@ -247,6 +294,19 @@ func (p *auditedProvider) Stream(ctx context.Context, req Request, onChunk func(
 		p.record(ctx, req.Model, servedModel, req.OrgID, usage{In: tokensIn, Out: tokensOut})
 	}
 	return err
+}
+
+// recordFailure counts a call that failed (err, or a stream that ended without its terminal chunk when err is nil):
+// as cancelled under its reason when the caller ended it (callCancellation), else as a provider error of its class
+// (R-observability-4) — a user's stop, a watchdog, shutdown or a deadline never reads as a provider error.
+func (p *auditedProvider) recordFailure(ctx context.Context, err error) {
+	if reason, cancelled := callCancellation(ctx, err); cancelled {
+		recordAICancelled(p.providerID, reason)
+		return
+	}
+	if err != nil {
+		recordAIError(p.providerID, aiErrorClass(err))
+	}
 }
 
 // deltaEstimate is a stream's output-token estimate as the sum of each delta's own estimate, computed lazily
@@ -334,6 +394,11 @@ func requestEstimateHash(providerID string, req Request) uint64 {
 	}
 	field([]byte(providerID))
 	field([]byte(req.SystemPrompt))
+	for _, td := range req.Tools {
+		field([]byte(td.Name))
+		field([]byte(td.Description))
+		field(td.InputSchema)
+	}
 	for _, m := range req.Messages {
 		field([]byte(m.Content))
 		for _, tc := range m.ToolCalls {
@@ -344,14 +409,23 @@ func requestEstimateHash(providerID string, req Request) uint64 {
 	return h.Sum64()
 }
 
-// estimateRequestTokens estimates a full request's input tokens: system prompt + message contents + tool-call
-// arguments; shared by the no-usage fallbacks, whose repeats the memo above absorbs.
+// toolDefinitionOverhead is the per-tool framing a provider wraps around a tool definition, in tokens: the same
+// allowance the chat's context-window check makes for each tool (promptTokenCeiling).
+const toolDefinitionOverhead = 8
+
+// estimateRequestTokens estimates a full request's input tokens: system prompt + the tool definitions (sent on
+// every tool-loop iteration) + message contents + tool-call arguments; shared by the no-usage fallbacks, whose
+// repeats the memo above absorbs.
 func (p *auditedProvider) estimateRequestTokens(req Request) int {
 	key := requestEstimateHash(p.providerID, req)
 	if n, ok := requestTokenEstimates.get(key); ok {
 		return n
 	}
 	total := p.inner.EstimateTokens(req.SystemPrompt)
+	for _, td := range req.Tools {
+		total += p.inner.EstimateTokens(td.Name) + p.inner.EstimateTokens(td.Description) +
+			p.inner.EstimateTokens(string(td.InputSchema)) + toolDefinitionOverhead
+	}
 	for _, m := range req.Messages {
 		c := p.inner.EstimateTokens(m.Content)
 		for _, tc := range m.ToolCalls {
@@ -367,23 +441,35 @@ func (p *auditedProvider) estimateRequestTokens(req Request) int {
 	return total
 }
 
-func (p *auditedProvider) record(ctx context.Context, modelID, servedModel, orgID string, u usage) {
+// estimateToolCalls estimates the output tokens of a turn's tool calls: each call's name and arguments.
+func (p *auditedProvider) estimateToolCalls(calls []ToolCall) int {
+	n := 0
+	for _, tc := range calls {
+		n += p.inner.EstimateTokens(tc.Name) + p.inner.EstimateTokens(string(tc.Input))
+	}
+	return n
+}
+
+// record saves one call's usage row for who the call was attributed to (user): the context's usage scope, scope
+// and org both, else the chain's scope with reqOrgID (the Request's org; "" for an Embed) (R-budget-15).
+func (p *auditedProvider) record(ctx context.Context, modelID, servedModel, reqOrgID string, u usage) {
 	u = u.clamped()
 	if p.recorder == nil || (u.In == 0 && u.Out == 0) {
 		return
 	}
-	metric := p.usageMetric(modelID, servedModel, orgID, u)
+	userID, orgID := p.user(ctx, reqOrgID)
+	metric := p.usageMetric(modelID, servedModel, userID, orgID, u)
 
 	// Asynchronously record the usage so it doesn't block the caller. The semaphore acquire is NON-blocking:
 	// when all slots are in flight the metric is DROPPED (recordUsageDropped) rather than parking
 	// another goroutine — in practice never hit (~7 metrics per request against 16 slots), a valve against a stuck recorder.
-	if !p.acquireRecordSlot(modelID) {
+	if !p.acquireRecordSlot(ctx, modelID) {
 		return
 	}
 	// Usage accounting must survive the request that generated it: binding this to the caller's context would
 	// drop the record for exactly the turns a user cancels. usageRecords drains it at shutdown; the semaphore
 	// above bounds concurrency.
-	p.goRecord(modelID, func() { p.save(&metric) })
+	p.goRecord(ctx, modelID, func(release func()) { p.save(ctx, &metric, release) })
 }
 
 // usageRecords runs every provider's background usage writes, so shutdown waits for the rows in flight (they
@@ -396,26 +482,28 @@ const maxConcurrentUsageRecords = 1024
 
 // goRecord runs fn on usageRecords holding one of p's record slots; the slot is released when fn returns, or
 // at once when the write cannot start (shutting down).
-func (p *auditedProvider) goRecord(modelID string, fn func()) {
+func (p *auditedProvider) goRecord(ctx context.Context, modelID string, fn func(release func())) {
+	var once sync.Once
+	release := func() { once.Do(p.releaseRecordSlot) }
 	if !usageRecords.Go(func() {
-		defer p.releaseRecordSlot()
-		fn()
+		defer release()
+		fn(release)
 	}) {
 		// The runner refused: at its process-wide cap or draining for shutdown (it counts which).
 		p.releaseRecordSlot()
 		recordUsageDropped("runner")
-		logger.Warn("AI usage metric dropped — usage runner refused it", "provider", p.providerID, "model", modelID)
+		logger.FromContext(ctx).Warn("AI usage metric dropped — usage runner refused it", "provider", p.providerID, "model", modelID)
 	}
 }
 
 // acquireRecordSlot takes one of the maxConcurrentRecords background slots without blocking; false (metric dropped and counted) when all are busy.
-func (p *auditedProvider) acquireRecordSlot(modelID string) bool {
+func (p *auditedProvider) acquireRecordSlot(ctx context.Context, modelID string) bool {
 	select {
 	case p.recordSem <- struct{}{}:
 		return true
 	default:
 		recordUsageDropped("saturated")
-		logger.Warn("AI usage metric dropped — recorder saturated",
+		logger.FromContext(ctx).Warn("AI usage metric dropped — recorder saturated",
 			"provider", p.providerID, "model", modelID)
 		return false
 	}
@@ -427,19 +515,38 @@ func (p *auditedProvider) releaseRecordSlot() {
 	<-p.recordSem
 }
 
-// save writes one usage row on its own bounded context.
-func (p *auditedProvider) save(metric *interfaces.UsageMetric) {
+// usageSaveRetryDelay is the wait before the one retry of a failed usage save.
+const usageSaveRetryDelay = 2 * time.Second
+
+// save writes one usage row on its own bounded context. logCtx is the request's context, read only for the
+// attributes of the loss line: the writes never inherit its cancellation.
+func (p *auditedProvider) save(logCtx context.Context, metric *interfaces.UsageMetric, release func()) {
 	// #nosec G118 -- intentionally detached: usage logging must outlive the request ctx.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := p.recorder(ctx, metric); err != nil {
-		logger.Warn("AI usage recording failed",
-			"provider", p.providerID, "model", metric.Model, "error", err)
+	if err := p.saveOnce(metric); err == nil {
+		return
 	}
+	// One retry after a pause (a database restart, a failover): the row is the only record of the spend. The
+	// wait gives its record slot back, so the rows behind it are not dropped as saturated meanwhile.
+	release()
+	time.Sleep(p.saveRetryDelay)
+	if err := p.saveOnce(metric); err != nil {
+		usageSaveFailedTotal.WithLabelValues("lost").Inc()
+		logger.FromContext(logCtx).Warn("AI usage recording failed twice — the row is lost and the usage views under-count",
+			"provider", p.providerID, "model", metric.Model, "error", err)
+		return
+	}
+	usageSaveFailedTotal.WithLabelValues("retried").Inc()
 }
 
-// usageMetric builds one call's usage row.
-func (p *auditedProvider) usageMetric(modelID, servedModel, orgID string, u usage) interfaces.UsageMetric {
+// saveOnce is one attempt to write metric, on its own bounded context.
+func (p *auditedProvider) saveOnce(metric *interfaces.UsageMetric) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return p.recorder(ctx, metric)
+}
+
+// usageMetric builds one call's usage row for userID and orgID (record resolves both through user).
+func (p *auditedProvider) usageMetric(modelID, servedModel, userID, orgID string, u usage) interfaces.UsageMetric {
 	if orgID == "" {
 		// A chain built from an org's shared credential records the org even when the call carried no org.
 		orgID = p.usageOrg
@@ -447,9 +554,9 @@ func (p *auditedProvider) usageMetric(modelID, servedModel, orgID string, u usag
 
 	metric := interfaces.UsageMetric{
 		ID:     uuid.NewString(),
-		UserID: p.scope,
-		// OrgID is carried on the request, not fixed at construction, so one audited provider attributes
-		// org-scoped and personal usage correctly.
+		UserID: userID,
+		// OrgID is resolved per call (the context's usage scope, else the request's), not fixed at construction,
+		// so one audited provider attributes org-scoped and personal usage correctly.
 		OrgID:    orgID,
 		Provider: p.providerID,
 		Model:    modelID,
@@ -503,9 +610,9 @@ func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32
 	// Embed carries no Request: the model is the embedding model named below, the org the context's.
 	start := time.Now()
 	res, err := p.inner.Embed(ctx, text)
-	observeAIRequest(p.providerID, time.Since(start).Seconds())
+	observeAICall(p.providerID, aiCallEmbed, time.Since(start).Seconds())
 	if err != nil {
-		recordAIError(p.providerID)
+		p.recordFailure(ctx, err)
 		return res, err
 	}
 	// Embedding APIs count INPUT tokens only: estimate the batch's input tokens and record under the embedding
@@ -526,8 +633,7 @@ func (p *auditedProvider) Embed(ctx context.Context, text []string) ([][]float32
 			model = p.inner.DefaultModel()
 		}
 		recordAITokens(p.providerID, tokensIn, 0)
-		_, orgID := p.user(ctx, "")
-		p.record(ctx, model, "", orgID, usage{In: tokensIn})
+		p.record(ctx, model, "", "", usage{In: tokensIn})
 	}
 	return res, err
 }
@@ -548,7 +654,17 @@ func (p *auditedProvider) CountTokens(ctx context.Context, req Request) (int, er
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return p.tokenCounter.CountTokens(ctx, req)
+	// Spanned here: the counter is the raw provider's, outside the traced chain.
+	ctx, span := otel.Tracer("ai-provider").Start(ctx, p.providerID+".CountTokens", trace.WithAttributes(
+		attribute.String("ai.provider", p.providerID), attribute.String("ai.model", req.Model)))
+	defer span.End()
+	n, err := p.tokenCounter.CountTokens(ctx, req)
+	if err != nil {
+		endFailed(span, err)
+		return n, err
+	}
+	span.SetAttributes(attribute.Int("ai.tokens_in", n))
+	return n, nil
 }
 func (p *auditedProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 	p.modelsOnce.Do(func() {

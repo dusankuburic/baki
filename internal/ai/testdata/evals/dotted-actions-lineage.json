@@ -1,0 +1,20 @@
+{
+  "why": "Lists every place a variable is read using get_variable_lineage output; each block link comes from the lineage.",
+  "flow": "dotted_actions",
+  "question": "Where is the Item variable read or assigned?",
+  "expect": {
+    "toolsSubset": [
+      "get_variable_lineage"
+    ],
+    "mustMention": [
+      "B6",
+      "B7",
+      "B8",
+      "B11"
+    ],
+    "mustLink": [
+      "block:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

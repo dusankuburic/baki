@@ -1,0 +1,7 @@
+: hand-built from the Gemini API streamGenerateContent?alt=sse reference (GenerateContentResponse per event), NOT a live capture; see ../README.md
+data: {"candidates": [{"content": {"parts": [{"text": "The flow reads "}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 1290,"candidatesTokenCount": 4,"totalTokenCount": 1294,"cachedContentTokenCount": 1024,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 1290}]},"modelVersion": "gemini-2.5-flash","responseId": "WIREgeminiPlain0001"}
+
+data: {"candidates": [{"content": {"parts": [{"text": "the workbook, then loops "}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 1290,"candidatesTokenCount": 10,"totalTokenCount": 1300,"cachedContentTokenCount": 1024,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 1290}]},"modelVersion": "gemini-2.5-flash","responseId": "WIREgeminiPlain0001"}
+
+data: {"candidates": [{"content": {"parts": [{"text": "over each row — café names included."}],"role": "model"},"finishReason": "STOP","index": 0}],"usageMetadata": {"promptTokenCount": 1290,"candidatesTokenCount": 18,"totalTokenCount": 1308,"cachedContentTokenCount": 1024,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 1290}],"candidatesTokensDetails": [{"modality": "TEXT","tokenCount": 18}]},"modelVersion": "gemini-2.5-flash","responseId": "WIREgeminiPlain0001"}
+

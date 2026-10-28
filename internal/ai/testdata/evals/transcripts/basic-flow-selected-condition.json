@@ -1,0 +1,24 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "text": "Let me trace `ButtonPressed` first.",
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "get_variable_lineage",
+          "input": {
+            "name": "ButtonPressed"
+          }
+        }
+      ],
+      "tokensIn": 2410,
+      "tokensOut": 31
+    },
+    {
+      "text": "\n\n[IF %ButtonPressed% = OK](block:B7) (line 8) branches on the button the user clicked in the first dialog:\n\n- `ButtonPressed` is written by [Show Message Box](block:B2) on line 3 — the lineage shows that single write and the read on line 8, nothing else.\n- When it is `OK`, [Show Message Box](block:B8) on line 9 runs; otherwise the `Else` branch shows a different message.\n\nNote that `FormattedDate`, used by the line 9 message, is never set anywhere in `Main`, so that message will show an empty value.",
+      "tokensIn": 2512,
+      "tokensOut": 142
+    }
+  ]
+}

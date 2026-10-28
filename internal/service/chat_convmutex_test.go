@@ -21,7 +21,7 @@ func (p *panicOnSaveStore) SaveConversation(context.Context, string, string, []s
 	panic("boom: simulated storage failure during persist")
 }
 
-func (p *panicOnSaveStore) SaveConversationIf(context.Context, string, string, int64, []storageif.ChatMessage) (int64, error) {
+func (p *panicOnSaveStore) SaveConversationIf(context.Context, string, string, string, int64, []storageif.ChatMessage) (int64, error) {
 	panic("boom: simulated storage failure during persist")
 }
 

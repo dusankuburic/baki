@@ -50,13 +50,14 @@ interface Props {
   pickerTriggerRef?: React.MutableRefObject<HTMLButtonElement | null>
 }
 
-type DisplayState = 'ready' | 'streaming' | 'connecting' | 'reconnecting'
+type DisplayState = 'ready' | 'streaming' | 'connecting' | 'reconnecting' | 'disconnected'
 
+// Ready only while the live-updates stream is open: a reply needs it. 'idle' is no stream at all.
 function toDisplayState(sse: EventConnectionState, isStreaming?: boolean): DisplayState {
   if (sse === 'reconnecting') return 'reconnecting'
   if (sse === 'connecting') return 'connecting'
   if (sse === 'open') return isStreaming ? 'streaming' : 'ready'
-  return 'ready'
+  return 'disconnected'
 }
 
 function StatusDot({state}: {state: DisplayState}) {
@@ -68,6 +69,7 @@ function StatusDot({state}: {state: DisplayState}) {
         state === 'ready' && 'bg-success',
         state === 'streaming' && 'bg-brand-400 animate-pulse-soft shadow-[0_0_6px_var(--brand-400)]',
         (state === 'connecting' || state === 'reconnecting') && 'bg-warning animate-pulse-soft',
+        state === 'disconnected' && 'bg-semantic-error',
       )}
     />
   )

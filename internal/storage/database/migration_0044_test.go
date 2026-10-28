@@ -114,11 +114,11 @@ func TestMigration0044_TriggerBumpsOnAnySQL(t *testing.T) {
 		t.Fatalf("could not stage a legacy row: version %d", v)
 	}
 	msgs := []interfaces.ChatMessage{{ID: "m9", Role: "user", Content: "after the migration"}}
-	v3, err := b.SaveConversationIf(ctx, "f44", "s", 0, msgs)
+	v3, err := b.SaveConversationIf(ctx, "f44", "s", "", 0, msgs)
 	if err != nil || v3 <= 0 {
 		t.Fatalf("SaveConversationIf(0) of a legacy row = (%d, %v), want a positive version", v3, err)
 	}
-	if _, err := b.SaveConversationIf(ctx, "f44", "s", 0, msgs); err == nil {
+	if _, err := b.SaveConversationIf(ctx, "f44", "s", "", 0, msgs); err == nil {
 		t.Error("a second SaveConversationIf(0) succeeded; the legacy row has a version now")
 	}
 }

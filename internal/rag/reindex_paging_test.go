@@ -286,7 +286,12 @@ func TestEmbeddingFailed_WrapsProviderCause(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrEmbeddingFailed wrapping ai.ErrRateLimited", name, err)
 		}
 	}
-	if len(store.KnowledgeDocs) != 1 {
-		t.Errorf("a failed upload wrote a document: %d docs", len(store.KnowledgeDocs))
+	// The refused upload (its guard sample failed) stored nothing; the one into the empty org stored its document
+	// pending, out of the corpus and resumable, nothing of it embedded (R-knowledge-2).
+	if docs, _ := store.ListKnowledgeDocuments(context.Background(), "org-1", 0, 0); len(docs) != 1 {
+		t.Errorf("an upload refused by its guard wrote a document: %d docs", len(docs))
+	}
+	if docs, _ := store.ListKnowledgeDocuments(context.Background(), "org-empty", 0, 0); len(docs) != 1 || docs[0].State != interfaces.KnowledgeDocumentPending || docs[0].PendingChunks != docs[0].ChunkCount {
+		t.Errorf("the failed upload's document = %+v; want it pending with nothing embedded", docs)
 	}
 }

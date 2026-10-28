@@ -44,14 +44,14 @@ func (f *flakyConvStore) DeleteConversation(_ context.Context, _, _ string) erro
 
 // The versioned methods keep one version that every save moves, so the compare-and-swap path of the service is
 // exercised against the same failing load.
-func (f *flakyConvStore) LoadConversationVersioned(ctx context.Context, flowID, scope string) ([]storageif.ChatMessage, int64, error) {
+func (f *flakyConvStore) LoadConversationVersioned(ctx context.Context, flowID, scope, owner string) ([]storageif.ChatMessage, int64, error) {
 	msgs, err := f.LoadConversation(ctx, flowID, scope)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return msgs, f.version, err
 }
 
-func (f *flakyConvStore) SaveConversationIf(_ context.Context, _, _ string, expected int64, m []storageif.ChatMessage) (int64, error) {
+func (f *flakyConvStore) SaveConversationIf(_ context.Context, _, _, _ string, expected int64, m []storageif.ChatMessage) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if expected != f.version {
@@ -63,8 +63,20 @@ func (f *flakyConvStore) SaveConversationIf(_ context.Context, _, _ string, expe
 	return f.version, nil
 }
 
-func (f *flakyConvStore) DeleteConversationIf(_ context.Context, _, _ string, _ int64) error {
+func (f *flakyConvStore) DeleteConversationIf(_ context.Context, _, _, _ string, _ int64, _ bool) error {
 	return nil
+}
+
+func (f *flakyConvStore) ListConversations(context.Context, string, string, *storageif.PageCursor, int) ([]storageif.ConversationSummary, error) {
+	return nil, nil
+}
+
+func (f *flakyConvStore) SetConversationTitle(context.Context, string, string, string, string) (int64, error) {
+	return 0, nil
+}
+
+func (f *flakyConvStore) IsSharedConversation(context.Context, string, string) (bool, error) {
+	return false, nil
 }
 
 func (f *flakyConvStore) SaveUsageMetric(_ context.Context, _ *storageif.UsageMetric) error {

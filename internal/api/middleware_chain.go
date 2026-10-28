@@ -34,10 +34,12 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 		uploadRl := newRL(cfg.Runtime.RateLimitUploadRPS, cfg.Runtime.RateLimitUploadBurst).SetGroup(route.RateUpload)
 		channelTestRl := newRL(cfg.Runtime.RateLimitChannelTestRPS, cfg.Runtime.RateLimitChannelTestBurst).SetGroup(route.RateChannelTest)
 		avatarRl := newRL(cfg.Runtime.RateLimitAvatarRPS, cfg.Runtime.RateLimitAvatarBurst).SetGroup(route.RateAvatar)
+		controlRl := newRL(cfg.Runtime.RateLimitControlRPS, cfg.Runtime.RateLimitControlBurst).SetGroup(route.RateControl)
+		embedRl := newRL(cfg.Runtime.RateLimitEmbedRPS, cfg.Runtime.RateLimitEmbedBurst).SetGroup(route.RateEmbed)
 		if redisClient != nil {
 			logger.Info("rate limiting: using shared Redis backplane", "url_set", cfg.Redis.URL.IsSet())
 		}
-		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl, channelTestRl, avatarRl)
+		rateLimiters = append(rateLimiters, generalRl, authRl, analysisRl, chatRl, uploadRl, channelTestRl, avatarRl, controlRl, embedRl)
 
 		// Per-user write throttle: one bucket per authenticated user capping their total write volume across endpoints; cloud only (local is single-user and would self-DoS). Installed on the Router; appended to rateLimiters so Stop() runs on shutdown.
 		perUserRl := newRL(cfg.Runtime.RateLimitPerUserRPS, cfg.Runtime.RateLimitPerUserBurst).SetGroup(route.RatePerUser)
@@ -54,6 +56,8 @@ func BuildHandler(router *Router, cfg *config.Config, redisClient *redis.Client)
 			route.RateUpload:      uploadRl,
 			route.RateChannelTest: channelTestRl,
 			route.RateAvatar:      avatarRl,
+			route.RateControl:     controlRl,
+			route.RateEmbed:       embedRl,
 		}
 
 		routerWithLimits = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -188,8 +192,18 @@ func rateLimitGroup(method string, u *url.URL) string {
 		if strings.HasPrefix(path, "/api/analysis/") || path == "/api/integrations/ci" {
 			return rlGroupAnalysis
 		}
-		if path == "/api/chat/stream" {
+		// Billed routes (route.Billed) ride a cost bucket (R-security-c22): a chat turn and the context preview,
+		// whose query embedding is billed, the chat bucket; the knowledge base's bulk embedding, its own.
+		if path == "/api/chat/stream" || path == "/api/chat/preview-context" {
 			return rlGroupChat
+		}
+		if isOrgKnowledgeEmbedPath(path) {
+			return route.RateEmbed
+		}
+		// The stream commands (Stop, an approval decision) reduce spend: a bucket of their own, so the caller's other
+		// traffic never refuses them (R-streaming-c20).
+		if path == "/api/chat/cancel" || path == "/api/chat/fix-decision" {
+			return route.RateControl
 		}
 		// The provider connection test fires up to three billed completions per call — the same spend shape as a chat turn, so it rides the chat bucket; the other provider routes (list, the OAuth device flow) cost no model tokens and stay on general.
 		if path == "/api/providers/test" || isOrgProviderTestPath(path) {
@@ -237,6 +251,17 @@ func azureOutboundRoute(path string) (group string, ok bool) {
 		return rlGroupAnalysis, true
 	}
 	return "", false
+}
+
+// isOrgKnowledgeEmbedPath matches /api/orgs/{id}/knowledge/upload and /api/orgs/{id}/knowledge/reindex (dispatch
+// path): the knowledge base's bulk embedding, on the embed bucket.
+func isOrgKnowledgeEmbedPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/api/orgs/")
+	if !ok {
+		return false
+	}
+	orgID, tail, ok := strings.Cut(rest, "/")
+	return ok && orgID != "" && (tail == "knowledge/upload" || tail == "knowledge/reindex")
 }
 
 // isOrgProviderTestPath matches /api/orgs/{id}/providers/azure-foundry/test (dispatch path): the same billed completions as /api/providers/test, so it shares that chat bucket and the RLS exemption (rlsExemptPath).

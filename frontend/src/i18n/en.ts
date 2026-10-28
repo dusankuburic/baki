@@ -809,12 +809,15 @@ export const chat = {
     dismissBlockLost: 'Dismiss',
     toolActivity: 'AI tool activity',
     conversation: 'Conversation',
+    answerAnnouncement: 'Answer: {{text}}',
     scrollToBottom: 'Scroll to bottom',
   },
   tokens: {
     streamingTitle: 'Counts output tokens as they stream; full input/output totals appear when the response completes.',
     streamingSoFar: '{{formatted}} tokens so far',
-    streamingAria: 'Generating answer — {{count}} output tokens so far',
+    generating: 'Generating answer',
+    replyEnded_one: 'Reply ended, {{count}} output token',
+    replyEnded_other: 'Reply ended, {{count}} output tokens',
     total: '{{formatted}} tokens',
   },
   files: {
@@ -844,6 +847,7 @@ export const chat = {
   templates: {
     ui: {
       heading: 'Templates',
+      explainNamedBlock: 'Explain "{{name}}" in detail',
     },
     categories: {
       explain: 'Explain',
@@ -889,7 +893,7 @@ export const chat = {
     toolsUsed: 'Tools used in this thread',
     close: 'Close thread',
     confirmCloseTitle: 'Close this thread?',
-    confirmClose: "You won't be able to reopen “{{name}}” or its messages.",
+    confirmClose: "“{{name}}” and its messages will be deleted. You won't be able to reopen it.",
     tabTooltip: '{{title}} — {{model}}',
     modelPurpose: '{{model}} · {{purpose}}',
   },
@@ -1073,17 +1077,20 @@ export const chat = {
     cancelled: 'cancelled — generation stopped before you decided',
     applied: 'Fix applied and verified',
     'applied-unresolved': 'Applied, but the finding still appears',
+    'already-resolved': 'Already resolved — nothing was changed',
     declined: 'Declined — nothing was changed',
     timeout: 'No response in time — nothing was changed',
     error: 'Fix failed',
     applying: 'Applying…',
     pending: 'Awaiting decision',
+    unknown: 'Outcome unknown — the response ended while the fix was applied; re-run the analysis to check the flow',
   },
   itemOutcome: {
     applied: 'applied',
     'applied-unresolved': 'still appears',
     error: 'failed',
     'already-resolved': 'already resolved',
+    skipped: 'skipped',
   },
   deviceAuth: {
     visitPrompt: 'To authenticate, visit:',
@@ -1096,6 +1103,8 @@ export const chat = {
     secretStorageUnavailable:
       'Signed in, but the token could not be stored: secret storage is unavailable on this device — start again once it is.',
     tokenNotStored: 'Signed in, but the token could not be stored — start again.',
+    tokenUnreadable:
+      "Your earlier sign-in can't be read: the server's encryption key has changed since. Sign in again to use this provider.",
     connectedAs: 'Connected as @{{username}}',
     disconnect: 'Disconnect',
     retry: 'Retry',
@@ -1107,8 +1116,26 @@ export const chat = {
     inputAria: 'Message the assistant',
     placeholder: 'Ask anything…',
     queuePlaceholder: 'Reply streaming — type and press Enter to queue your next message…',
-    cancelQueued: 'Cancel queued message',
-    queuedPrefix: 'Queued — sends when the reply finishes:',
+    cancelQueued: 'Cancel queued message: {{text}}',
+    queuedCount: '{{count}} queued',
+    queuedHint: 'each sends when the reply before it finishes; not kept if you reload',
+    queuePaused: {
+      error: 'Paused: the last reply failed',
+      stopped: 'Paused: you stopped the reply',
+      refused: 'Paused: the next message could not be sent',
+    },
+    queueSendNext: 'Send next',
+    queueRefusedTitle: 'Your queued message was not sent',
+    queueRefusedBody: 'It is still first in the queue. Choose Send next to try again.',
+    queueNeedsText: 'Add a question to queue with the files',
+    queueNeedsTextBody: 'A queued message needs text; the tagged files are sent with it.',
+    toolsTurnedOn: 'Tools turned on for this chat',
+    toolsTurnedOnBody: 'This prompt looks things up in the flow. Switch tools off again from the chat menu.',
+    queuedListAria: 'Queued messages',
+    queueFullTitle: 'Queue full',
+    queueFullBody: 'Up to {{count}} messages can wait for the reply. Cancel one, or send this after the reply.',
+    toolsOffHint: 'Tools are off: answers rely on a summary of the flow and cannot look up other blocks.',
+    toolsOffAction: 'Turn on tools',
     previewContext: 'Preview context',
     expandEditor: 'Expand editor',
     stopGeneration: 'Stop generation',
@@ -1144,6 +1171,13 @@ export const chat = {
     removedModel: 'removed model',
     omitted: 'Earlier turns omitted ({{count}})',
     compact: 'Compact',
+    knowledge: {
+      identityMismatch:
+        "Your organisation's guidelines were not used: its knowledge base was indexed with a different embedding model than yours. An org admin can re-index it, or the operator can set PAD_EMBEDDING_PROVIDER so everyone embeds with the org's key.",
+      noEmbedder:
+        "Your organisation's guidelines were not used: no embedding provider is available to you. Add a key for the org's embedding provider, or ask the operator to set PAD_EMBEDDING_PROVIDER.",
+      deadline: "Your organisation's guidelines were not used: the knowledge base did not answer in time.",
+    },
     externalLink: 'External link — click to show where it goes: {{url}}',
   },
   fixCard: {
@@ -1157,6 +1191,8 @@ export const chat = {
     expiring: 'expiring…',
     decisionFailed: "Couldn't send your decision — try again.",
     decisionUnreachable: "Couldn't reach the server running this response, so your decision wasn't sent.",
+    decisionRestarting: 'The server is restarting, so nothing was applied — send your decision again in a moment.',
+    decisionRateLimited: 'The server is busy, so your decision was not sent. Send it again in a moment.',
     decisionRetry: 'Try again',
     readOnly: "This flow is read-only, so the change can't be applied.",
     aria: 'Proposed fix: {{fixType}}',
@@ -1176,6 +1212,7 @@ export const chat = {
       applying: 'Applying the fix…',
       applied: 'Fix applied and verified.',
       'applied-unresolved': 'Applied, but the finding still appears — review recommended.',
+      'already-resolved': 'Already resolved — nothing was changed.',
       declined: 'Declined — nothing was changed.',
       timeout: 'No response in time — nothing was changed.',
       error: 'Fix failed.',
@@ -1186,6 +1223,7 @@ export const chat = {
       'applied-unresolved': 'applied — still appears',
       error: 'failed',
       'already-resolved': 'already resolved',
+      skipped: 'skipped — not applied',
     },
   },
   approvalCard: {
@@ -1206,16 +1244,19 @@ export const chat = {
       applying: 'Running…',
       applied: 'Done.',
       'applied-unresolved': 'Done — review recommended.',
+      'already-resolved': 'Already done — nothing was changed.',
       declined: 'Dismissed — nothing was changed.',
       timeout: 'No response in time — nothing was changed.',
       error: 'Failed.',
       cancelled: 'Cancelled — nothing was changed.',
+      unknown: 'Outcome unknown — the response ended while it ran.',
     },
     itemStatus: {
       applied: 'done',
       'applied-unresolved': 'done — review recommended',
       error: 'failed',
       'already-resolved': 'already done',
+      skipped: 'skipped',
     },
   },
   welcome: {
@@ -1251,12 +1292,18 @@ export const chat = {
     modelNotAvailableSend: 'Your message is back in the composer. Choose another model to send it.',
     modelNotAvailableResend: 'Nothing was sent, and the last answer is kept. Choose another model, then try again.',
     chooseModel: 'Choose another model',
+    contextLimitHint:
+      'Compact the conversation if its history is long; if this question alone is too large, narrow the question or the flow context it is about.',
+    toolLoopLimitHint:
+      'The assistant used all of its steps on this question. Ask a narrower question, or ask it to continue from where it stopped.',
     previewModelNotAvailable: "This chat's model is no longer available — your message wasn't sent.",
     openSettings: 'Open settings',
     stalled: 'The response stalled — the connection to the backend may have been lost.',
     serverRestarting: 'The server restarted — sending your message again',
     serverRestarted: 'The server restarted before this answer finished — use Retry to send it again.',
+    backendRestarted: 'The backend restarted while this answer was being written — use Retry to send it again.',
     stopUnreachable: "Couldn't stop the response",
+    stopRateLimitedBody: 'The server is busy and refused the stop. It will stop on its own, or you can try again.',
     stopUnreachableBody:
       'It runs on another server that did not answer. It will stop on its own, or you can try again.',
     stopRetry: 'Try again',
@@ -1267,6 +1314,12 @@ export const chat = {
     saveFailed: "Couldn't save this conversation",
     saveFailedBody: 'Recent messages may be missing after a reload.',
     clearFailed: "Couldn't clear the conversation — nothing was deleted.",
+    threadUnowned:
+      'This conversation was stored before conversations had owners, so only someone who can delete the flow can delete it: it stays on the server. It was removed from your list.',
+    threadUnownedCleared:
+      'This conversation was stored before conversations had owners, so only someone who can delete the flow can delete it: it stays on the server. Your thread starts afresh.',
+    threadRekeyed:
+      "This thread's id belonged to another user's conversation, so it continues under a new id. Your messages are kept.",
     compactFailed: "Couldn't compact the conversation — nothing was changed.",
     changedElsewhere:
       'This conversation changed in another tab or session, so it was reloaded. Nothing was changed; try again.',
@@ -1287,6 +1340,7 @@ export const chat = {
     streaming: 'Streaming',
     connecting: 'Connecting...',
     reconnecting: 'Reconnecting...',
+    disconnected: 'Disconnected',
   },
 }
 

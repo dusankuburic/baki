@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"pad-core/cache"
 	"pad-core/logger"
 )
 
@@ -43,16 +44,37 @@ const (
 	azureProjectMaxBody = 4 << 20
 )
 
-// projectExtras merges the project deployments listing into the document's deployments and appends the
-// project's agents, reporting completeness. Everything is best effort: a definitive refusal (403, a 401 that
-// survived a fresh token, 404, 400) leaves the document's deployments and counts as COMPLETE — not re-requested
-// every turn; a transient failure returns what is known as incomplete (served briefly, azureModelsRetryAfter).
-// The two paginated listings run concurrently; a deployments failure that makes the agents call pointless
-// (unobtainable token, 429 — the agents route shares its quota) cancels the agents fetch.
+// azureProjectListing is one project listing attempt: the listing, and what of it the project answered.
+type azureProjectListing struct {
+	models []ModelInfo
+	// deployments, agents: that listing answered in full, or with a definitive refusal (403, a 401 that survived
+	// a fresh token, 404, 400) — an answer, not re-requested every turn. Both: the listing is complete.
+	deployments, agents bool
+	// retryAfter is the longest back-off a throttled listing asked for (0: none).
+	retryAfter time.Duration
+}
+
+func (l azureProjectListing) complete() bool { return l.deployments && l.agents }
+
+// projectExtras is projectExtrasListing's listing and whether it is complete.
 func (p *AzureFoundryProvider) projectExtras(ctx context.Context, models []ModelInfo) ([]ModelInfo, bool) {
+	l := p.projectExtrasListing(ctx, models)
+	return l.models, l.complete()
+}
+
+// projectExtrasListing merges the project deployments listing into the document's deployments and appends the
+// project's agents. Everything is best effort: a definitive refusal leaves the document's deployments and counts
+// as answered; a transient failure returns what is known — the deployments pages read before it included — as
+// incomplete (storeAzureListing decides what is cached). The two paginated listings run concurrently, each on
+// its own context under ctx's deadline (the flight's budget), so neither listing's failure ends the other; a
+// deployments failure that makes the agents call pointless (unobtainable token, 429 — the agents route shares
+// its quota) cancels the agents fetch.
+func (p *AzureFoundryProvider) projectExtrasListing(ctx context.Context, models []ModelInfo) azureProjectListing {
 	if !p.cfg.listsProjectDeployments() {
-		return models, true
+		return azureProjectListing{models: models, deployments: true, agents: true}
 	}
+	dctx, cancelDeployments := context.WithCancel(ctx)
+	defer cancelDeployments()
 	actx, cancelAgents := context.WithCancel(ctx)
 	defer cancelAgents()
 	var (
@@ -65,7 +87,7 @@ func (p *AzureFoundryProvider) projectExtras(ctx context.Context, models []Model
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		deployments, depErr = p.fetchProjectDeployments(ctx)
+		deployments, depErr = p.fetchProjectDeployments(dctx)
 		if depErr != nil && (errors.Is(depErr, errEntraToken) || errors.Is(depErr, ErrRateLimited)) {
 			cancelAgents()
 		}
@@ -76,31 +98,49 @@ func (p *AzureFoundryProvider) projectExtras(ctx context.Context, models []Model
 	}()
 	wg.Wait()
 
-	complete := true
+	out := azureProjectListing{retryAfter: max(projectRetryAfter(depErr), projectRetryAfter(agentsErr))}
 	var deployedModels map[string]string
+	if len(deployments) > 0 {
+		// Every page, or the pages read before a failure: the best decorations known for those deployments.
+		models = p.mergeProjectDeployments(ctx, models, deployments)
+		deployedModels = deployedModelNames(deployments)
+	}
 	switch {
 	case depErr == nil:
-		models = p.mergeProjectDeployments(models, deployments)
-		deployedModels = deployedModelNames(deployments)
-	case errors.Is(depErr, errEntraToken) || ctx.Err() != nil:
-		logger.Warn("azure ai foundry: project deployments unavailable; skipping the agents", "error", depErr)
-		return models, false
+		out.deployments = true
+	case errors.Is(depErr, errEntraToken):
+		logger.FromContext(ctx).Warn("azure ai foundry: project deployments unavailable; skipping the agents", "error", depErr)
+		out.models = models
+		return out
 	case errors.Is(depErr, ErrApiKeyInvalid) && definitiveProjectFailure(depErr):
 		// A fresh token was refused too: the principal has no role on the project, and the agents route too.
-		logger.Warn("azure ai foundry: project not accessible to the entra id principal; listing the configured deployments only", "error", depErr)
-		return models, true
+		logger.FromContext(ctx).Warn("azure ai foundry: project not accessible to the entra id principal; listing the configured deployments only", "error", depErr)
+		out.models, out.deployments, out.agents = models, true, true
+		return out
 	case errors.Is(depErr, ErrRateLimited):
-		logger.Warn("azure ai foundry: project deployments throttled; the agents listing was abandoned", "error", depErr)
-		return models, false
+		logger.FromContext(ctx).Warn("azure ai foundry: project deployments throttled; the agents listing was abandoned", "error", depErr)
+		out.models = models
+		return out
 	default:
-		logger.Warn("azure ai foundry: project deployments unavailable", "error", depErr)
-		complete = definitiveProjectFailure(depErr)
+		logger.FromContext(ctx).Warn("azure ai foundry: project deployments unavailable", "error", depErr, "listed", len(deployments))
+		out.deployments = definitiveProjectFailure(depErr)
 	}
 	if agentsErr != nil {
-		logger.Warn("azure ai foundry: project agents unavailable", "error", agentsErr)
-		return models, complete && definitiveProjectFailure(agentsErr) && ctx.Err() == nil
+		logger.FromContext(ctx).Warn("azure ai foundry: project agents unavailable", "error", agentsErr)
+		out.models, out.agents = models, definitiveProjectFailure(agentsErr)
+		return out
 	}
-	return append(models, p.agentModels(agents, deployedModels)...), complete && ctx.Err() == nil
+	out.models, out.agents = append(models, p.agentModels(agents, deployedModels)...), true
+	return out
+}
+
+// projectRetryAfter is the back-off a throttled project listing asked for (0: none, or not throttled).
+func projectRetryAfter(err error) time.Duration {
+	var rl *RateLimitError
+	if errors.As(err, &rl) {
+		return rl.RetryAfter
+	}
+	return 0
 }
 
 // deployedModelNames maps each listed deployment (lower-cased name) to the model it serves.
@@ -117,7 +157,7 @@ func deployedModelNames(deployments []projectDeployment) map[string]string {
 // mergeProjectDeployments applies the project listing to the document's entries (the model behind each one,
 // the embedding flag) and appends the project's other deployments in listing order. A deployment the listing
 // reports as Anthropic-published is a Claude deployment, listed under its "claude:<name>" id.
-func (p *AzureFoundryProvider) mergeProjectDeployments(models []ModelInfo, deployments []projectDeployment) []ModelInfo {
+func (p *AzureFoundryProvider) mergeProjectDeployments(ctx context.Context, models []ModelInfo, deployments []projectDeployment) []ModelInfo {
 	byID := make(map[string]projectDeployment, len(deployments))
 	for _, d := range deployments {
 		byID[strings.ToLower(d.listingID())] = d
@@ -128,7 +168,7 @@ func (p *AzureFoundryProvider) mergeProjectDeployments(models []ModelInfo, deplo
 		d, ok := byID[key]
 		if !ok && !models[i].Embedding && !IsClaudeModel(models[i].ID) {
 			if cd, isClaude := byID[claudeModelPrefix+key]; isClaude {
-				logger.Debug("azure ai foundry: deployment is Anthropic-published; listing it as a Claude deployment", "deployment", cd.name)
+				logger.FromContext(ctx).Debug("azure ai foundry: deployment is Anthropic-published; listing it as a Claude deployment", "deployment", cd.name)
 				seen[key] = true
 				models[i] = claudeDeploymentEntry(cd.name)
 				key, d, ok = strings.ToLower(models[i].ID), cd, true
@@ -194,7 +234,8 @@ func (d projectDeployment) listingID() string {
 }
 
 // fetchProjectDeployments calls GET {project}/deployments?api-version=v1 and
-// returns the deployments in listing order, deduplicated by lower-cased name.
+// returns the deployments in listing order, deduplicated by lower-cased name. On an error it returns the
+// deployments of the pages read before it, with the error: the caller decides what a partial listing is worth.
 func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]projectDeployment, error) {
 	var out []projectDeployment
 	seen := map[string]bool{}
@@ -202,7 +243,7 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 	for page := 0; next != "" && page < azureProjectMaxPages; page++ {
 		body, err := p.projectGET(ctx, next)
 		if err != nil {
-			return nil, err
+			return out, err
 		}
 		// Each item is decoded on its own: an undecodable one costs that entry, not the whole page (which used
 		// to make the listing incomplete, hence uncached and re-fetched every turn).
@@ -211,7 +252,7 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 			NextLink string            `json:"nextLink"`
 		}
 		if err := json.Unmarshal(body, &parsed); err != nil {
-			return nil, fmt.Errorf("parse deployments: %w", err)
+			return out, fmt.Errorf("parse deployments: %w", err)
 		}
 		for _, raw := range parsed.Value {
 			var d struct {
@@ -223,7 +264,7 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 				Capabilities   map[string]any `json:"capabilities"`
 			}
 			if err := json.Unmarshal(raw, &d); err != nil {
-				logger.Debug("azure ai foundry: skipping undecodable project deployment item", "error", err)
+				logger.FromContext(ctx).Debug("azure ai foundry: skipping undecodable project deployment item", "error", err)
 				continue
 			}
 			name := strings.TrimSpace(d.Name)
@@ -233,7 +274,7 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 			if conn := strings.TrimSpace(d.ConnectionName); conn != "" {
 				// A deployment that comes from a project CONNECTION (an AI gateway / external model endpoint) is
 				// reachable through that connection only — /openai/v1 answers 404 for its name.
-				logger.Debug("azure ai foundry: skipping a connection deployment not callable on /openai/v1",
+				logger.FromContext(ctx).Debug("azure ai foundry: skipping a connection deployment not callable on /openai/v1",
 					"deployment", name, "connection", conn)
 				continue
 			}
@@ -244,11 +285,11 @@ func (p *AzureFoundryProvider) fetchProjectDeployments(ctx context.Context) ([]p
 				(capabilityTrue(d.Capabilities, "embeddings") && !capabilityTrue(d.Capabilities, "chat_completion")))
 			out = append(out, projectDeployment{name: name, modelName: modelName, embedding: embedding, claude: claude})
 		}
-		next = p.sameProjectHost(parsed.NextLink)
+		next = p.sameProjectHost(ctx, parsed.NextLink)
 	}
 	if next != "" {
 		// The listing was cut by the page cap with more pages pending — say so, or a missing deployment looks like a merge bug.
-		logger.Warn("azure ai foundry: project deployments listing stopped at the page cap; deployments beyond it are not listed",
+		logger.FromContext(ctx).Warn("azure ai foundry: project deployments listing stopped at the page cap; deployments beyond it are not listed",
 			"pages", azureProjectMaxPages, "listed", len(out))
 	}
 	return out, nil
@@ -356,7 +397,7 @@ func (p *AzureFoundryProvider) fetchAgentsReport(ctx context.Context) ([]azureAg
 			// Per item, as for deployments: one agent of an unexpected shape must not make the whole listing incomplete.
 			var a azureAgent
 			if err := json.Unmarshal(raw, &a); err != nil {
-				logger.Debug("azure ai foundry: skipping undecodable project agent item", "error", err)
+				logger.FromContext(ctx).Debug("azure ai foundry: skipping undecodable project agent item", "error", err)
 				continue
 			}
 			name := a.label()
@@ -364,12 +405,12 @@ func (p *AzureFoundryProvider) fetchAgentsReport(ctx context.Context) ([]azureAg
 				continue
 			}
 			if !a.runsViaAgentReference() {
-				logger.Debug("azure ai foundry: skipping agent not callable via agent_reference", "agent", name, "kind", a.kind())
+				logger.FromContext(ctx).Debug("azure ai foundry: skipping agent not callable via agent_reference", "agent", name, "kind", a.kind())
 				report.skipped++
 				continue
 			}
 			if !a.usable() {
-				logger.Debug("azure ai foundry: skipping an agent that is disabled or whose latest version is not active",
+				logger.FromContext(ctx).Debug("azure ai foundry: skipping an agent that is disabled or whose latest version is not active",
 					"agent", name, "state", a.State, "status", a.Versions.Latest.Status)
 				report.skipped++
 				continue
@@ -384,7 +425,7 @@ func (p *AzureFoundryProvider) fetchAgentsReport(ctx context.Context) ([]azureAg
 		}
 		switch {
 		case parsed.NextLink != "":
-			next = p.sameProjectHost(parsed.NextLink)
+			next = p.sameProjectHost(ctx, parsed.NextLink)
 		case parsed.HasMore && parsed.LastID != "":
 			next = p.cfg.ProjectEndpoint + "/agents?api-version=" + azureProjectAPIVersion + "&limit=" + strconv.Itoa(azureProjectAgentsPageSize) + "&after=" + url.QueryEscape(parsed.LastID)
 		default:
@@ -393,11 +434,11 @@ func (p *AzureFoundryProvider) fetchAgentsReport(ctx context.Context) ([]azureAg
 	}
 	// Both caps truncate silently otherwise; a missing agent in the picker then looks like a merge bug.
 	if next != "" {
-		logger.Warn("azure ai foundry: project agents listing stopped at the page cap; agents beyond it are not listed",
+		logger.FromContext(ctx).Warn("azure ai foundry: project agents listing stopped at the page cap; agents beyond it are not listed",
 			"pages", azureProjectMaxPages, "listed", len(out))
 	}
 	if len(out) >= azureProjectMaxAgents {
-		logger.Warn("azure ai foundry: project agents listing stopped at the agent cap; agents beyond it are not listed",
+		logger.FromContext(ctx).Warn("azure ai foundry: project agents listing stopped at the agent cap; agents beyond it are not listed",
 			"cap", azureProjectMaxAgents)
 	}
 	report.truncated = next != "" || len(out) >= azureProjectMaxAgents
@@ -519,57 +560,43 @@ const (
 
 // agentKinds remembers each listed agent's kind per project (the listing is the only place it is reported), so
 // the chat path sends the workflow opt-in header without a listing call. Bounded; keyed by project + agent name.
-var agentKinds = struct {
-	sync.Mutex
-	m map[string]agentKindEntry
-}{m: map[string]agentKindEntry{}}
+var agentKinds = cache.New[agentKindEntry](agentKindsSpec, servedMemoMax, cache.WithMaxEntries(servedMemoMax), cache.WithTTL(servedMemoTTL))
 
 type agentKindEntry struct {
 	kind string
 	seen time.Time
 }
 
-func agentKindKey(project, name string) string {
-	return project + "\x00" + strings.ToLower(name)
+func agentKindKey(project, name string) cache.Key {
+	return memoKey(agentKindsSpec, project+"\x00"+strings.ToLower(name))
 }
 
 // rememberAgentKind records a listed agent's kind ("" forgets it).
 func rememberAgentKind(project, name, kind string) {
 	key := agentKindKey(project, name)
-	agentKinds.Lock()
-	defer agentKinds.Unlock()
 	if kind == "" {
-		delete(agentKinds.m, key)
+		agentKinds.Delete(key)
 		return
 	}
-	if len(agentKinds.m) >= servedMemoMax {
-		agentKinds.m = map[string]agentKindEntry{}
-	}
-	agentKinds.m[key] = agentKindEntry{kind: kind, seen: time.Now()}
+	agentKinds.Set(key, agentKindEntry{kind: kind, seen: time.Now()}, 1, 0)
 }
 
 // agentKindFor returns the remembered kind of an agent, "" when unknown.
 func agentKindFor(project, name string) string {
 	key := agentKindKey(project, name)
-	agentKinds.Lock()
-	defer agentKinds.Unlock()
-	e, ok := agentKinds.m[key]
+	e, ok := agentKinds.Get(key)
 	if !ok {
 		return ""
 	}
 	if time.Since(e.seen) > servedMemoTTL {
-		delete(agentKinds.m, key)
+		agentKinds.Delete(key)
 		return ""
 	}
 	return e.kind
 }
 
 // resetAgentKinds clears the memo (tests, ResetAzureFoundryCaches).
-func resetAgentKinds() {
-	agentKinds.Lock()
-	agentKinds.m = map[string]agentKindEntry{}
-	agentKinds.Unlock()
-}
+func resetAgentKinds() { agentKinds.Clear() }
 
 // deploymentModelResolver maps a deployment name to the model the cached project listing says it serves: an
 // agent run's response.model is the agent's DEPLOYMENT — a custom name prices at $0 and teaches the memo
@@ -609,7 +636,7 @@ func (a azureAgent) model() string {
 
 // sameProjectHost accepts a continuation link only when it stays on the configured project host — a listing
 // must not redirect the credential elsewhere; a rejected link is logged (dropping it silently truncated listings).
-func (p *AzureFoundryProvider) sameProjectHost(link string) string {
+func (p *AzureFoundryProvider) sameProjectHost(ctx context.Context, link string) string {
 	link = strings.TrimSpace(link)
 	if link == "" {
 		return ""
@@ -617,7 +644,7 @@ func (p *AzureFoundryProvider) sameProjectHost(link string) string {
 	u, err := url.Parse(link)
 	base, baseErr := url.Parse(p.cfg.ProjectEndpoint)
 	if err != nil || baseErr != nil || !strings.EqualFold(u.Host, base.Host) || u.Scheme != "https" {
-		logger.Warn("azure ai foundry: rejected a listing continuation link that does not stay on the project host; the listing ends here",
+		logger.FromContext(ctx).Warn("azure ai foundry: rejected a listing continuation link that does not stay on the project host; the listing ends here",
 			"link", oneLine(link, 200), "project_host", base.Host)
 		return ""
 	}
@@ -661,7 +688,7 @@ func (p *AzureFoundryProvider) projectGETOnce(ctx context.Context, rawURL string
 	if err := p.authorize(ctx, req); err != nil {
 		return nil, err
 	}
-	resp, err := p.client.Do(req)
+	resp, err := doProviderRequest(p.client, req)
 	if err != nil {
 		return nil, err
 	}

@@ -1,0 +1,15 @@
+: hand-built: a leading <think> block inside content, tags split across deltas, as DeepSeek-R1 distills stream it without a reasoning parser, NOT a live capture; see ../README.md
+data: {"id":"chatcmpl-WIRE0000000000000000000000008","object":"chat.completion.chunk","created":1761523207,"model":"deepseek-r1-distill-qwen-32b","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000008","object":"chat.completion.chunk","created":1761523207,"model":"deepseek-r1-distill-qwen-32b","choices":[{"index":0,"delta":{"content":"<thi"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000008","object":"chat.completion.chunk","created":1761523207,"model":"deepseek-r1-distill-qwen-32b","choices":[{"index":0,"delta":{"content":"nk>\nBlock 14 compares LoopIndex."},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000008","object":"chat.completion.chunk","created":1761523207,"model":"deepseek-r1-distill-qwen-32b","choices":[{"index":0,"delta":{"content":"\n</th"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000008","object":"chat.completion.chunk","created":1761523207,"model":"deepseek-r1-distill-qwen-32b","choices":[{"index":0,"delta":{"content":"ink>\n\nYes, it exits."},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000008","object":"chat.completion.chunk","created":1761523207,"model":"deepseek-r1-distill-qwen-32b","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160}}
+
+data: [DONE]
+

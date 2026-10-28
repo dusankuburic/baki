@@ -1,0 +1,11 @@
+{
+  "data": {
+    "durationMs": 1,
+    "label": "Listing findings",
+    "name": "list_findings",
+    "ok": true,
+    "summary": "4 finding(s) (showing 1-4 of 4):"
+  },
+  "streamId": "stream-1",
+  "type": "tool_result"
+}

@@ -1,6 +1,8 @@
 import {describe, it, expect} from 'vitest'
 import {
+  CHAT_ERROR_CODES,
   classifyChatFailure,
+  chatErrorGuidance,
   providerErrorInfo,
   isStreamGone,
   isReplicaUnreachable,
@@ -29,6 +31,16 @@ describe('classifyChatFailure', () => {
     expect(classifyChatFailure('the server is restarting', 'SERVER_RESTARTING')).toBe('serverRestarting')
     expect(classifyChatFailure('the server is restarting')).toBe('generic')
     expect(classifyChatFailure('lost', 'STREAM_INTERRUPTED')).toBe('generic')
+  })
+
+  it('shows the watchdog codes as generic failures with the server copy and Retry (R-streaming-10)', () => {
+    expect(CHAT_ERROR_CODES.idleTimeout).toBe('STREAM_IDLE_TIMEOUT')
+    expect(CHAT_ERROR_CODES.clientGone).toBe('STREAM_CLIENT_GONE')
+    for (const code of [CHAT_ERROR_CODES.idleTimeout, CHAT_ERROR_CODES.clientGone]) {
+      expect(classifyChatFailure('response stopped: setting up the response took too long', code)).toBe('generic')
+      expect(chatErrorGuidance(code)).toBeNull()
+      expect(providerErrorInfo(code)).toBeNull()
+    }
   })
 })
 
@@ -133,5 +145,26 @@ describe('isReplicaUnreachable', () => {
     expect(isReplicaUnreachable({status: 503})).toBe(false)
     expect(isReplicaUnreachable(new Error('REPLICA_UNREACHABLE'))).toBe(false)
     expect(isReplicaUnreachable(null)).toBe(false)
+  })
+})
+
+// R-provider-16: the codes the server sends that are not provider errors get their own remedy.
+describe('chatErrorGuidance', () => {
+  it('offers Compact and a hint beside Retry for a context overflow', () => {
+    expect(chatErrorGuidance('CONTEXT_LIMIT')).toEqual({
+      action: 'compact',
+      hintKey: 'errors.contextLimitHint',
+      hideRetry: false,
+    })
+  })
+
+  it('adds a hint to a step-limit failure and keeps Retry', () => {
+    expect(chatErrorGuidance('TOOL_LOOP_LIMIT')).toEqual({hintKey: 'errors.toolLoopLimitHint', hideRetry: false})
+  })
+
+  it('leaves the plain Retry for the rest', () => {
+    for (const code of ['STREAM_TIMEOUT', 'PROVIDER_RATE_LIMITED', 'PROVIDER_AUTH', undefined, null, 'SOMETHING_NEW']) {
+      expect(chatErrorGuidance(code)).toBeNull()
+    }
   })
 })

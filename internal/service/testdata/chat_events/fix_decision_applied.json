@@ -1,0 +1,9 @@
+{
+  "data": {
+    "message": "the finding no longer appears after re-analysis (flow now has 0 findings). The flow was re-parsed: ALL block IDs have changed — call list_findings again before referencing any block",
+    "proposalId": "proposal-1",
+    "status": "applied"
+  },
+  "streamId": "stream-1",
+  "type": "fix_decision"
+}

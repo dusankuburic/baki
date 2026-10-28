@@ -41,18 +41,25 @@ type settingsScope struct {
 	// lockParentSQL locks the scope's owner row (the user or the organisation) the way a delete of it does, "" for
 	// the deployment.
 	lockParentSQL string
+	// lockOwnerForWriteSQL locks the owner row FOR NO KEY UPDATE for a locked read-modify-write
+	// (updateSettingsDocWith), "" for the deployment; lockLegacySQL locks the blob row, when there is one.
+	lockOwnerForWriteSQL string
+	lockLegacySQL        string
 }
 
 func newSettingsScope(name, table, keyColumn, parent string, defaults func() (*interfaces.AppSettings, error), legacyKey func(string) any) settingsScope {
-	lockParent := ""
+	lockParent, lockOwnerForWrite := "", ""
 	if parent != "" {
 		lockParent = fmt.Sprintf(`SELECT 1 FROM %s WHERE id = $1 FOR KEY SHARE`, parent)
+		lockOwnerForWrite = fmt.Sprintf(`SELECT 1 FROM %s WHERE id = $1 FOR NO KEY UPDATE`, parent)
 	}
 	return settingsScope{
-		name:          name,
-		defaults:      defaults,
-		legacyKey:     legacyKey,
-		lockParentSQL: lockParent,
+		name:                 name,
+		defaults:             defaults,
+		legacyKey:            legacyKey,
+		lockParentSQL:        lockParent,
+		lockOwnerForWriteSQL: lockOwnerForWrite,
+		lockLegacySQL:        fmt.Sprintf(`SELECT 1 FROM %s WHERE %s = $1 FOR UPDATE`, table, keyColumn),
 		// One statement, so the blob and the section rows come from one snapshot. The blob is the row whose
 		// section is NULL. A section row the blob no longer matches is left out: the blob's section is newer. The
 		// fields only that row holds are not lost, the next write merges onto it.
@@ -128,6 +135,43 @@ func (b *PostgresStorageBackend) LoadOrgSettings(ctx context.Context, orgID stri
 	return b.loadSettingsDoc(ctx, orgSettingsScope, orgID)
 }
 
+// UpdateOrgSettingsWith is the organisation document's locked read-modify-write (updateSettingsDocWith), the
+// section-level settings write's storage (R-config-4).
+func (b *PostgresStorageBackend) UpdateOrgSettingsWith(ctx context.Context, orgID string, mutate func(*interfaces.AppSettings) error) error {
+	return b.updateSettingsDocWith(ctx, orgSettingsScope, orgID, mutate)
+}
+
+// updateSettingsDocWith reads the document under its rows' locks, hands it to mutate and writes what mutate leaves
+// with saveSettingsDoc's statements, in one transaction (the request's when one is open). Its writers take the owner
+// row FOR NO KEY UPDATE, on which they conflict with each other and with the owner's deletion, but not with the
+// FOR KEY SHARE of a plain save or of a foreign-key check: that lock is what serialises two first writes of a
+// document that has no rows yet. Then the blob row and the section rows FOR UPDATE, in the order every save takes
+// them, so a plain save in flight is waited for too. The read comes after the locks, so it sees the last committed
+// write. An error from mutate writes nothing.
+func (b *PostgresStorageBackend) updateSettingsDocWith(ctx context.Context, sc settingsScope, id string, mutate func(*interfaces.AppSettings) error) error {
+	return b.withTx(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		if sc.lockOwnerForWriteSQL != "" {
+			if _, err := tx.ExecContext(txCtx, sc.lockOwnerForWriteSQL, id); err != nil {
+				return fmt.Errorf("lock %s settings owner: %w", sc.name, err)
+			}
+		}
+		if _, err := tx.ExecContext(txCtx, sc.lockLegacySQL, sc.legacyKey(id)); err != nil {
+			return fmt.Errorf("lock %s settings: %w", sc.name, err)
+		}
+		if _, err := lockSettingsSections(txCtx, tx, sc, id); err != nil {
+			return err
+		}
+		doc, err := b.loadSettingsDoc(txCtx, sc, id)
+		if err != nil {
+			return err
+		}
+		if err := mutate(doc); err != nil {
+			return err
+		}
+		return b.saveSettingsDocTx(txCtx, tx, sc, id, doc)
+	})
+}
+
 func (b *PostgresStorageBackend) sections() *settingsdoc.Registry {
 	if b.settingsSections != nil {
 		return b.settingsSections
@@ -138,48 +182,53 @@ func (b *PostgresStorageBackend) sections() *settingsdoc.Registry {
 // saveSettingsDoc writes the document's sections, each merged onto its stored row (settingsdoc.Encode), and the
 // legacy blob exactly as the release before wrote it.
 func (b *PostgresStorageBackend) saveSettingsDoc(ctx context.Context, sc settingsScope, id string, settings *interfaces.AppSettings) error {
+	return b.withTx(ctx, func(txCtx context.Context, tx *sql.Tx) error {
+		return b.saveSettingsDocTx(txCtx, tx, sc, id, settings)
+	})
+}
+
+// saveSettingsDocTx is saveSettingsDoc's write inside tx.
+func (b *PostgresStorageBackend) saveSettingsDocTx(txCtx context.Context, tx *sql.Tx, sc settingsScope, id string, settings *interfaces.AppSettings) error {
 	blob, err := json.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("marshal %s settings: %w", sc.name, err)
 	}
-	return b.withTx(ctx, func(txCtx context.Context, tx *sql.Tx) error {
-		// The owner row, the blob row, then the section rows: the order in which deleting the user or organisation
-		// locks them (its own row, then the cascade). A save that inserted a section row while holding the blob
-		// row waited on the owner row for the foreign key check, which the delete held while it waited on the
-		// blob: a deadlock, as was locking the sections first.
-		if sc.lockParentSQL != "" {
-			if _, err := tx.ExecContext(txCtx, sc.lockParentSQL, id); err != nil {
-				return fmt.Errorf("lock %s settings owner: %w", sc.name, err)
-			}
+	// The owner row, the blob row, then the section rows: the order in which deleting the user or organisation
+	// locks them (its own row, then the cascade). A save that inserted a section row while holding the blob
+	// row waited on the owner row for the foreign key check, which the delete held while it waited on the
+	// blob: a deadlock, as was locking the sections first.
+	if sc.lockParentSQL != "" {
+		if _, err := tx.ExecContext(txCtx, sc.lockParentSQL, id); err != nil {
+			return fmt.Errorf("lock %s settings owner: %w", sc.name, err)
 		}
-		now := time.Now().UTC()
-		if _, err := tx.ExecContext(txCtx, sc.saveLegacySQL, sc.legacyKey(id), blob, now); err != nil {
-			return fmt.Errorf("save %s settings: %w", sc.name, err)
-		}
-		stored, err := lockSettingsSections(txCtx, tx, sc, id)
-		if err != nil {
-			return err
-		}
-		sections, err := b.sections().Encode(settings, stored)
-		if err != nil {
-			return err
-		}
-		keys := make([]string, 0, len(sections))
-		for k := range sections {
-			keys = append(keys, k)
-		}
-		slices.Sort(keys)
-		versions := make([]int, len(keys))
-		datas := make([]string, len(keys))
-		for i, k := range keys {
-			versions[i] = sections[k].Version
-			datas[i] = string(sections[k].Data)
-		}
-		if _, err := tx.ExecContext(txCtx, upsertSettingsSectionsSQL, sc.name, id, keys, versions, datas, string(blob), now); err != nil {
-			return fmt.Errorf("save %s settings sections: %w", sc.name, err)
-		}
-		return nil
-	})
+	}
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(txCtx, sc.saveLegacySQL, sc.legacyKey(id), blob, now); err != nil {
+		return fmt.Errorf("save %s settings: %w", sc.name, err)
+	}
+	stored, err := lockSettingsSections(txCtx, tx, sc, id)
+	if err != nil {
+		return err
+	}
+	sections, err := b.sections().Encode(settings, stored)
+	if err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(sections))
+	for k := range sections {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	versions := make([]int, len(keys))
+	datas := make([]string, len(keys))
+	for i, k := range keys {
+		versions[i] = sections[k].Version
+		datas[i] = string(sections[k].Data)
+	}
+	if _, err := tx.ExecContext(txCtx, upsertSettingsSectionsSQL, sc.name, id, keys, versions, datas, string(blob), now); err != nil {
+		return fmt.Errorf("save %s settings sections: %w", sc.name, err)
+	}
+	return nil
 }
 
 // lockSettingsSections reads the scope's section rows and locks them for the rest of the transaction, so two

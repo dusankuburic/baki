@@ -38,6 +38,13 @@ services:
       # base file at a real database, drop this line and use sslmode=require.
       - PAD_DB_REQUIRE_SSL=false
       - PAD_AUTH_SECRET=${PAD_AUTH_SECRET:?PAD_AUTH_SECRET must be set}
+      # The keystore key (docs/architecture/operations.md, "Encryption keys"). Unset,
+      # PAD_AUTH_SECRET keys the stored provider keys, which the cloud image logs as
+      # deprecated. To move off it, set both in .env: a new PAD_ENCRYPTION_KEY
+      # (openssl rand -hex 32) and PAD_ENCRYPTION_KEY_PREVIOUS = the PAD_AUTH_SECRET
+      # value; the boot re-seals, then drop PAD_ENCRYPTION_KEY_PREVIOUS. Empty = unset.
+      - PAD_ENCRYPTION_KEY=${PAD_ENCRYPTION_KEY:-}
+      - PAD_ENCRYPTION_KEY_PREVIOUS=${PAD_ENCRYPTION_KEY_PREVIOUS:-}
       # Both loopback spellings: on Windows, `localhost` resolves to ::1 first,
       # and browsers reach the container through WSL's relay there (which can
       # stall); http://127.0.0.1:8080 goes through Docker's own forwarder.

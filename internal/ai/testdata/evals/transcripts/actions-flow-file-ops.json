@@ -1,0 +1,37 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "list_findings",
+          "input": {
+            "category": "Reliability"
+          }
+        }
+      ],
+      "tokensIn": 2350,
+      "tokensOut": 21
+    },
+    {
+      "toolCalls": [
+        {
+          "id": "call_2",
+          "name": "propose_fix",
+          "input": {
+            "blockId": "B10",
+            "ruleId": "file-op-no-error-handler"
+          }
+        }
+      ],
+      "tokensIn": 2810,
+      "tokensOut": 34
+    },
+    {
+      "text": "Two file operations have no error handler:\n\n1. [Read From File](block:B10) on line 11, in `Main` ([finding](finding:file-op-no-error-handler:5b9d56555febe750))\n2. [Delete](block:B26) on line 31, in `Cleanup` ([finding](finding:file-op-no-error-handler:1bca65829958e156))\n\nThe fix for the first wraps line 11 in an error handler:\n\n```\nON BLOCK ERROR\n    File.ReadTextFromFile.ReadText ...\nEND\n```\n\nThis is a preview only — nothing has been changed. Ask me to apply it and you will get an approval prompt first.",
+      "tokensIn": 2990,
+      "tokensOut": 163
+    }
+  ]
+}

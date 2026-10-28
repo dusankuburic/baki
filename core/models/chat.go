@@ -66,6 +66,10 @@ type ChatMessage struct {
 	// alias, from the stream's done event. Empty = not reported.
 	ServedModel  string `json:"servedModel,omitempty"`
 	FinishReason string `json:"finishReason,omitempty"`
+	// ErrorCode and ErrorShared classify a message that ended with FinishReason "error": the code and the
+	// shared-credential flag of the stream's error event, so a reloaded message offers the same way out.
+	ErrorCode   string `json:"errorCode,omitempty"`
+	ErrorShared bool   `json:"errorShared,omitempty"`
 	// ToolCalls records the tool invocations behind this assistant message.
 	ToolCalls []ToolCallRecord `json:"toolCalls,omitempty"`
 	// FixProposal snapshots the single apply_fix approval record — LEGACY,
@@ -77,6 +81,9 @@ type ChatMessage struct {
 	// Truncated is how many earlier history messages the turn left out to fit the model's context window
 	// (the stream's history_truncated notices summed), so a reloaded conversation still shows the chip.
 	Truncated int `json:"truncated,omitempty"`
+	// Knowledge is the status of the turn's knowledge notice (identity_mismatch, no_embedder, deadline): the
+	// organisation's guidelines were not consulted, and a reloaded conversation still says so. Empty otherwise.
+	Knowledge string `json:"knowledge,omitempty"`
 }
 
 type ChatRequest struct {
@@ -213,6 +220,9 @@ type ProviderInfo struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Configured bool   `json:"configured"`
+	// CredentialStatus is the caller's own credential: configured, unreadable (stored, but the server cannot
+	// decrypt it: enter it again) or missing; empty for a family the registry lists (Azure AI Foundry).
+	CredentialStatus string `json:"credentialStatus,omitempty"`
 	// Shared is true when the caller has no credential of their own and the listing runs on the organisation's shared one.
 	Shared       bool          `json:"shared,omitempty"`
 	Models       []ModelDetail `json:"models"`
@@ -283,10 +293,17 @@ type ProviderCatalogEntry struct {
 	Caps       []string          `json:"caps"`
 	Credential CredentialSchema  `json:"credential"`
 	Endpoints  ProviderEndpoints `json:"endpoints"`
-	// Configured: the caller holds a credential of their own, or their organisation shares one.
-	Configured bool   `json:"configured"`
-	Color      string `json:"color,omitempty"`
-	Icon       string `json:"icon,omitempty"`
+	// Configured: the caller holds a usable credential of their own, or holds none and their organisation shares
+	// a usable one (an unreadable own credential is not passed over: a turn reports it).
+	Configured bool `json:"configured"`
+	// CredentialStatus is the caller's own credential: configured, unreadable (stored, but the server cannot
+	// decrypt it after its encryption key changed: enter it again) or missing.
+	CredentialStatus string `json:"credentialStatus"`
+	// OrgCredentialStatus is the organisation's shared credential, in the same words; omitted without an
+	// organisation or for a provider an organisation cannot share.
+	OrgCredentialStatus string `json:"orgCredentialStatus,omitempty"`
+	Color               string `json:"color,omitempty"`
+	Icon                string `json:"icon,omitempty"`
 	// Configurable: the credential can be managed through Endpoints (false for a document provider the client
 	// has no panel for: "configured on the server").
 	Configurable bool `json:"configurable,omitempty"`

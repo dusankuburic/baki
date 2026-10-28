@@ -9,7 +9,8 @@ import (
 )
 
 // TestJournal_RecordAndBound: only agentic types are journaled, and the
-// journal drops the OLDEST entries at capacity (recent events matter most).
+// journal drops the OLDEST entries at capacity (recent events matter most),
+// leaving one marker that says how many tool calls it dropped (R-streaming-2).
 func TestJournal_RecordAndBound(t *testing.T) {
 	ctl := &streamCtl{}
 	ctl.mu.Lock()
@@ -23,11 +24,18 @@ func TestJournal_RecordAndBound(t *testing.T) {
 	if len(snap.Events) > maxJournalEvents {
 		t.Fatalf("journal exceeded cap: %d", len(snap.Events))
 	}
-	// The oldest 60 entries dropped; the newest (index maxJournalEvents+19)
-	// must be the last recorded.
+	// The oldest half dropped once, behind the marker; the newest (index
+	// maxJournalEvents+19) must be the last recorded.
 	last := snap.Events[len(snap.Events)-1]
 	if got, _ := last.Data["i"].(int); got != maxJournalEvents+19 {
 		t.Errorf("newest event lost: got i=%v, want %d", got, maxJournalEvents+19)
+	}
+	if first := snap.Events[0]; first.Type != "tool_result" || first.Data["name"] != journalTruncatedName ||
+		first.Data["summary"] != "50 earlier tool calls omitted" {
+		t.Errorf("first event %+v, want the truncation marker counting the 50 dropped calls", first)
+	}
+	if got, _ := snap.Events[1].Data["i"].(int); got != maxJournalEvents/2 {
+		t.Errorf("oldest kept event i=%v, want %d", got, maxJournalEvents/2)
 	}
 	for _, ev := range snap.Events {
 		if ev.Type == "chunk" {
@@ -141,12 +149,15 @@ func TestJournal_DroppedEventsUnreachable(t *testing.T) {
 	if !weakCollected(oldest) {
 		t.Fatal("a dropped journal event is still reachable (pinned by the backing array)")
 	}
-	// Behaviour unchanged: the newest half survives, in order.
+	// The newest half survives, in order, behind the truncation marker.
 	events := ctl.snapshotEvents()
-	if len(events) != maxJournalEvents/2+1 {
-		t.Fatalf("journal holds %d events, want %d", len(events), maxJournalEvents/2+1)
+	if len(events) != maxJournalEvents/2+2 {
+		t.Fatalf("journal holds %d events, want %d (the marker, the kept half, the new one)", len(events), maxJournalEvents/2+2)
 	}
-	if first, _ := events[0].Data["i"].(int); first != maxJournalEvents/2 {
+	if events[0].Data["name"] != journalTruncatedName {
+		t.Errorf("first event %+v, want the truncation marker", events[0])
+	}
+	if first, _ := events[1].Data["i"].(int); first != maxJournalEvents/2 {
 		t.Errorf("oldest kept event i=%d, want %d", first, maxJournalEvents/2)
 	}
 	if last, _ := events[len(events)-1].Data["i"].(int); last != maxJournalEvents {

@@ -67,10 +67,9 @@ func TestEstimateRequestTokensMemoStaysBounded(t *testing.T) {
 	}
 }
 
-// The served-model memo's resource index keeps resource lookups exact across
-// inserts and past the memo's cap: every surviving key stays indexed, no
-// evicted key is left behind (a stale hit), and a post-eviction insert still
-// resolves.
+// The served-model memo's resource-wide view (ai.served-by-resource) answers for any caller of the resource, never
+// for another resource, stops answering for an alias seen served by more than one model, and still resolves after
+// the per-scope memo churned past its cap.
 func TestServedModelResourceIndexSurvivesEviction(t *testing.T) {
 	resetServedModels()
 	t.Cleanup(resetServedModels)
@@ -87,34 +86,24 @@ func TestServedModelResourceIndexSurvivesEviction(t *testing.T) {
 	if got, _ := lookupServedModelForResource(res, az, "claude:prod"); got != "claude-opus-4-6" {
 		t.Fatalf("resource lookup after a foreign insert = %q, want claude-opus-4-6", got)
 	}
+	// An alias one caller saw served by two models is a router (or was re-pointed): the view stops answering.
+	recordServedModel("u1\x00"+res, az, "router", "gpt-4.1-2025-04-14")
+	recordServedModel("u1\x00"+res, az, "router", "gpt-5-2025-08-07")
+	if got, ok := lookupServedModelForResource(res, az, "router"); ok {
+		t.Fatalf("a varied alias resolved to %q", got)
+	}
 
-	// Push the memo past its cap: eviction must unindex every key it drops,
-	// and the index must track exactly the surviving memo.
+	// Push both caches past their cap: they stay bounded, and a post-eviction insert still resolves.
 	for i := 0; i < servedMemoMax+64; i++ {
 		recordServedModel(fmt.Sprintf("u%d\x00https://r%d.services.ai.azure.com", i, i), az,
 			fmt.Sprintf("dep%d", i%8), "gpt-4.1-2025-04-14")
 	}
-	servedMu.Lock()
-	memoLen := len(servedMemo)
-	indexed := 0
-	for _, bucket := range servedByResource {
-		indexed += len(bucket)
-		for k := range bucket {
-			if _, ok := servedMemo[k]; !ok {
-				servedMu.Unlock()
-				t.Fatalf("index lists evicted key %q", k)
-			}
-		}
+	if n := servedMemo.Len(); n > servedMemoMax {
+		t.Fatalf("memo holds %d entries, cap %d", n, servedMemoMax)
 	}
-	servedMu.Unlock()
-	if memoLen > servedMemoMax {
-		t.Fatalf("memo holds %d entries, cap %d", memoLen, servedMemoMax)
+	if n := servedByResource.Len(); n > servedMemoMax {
+		t.Fatalf("resource view holds %d entries, cap %d", n, servedMemoMax)
 	}
-	if indexed != memoLen {
-		t.Fatalf("index tracks %d keys, memo holds %d", indexed, memoLen)
-	}
-
-	// A post-eviction insert must still resolve through the index.
 	const late = "https://late.services.ai.azure.com"
 	recordServedModel("late-user\x00"+late, az, "claude:late", "claude-opus-4-6")
 	if got, ok := lookupServedModelForResource(late, az, "claude:late"); !ok || got != "claude-opus-4-6" {

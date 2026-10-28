@@ -3393,7 +3393,7 @@ const docTemplate = `{
         },
         "/api/chat/clear": {
             "post": {
-                "description": "Deletes the chat history for a specific flow and provider. With baseVersion the history is deleted only if the conversation still has that version, else 409 CONVERSATION_CONFLICT with details.version; without it the delete is unconditional, as before.",
+                "description": "Deletes the caller's chat history for a flow and conversation key (the wire field is historically named ` + "`" + `provider` + "`" + `). Needs only chat access to the flow (viewer): a conversation belongs to the user whose turn or save created it, and only they can delete it. Another user's conversation under the key is never deleted — the clear answers as for a missing conversation. A conversation stored before conversations had owners under a thread id (a uuid) is deleted by whoever sends its key (the id is unguessable: its holder is its creator); under \"flow\" or a block id it is shared, and only someone who may delete the flow (its owner, an admin of its organisation) deletes it — anyone else gets 403 CONVERSATION_UNOWNED (drop the thread from the client's own list; the conversation goes with its flow). With baseVersion the history is deleted only if the conversation still has that version, else 409 CONVERSATION_CONFLICT with details.version; without it the delete is unconditional, as before.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3432,6 +3432,12 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "403": {
+                        "description": "No chat access to the flow, or CONVERSATION_UNOWNED: a conversation stored before owners, and the caller may not delete the flow",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "409": {
@@ -3520,7 +3526,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "The stream runs on another server this one could not reach (code REPLICA_UNREACHABLE; Retry-After and details.retryAfterSeconds say when to retry; the decision may not have been delivered, so send it again)",
+                        "description": "The stream runs on another server this one could not reach (code REPLICA_UNREACHABLE; Retry-After and details.retryAfterSeconds say when to retry; the decision may not have been delivered, so send it again), or an approve reached a server that is restarting (code SERVER_RESTARTING; nothing was applied; a decline is still accepted)",
                         "schema": {
                             "$ref": "#/definitions/render.ErrorResponse"
                         }
@@ -3530,7 +3536,7 @@ const docTemplate = `{
         },
         "/api/chat/get": {
             "post": {
-                "description": "Retrieves the chat history for a specific flow and conversation key (the wire field is historically named ` + "`" + `provider` + "`" + `). The body is an object — {messages: [...]} (always an array), version (the conversation's version, 0 when none is stored yet; send it back as baseVersion on save and clear; absent where the store has no versions) plus activeStreamId when the caller has a stream on this conversation whose question is stored but whose answer is not yet (live, or finished and still being stored) — so a client that reloads mid-turn can re-attach via /api/chat/resume instead of losing the answer until another reload. The frontend still accepts the bare array older servers answered with.",
+                "description": "Retrieves the chat history for a specific flow and conversation key (the wire field is historically named ` + "`" + `provider` + "`" + `). Only the caller's own conversation is returned, or one stored before conversations had owners: a key under which another user's conversation is stored reads as an empty conversation at version 0. The body is an object — {messages: [...]} (always an array), version (the conversation's version, 0 when none is stored yet; send it back as baseVersion on save and clear; absent where the store has no versions) plus activeStreamId when the caller has a stream on this conversation whose question is stored but whose answer is not yet (live, or finished and still being stored) — so a client that reloads mid-turn can re-attach via /api/chat/resume instead of losing the answer until another reload. The frontend still accepts the bare array older servers answered with.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3694,7 +3700,7 @@ const docTemplate = `{
         },
         "/api/chat/save": {
             "post": {
-                "description": "Saves the chat history for a specific flow and provider. A message's content is stored as its scrubbed copy (secrets such as passwords, tokens and keys masked ` + "`" + `[REDACTED]` + "`" + `, as the model saw them), so a reload returns the masked text. A message's modelLabel (the model's display name when it was sent) is stored clamped: NFC-normalised, control, bidi and zero-width characters dropped, whitespace collapsed, at most 64 characters. With baseVersion (the version GET returned, or a previous save answered) the list replaces the stored one only if the conversation still has that version, and the response carries the new version; a conversation that changed since answers 409 CONVERSATION_CONFLICT with details.version (the current version): reload, merge by message id and save again. Without baseVersion (a client from before versions) the save replaces the stored list whatever it holds, which can erase a turn another tab or the server stored; it is counted in pad_chat_blind_saves_total.",
+                "description": "Saves the chat history for a specific flow and provider. The conversation belongs to the user whose save or turn created it; a key under which another user's conversation is stored is refused with 409 CONVERSATION_KEY_TAKEN (no reload makes it succeed: start the thread under a new key). A conversation stored before owners under a thread id becomes the caller's with the save; under \"flow\" or a block id it is shared, and its list is replaced only by someone who may delete the flow: anyone else gets 403 CONVERSATION_UNOWNED (the server still stores the caller's turns on it). A message's content is stored as its scrubbed copy (secrets such as passwords, tokens and keys masked ` + "`" + `[REDACTED]` + "`" + `, as the model saw them), so a reload returns the masked text. A message's modelLabel (the model's display name when it was sent) is stored clamped: NFC-normalised, control, bidi and zero-width characters dropped, whitespace collapsed, at most 64 characters. With baseVersion (the version GET returned, or a previous save answered) the list replaces the stored one only if the conversation still has that version, and the response carries the new version; a conversation that changed since answers 409 CONVERSATION_CONFLICT with details.version (the current version): reload, merge by message id and save again. Without baseVersion (a client from before versions) the save replaces the stored list whatever it holds, which can erase a turn another tab or the server stored; it is counted in pad_chat_blind_saves_total.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3732,8 +3738,14 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "CONVERSATION_UNOWNED: a shared conversation stored before owners, and the caller may not delete the flow",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
                     "409": {
-                        "description": "CONVERSATION_CONFLICT: the conversation is no longer at baseVersion (details.version is the current one)",
+                        "description": "CONVERSATION_CONFLICT: the conversation is no longer at baseVersion (details.version is the current one); CONVERSATION_KEY_TAKEN: the key holds another user's conversation",
                         "schema": {
                             "$ref": "#/definitions/render.ErrorResponse"
                         }
@@ -3867,6 +3879,116 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/chat/threads": {
+            "post": {
+                "description": "The caller's stored chat threads (conversations) on a flow, newest change first (updatedAt, then id, both descending), for rebuilding the client's thread list in any browser. Only the caller's own threads: another user's are never listed, and neither are conversations stored before conversations had owners (they belong to nobody; a client keeps the ones it already lists). A page holds at most limit items (default 50, at most 200); nextCursor, present while more follow, is passed back as cursor for the next page, with the same flowId (another flow's list refuses it: 400). Needs chat access to the flow (viewer; scope chat): 404 for a missing flow, 403 without access. Where conversations are not stored server-side (the desktop app, a deployment without accounts) the list is empty.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "List the caller's chat threads on a flow",
+                "parameters": [
+                    {
+                        "description": "flowId, limit, cursor",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.ChatThreadsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.Page-api_ChatThread"
+                        }
+                    },
+                    "400": {
+                        "description": "No flowId, or a cursor this list did not issue",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "No chat access to the flow",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "No such flow",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/chat/title": {
+            "post": {
+                "description": "Sets the title of one of the caller's chat threads on a flow (\"\" removes it), so every browser's thread list shows it (POST /api/chat/threads). With \"Save conversation history\" off the title is accepted and dropped (no version). A thread not stored yet is created only under a thread id (a lower-case uuid, as the client generates): under any other key (\"flow\", a block id) a missing conversation is not created — the title is accepted and dropped (no version) — and neither is a thread the caller cleared in the last minutes (a rename racing the close). A conversation stored before owners under a thread id becomes the caller's. The title is stored clamped — NFC, control, bidi and zero-width characters dropped, whitespace collapsed, at most 200 characters — and as its scrubbed copy (secrets masked [REDACTED]), like the messages. A thread not stored yet (named before its first turn) is stored empty with the name, at a version of its own, which the answer carries (version: the conversation's version after naming, unchanged for a stored thread); a client that held 0 and has stored nothing adopts it as its baseVersion, else its next save at 0 gets 409 CONVERSATION_CONFLICT and reloads as usual. Naming changes neither the version of a stored thread nor updatedAt. A key under which another user's conversation is stored is refused with 409 CONVERSATION_KEY_TAKEN, a shared conversation stored before owners (under \"flow\" or a block id) with 403 CONVERSATION_UNOWNED (it belongs to nobody; keep the name in the client). Needs chat access to the flow (viewer; scope chat). Where conversations are not stored server-side (the desktop app, a deployment without accounts) the title is accepted and dropped.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "Name a chat thread",
+                "parameters": [
+                    {
+                        "description": "flowId, conversationId, title",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.ChatThreadTitleRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ChatThreadTitleResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "No flowId or conversationId, or a field over its size",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "No chat access to the flow, or CONVERSATION_UNOWNED",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "No such flow",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "CONVERSATION_KEY_TAKEN: the key holds another user's conversation",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -6289,6 +6411,12 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "503": {
+                        "description": "SECRET_STORAGE_UNAVAILABLE: the secret store cannot be reached (an OS keychain that is down); the key was not removed",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
                     }
                 }
             }
@@ -6319,7 +6447,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "{has: bool}",
+                        "description": "{has: bool, unreadable?: true} — unreadable: a key is stored but the server cannot decrypt it (its encryption key changed); enter it again",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -6380,7 +6508,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Malformed body, a provider id no spec describes (PROVIDER_UNKNOWN), or a provider configured through its own routes rather than a bare key (USE_PROVIDER_CONFIG: azure-foundry, local)",
+                        "description": "Malformed body (over 64 KiB, or a field neither provider, key nor one the provider's credential declares), a provider id no spec describes (PROVIDER_UNKNOWN), a provider configured through its own routes rather than a bare key (USE_PROVIDER_CONFIG: azure-foundry, local), or a key that is empty after trimming, over 8 KiB or holds a control character (KEY_INVALID)",
                         "schema": {
                             "$ref": "#/definitions/render.ErrorResponse"
                         }
@@ -6392,6 +6520,12 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "503": {
+                        "description": "SECRET_STORAGE_UNAVAILABLE: the secret store cannot be reached (an OS keychain that is down); nothing changed",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -7623,7 +7757,7 @@ const docTemplate = `{
         },
         "/api/orgs/{id}/knowledge": {
             "get": {
-                "description": "The org's documents, newest first, each with its chunk counts: chunkCount, vectorIndexed (in the vector index at the deployment's width) and embeddingStranded (embedded under another embedding model than the caller's, so the caller's searches never return them; re-index converts them). A document with chunks outside the vector index also carries embeddingWidthMismatch {configured, observed, source}: the deployment's PAD_EMBEDDING_DIM against the width of the side source names — \"embedder\" (what the caller's embedding model produces: set PAD_EMBEDDING_DIM to it and restart) or \"stored\" (what the stored chunks hold: re-index). On a deployment without a vector index (no pgvector) every document carries noVectorIndex true, vectorIndexed is always 0 and no width is reported: searches run in-process at the embedder's width.",
+                "description": "The org's documents, newest first, each with its state (\"ready\", or \"pending\": an upload whose pendingChunks are still to embed — continue it by posting {docId} to the upload route; none of it is searched until it is ready), its chunkerVersion, hasSource (the source text is kept, so a rechunk re-index can cut it again) and its chunk counts: chunkCount, vectorIndexed (in the vector index at the deployment's width) and embeddingStranded (embedded under another embedding model than the caller's, so the caller's searches never return them; re-index converts them). A document with chunks outside the vector index also carries embeddingWidthMismatch {configured, observed, source}: the deployment's PAD_EMBEDDING_DIM against the width of the side source names — \"embedder\" (what the caller's embedding model produces: set PAD_EMBEDDING_DIM to it and restart) or \"stored\" (what the stored chunks hold: re-index). On a deployment without a vector index (no pgvector) every document carries noVectorIndex true, vectorIndexed is always 0 and no width is reported: searches run in-process at the embedder's width.",
                 "produces": [
                     "application/json"
                 ],
@@ -7673,7 +7807,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Optional. force=true re-indexes even when the corpus was indexed with a different embedding model (first request of a run only); cursor = the previous answer's nextCursor resumes the run after it; background=true runs the whole re-index as the knowledge_reembed job (202; no cursor), on the organisation's shared embedding credential only",
+                        "description": "Optional. force=true re-indexes even when the corpus was indexed with a different embedding model (first request of a run only); cursor = the previous answer's nextCursor resumes the run after it; background=true runs the whole re-index as the knowledge_reembed job (202; no cursor), on the organisation's shared embedding credential only; rechunk=true cuts the documents split by an older chunker version again at the current one and re-embeds them (no force, no background): each becomes a new ready version of its name; one stored before its source text was kept is skipped (skippedNoSource) until uploaded again, and one whose name has an unfinished upload is skipped (skippedPending): a rechunk never supersedes an upload",
                         "name": "request",
                         "in": "body",
                         "schema": {
@@ -7683,7 +7817,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Re-indexed this request's pages ({chunks, docs}); nextCursor (with truncated=true) means chunks remain — post again with {force, cursor: nextCursor}. Every page is committed as it completes, so a later failure keeps the earlier pages — a request that FAILS after committing pages answers its error code with details {nextCursor, chunks} to resume from. Unforced, only the chunks not yet embedded under the caller's model are converted",
+                        "description": "Re-indexed this request's pages ({chunks, docs}); nextCursor (with truncated=true) means chunks remain — post again with {force, cursor: nextCursor}. Every page is committed as it completes, so a later failure keeps the earlier pages — a request that FAILS after committing pages answers its error code with details {nextCursor, chunks} to resume from. Unforced, only the chunks not yet embedded under the caller's model are converted; a plain re-index never re-chunks. A rechunk also reports rechunked (this request's), and skippedNoSource, skippedTooLarge and skippedPending, which every request recounts from the start of the corpus (take the last request's, or the largest, never the sum); post {rechunk: true} again while nextCursor is set",
                         "schema": {
                             "$ref": "#/definitions/rag.ReindexResult"
                         }
@@ -7756,9 +7890,9 @@ const docTemplate = `{
         },
         "/api/orgs/{id}/knowledge/upload": {
             "post": {
-                "description": "Chunks and embeds the document with the caller's embedding provider. Refused with 409 EMBEDDING_MODEL_CHANGED when that provider's model is not the one the org's knowledge base was indexed with (mixing models would make documents unfindable for members on the other model).",
+                "description": "Two-phase: stores the document and the text of its chunks first (state \"pending\"), then embeds the chunks with the caller's embedding provider page by page within the request's budget, each batch committed as it is bought. A document all of whose chunks are embedded turns \"ready\", joins the corpus and replaces the older version of its filename at once; until then no search returns any of it and the older version keeps answering. While chunks remain (pendingChunks \u003e 0, nextCursor set) post {docId, cursor: nextCursor} to this route to continue the upload (200): it embeds the chunks still to embed with the caller's provider, which must be the model the upload's embedded chunks carry and pass the model guard; nothing is embedded twice, so the cursor is optional, and a ready document answers as it is (embedded 0). A re-upload of the same name supersedes an unfinished upload (the same text resumes it instead: resumed true). Refused with 409 EMBEDDING_MODEL_CHANGED when that provider's model is not the one the org's knowledge base was indexed with (mixing models would make documents unfindable for members on the other model).",
                 "consumes": [
-                    "multipart/form-data"
+                    "application/json"
                 ],
                 "produces": [
                     "application/json"
@@ -7774,18 +7908,41 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "description": "{filename, content} uploads a document; {docId, cursor?} continues an unfinished upload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.knowledgeUploadRequest"
+                        }
                     }
                 ],
                 "responses": {
-                    "201": {
-                        "description": "Uploaded",
+                    "200": {
+                        "description": "A continuation ({docId}): the same shape for the continued document. Also a document whose text is the ready document of its name, already embedded under the caller's embedding model: nothing is stored or embedded, the answer is that document with unchanged: true (an unfinished upload of the name is superseded, as by any re-upload)",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/rag.UploadResult"
+                        }
+                    },
+                    "201": {
+                        "description": "Stored: {id, filename, state, chunkerVersion, chunks, embedded, pendingChunks, resumed, truncated, nextCursor}. A request that FAILS after the document was stored answers its error code with details {id, pendingChunks, nextCursor}: continue that document instead of uploading it again",
+                        "schema": {
+                            "$ref": "#/definitions/rag.UploadResult"
                         }
                     },
                     "400": {
-                        "description": "Embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), not allowed here (PROVIDER_NOT_ALLOWED: disabled in the deployment or off the organisation's allowed-provider list), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)",
+                        "description": "Invalid filename (KNOWLEDGE_FILENAME_INVALID: blank, over 255 bytes, not valid UTF-8, or containing a control character or a path separator (slash or backslash); refused before any embedding call), a body mixing a document and a continuation or a cursor naming another document, embedding provider not configured (EMBEDDING_NOT_CONFIGURED; EMBEDDING_ORG_NOT_CONFIGURED when the org's shared Azure credential names no embedding deployment), not allowed here (PROVIDER_NOT_ALLOWED: disabled in the deployment or off the organisation's allowed-provider list), rejected credentials (EMBEDDING_AUTH_FAILED, EMBEDDING_PERMISSION_DENIED) or a request the provider rejected (EMBEDDING_PROVIDER_REJECTED)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "A continuation of a document the org does not have (KNOWLEDGE_DOCUMENT_NOT_FOUND)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -7794,7 +7951,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Embedding model differs from the indexed corpus (EMBEDDING_MODEL_CHANGED) or another upload/re-index of this org is in flight on any replica, or this replica is at its lease cap (KNOWLEDGE_BUSY)",
+                        "description": "Embedding model differs from the indexed corpus or, on a continuation, from the upload's (EMBEDDING_MODEL_CHANGED), or another upload/re-index of this org is in flight on any replica, or this replica is at its lease cap (KNOWLEDGE_BUSY)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -9882,6 +10039,12 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "503": {
+                        "description": "SECRET_STORAGE_UNAVAILABLE: the secret store cannot be reached (an OS keychain that is down); the token was not removed",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
                     }
                 }
             }
@@ -9932,6 +10095,12 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "422": {
+                        "description": "KEY_UNREADABLE: a token is stored but the server cannot decrypt it (its encryption key changed); sign in again",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "500": {
@@ -10030,6 +10199,12 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "503": {
+                        "description": "SECRET_STORAGE_UNAVAILABLE: the secret store cannot be reached (an OS keychain that is down); the token was not removed",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
                     }
                 }
             }
@@ -10080,6 +10255,12 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "422": {
+                        "description": "KEY_UNREADABLE: a token is stored but the server cannot decrypt it (its encryption key changed); sign in again",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     },
                     "500": {
@@ -10220,6 +10401,12 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "503": {
+                        "description": "SECRET_STORAGE_UNAVAILABLE: the secret store cannot be reached (an OS keychain that is down); nothing changed",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
                         }
                     }
                 }
@@ -10477,7 +10664,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Malformed body, a body over 1 MiB, or a field over its cap (invalid settings: the message names the field, e.g. ai.systemPromptSuffix over 4000 characters, more than 20 prompts in a list, an unknown ai.activeProvider; a value the write carries back unchanged is never refused)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -10556,7 +10743,107 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Malformed body, or ids in ai.allowedProviders that no provider spec describes (PROVIDER_UNKNOWN; details.providers lists them)",
+                        "description": "Malformed body, ids in ai.allowedProviders that no provider spec describes (PROVIDER_UNKNOWN; details.providers lists them), or a field over its cap (invalid settings, the field named, as on /api/system/settings)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/system/settings/org/{id}/sections/{section}": {
+            "get": {
+                "description": "One section of the organisation's settings (ai, analysis, profile, ...) with its revision, the token a section write's ifRevision carries. Reading requires org membership.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get an org settings section",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Org ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Section key, e.g. ai",
+                        "name": "section",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The section and its revision",
+                        "schema": {
+                            "$ref": "#/definitions/service.SettingsSectionState"
+                        }
+                    },
+                    "400": {
+                        "description": "Not a section a write can set (recentFiles, version, or unknown)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Sets the fields of one section the body names and keeps the section's other fields and every other section (R-config-4): the server merges them into the section as stored, under the settings rows' lock, so two admins saving different fields at once both land. With ifRevision (from GET .../sections/{section}) the write is refused with 409 SETTINGS_STALE when the section changed since that read: reload, then apply the change again. Writing requires org admin. An explicit null clears a field; ai.allowedProviders must name registered providers only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Update fields of an org settings section",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Org ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Section key, e.g. ai",
+                        "name": "section",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "The fields to set and the revision read",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.orgSettingsSectionWrite"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The section as written and its new revision",
+                        "schema": {
+                            "$ref": "#/definitions/service.SettingsSectionState"
+                        }
+                    },
+                    "400": {
+                        "description": "Malformed body, no field, a field the section does not have, a value of the wrong type or over its cap, or unknown ids in ai.allowedProviders (PROVIDER_UNKNOWN; details.providers lists them)",
+                        "schema": {
+                            "$ref": "#/definitions/render.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "SETTINGS_STALE: the section changed since the revision in ifRevision",
                         "schema": {
                             "$ref": "#/definitions/render.ErrorResponse"
                         }
@@ -10848,6 +11135,70 @@ const docTemplate = `{
                 }
             }
         },
+        "api.ChatThread": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "messageCount": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.ChatThreadTitleRequest": {
+            "type": "object",
+            "properties": {
+                "conversationId": {
+                    "description": "ConversationID is the thread's conversation key (ChatThread.ID).",
+                    "type": "string"
+                },
+                "flowId": {
+                    "type": "string"
+                },
+                "title": {
+                    "description": "Title is the name; \"\" removes it.",
+                    "type": "string"
+                }
+            }
+        },
+        "api.ChatThreadTitleResponse": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.ChatThreadsRequest": {
+            "type": "object",
+            "properties": {
+                "cursor": {
+                    "type": "string"
+                },
+                "flowId": {
+                    "type": "string"
+                },
+                "limit": {
+                    "type": "integer"
+                }
+            }
+        },
         "api.MeResponse": {
             "type": "object",
             "properties": {
@@ -10874,6 +11225,23 @@ const docTemplate = `{
                 },
                 "role": {
                     "type": "string"
+                }
+            }
+        },
+        "api.Page-api_ChatThread": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ChatThread"
+                    }
+                },
+                "nextCursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },
@@ -11082,6 +11450,26 @@ const docTemplate = `{
                 },
                 "force": {
                     "type": "boolean"
+                },
+                "rechunk": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "api.knowledgeUploadRequest": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "cursor": {
+                    "$ref": "#/definitions/interfaces.KnowledgeChunkCursor"
+                },
+                "docId": {
+                    "type": "string"
+                },
+                "filename": {
+                    "type": "string"
                 }
             }
         },
@@ -11222,6 +11610,17 @@ const docTemplate = `{
                 "status": {
                     "type": "string",
                     "example": "ok"
+                }
+            }
+        },
+        "api.orgSettingsSectionWrite": {
+            "type": "object",
+            "properties": {
+                "ifRevision": {
+                    "type": "string"
+                },
+                "values": {
+                    "type": "object"
                 }
             }
         },
@@ -11405,6 +11804,13 @@ const docTemplate = `{
                 "contextSubflowId": {
                     "type": "string"
                 },
+                "errorCode": {
+                    "description": "ErrorCode and ErrorShared classify a message that ended with FinishReason \"error\": the code and the\nshared-credential flag of the stream's error event, so a reloaded message offers the same way out.",
+                    "type": "string"
+                },
+                "errorShared": {
+                    "type": "boolean"
+                },
                 "finishReason": {
                     "type": "string"
                 },
@@ -11424,6 +11830,10 @@ const docTemplate = `{
                     }
                 },
                 "id": {
+                    "type": "string"
+                },
+                "knowledge": {
+                    "description": "Knowledge is the status of the turn's knowledge notice (identity_mismatch, no_embedder, deadline): the\norganisation's guidelines were not consulted, and a reloaded conversation still says so. Empty otherwise.",
                     "type": "string"
                 },
                 "model": {
@@ -11760,11 +12170,15 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "configured": {
-                    "description": "Configured: the caller holds a credential of their own, or their organisation shares one.",
+                    "description": "Configured: the caller holds a usable credential of their own, or holds none and their organisation shares\na usable one (an unreadable own credential is not passed over: a turn reports it).",
                     "type": "boolean"
                 },
                 "credential": {
                     "$ref": "#/definitions/pad-core_models.CredentialSchema"
+                },
+                "credentialStatus": {
+                    "description": "CredentialStatus is the caller's own credential: configured, unreadable (stored, but the server cannot\ndecrypt it after its encryption key changed: enter it again) or missing.",
+                    "type": "string"
                 },
                 "endpoints": {
                     "$ref": "#/definitions/pad-core_models.ProviderEndpoints"
@@ -11782,6 +12196,10 @@ const docTemplate = `{
                     }
                 },
                 "name": {
+                    "type": "string"
+                },
+                "orgCredentialStatus": {
+                    "description": "OrgCredentialStatus is the organisation's shared credential, in the same words; omitted without an\norganisation or for a provider an organisation cannot share.",
                     "type": "string"
                 }
             }
@@ -11836,6 +12254,10 @@ const docTemplate = `{
                 },
                 "credential": {
                     "$ref": "#/definitions/pad-core_models.CredentialSchema"
+                },
+                "credentialStatus": {
+                    "description": "CredentialStatus is the caller's own credential: configured, unreadable (stored, but the server cannot\ndecrypt it: enter it again) or missing; empty for a family the registry lists (Azure AI Foundry).",
+                    "type": "string"
                 },
                 "defaultModel": {
                     "type": "string"
@@ -11906,7 +12328,61 @@ const docTemplate = `{
                 "nextCursor": {
                     "$ref": "#/definitions/interfaces.KnowledgeChunkCursor"
                 },
+                "rechunked": {
+                    "description": "The rechunk re-index (RechunkOrg) also reports how many documents this request cut again at the current\nchunker version and finished (Rechunked; each now has a new id), how many below it kept no source text to cut\n(SkippedNoSource: stored before v51; re-upload them), how many the new split would take past what one upload\nmay index (SkippedTooLarge) and how many have an unfinished upload of their name, which a rechunk never\nsupersedes (SkippedPending: finish or delete that upload first). Its Chunks are the new chunks embedded, its\nDocs the documents worked on.\n\nRechunked counts this request only, but the Skipped counts are recounted by every request: each one walks the\ncorpus from its start and meets every skipped document it reaches again (a skipped document stays below the\nversion). They are not to be summed across the requests of a run: the request that ends the run (no\nNextCursor) has walked them all, so its counts — or the largest seen — are the run's.",
+                    "type": "integer"
+                },
+                "skippedNoSource": {
+                    "type": "integer"
+                },
+                "skippedPending": {
+                    "type": "integer"
+                },
+                "skippedTooLarge": {
+                    "type": "integer"
+                },
                 "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "rag.UploadResult": {
+            "type": "object",
+            "properties": {
+                "chunkerVersion": {
+                    "type": "integer"
+                },
+                "chunks": {
+                    "description": "Chunks is the document's chunk count; Embedded the chunks this request embedded; PendingChunks those still to\nembed.",
+                    "type": "integer"
+                },
+                "embedded": {
+                    "type": "integer"
+                },
+                "filename": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "nextCursor": {
+                    "$ref": "#/definitions/interfaces.KnowledgeChunkCursor"
+                },
+                "pendingChunks": {
+                    "type": "integer"
+                },
+                "resumed": {
+                    "description": "Resumed: the upload found an unfinished upload of the same name and text and continued it instead of storing\n(and paying for) it again.",
+                    "type": "boolean"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "unchanged": {
+                    "description": "Unchanged: the upload's text is the ready document of the name, its chunks embedded under the caller's\nembedding identity: nothing was stored or embedded, and the result is that document (R-security-c22).",
                     "type": "boolean"
                 }
             }
@@ -12566,6 +13042,20 @@ const docTemplate = `{
                 },
                 "updatedBy": {
                     "type": "string"
+                }
+            }
+        },
+        "service.SettingsSectionState": {
+            "type": "object",
+            "properties": {
+                "revision": {
+                    "type": "string"
+                },
+                "section": {
+                    "type": "string"
+                },
+                "values": {
+                    "type": "object"
                 }
             }
         }

@@ -7,7 +7,8 @@ import {uuid} from '@/lib/uuid'
 import {useChatStore} from '@/stores/chatStore'
 import {conversationKey} from '@/stores/chatStore'
 import {conversationHistoryEnabled} from '@/lib/chatHistory'
-import type {ChatMessage} from '@/types'
+import type {ChatMessage, FixProposalSnapshot} from '@/types'
+import type {StreamSlot} from '@/stores/chatStore'
 import type {DoneMeta} from '@/lib/chatEvent'
 import type {ChatStoreState, StreamAcc, ToastApi} from './types'
 import {messageModel, applyDoneMeta} from './helpers'
@@ -16,6 +17,33 @@ interface CommitDeps {
   toastRef: MutableRefObject<ToastApi | null>
   appendMessage: ChatStoreState['appendMessage']
   updateThread: ChatStoreState['updateThread']
+}
+
+/** The slot's fix cards as the message stores them. */
+export function fixSnapshotsOf(slot: StreamSlot | undefined): FixProposalSnapshot[] {
+  const fixCards = slot ? slot.approvals.filter(card => card.source === 'fix') : []
+  return fixCards.map(card => ({
+    proposalId: card.proposalId,
+    ...(card.tool ? {tool: card.tool} : {}),
+    ...(card.previewKind ? {previewKind: card.previewKind} : {}),
+    ruleId: card.ruleId ?? '',
+    fixType: card.fixType ?? '',
+    blockLabel: card.blockLabel ?? '',
+    line: card.line ?? 0,
+    summary: card.summary ?? '',
+    status: card.status,
+    message: card.message,
+    items: card.items.map(it => ({
+      ...(it.id ? {id: it.id} : {}),
+      ruleId: it.ruleId ?? '',
+      fixType: it.fixType ?? '',
+      blockLabel: it.blockLabel ?? '',
+      line: it.line ?? 0,
+      summary: it.summary,
+      status: it.status,
+      message: it.message,
+    })),
+  }))
 }
 
 export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
@@ -89,30 +117,9 @@ export function useCommit({toastRef, appendMessage, updateThread}: CommitDeps) {
       }
       // The omitted-history count stays on the message, so the chip survives a reload.
       if (slot?.truncated) msg.truncated = slot.truncated
-      const fixCards = slot ? slot.approvals.filter(card => card.source === 'fix') : []
-      if (fixCards.length > 0) {
-        msg.fixProposals = fixCards.map(card => ({
-          proposalId: card.proposalId,
-          ...(card.tool ? {tool: card.tool} : {}),
-          ...(card.previewKind ? {previewKind: card.previewKind} : {}),
-          ruleId: card.ruleId ?? '',
-          fixType: card.fixType ?? '',
-          blockLabel: card.blockLabel ?? '',
-          line: card.line ?? 0,
-          summary: card.summary ?? '',
-          status: card.status,
-          message: card.message,
-          items: card.items.map(it => ({
-            ruleId: it.ruleId ?? '',
-            fixType: it.fixType ?? '',
-            blockLabel: it.blockLabel ?? '',
-            line: it.line ?? 0,
-            summary: it.summary,
-            status: it.status,
-            message: it.message,
-          })),
-        }))
-      }
+      if (slot?.knowledge) msg.knowledge = slot.knowledge
+      const fixes = fixSnapshotsOf(slot)
+      if (fixes.length > 0) msg.fixProposals = fixes
       appendMessage(threadId, msg)
       if ((msg.toolCalls?.length ?? 0) > 0 || (slot?.approvals.length ?? 0) > 0) {
         updateThread(threadId, {

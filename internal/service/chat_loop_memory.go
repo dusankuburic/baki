@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"time"
 
 	"pad-analyzer/internal/ai"
 	"pad-core/models"
@@ -86,7 +87,9 @@ func (m *loopToolMemory) exec(name string, input json.RawMessage, tctx *ai.ToolC
 			recordChatToolRefused(name, reason)
 		}
 	}
+	began := time.Now()
 	result := ai.ExecuteTool(name, input, *tctx)
+	chatToolDuration.WithLabelValues(metricToolLabel(name)).Observe(time.Since(began).Seconds())
 	recordChatToolResult(metricToolLabel(name), !strings.HasPrefix(result, "error:"))
 
 	m.mu.Lock()

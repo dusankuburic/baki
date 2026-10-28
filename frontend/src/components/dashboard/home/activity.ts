@@ -16,6 +16,7 @@ import {
   Users,
   FileText,
   History,
+  Wrench,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -39,6 +40,8 @@ const EXACT: Record<string, LucideIcon> = {
   'finding.comment_add': MessageSquare,
   'finding.comment_delete': MessageSquare,
   'chat.stream': Bot,
+  'chat.fix_decision': Bot,
+  'flow.fix_apply': Wrench,
   'keys.save': Key,
   'token.create': Key,
   'token.revoke': Key,

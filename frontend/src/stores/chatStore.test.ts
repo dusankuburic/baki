@@ -1,5 +1,15 @@
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
-import {useChatStore, MAX_CONCURRENT_STREAMS, threadModelOf} from './chatStore'
+import {
+  useChatStore,
+  MAX_CONCURRENT_STREAMS,
+  MAX_THREADS,
+  threadModelOf,
+  autoTitle,
+  AUTO_TITLE_MAX,
+  MAX_QUEUED_MESSAGES,
+} from './chatStore'
+import {useSettingsStore} from './settingsStore'
+import {chatApi} from '@/api'
 import {registerCurrentUserResolver} from './storeRegistry'
 import type {ChatMessage} from '@/types'
 
@@ -13,7 +23,6 @@ beforeEach(() => {
     activeThreadId: null,
     conversations: new Map(),
     streams: {},
-    selectedProvider: 'claude',
     drafts: {},
   })
 })
@@ -117,12 +126,21 @@ describe('appendMessage', () => {
     expect(thread.title).toBe('Existing')
   })
 
-  it('truncates title to 40 chars', () => {
+  // R-frontend-19: one rule (autoTitle) — whitespace runs collapse to one space, trimmed, then 50 characters.
+  it('titles a 60-character first message with newlines by the one autoTitle rule', () => {
     const id = useChatStore.getState().createThread('flow1')
-    const long = 'A'.repeat(60)
-    useChatStore.getState().appendMessage(id, makeMessage('m1', 'user', long))
+    const text = `  ${'A'.repeat(20)}\n\n${'B'.repeat(20)}\n${'C'.repeat(16)}  `
+    useChatStore.getState().appendMessage(id, makeMessage('m1', 'user', text))
     const thread = useChatStore.getState().threads.find(t => t.id === id)!
-    expect(thread.title.length).toBe(40)
+    expect(thread.title).toBe(`${'A'.repeat(20)} ${'B'.repeat(20)} ${'C'.repeat(8)}`)
+    expect(thread.title).toHaveLength(AUTO_TITLE_MAX)
+    expect(thread.title).toBe(autoTitle(text))
+  })
+
+  it('leaves a whitespace-only first message untitled', () => {
+    const id = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().appendMessage(id, makeMessage('m1', 'user', ' \n\t '))
+    expect(useChatStore.getState().threads.find(t => t.id === id)!.title).toBe('')
   })
 })
 
@@ -307,6 +325,14 @@ describe('closeThread stream cleanup', () => {
     expect(useChatStore.getState().streams['t1']).toBeUndefined()
   })
 
+  it('only removes state: the stream engine owns the cancel (R-frontend-17)', () => {
+    const cancel = vi.spyOn(chatApi, 'cancelStream').mockResolvedValue(undefined)
+    useChatStore.getState().startStream('t1', 's1', 'm1')
+    useChatStore.getState().closeThread('t1')
+    expect(cancel).not.toHaveBeenCalled()
+    cancel.mockRestore()
+  })
+
   it('closing one streaming thread leaves the others intact', () => {
     useChatStore.getState().startStream('t1', 's1', 'm1')
     useChatStore.getState().startStream('t2', 's2', 'm2')
@@ -387,26 +413,100 @@ describe('setDraft', () => {
 
     useChatStore.getState().closeThread(drop)
 
-    expect(useChatStore.getState().queuedByThread[keep]?.text).toBe('keep me')
+    expect(useChatStore.getState().queuedByThread[keep]?.map(q => q.text)).toEqual(['keep me'])
     expect(drop in useChatStore.getState().queuedByThread).toBe(false)
   })
 })
 
 describe('queued follow-up messages (U1.6)', () => {
+  beforeEach(() => {
+    useChatStore.setState({queuedByThread: {}})
+  })
+
   it('queue / take / clear semantics', () => {
     const st = useChatStore.getState()
     st.queueMessage('t1', {text: 'hello', files: [], excludeContext: true})
-    expect(useChatStore.getState().queuedByThread['t1']?.text).toBe('hello')
+    expect(useChatStore.getState().queuedByThread['t1']?.[0]?.text).toBe('hello')
 
     const got = useChatStore.getState().takeQueuedMessage('t1')
     expect(got?.text).toBe('hello')
     expect(useChatStore.getState().takeQueuedMessage('t1')).toBeUndefined()
+    expect('t1' in useChatStore.getState().queuedByThread).toBe(false)
 
     expect(() => useChatStore.getState().clearQueuedMessage('t1')).not.toThrow()
+  })
 
+  // R-frontend-13: a second follow-up used to overwrite the first.
+  it('keeps two queued follow-ups in order and hands them out FIFO', () => {
+    const st = useChatStore.getState()
+    expect(st.queueMessage('t1', {text: 'first', files: []})).toBe(true)
+    expect(st.queueMessage('t1', {text: 'second', files: []})).toBe(true)
+    expect(useChatStore.getState().queuedByThread['t1']?.map(q => q.text)).toEqual(['first', 'second'])
+
+    expect(useChatStore.getState().takeQueuedMessage('t1')?.text).toBe('first')
+    expect(useChatStore.getState().takeQueuedMessage('t1')?.text).toBe('second')
+    expect(useChatStore.getState().takeQueuedMessage('t1')).toBeUndefined()
+  })
+
+  it(`refuses a follow-up past the cap of ${MAX_QUEUED_MESSAGES} and keeps the queue as it was`, () => {
+    const st = useChatStore.getState()
+    for (let i = 0; i < MAX_QUEUED_MESSAGES; i++) expect(st.queueMessage('t1', {text: `m${i}`, files: []})).toBe(true)
+    expect(st.queueMessage('t1', {text: 'one too many', files: []})).toBe(false)
+    const texts = useChatStore.getState().queuedByThread['t1']?.map(q => q.text)
+    expect(texts).toHaveLength(MAX_QUEUED_MESSAGES)
+    expect(texts).not.toContain('one too many')
+  })
+
+  it('removes one queued follow-up by id and leaves the rest', () => {
+    const st = useChatStore.getState()
     st.queueMessage('t1', {text: 'first', files: []})
     st.queueMessage('t1', {text: 'second', files: []})
-    expect(useChatStore.getState().takeQueuedMessage('t1')?.text).toBe('second')
+    const [first] = useChatStore.getState().queuedByThread['t1']!
+    useChatStore.getState().removeQueuedMessage('t1', first!.id)
+    expect(useChatStore.getState().queuedByThread['t1']?.map(q => q.text)).toEqual(['second'])
+    useChatStore.getState().removeQueuedMessage('t1', useChatStore.getState().queuedByThread['t1']![0]!.id)
+    expect('t1' in useChatStore.getState().queuedByThread).toBe(false)
+  })
+
+  // Review of R-frontend-13: after a failed or stopped turn the queue holds instead of firing the next message.
+  describe('paused queue', () => {
+    beforeEach(() => {
+      useChatStore.setState({queuedByThread: {}, queuePausedByThread: {}})
+    })
+
+    it('pauses a thread with queued follow-ups, keeps them, and resumes', () => {
+      const st = useChatStore.getState()
+      st.queueMessage('t1', {text: 'first', files: []})
+      st.pauseQueue('t1', 'error')
+      expect(useChatStore.getState().queuePausedByThread['t1']).toBe('error')
+      expect(useChatStore.getState().queuedByThread['t1']?.map(q => q.text)).toEqual(['first'])
+      useChatStore.getState().resumeQueue('t1')
+      expect('t1' in useChatStore.getState().queuePausedByThread).toBe(false)
+    })
+
+    it('does not pause a thread with nothing queued', () => {
+      useChatStore.getState().pauseQueue('t1', 'stopped')
+      expect('t1' in useChatStore.getState().queuePausedByThread).toBe(false)
+    })
+
+    it('forgets the pause once the queue is empty', () => {
+      const st = useChatStore.getState()
+      st.queueMessage('t1', {text: 'only', files: []})
+      st.pauseQueue('t1', 'stopped')
+      useChatStore.getState().removeQueuedMessage('t1', useChatStore.getState().queuedByThread['t1']![0]!.id)
+      expect('t1' in useChatStore.getState().queuePausedByThread).toBe(false)
+    })
+
+    it('puts a message back at the head, even past the cap', () => {
+      const st = useChatStore.getState()
+      for (let i = 0; i < MAX_QUEUED_MESSAGES; i++) st.queueMessage('t1', {text: `m${i}`, files: []})
+      const head = useChatStore.getState().takeQueuedMessage('t1')!
+      useChatStore.getState().queueMessage('t1', {text: 'late', files: []})
+      useChatStore.getState().requeueMessage('t1', head)
+      const texts = useChatStore.getState().queuedByThread['t1']!.map(q => q.text)
+      expect(texts[0]).toBe('m0')
+      expect(texts).toHaveLength(MAX_QUEUED_MESSAGES + 1)
+    })
   })
 })
 
@@ -458,6 +558,20 @@ describe('thread persistence', () => {
     })
     expect(state.threads.some(t => t.flowId === 'other-flow')).toBe(false)
     expect(state.conversations.has(a)).toBe(false)
+  })
+
+  // R-frontend-6: tools are on by default, so a thread's "off" must survive a reload, not read back as "no choice".
+  it('keeps a thread’s useTools false across a reload, and leaves an undecided thread undecided', () => {
+    const off = useChatStore.getState().createThread('flow1')
+    const undecided = useChatStore.getState().createThread('flow1')
+    useChatStore.getState().updateThread(off, {useTools: false})
+
+    useChatStore.setState({threads: [], activeThreadId: null, conversations: new Map()})
+    useChatStore.getState().hydrateThreads('flow1')
+
+    const threads = useChatStore.getState().threads
+    expect(threads.find(t => t.id === off)?.useTools).toBe(false)
+    expect(threads.find(t => t.id === undecided)?.useTools).toBeUndefined()
   })
 
   it('restores the lost-block notice of a cleared thread, as a string only', () => {
@@ -867,5 +981,163 @@ describe('thread model pins', () => {
     useChatStore.getState().openModelPicker()
     useChatStore.getState().openModelPicker()
     expect(useChatStore.getState().modelPickerRequest).toBe(2)
+  })
+})
+
+describe('MAX_THREADS eviction (R-frontend-14, R-frontend-c26)', () => {
+  const stored: Record<string, string> = {}
+  const fakeStorage = {
+    getItem: (k: string) => stored[k] ?? null,
+    setItem: (k: string, v: string) => {
+      stored[k] = v
+    },
+    removeItem: (k: string) => {
+      delete stored[k]
+    },
+    key: (i: number) => Object.keys(stored)[i] ?? null,
+    get length() {
+      return Object.keys(stored).length
+    },
+  }
+  const KEY = (flowId: string) => `baki:chatThreads:v2:user-1:${flowId}`
+  const storedIds = (flowId: string) => (JSON.parse(stored[KEY(flowId)] ?? '[]') as {id: string}[]).map(t => t.id)
+  const initialSettings = useSettingsStore.getState()
+
+  beforeEach(() => {
+    for (const k of Object.keys(stored)) delete stored[k]
+    vi.stubGlobal('localStorage', fakeStorage)
+    registerCurrentUserResolver(() => 'user-1')
+    vi.spyOn(chatApi, 'clearConversation').mockResolvedValue(undefined)
+  })
+  afterEach(() => {
+    registerCurrentUserResolver(() => null)
+    useSettingsStore.setState(initialSettings, true)
+    vi.restoreAllMocks()
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
+  })
+
+  // The desktop app keeps no server thread index: an evicted thread no list brings back is deleted with it.
+  const asDesktop = () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+  }
+
+  function createMany(flowId: string, n: number): string[] {
+    const ids: string[] = []
+    for (let i = 0; i < n; i++) ids.push(useChatStore.getState().createThread(flowId))
+    return ids
+  }
+
+  function giveHistory(threadId: string, version: number) {
+    useChatStore.getState().appendMessage(threadId, makeMessage(`m-${threadId}`, 'user'))
+    useChatStore.getState().setConversationVersion(threadId, version)
+  }
+
+  it("evicts the oldest thread of the creating flow, never another flow's while one qualifies", () => {
+    const [other] = createMany('flowA', 1)
+    const flowB = createMany('flowB', MAX_THREADS - 1)
+
+    useChatStore.getState().createThread('flowB')
+
+    const ids = useChatStore.getState().threads.map(t => t.id)
+    expect(ids).toHaveLength(MAX_THREADS)
+    expect(ids).toContain(other)
+    expect(ids).not.toContain(flowB[0])
+    expect(storedIds('flowB')).not.toContain(flowB[0])
+  })
+
+  // R-frontend-c26 (c): where the server lists the user's threads, an evicted thread stays reachable through that
+  // list (the next sync brings it back), so eviction only drops it from this client and deletes nothing.
+  it('with a server thread index, drops the victim locally and keeps its conversation', async () => {
+    const flowA = createMany('flowA', MAX_THREADS)
+    giveHistory(flowA[0]!, 2)
+
+    useChatStore.getState().createThread('flowB')
+
+    expect(useChatStore.getState().threads.some(t => t.id === flowA[0])).toBe(false)
+    expect(storedIds('flowA')).not.toContain(flowA[0])
+    await vi.dynamicImportSettled()
+    await new Promise(r => setTimeout(r, 0))
+    expect(chatApi.clearConversation).not.toHaveBeenCalled()
+  })
+
+  it('a web deployment without accounts keeps no server index either: the evicted conversation is cleared', async () => {
+    registerCurrentUserResolver(() => null)
+    createMany('flowA', 1)
+    const flowB = createMany('flowB', MAX_THREADS - 1)
+    giveHistory(flowB[0]!, 4)
+
+    useChatStore.getState().createThread('flowB')
+
+    await vi.waitFor(() => expect(chatApi.clearConversation).toHaveBeenCalledWith('flowB', flowB[0], 4))
+  })
+
+  it("in the desktop app, clears the evicted thread's stored conversation on the version it holds", async () => {
+    asDesktop()
+    createMany('flowA', 1)
+    const flowB = createMany('flowB', MAX_THREADS - 1)
+    giveHistory(flowB[0]!, 4)
+
+    useChatStore.getState().createThread('flowB')
+
+    await vi.waitFor(() => expect(chatApi.clearConversation).toHaveBeenCalledTimes(1))
+    expect(chatApi.clearConversation).toHaveBeenCalledWith('flowB', flowB[0], 4)
+  })
+
+  it("rewrites another flow's index when its thread is the victim", () => {
+    const flowA = createMany('flowA', MAX_THREADS)
+    expect(storedIds('flowA')).toContain(flowA[0])
+
+    useChatStore.getState().createThread('flowB')
+
+    expect(useChatStore.getState().threads.some(t => t.id === flowA[0])).toBe(false)
+    expect(storedIds('flowA')).not.toContain(flowA[0])
+    expect(storedIds('flowA')).toHaveLength(MAX_THREADS - 1)
+  })
+
+  it("in the desktop app, clears another flow's victim too", async () => {
+    asDesktop()
+    const flowA = createMany('flowA', MAX_THREADS)
+    giveHistory(flowA[0]!, 2)
+
+    useChatStore.getState().createThread('flowB')
+
+    await vi.waitFor(() => expect(chatApi.clearConversation).toHaveBeenCalledWith('flowA', flowA[0], 2))
+  })
+
+  it('leaves a victim whose history this client never loaded: no version, so no clear that could wipe a live one', async () => {
+    asDesktop()
+    const flowB = createMany('flowB', MAX_THREADS)
+    // As a hydrated thread that was never opened: stored messages may exist, but no version is held.
+    useChatStore.setState(s => {
+      const historyStatus = {...s.historyStatus}
+      delete historyStatus[flowB[0]!]
+      return {historyStatus}
+    })
+
+    useChatStore.getState().createThread('flowB')
+
+    expect(useChatStore.getState().threads.some(t => t.id === flowB[0])).toBe(false)
+    await vi.dynamicImportSettled()
+    await new Promise(r => setTimeout(r, 0))
+    expect(chatApi.clearConversation).not.toHaveBeenCalled()
+  })
+
+  it('makes no server call for a victim with nothing stored, or with history saving off', async () => {
+    asDesktop()
+    createMany('flowB', MAX_THREADS)
+    useChatStore.getState().createThread('flowB')
+    expect(chatApi.clearConversation).not.toHaveBeenCalled()
+
+    useSettingsStore.setState(s => ({
+      settings: {...s.settings, ai: {...s.settings.ai, saveConversationHistory: false}},
+    }))
+    const oldest = useChatStore.getState().threads[0]!.id
+    giveHistory(oldest, 1)
+    useChatStore.getState().createThread('flowB')
+    expect(useChatStore.getState().threads.some(t => t.id === oldest)).toBe(false)
+    // The clear decides once its settings module has loaded.
+    await vi.dynamicImportSettled()
+    await new Promise(r => setTimeout(r, 0))
+    expect(chatApi.clearConversation).not.toHaveBeenCalled()
   })
 })

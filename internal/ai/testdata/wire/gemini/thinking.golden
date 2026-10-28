@@ -1,0 +1,7 @@
+# gemini/thinking.sse through parseGeminiSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 text="Yes: block 14 exits " served="gemini-3-pro-preview"
+02 text="once LoopIndex reaches the row count." served="gemini-3-pro-preview"
+03 done finish="STOP" in=640 out=205 cacheRead=512 items={"textSignature":"CiQBWIREFIXTURENOTAREALTHOUGHTSIGNATURE=="} served="gemini-3-pro-preview"
+return nil
+summary chunks=3 keepalives=0 text="Yes: block 14 exits once LoopIndex reaches the row count."

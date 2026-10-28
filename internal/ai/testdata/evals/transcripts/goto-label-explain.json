@@ -1,0 +1,23 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "get_subflow_blocks",
+          "input": {
+            "subflowId": "S1"
+          }
+        }
+      ],
+      "tokensIn": 1560,
+      "tokensOut": 24
+    },
+    {
+      "text": "[GOTO Start](block:B5) on line 6 jumps out of [IF %Counter% < 3](block:B4) back to the label [Start](block:B2) on line 3 — a backwards jump across a block boundary, which is what the [goto-antipattern finding](finding:goto-antipattern:2a92d3cc149cdb8a) flags. It works, but the loop is hidden: nothing in the structure says lines 3–6 repeat.\n\nReplace the label and the GOTO with a `LOOP WHILE %Counter% < 3` around the `Increase Variable` action.",
+      "tokensIn": 1690,
+      "tokensOut": 121
+    }
+  ]
+}

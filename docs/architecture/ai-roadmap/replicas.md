@@ -117,64 +117,6 @@ The same records appear during a rollout that raises `PAD_MAX_REPLICAS`, through
 
 **ADR.** ADR 0033 close-out and the ADR 0028 addendum gate liveness, owner_gone and the ledger on `PAD_MAX_REPLICAS > 1`; neither covers a single replica with Redis or mixed values.
 
-### R-replicas-12
-
-**A question whose write lost every cross-replica CAS round (or failed) is dropped, but its answer is still stored, orphaned** · tier 1
-
-**Problem.** `persistUserTurnVersioned` retries the question's compare-and-swap five times. The stripe mutex serialises this replica's stream writers, but client saves and clears take no conversation mutex. `SaveClientConversation` calls `SaveConversationIf` directly (`chat_conversation_version.go:212`), `ClearConversationIf` calls `DeleteConversationIf` the same way (`:232`), and `convMutexFor` is used only at `chat.go:182` and `chat_conversation.go:236`. So a round can be lost to another replica, or to a tab saving on the same replica. When every round is lost, or `SaveConversationIf` fails for any other reason, the turn continues with `stored=false`. The worker still sets `persistAnswer=true` for server-owned history. A failed history load (`chat_conversation_version.go:339-344`) leads to the same orphan. At the end, `persistAssistantTurn` looks for the question by its client id, does not find it, and inserts the answer at the end of the history. The stored thread then holds an assistant message with no question. `userTurnStored` stays false, so no reload re-attaches. The only traces are the counter `pad_chat_persist_giveups_total` and two warn logs (`:160`, `:347`). The next turn's context carries an answer to a question that is not there.
-
-**Evidence.**
-- `internal/service/chat_conversation_version.go:32` — five rounds; "A round is lost only to another writer that finished its own first", and the per-conversation lock keeps one replica's contenders serial (`:32-35`)
-- `internal/service/chat_conversation_version.go:157` — `attempt >= mutateConversationAttempts` gives up with the conflict error (`:157-162`)
-- `internal/service/chat_conversation_version.go:345` — `persistUserTurnVersioned` logs the failure and continues with `stored=false` and a nil write (`:346-350`); a failed history load returns the same (`:339-344`)
-- `internal/service/chat_conversation_version.go:212` — `SaveClientConversation` calls `SaveConversationIf` with no conversation mutex; `ClearConversationIf` calls `DeleteConversationIf` the same way (`:232`)
-- `internal/service/chat.go:865` — `serverOwnsHistory`: `persistAnswer = true` unconditionally; `userTurnStored` only when stored (`:868-869`)
-- `internal/service/chat_conversation.go:270` — `persistAssistantTurn`: `at = len(history)` when the question id is not found, and the answer is inserted there (`:270-273`)
-- `internal/service/chat_conversation.go:234` — the stripe mutex queues this replica's stream writers only; the CAS settles all the others
-
-**Change.** Pass the question's outcome into the answer write. When the question is not in the stored history, the mutation inserts the question and the answer together (both are in `req` and `ctl`), so the thread ends up either complete or untouched. Count this case as a separate conflict source. The alternative is to refuse to store an answer whose question is absent and report that on the done event, so the client saves the pair. Also scale the backoff with the attempt number, so several writers on one hot thread (replicas, or a tab saving on the same replica) cannot use up all five rounds within 50 ms.
-
-**Touches.** `internal/service/chat_conversation_version.go`, `internal/service/chat_conversation.go`, `internal/service/chat.go`
-
-**Done when.**
-- A service test uses a fake backend that answers `ErrConversationConflict` for the first five rounds at stream start. Afterwards the stored conversation contains both the question and the answer, or neither.
-- A service test where `SaveConversationIf` fails with a transport error at start: same invariant.
-- `pad_chat_conversation_conflicts_total` gains a source for a pair written at the end (or for a dropped answer), and the warn log names it.
-
-**ADR.** ADR 0031 specifies the CAS; the give-up path's effect on the answer is unspecified.
-
-### R-replicas-c4
-
-**Chat turns never trigger the project-listing refresh, so a cold or idle replica sizes Foundry turns from undecorated entries** · tier 2
-
-**Problem.** Registry providers only read the process-local listing cache. Only `PickerListing` and `ListModels` (the model picker and the Settings registry view) trigger the background refresh; `ResolveChat` and the chat turn path never do. Two kinds of replica have no listing: one that has not served a picker or Settings read since it started, and any replica 65 min after the last such read (5 min TTL plus 1 h grace). On those, chat turns size from undecorated entries:
-
-- no served model;
-- the flat provider-wide 128k ContextLimit, unless the deployment name is catalogued;
-- no MaxOutputTokens;
-- no reasoning-output floor, unless the deployment name itself reveals a reasoning model.
-
-A reasoning deployment named, say, `prod-chat` therefore gets no reasoning-output floor on those turns (`chat.go:126-127`, `151`).
-
-The exposure is narrower than the listing alone suggests. The audited wrapper's `Models` folds in the served-model memo (`audited.go:697-699`; `enrichServedModels` at `served_model.go:198-214`). The memo records the model behind each alias after every answered turn and keeps it for 24 h (`served_model.go:21`). So after the first answered turn for a user and resource on a replica, the ServedModel, the catalogue window and the output cap come back without any listing, and the reasoning floor with them. Registry window and output overrides apply regardless (`audited.go:702`). The real exposure is the first turn or turns per user and resource on a cold replica, plus project-only data such as the Claude relisting.
-
-**Evidence.**
-- `internal/service/azure_models_runtime.go:404` — `PickerListing` calls `s.refreshListings(st)`; the only other call site is `ListModels` at `azure_models_entries.go:419`
-- `internal/service/azure_models_runtime.go:56` — `ResolveChat` (through line 146) resolves the entry and never triggers a refresh
-- `internal/service/chat.go:486` — chat resolves through `s.azure.ResolveChat`, then builds `ForAzureConnection` at 505-509 with no refresh
-- `internal/ai/azure_foundry.go:604` — registry `Models` returns the cached listing, else the bare entries; it never fetches
-- `internal/ai/azure_foundry.go:534` — `azureModelsCache` is a process-local map; nothing shares it across replicas
-- `internal/ai/azure_foundry.go:515` — `azureModelsCacheTTL` is 5 min; with `azureModelsStaleGrace` of 1 h (`azure_registry.go:486`) that gives the 65 min horizon
-
-**Change.** When the resolved resource's listing is not live, trigger a refresh for it, either in `ResolveChat` or when `turnProvider` builds a registry provider. Do it without blocking, through the existing `azureListingRefresher` (dedup by owner and connection, bounded queue), so the chat path still never waits on the network. Optionally, have a miss in the registry provider's `cachedListing` call back into a refresh hook. A non-blocking trigger in the style of `s.refreshListings` for the resolved connection is enough. Publishing listings across replicas is out of scope.
-
-**Touches.** `internal/service/azure_models_runtime.go`, `internal/service/chat.go`, `internal/ai/azure_registry.go`, `internal/service/azure_models_runtime_test.go`
-
-**Done when.**
-- On a service with an empty listing cache, one `ResolveChat` of an Entra+project resource triggers exactly one background refresh job for that resource, and a second `ResolveChat` while that job is in flight triggers no further job.
-- After that refresh completes, the next turn's `turnGenerationParams` sees the project listing's ServedModel and catalogue window for the deployment, without a picker read.
-- `ResolveChat` latency does not depend on the project endpoint: a hung project endpoint does not slow the chat turn.
-
 ### R-replicas-8
 
 **Every provider memo and the circuit breaker are per-process, and the anonymous-struct memos escape the state registry** · tier 3

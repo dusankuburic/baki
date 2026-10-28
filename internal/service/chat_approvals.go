@@ -8,6 +8,7 @@ import (
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/auth"
+	"pad-analyzer/internal/platform/drain"
 )
 
 // The approvals component of the chat service (ADR 0026): a tool that must ask the stream's owner before acting
@@ -28,6 +29,14 @@ func (s *ChatService) decisionWait() time.Duration {
 	}
 	return fixDecisionTimeout
 }
+
+// SetDrainingForTesting gives this service a draining state of its own, for router tests outside the package; the
+// server's is the process's (drain.Process).
+func (s *ChatService) SetDrainingForTesting(st *drain.State) { s.draining = st }
+
+// SetDecisionWaitForTesting shortens the approval wait of this service, for router tests outside the package
+// (a timeout case through the HTTP boundary); d <= 0 restores the default.
+func (s *ChatService) SetDecisionWaitForTesting(d time.Duration) { s.fixDecisionWait = d }
 
 // fixDecisionKeepalive is how often the approval wait touches the activity clock: without it the idle watchdog
 // (counting only provider chunks + explicit touches) could cancel a healthy stream while the user reads.
@@ -86,7 +95,12 @@ const (
 	approvalTimedOut
 	// approvalCancelled: the stream ended first; the card was resolved with status cancelled.
 	approvalCancelled
+	// approvalRefused: the server is draining; no card was shown (R-approvals-c17).
+	approvalRefused
 )
+
+// drainingApprovalRefusal is the model's answer for an approval not asked because the server is restarting.
+const drainingApprovalRefusal = "the server is restarting, so no approval was asked and nothing was changed — tell the user to ask again in a moment."
 
 // fixDecisionState is one registered approval prompt; decided is buffered so ResolveApproval never blocks and
 // the FIRST decision wins.
@@ -111,6 +125,19 @@ type fixDecision struct {
 // fixDecisionKeepalive, for decisionWait or until the stream ends. Timeout and cancellation resolve the card
 // here; a decided request is resolved by the caller once it knows the outcome of acting on it.
 func (s *ChatService) requestApproval(ctx context.Context, streamID string, req approvalRequest, emit func(string, map[string]interface{}), touch func()) (approvalDecision, approvalOutcome) {
+	// waitStatus labels the card's wait in pad_chat_approval_wait_seconds (R-observability-1).
+	waitStatus := "cancelled"
+	// Draining: an approval asked now could not be acted on before the stop ends the stream.
+	if s.draining.Draining() {
+		return approvalDecision{}, approvalRefused
+	}
+	// The wait is the approval phase for the idle watchdog's message; the tool phase it interrupted comes back after.
+	if v, ok := s.activeStreams.Load(streamID); ok {
+		ctl := v.(*streamCtl)
+		prev := ctl.currentPhase()
+		ctl.setPhase(phaseApproval)
+		defer ctl.setPhase(prev)
+	}
 	st := &fixDecisionState{streamID: streamID, requiredScope: req.requiredScope, decided: make(chan fixDecision, 1)}
 	s.pendingFixDecisions.Store(req.id, st)
 	defer s.pendingFixDecisions.Delete(req.id)
@@ -122,6 +149,8 @@ func (s *ChatService) requestApproval(ctx context.Context, streamID string, req 
 	defer s.cluster.dropApproval(req.id)
 
 	emit("fix_proposal", req.eventData())
+	shown := time.Now()
+	defer func() { chatApprovalWait.WithLabelValues(waitStatus).Observe(time.Since(shown).Seconds()) }()
 
 	timeout := time.NewTimer(s.decisionWait())
 	defer timeout.Stop()
@@ -130,12 +159,18 @@ func (s *ChatService) requestApproval(ctx context.Context, streamID string, req 
 	for {
 		select {
 		case dec := <-st.decided:
+			if dec.approved {
+				waitStatus = "approved"
+			} else {
+				waitStatus = "declined"
+			}
 			return approvalDecision{approved: dec.approved, excluded: dec.excludedBatchIdx}, approvalDecided
 		case <-keepalive.C:
 			if touch != nil {
 				touch()
 			}
 		case <-timeout.C:
+			waitStatus = "timeout"
 			emitApprovalDecision(emit, req.id, "timeout", "")
 			return approvalDecision{}, approvalTimedOut
 		case <-ctx.Done():
@@ -171,6 +206,10 @@ func (s *ChatService) ResolveApproval(ctx context.Context, streamID, proposalID 
 	}
 	if actor := auth.ActorFromContext(ctx); st.requiredScope != "" && actor != nil && !actor.Allows(st.requiredScope) {
 		return fmt.Errorf("%w (deciding this approval needs %s)", ErrScopeDenied, st.requiredScope)
+	}
+	// Draining: the stop would cut the apply; a decline changes nothing and still resolves the card.
+	if approved && s.draining.Draining() {
+		return ErrServerRestarting
 	}
 	dec := fixDecision{approved: approved}
 	if approved {

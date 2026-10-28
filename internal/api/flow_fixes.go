@@ -4,12 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 
 	"pad-analyzer/internal/api/render"
 	"pad-analyzer/internal/api/route"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/service"
 	storageif "pad-analyzer/internal/storage/interfaces"
+	"pad-core/models"
 )
 
 // handleApplyFix applies a deterministic auto-fix to a block in the source
@@ -49,6 +53,9 @@ func (h *FlowHandler) handleApplyFix(w http.ResponseWriter, r *http.Request) {
 	}
 	service.RecordFlowOp("patch_fix")
 	updated, err := h.flowSvc.ApplyFix(r.Context(), doc, req.BlockID, req.FixType, req.RuleID, req.Variable, req.Property, req.Unsafe)
+	h.auditFixApply(r, doc, err, map[string]string{
+		"ruleId": req.RuleID, "fixType": req.FixType, "blockId": req.BlockID, "unsafe": strconv.FormatBool(req.Unsafe),
+	})
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {
 			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
@@ -139,6 +146,14 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 		}
 	}
 	out, err := h.flowSvc.ApplyFixBatchResult(r.Context(), doc, ruleFilter, req.Limit)
+	meta := map[string]string{"rules": strings.Join(sortedKeys(ruleFilter), ","), "unsafe": "false"}
+	if err == nil {
+		meta["applied"] = strconv.Itoa(out.Applied)
+		if out.Partial {
+			meta["partial"] = "true"
+		}
+	}
+	h.auditFixApply(r, doc, err, meta)
 	if err != nil {
 		if errors.Is(err, storageif.ErrVersionConflict) {
 			render.Error(w, fmt.Errorf("flow was modified concurrently; reload and retry"), http.StatusConflict)
@@ -154,6 +169,28 @@ func (h *FlowHandler) handleApplyFixBatch(w http.ResponseWriter, r *http.Request
 		resp["partialReason"] = out.Reason.Error()
 	}
 	render.JSON(w, resp)
+}
+
+// auditFixApply records a fix written through the HTTP routes (flow.fix_apply, R-security-4), whether it landed.
+func (h *FlowHandler) auditFixApply(r *http.Request, doc *models.FlowDocument, err error, meta map[string]string) {
+	meta["source"], meta["outcome"] = "http", "applied"
+	switch {
+	case err != nil:
+		meta["outcome"] = "error"
+	case meta["applied"] == "0":
+		meta["outcome"] = "none" // the batch found nothing to fix
+	}
+	h.audit.Record(r.Context(), audit.Entry{Action: audit.ActionFlowFixApply, ResourceType: "flow", ResourceID: doc.ID, OrgID: doc.OrganizationID, Meta: meta})
+}
+
+// sortedKeys is the set's members in order ("" for none).
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // registerFixRoutes wires the /api/flow fix-application sub-routes. Each resolves the flow, then loops

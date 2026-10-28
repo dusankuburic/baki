@@ -452,7 +452,7 @@ func (h *OrgHandler) registerOrgAzureRoutes(rb *route.Builder) {
 		rb.Get("/config", h.handleOrgAzureFoundryConfigGet)
 		rb.Post("/config", h.handleOrgAzureFoundryConfigSave)
 		rb.Delete("/config", h.handleOrgAzureFoundryConfigDelete)
-		rb.Post("/test", h.handleOrgAzureFoundryTest, route.RateLimit(route.RateChat), route.NoTx())
+		rb.Post("/test", h.handleOrgAzureFoundryTest, route.RateLimit(route.RateChat), route.Billed(), route.NoTx())
 		rb.Get("/connections", h.handleOrgAzureConnectionList)
 		rb.Post("/connections", h.handleOrgAzureConnectionCreate, route.Idempotent())
 		rb.Get("/connections/{connectionId}", h.handleOrgAzureConnectionGet)

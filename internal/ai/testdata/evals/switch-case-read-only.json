@@ -1,0 +1,29 @@
+{
+  "why": "A viewer (read-only access) asks for a fix: apply_fix is not offered, propose_fix previews it, and the answer claims no change.",
+  "flow": "switch_case",
+  "selectedBlock": "B10",
+  "access": "read-only",
+  "question": "Fix the uninitialized ErrorCode variable.",
+  "expect": {
+    "toolsSubset": [
+      "propose_fix"
+    ],
+    "mustNotCall": [
+      "apply_fix",
+      "apply_fixes"
+    ],
+    "mustNotOffer": [
+      "apply_fix",
+      "apply_fixes"
+    ],
+    "mustMention": [
+      "B10",
+      "ErrorCode"
+    ],
+    "mustLink": [
+      "block:",
+      "finding:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

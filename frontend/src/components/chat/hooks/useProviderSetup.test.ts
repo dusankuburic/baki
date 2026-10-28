@@ -130,7 +130,6 @@ beforeEach(() => {
     conversations: new Map(),
     historyStatus: {},
     modelRefusals: {},
-    selectedProvider: 'claude',
     providerEpoch: 0,
   })
   useOrgStore.setState({activeOrgId: null, organisations: []})
@@ -383,7 +382,6 @@ describe('useProviderSetup per-thread model', () => {
     expect(updateAI).not.toHaveBeenCalled()
     expect(updateProvider).not.toHaveBeenCalled()
     expect(useSettingsStore.getState().settings.ai.activeProvider).toBe('claude')
-    expect(useChatStore.getState().selectedProvider).toBe('claude')
     expect(pinOf(T1)?.provider).toBe('openai')
   })
 

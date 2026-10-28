@@ -34,8 +34,8 @@ func (b *staleReadBackend) LoadConversation(ctx context.Context, flowID, scope s
 	return msgs, err
 }
 
-func (b *staleReadBackend) LoadConversationVersioned(ctx context.Context, flowID, scope string) ([]storageif.ChatMessage, int64, error) {
-	msgs, v, err := b.FakeBackend.LoadConversationVersioned(ctx, flowID, scope)
+func (b *staleReadBackend) LoadConversationVersioned(ctx context.Context, flowID, scope, owner string) ([]storageif.ChatMessage, int64, error) {
+	msgs, v, err := b.FakeBackend.LoadConversationVersioned(ctx, flowID, scope, owner)
 	time.Sleep(b.hold)
 	return msgs, v, err
 }
@@ -106,9 +106,9 @@ type interleavingBackend struct {
 	saves atomic.Int32
 }
 
-func (b *interleavingBackend) SaveConversationIf(ctx context.Context, flowID, scope string, expected int64, msgs []storageif.ChatMessage) (int64, error) {
+func (b *interleavingBackend) SaveConversationIf(ctx context.Context, flowID, scope, owner string, expected int64, msgs []storageif.ChatMessage) (int64, error) {
 	if int(b.saves.Add(1)) <= b.times {
-		cur, _, err := b.LoadConversationVersioned(ctx, flowID, scope)
+		cur, _, err := b.LoadConversationVersioned(ctx, flowID, scope, owner)
 		if err != nil {
 			return 0, err
 		}
@@ -116,7 +116,7 @@ func (b *interleavingBackend) SaveConversationIf(ctx context.Context, flowID, sc
 			return 0, err
 		}
 	}
-	return b.FakeBackend.SaveConversationIf(ctx, flowID, scope, expected, msgs)
+	return b.FakeBackend.SaveConversationIf(ctx, flowID, scope, owner, expected, msgs)
 }
 
 func noBackoff(t *testing.T) {
@@ -186,12 +186,12 @@ func TestMutateConversation_NoChangeWritesNothing(t *testing.T) {
 	if err := backend.SaveConversation(ctx, "f", "k", []storageif.ChatMessage{{ID: "m0", Role: "user", Content: "first"}}); err != nil {
 		t.Fatal(err)
 	}
-	_, before, _ := backend.LoadConversationVersioned(ctx, "f", "k")
+	_, before, _ := backend.LoadConversationVersioned(ctx, "f", "k", "")
 	stored, err := svc.mutateConversation(ctx, "f", "k", func(h []models.ChatMessage) ([]models.ChatMessage, bool, error) { return h, false, nil })
 	if stored || err != nil {
 		t.Fatalf("mutateConversation = (%v, %v), want (false, nil)", stored, err)
 	}
-	if _, after, _ := backend.LoadConversationVersioned(ctx, "f", "k"); after != before {
+	if _, after, _ := backend.LoadConversationVersioned(ctx, "f", "k", ""); after != before {
 		t.Errorf("version moved %d -> %d", before, after)
 	}
 }
@@ -203,19 +203,19 @@ func TestSaveClientConversation_StaleBaseVersionConflicts(t *testing.T) {
 	ctx := context.Background()
 	first := []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}}
 
-	saved, err := svc.SaveClientConversation(ctx, "f", "k", new(int64), first)
+	saved, err := svc.SaveClientConversation(ctx, "f", "k", new(int64), first, true)
 	if err != nil || !saved.Versioned || saved.Version <= 0 {
 		t.Fatalf("create at base 0 = (%+v, %v), want a versioned save", saved, err)
 	}
 	second := append(slices.Clone(first), models.ChatMessage{ID: "m2", Role: "assistant", Content: "two"})
 	base := saved.Version
-	next, err := svc.SaveClientConversation(ctx, "f", "k", &base, second)
+	next, err := svc.SaveClientConversation(ctx, "f", "k", &base, second, true)
 	if err != nil || next.Version <= saved.Version {
 		t.Fatalf("save at the current version = (%+v, %v), want a newer version", next, err)
 	}
 
 	stale := saved.Version
-	_, err = svc.SaveClientConversation(ctx, "f", "k", &stale, []models.ChatMessage{{ID: "m9", Role: "user", Content: "overwrites"}})
+	_, err = svc.SaveClientConversation(ctx, "f", "k", &stale, []models.ChatMessage{{ID: "m9", Role: "user", Content: "overwrites"}}, true)
 	ae, ok := apperr.As(err)
 	if !ok || ae.Kind != apperr.KindConflict || ae.Code != CodeConversationConflict {
 		t.Fatalf("stale save err = %v, want a 409 %s", err, CodeConversationConflict)
@@ -239,11 +239,11 @@ func TestSaveClientConversation_WithoutABaseVersionIsBlindAndCounted(t *testing.
 	ctx := context.Background()
 	before := testutil.ToFloat64(chatBlindSavesTotal)
 
-	saved, err := svc.SaveClientConversation(ctx, "f", "k", nil, []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}})
+	saved, err := svc.SaveClientConversation(ctx, "f", "k", nil, []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}}, true)
 	if err != nil || saved.Versioned {
 		t.Fatalf("blind save = (%+v, %v), want it accepted without a version", saved, err)
 	}
-	if _, err := svc.SaveClientConversation(ctx, "f", "k", nil, []models.ChatMessage{{ID: "m2", Role: "user", Content: "replaced"}}); err != nil {
+	if _, err := svc.SaveClientConversation(ctx, "f", "k", nil, []models.ChatMessage{{ID: "m2", Role: "user", Content: "replaced"}}, true); err != nil {
 		t.Fatal(err)
 	}
 	if got := testutil.ToFloat64(chatBlindSavesTotal) - before; got != 2 {
@@ -255,8 +255,8 @@ func TestSaveClientConversation_WithoutABaseVersionIsBlindAndCounted(t *testing.
 	}
 
 	// A versioned save is not counted.
-	_, v, _ := svc.backend.LoadConversationVersioned(ctx, "f", "k")
-	if _, err := svc.SaveClientConversation(ctx, "f", "k", &v, []models.ChatMessage{{ID: "m3", Role: "user", Content: "x"}}); err != nil {
+	_, v, _ := svc.backend.LoadConversationVersioned(ctx, "f", "k", "")
+	if _, err := svc.SaveClientConversation(ctx, "f", "k", &v, []models.ChatMessage{{ID: "m3", Role: "user", Content: "x"}}, true); err != nil {
 		t.Fatal(err)
 	}
 	if got := testutil.ToFloat64(chatBlindSavesTotal) - before; got != 2 {
@@ -270,19 +270,19 @@ func TestClearConversationIf(t *testing.T) {
 	svc := cloudChat(tu.NewFakeBackend())
 	ctx := context.Background()
 	base := int64(0)
-	saved, err := svc.SaveClientConversation(ctx, "f", "k", &base, []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}})
+	saved, err := svc.SaveClientConversation(ctx, "f", "k", &base, []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	stale := saved.Version - 1
-	err = svc.ClearConversationIf(ctx, "f", "k", stale)
+	err = svc.ClearConversationIf(ctx, "f", "k", stale, true)
 	if ae, ok := apperr.As(err); !ok || ae.Code != CodeConversationConflict || ae.Details["version"] != saved.Version {
 		t.Fatalf("stale clear err = %v, want %s carrying version %d", err, CodeConversationConflict, saved.Version)
 	}
 	if got, _ := svc.GetConversation(ctx, "f", "k"); len(got) != 1 {
 		t.Fatalf("a refused clear deleted the history")
 	}
-	if err := svc.ClearConversationIf(ctx, "f", "k", saved.Version); err != nil {
+	if err := svc.ClearConversationIf(ctx, "f", "k", saved.Version, true); err != nil {
 		t.Fatalf("clear at the current version: %v", err)
 	}
 	if got, _ := svc.GetConversation(ctx, "f", "k"); len(got) != 0 {
@@ -298,7 +298,7 @@ func TestReadConversation_CarriesTheVersion(t *testing.T) {
 	if err != nil || !empty.Versioned || empty.Version != 0 || len(empty.Messages) != 0 {
 		t.Fatalf("missing conversation = (%+v, %v), want an empty list at version 0", empty, err)
 	}
-	saved, err := cloud.SaveClientConversation(ctx, "f", "k", new(int64), []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}})
+	saved, err := cloud.SaveClientConversation(ctx, "f", "k", new(int64), []models.ChatMessage{{ID: "m1", Role: "user", Content: "one"}}, true)
 	if err != nil {
 		t.Fatal(err)
 	}

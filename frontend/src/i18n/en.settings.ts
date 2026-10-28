@@ -1,4 +1,8 @@
 export const enSettings = {
+  saveFailed: {
+    title: 'Your settings were not saved',
+    reloaded: 'The change was put back.',
+  },
   providers: {
     connectedAs: 'Connected as',
     disconnect: 'Disconnect',
@@ -90,6 +94,8 @@ export const enSettings = {
     errorWithCode: '{{message}} ({{code}})',
     codeProviderUnknown: 'This server does not know this provider',
     codeUseProviderConfig: 'This provider is set up in its own section, not with a key',
+    codeSecretStorageUnavailable:
+      "The key was not changed: this server's secret storage is unavailable right now (the key stays as it was). Try again once it is back.",
     testFailedDetail: 'Invalid · {{detail}}',
   },
   azureModels: {
@@ -411,6 +417,8 @@ export const enSettings = {
     embeddingNoticePrefix: 'Requires an embedding provider.',
     embeddingNoticeSuffix:
       'Indexing needs a configured OpenAI, Gemini, GLM, or GitHub Models key (set under AI Behavior → Embedding Assistant). Azure AI Foundry indexes the Knowledge Base only when your administrator enables it for this deployment, and then needs an embedding model marked "Use for knowledge base" under AI Accounts → Azure AI Foundry. Claude, Copilot, and xAI don\'t support embeddings, so a Claude-only setup can\'t use the Knowledge Base.',
+    memberEmbeddingHint:
+      "Members search it with their own embedding key, so a member without a key for the provider it was indexed with gets none of its guidelines. The operator can set PAD_EMBEDDING_PROVIDER to make everyone use the organisation's key.",
     embeddingMissingUpload:
       'Indexing requires an embedding-capable provider key (OpenAI, Gemini, GLM, or GitHub Models — or Azure AI Foundry when your administrator enabled it and an embedding model is marked "Use for knowledge base"). Configure one under AI Behavior → Embedding Assistant.',
     embeddingMissingReindex:
@@ -466,6 +474,55 @@ export const enSettings = {
     loadFailed: 'Failed to load documents',
     fileTooLarge: 'File is {{size}}MB — limit is 1MB',
     uploaded: 'Document added',
+    uploadProgress: 'Embedded {{embedded}} of {{chunks}} passages…',
+    uploadStop: 'Stop upload',
+    uploadResume: 'Resume upload',
+    uploadStopped:
+      'Upload paused at {{embedded}} of {{chunks}} passages. Resume it to finish: the passages already embedded are kept and not paid for again.',
+    uploadStoppedUnknown:
+      'Upload stopped. If the document was stored, it is listed below as unfinished: Resume it there to finish.',
+    uploadProgressLabel: 'Upload progress',
+    reindexProgressLabel: 'Re-index progress',
+    indexing: 'Indexing…',
+    uploadStalled: 'The upload made no progress. Resume it later, or check the embedding provider.',
+    uploadDocumentGone:
+      'That upload no longer exists: it was replaced by a newer upload of the file, or deleted. Upload the file again.',
+    pending: 'Upload unfinished: {{embedded}} of {{chunks}} passages embedded. It is not searched until it finishes.',
+    resumePending: 'Resume',
+    resumePendingAria: 'Resume the upload of {{filename}}',
+    noSourceHint: 'Uploaded before its text was kept: upload it again to re-chunk it.',
+    rechunk: 'Re-chunk',
+    rechunking: 'Re-chunking…',
+    rechunkTitle: 'Cut the documents split by an older chunker again with the current one, and re-embed them',
+    rechunkConfirmTitle: 'Re-chunk the knowledge base?',
+    rechunkConfirmMessage:
+      'Documents split by an older chunker are cut again from their kept text and re-embedded with your embedding model. This calls the embedding provider for every passage of those documents.',
+    rechunkProgress_one: 'Re-chunked {{count}} document so far…',
+    rechunkProgress_other: 'Re-chunked {{count}} documents so far…',
+    rechunkDone_one: 'Re-chunked {{count}} document',
+    rechunkDone_other: 'Re-chunked {{count}} documents',
+    rechunkNothing: 'Nothing to re-chunk',
+    rechunkSkippedNoSource_one:
+      '{{count}} document was uploaded before its text was kept, so it could not be re-chunked: upload it again.',
+    rechunkSkippedNoSource_other:
+      '{{count}} documents were uploaded before their text was kept, so they could not be re-chunked: upload them again.',
+    rechunkSkippedTooLarge_one:
+      '{{count}} document would split into more passages than one upload may index and was left as it is.',
+    rechunkSkippedTooLarge_other:
+      '{{count}} documents would split into more passages than one upload may index and were left as they are.',
+    rechunkSkippedPending_one:
+      '{{count}} document was left as it is because an upload of it is unfinished. Finish or delete that upload first.',
+    rechunkSkippedPending_other:
+      '{{count}} documents were left as they are because an upload of them is unfinished. Finish or delete that upload first.',
+    rechunkStopped_one: 'Re-chunk stopped after {{count}} document. Run Re-chunk again to do the rest.',
+    rechunkStopped_other: 'Re-chunk stopped after {{count}} documents. Run Re-chunk again to do the rest.',
+    rechunkFailed: "Couldn't re-chunk the knowledge base",
+    rechunkIncomplete_one:
+      'Re-chunk stopped before it finished, after {{count}} document. Run Re-chunk again to do the rest.',
+    rechunkIncomplete_other:
+      'Re-chunk stopped before it finished, after {{count}} documents. Run Re-chunk again to do the rest.',
+    rechunkModelChanged:
+      'Not re-chunked: your embedding model differs from the one this knowledge base was indexed with. Use the same embedding provider as the rest of your organization, or re-index the knowledge base with your model first.',
     uploadFailed: 'Upload failed',
     uploadFailedDetail: 'Upload failed: {{message}}',
     selectFile: 'Select text or markdown file...',
@@ -531,6 +588,9 @@ export const enSettings = {
   keys: {
     configuredLocal: 'API key configured (saved in your OS keychain)',
     configuredServer: 'API key configured (stored encrypted on this server)',
+    unreadable:
+      "The stored key can't be read: the server's encryption key has changed since it was saved. Enter the key again to use this provider.",
+    enterAgain: 'Enter the key again',
     remove: 'Remove',
     removing: 'Removing…',
     test: 'Test',
@@ -822,6 +882,11 @@ export const enSettings = {
     saving: 'Saving…',
     saved: 'AI providers saved',
     saveFailed: 'Failed to save the AI providers',
+    stale:
+      'The AI settings changed after you opened them. The current allowed providers are loaded; review them and save again.',
+    staleReloadFailed:
+      "The AI settings changed after you opened them, and the current settings couldn't be loaded. Your selection is kept; reload them before saving again.",
+    reload: 'Reload',
     loading: 'Loading…',
     loadFailed: "Couldn't load the organisation's AI providers.",
   },
@@ -899,6 +964,7 @@ export const enSettings = {
     add: 'Add',
     editAria: 'Suggested prompt {{index}} of {{title}}',
     blankInvalid: 'A prompt cannot be empty',
+    listFull: 'A list holds at most {{max}} prompts.',
     remove: 'Remove prompt',
   },
   modal: {
@@ -1004,12 +1070,20 @@ export const enSettings = {
     embeddingModelPlaceholder: 'Provider default',
     embeddingModelHintPrefix: 'Override the embedding model name (e.g.',
     embeddingModelHintSuffix:
-      "). Leave blank to use the provider's default. The pgvector index tolerates a model swap; mismatched-dimension chunks are excluded at insert.",
+      "). Leave blank to use the provider's default. If the knowledge base was indexed with a different model, uploads fail until it is re-indexed with this one under Knowledge Base.",
     embeddingModelHintAzure:
       'For Azure AI Foundry, add an embedding model under AI Accounts → Azure AI Foundry and choose "Use for knowledge base" in its menu.',
+    embeddingManagedByAdmin:
+      "The deployment's administrator chooses the provider and model that index every Knowledge Base, under Admin → Operations → AI embeddings.",
+    saveFailed: 'Your last change was not saved and was put back: {{message}}',
+    saveFailedNoDetail: 'Your last change was not saved and was put back.',
     historyCosts: 'History',
     saveHistory: 'Save Conversation History',
     saveHistoryHint: 'Keep a local record of your AI chats per flow.',
+    toolsHeading: 'Tools',
+    toolsByDefault: 'Use tools by default',
+    toolsByDefaultHint:
+      'Let the assistant look up blocks, subflows and variables in the flow instead of answering from a summary. Applies to every chat you have not switched tools on or off in.',
     customInstructions: 'Custom Instructions',
     customInstructionsHint:
       'Appended to the AI system prompt. Use this to set a preferred language, focus area, or persona.',
@@ -1020,7 +1094,7 @@ export const enSettings = {
     creative: 'Creative',
     maxTokens: 'Max Tokens',
     maxTokensHint:
-      'Reasoning models (o-series, GPT-5, gpt-oss, DeepSeek-R1, Grok 4, Phi-4 reasoning, Claude Opus/Sonnet 5.x / Fable / Mythos) count their hidden thinking against this budget, so they are always sent at least {{floor}} tokens per turn — capped at the model’s own output limit — whatever is set here.',
+      'Reasoning models (o-series, GPT-5, gpt-oss, DeepSeek-R1, Grok 4, Phi-4 reasoning, Claude Opus/Sonnet 5.x / Fable / Mythos, Gemini 2.5 and 3) count their hidden thinking against this budget, so they are always sent at least {{floor}} tokens per turn — capped at the model’s own output limit — whatever is set here.',
     contextBudget: 'Context Token Budget',
     contextBudgetHint: 'Max tokens used for flow context.',
     defaultModel: 'Default for new chats',
@@ -1034,7 +1108,7 @@ export const enSettings = {
     reasoningEffortMedium: 'Medium',
     reasoningEffortHigh: 'High',
     reasoningEffortHint:
-      'Applies to reasoning models only (GPT-5/o-series reasoning_effort, Claude effort); other models ignore it. Deeper reasoning costs more output tokens.',
+      'Applies to reasoning models only (GPT-5/o-series reasoning_effort, Claude effort, Gemini thinking); other models ignore it. Deeper reasoning costs more output tokens.',
   },
   policy: {
     selectOrgFirst: 'Select an organization first',

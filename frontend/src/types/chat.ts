@@ -2,6 +2,7 @@
 import type {ProviderID} from './providers'
 import type {ReasoningEffort} from './settings'
 import type {BlockAnchor} from '@/lib/blockAnchor'
+import type {KnowledgeStatus} from '@/lib/chatEvent'
 
 export interface ToolCallRecord {
   name: string
@@ -12,6 +13,8 @@ export interface ToolCallRecord {
 }
 
 export interface FixItemSnapshot {
+  /** The request item's id (blockId:ruleId), when the record carries one. */
+  id?: string
   ruleId: string
   fixType: string
   blockLabel: string
@@ -74,6 +77,8 @@ export interface ChatMessage {
   approvals?: ApprovalSnapshot[]
   /** How many earlier history messages the turn left out to fit the model's context window. */
   truncated?: number
+  /** Why the turn went without the org's knowledge base (its knowledge notice); absent when it was consulted. */
+  knowledge?: KnowledgeStatus
 }
 
 export interface ChatRequest {

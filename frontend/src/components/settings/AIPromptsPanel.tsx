@@ -3,6 +3,8 @@ import {useTranslation} from 'react-i18next'
 import {useSettingsStore} from '@/stores/settingsStore'
 import {X, Plus, GripVertical} from 'lucide-react'
 import clsx from 'clsx'
+import {AI_PROMPT_MAX_LENGTH, AI_PROMPTS_PER_LIST_MAX} from '@/lib/constraints'
+import SaveErrorLine from './SaveErrorLine'
 
 const EMPTY_PROMPTS = {block: [], flow: [], finding: [], blockWithFindings: []}
 
@@ -13,38 +15,41 @@ export default function AIPromptsPanel() {
   const p = aiSettings.prompts ?? EMPTY_PROMPTS
 
   return (
-    <div className="grid gap-6 grid-cols-[repeat(auto-fill,minmax(24rem,1fr))]">
-      <PromptList
-        title={t('prompts.flowTitle')}
-        description={t('prompts.flowDescription')}
-        listKey="flow"
-        items={p.flow}
-        onChange={newItems => updateAI({prompts: {...p, flow: newItems}})}
-      />
+    <div className="space-y-4">
+      <SaveErrorLine />
+      <div className="grid gap-6 grid-cols-[repeat(auto-fill,minmax(24rem,1fr))]">
+        <PromptList
+          title={t('prompts.flowTitle')}
+          description={t('prompts.flowDescription')}
+          listKey="flow"
+          items={p.flow}
+          onChange={newItems => updateAI({prompts: {...p, flow: newItems}})}
+        />
 
-      <PromptList
-        title={t('prompts.blockTitle')}
-        description={t('prompts.blockDescription')}
-        listKey="block"
-        items={p.block}
-        onChange={newItems => updateAI({prompts: {...p, block: newItems}})}
-      />
+        <PromptList
+          title={t('prompts.blockTitle')}
+          description={t('prompts.blockDescription')}
+          listKey="block"
+          items={p.block}
+          onChange={newItems => updateAI({prompts: {...p, block: newItems}})}
+        />
 
-      <PromptList
-        title={t('prompts.findingTitle')}
-        description={t('prompts.findingDescription')}
-        listKey="finding"
-        items={p.finding}
-        onChange={newItems => updateAI({prompts: {...p, finding: newItems}})}
-      />
+        <PromptList
+          title={t('prompts.findingTitle')}
+          description={t('prompts.findingDescription')}
+          listKey="finding"
+          items={p.finding}
+          onChange={newItems => updateAI({prompts: {...p, finding: newItems}})}
+        />
 
-      <PromptList
-        title={t('prompts.blockWithFindingsTitle')}
-        description={t('prompts.blockWithFindingsDescription')}
-        listKey="blockWithFindings"
-        items={p.blockWithFindings}
-        onChange={newItems => updateAI({prompts: {...p, blockWithFindings: newItems}})}
-      />
+        <PromptList
+          title={t('prompts.blockWithFindingsTitle')}
+          description={t('prompts.blockWithFindingsDescription')}
+          listKey="blockWithFindings"
+          items={p.blockWithFindings}
+          onChange={newItems => updateAI({prompts: {...p, blockWithFindings: newItems}})}
+        />
+      </div>
     </div>
   )
 }
@@ -158,24 +163,31 @@ function PromptList({
           </div>
         ))}
 
-        <form onSubmit={handleAdd} className="flex items-center gap-2 p-1 pl-7 mt-2">
-          <input
-            type="text"
-            className="flex-1 bg-surface-3 border border-border-default rounded px-2 py-1.5 text-sm text-text-primary outline-hidden focus:border-brand-500 placeholder:text-text-tertiary"
-            placeholder={t('prompts.addPlaceholder')}
-            aria-label={t('prompts.addAria')}
-            value={newItemText}
-            onChange={e => setNewItemText(e.target.value)}
-          />
-          <button
-            type="submit"
-            disabled={!newItemText.trim()}
-            className="p-1.5 text-brand-500 hover:bg-brand-500/10 rounded disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
-            aria-label={t('prompts.addAria')}
-          >
-            <Plus className="w-5 h-5" />
-          </button>
-        </form>
+        {list.length >= AI_PROMPTS_PER_LIST_MAX ? (
+          <p className="p-1 pl-7 mt-2 text-xs text-text-tertiary">
+            {t('prompts.listFull', {max: AI_PROMPTS_PER_LIST_MAX})}
+          </p>
+        ) : (
+          <form onSubmit={handleAdd} className="flex items-center gap-2 p-1 pl-7 mt-2">
+            <input
+              type="text"
+              maxLength={AI_PROMPT_MAX_LENGTH}
+              className="flex-1 bg-surface-3 border border-border-default rounded px-2 py-1.5 text-sm text-text-primary outline-hidden focus:border-brand-500 placeholder:text-text-tertiary"
+              placeholder={t('prompts.addPlaceholder')}
+              aria-label={t('prompts.addAria')}
+              value={newItemText}
+              onChange={e => setNewItemText(e.target.value)}
+            />
+            <button
+              type="submit"
+              disabled={!newItemText.trim()}
+              className="p-1.5 text-brand-500 hover:bg-brand-500/10 rounded disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
+              aria-label={t('prompts.addAria')}
+            >
+              <Plus className="w-5 h-5" />
+            </button>
+          </form>
+        )}
       </div>
     </div>
   )
@@ -205,6 +217,7 @@ function PromptRowInput({
     <div className="flex-1 min-w-0 flex flex-col">
       <input
         type="text"
+        maxLength={AI_PROMPT_MAX_LENGTH}
         className={clsx(
           'w-full bg-transparent border rounded px-2 py-1 text-sm text-text-primary outline-hidden transition-colors',
           blank

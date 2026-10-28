@@ -90,12 +90,16 @@ type AISettings struct {
 	ActiveProvider    string `json:"activeProvider"`
 	EmbeddingProvider string `json:"embeddingProvider"`
 	// EmbeddingModel overrides the provider's default embedding model; empty
-	// keeps the default. The pgvector index is dimensionless, so a model swap
-	// needs no re-index (mismatched dims are excluded at insert).
+	// keeps the default. An org knowledge base indexed with another model refuses
+	// uploads (EMBEDDING_MODEL_CHANGED) until a forced re-index (ADR 0027).
 	EmbeddingModel          string                      `json:"embeddingModel,omitempty"`
 	Providers               map[string]AIProviderConfig `json:"providers"`
 	SaveConversationHistory bool                        `json:"saveConversationHistory"`
 	SystemPromptSuffix      string                      `json:"systemPromptSuffix,omitempty"`
+	// ToolsOffByDefault starts the chat's threads without tools: a thread that never switched tools on or off sends
+	// useTools false. False (the zero value, and every document stored before it) keeps tools on. Read by the client
+	// only; the server runs the tool loop per request (ChatRequest.UseTools).
+	ToolsOffByDefault bool `json:"toolsOffByDefault,omitempty"`
 	// AllowedProviders, in an ORGANISATION's settings, lists the provider ids its flows and corpus may be
 	// sent to (ADR 0028); empty = every provider the deployment offers. Unread in the deployment's and a
 	// user's settings.

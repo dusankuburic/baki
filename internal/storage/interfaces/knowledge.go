@@ -25,6 +25,8 @@ type KnowledgeStore interface {
 	SaveKnowledgeDocumentWithChunks(ctx context.Context, userID string, doc *KnowledgeDocument, chunks []KnowledgeChunk) error
 	// SearchKnowledge ranks the org's chunks at the query's width by cosine similarity. identity restricts the hits to the chunks embedded under it plus the legacy rows (no identity); "" = any identity.
 	SearchKnowledge(ctx context.Context, orgID string, queryEmbedding []float32, limit int, identity string) ([]KnowledgeChunk, error)
+	// SearchKnowledgeLexical is the lexical half of hybrid retrieval: up to limit of the org's chunks whose text holds one of phrases at a trigram word similarity (pg_trgm word_similarity: the phrase against its best-matching extent of the chunk) at or above the store's floor, those matching more of the phrases first. identity filters as SearchKnowledge's does, a pending chunk is never a hit; no phrases, no hits.
+	SearchKnowledgeLexical(ctx context.Context, orgID string, phrases []string, limit int, identity string) ([]KnowledgeChunk, error)
 	// ListKnowledgeChunkContents returns up to limit chunks (no embeddings) strictly after the cursor in (doc_id, id) order — one re-index page; limit <= 0 = backend page cap. notIdentity skips the chunks already embedded under that identity (legacy rows are walked); "" walks every chunk.
 	ListKnowledgeChunkContents(ctx context.Context, orgID string, after KnowledgeChunkCursor, limit int, notIdentity string) ([]KnowledgeChunk, error)
 	// ListUnindexedKnowledgeChunkContents is ListKnowledgeChunkContents over the chunks OUTSIDE the vector index alone, whatever their identity — the rows a width change left as JSON only; a store without a vector index (HasPgvector false) has nothing outside it and returns every chunk.
@@ -47,7 +49,55 @@ type KnowledgeStore interface {
 	CountStrandedKnowledgeChunksByDocument(ctx context.Context, orgID, identity string) (map[string]int, error)
 	// StampKnowledgeChunkIdentity rewrites the embedding identity of the org's chunks at identity from ("" = the legacy rows) to to ("" = none), RLS-scoped to userID like UpdateKnowledgeChunkEmbeddings, and reports how many rows changed.
 	StampKnowledgeChunkIdentity(ctx context.Context, userID, orgID, from, to string) (int, error)
+
+	// Two-phase uploads, re-chunking and the per-document identity stamp (R-knowledge-2, -9, -3; v51). A pending
+	// chunk (KnowledgeChunk.Pending) belongs to an upload not yet finished: stored without an embedding, embedded page
+	// by page (UpdateKnowledgeChunkEmbeddings), it is out of the corpus until FinishKnowledgeDocument — no search
+	// returns it, embedded or not, and the census, the samples and the re-index pages leave it out.
+
+	// GetKnowledgeDocument is one of the org's documents with its source text (Content, HasSource: a document stored
+	// before v51 kept none), its state and its chunk counts (ChunkCount, PendingChunks); ErrNotFound when the org has
+	// no document by that id.
+	GetKnowledgeDocument(ctx context.Context, orgID, id string) (*KnowledgeDocument, error)
+	// ListPendingKnowledgeChunks returns up to limit (<= 0 = the backend's page cap) of the document's pending chunks
+	// still without an embedding, in id order strictly after afterID ("" = from the first) — one page of a two-phase
+	// upload's embedding.
+	ListPendingKnowledgeChunks(ctx context.Context, orgID, docID, afterID string, limit int) ([]KnowledgeChunk, error)
+	// FinishKnowledgeDocument completes a two-phase upload, RLS-scoped to userID: when none of the document's chunks
+	// lacks its embedding it marks a pending document ready, puts its chunks into the corpus (Pending cleared) and, in
+	// the same transaction, deletes the org's other READY documents of its filename (the versions it supersedes). It
+	// reports how many chunks are still to embed (0: the document is ready); ErrNotFound when the org has no document
+	// by that id.
+	FinishKnowledgeDocument(ctx context.Context, userID, orgID, docID string) (pending int, err error)
+	// ListKnowledgeDocumentsBelowChunkerVersion returns up to limit (<= 0 = all) of the org's ready documents split with
+	// a chunker version below version, in id order strictly after afterID, without their text (HasSource says whether
+	// it is kept) — what a rechunk re-index walks.
+	ListKnowledgeDocumentsBelowChunkerVersion(ctx context.Context, orgID string, version int, afterID string, limit int) ([]*KnowledgeDocument, error)
+	// SampleLegacyKnowledgeChunkEmbeddings returns, for up to docs of the org's documents holding embedded legacy chunks
+	// (no identity, not pending; lowest document ids first), the first and the last such chunk by id WITH stored
+	// embeddings, in (doc_id, id) order — a document's proof covers both ends of a re-index that stopped inside it.
+	SampleLegacyKnowledgeChunkEmbeddings(ctx context.Context, orgID string, docs int) ([]KnowledgeChunk, error)
+	// StampKnowledgeDocumentIdentity stamps to on the legacy chunks (no identity, not pending) of the org's documents
+	// docIDs alone — the documents a sample proved (ADR 0027 §3) — RLS-scoped to userID, and reports how many rows changed.
+	StampKnowledgeDocumentIdentity(ctx context.Context, userID, orgID string, docIDs []string, to string) (int, error)
 }
+
+// The states of a knowledge document (knowledge_documents.state, v51). A pending document has chunks still to embed
+// (an upload cut short, resumable by posting its id back to the upload route); a ready one has none.
+const (
+	KnowledgeDocumentPending = "pending"
+	KnowledgeDocumentReady   = "ready"
+)
+
+// KnowledgePendingTTL is how long an unfinished upload is kept, counted from when it was first stored: the retention
+// sweep then deletes it (PurgeResult.KnowledgeUploads) with its chunks and its kept source text. It never served, and
+// the ready version it would have replaced still does. Generous, so an upload left over a holiday can still be
+// continued; a re-upload of the same text starts the clock again only when the old one was already swept.
+const KnowledgePendingTTL = 30 * 24 * time.Hour
+
+// KnowledgePendingPurgeBatch bounds how many unfinished uploads one retention sweep deletes (each holds up to 2 500
+// chunks and 1 MiB of source text, deleted in the same statement); the next sweep takes the rest.
+const KnowledgePendingPurgeBatch = 25
 
 // KnowledgeChunkCounts is an org's chunk census relative to one embedding identity (ADR 0027).
 type KnowledgeChunkCounts struct {
@@ -72,6 +122,15 @@ type KnowledgeDocument struct {
 	ChunkerVersion int `json:"chunkerVersion,omitempty"`
 	// EmbeddingStranded is a list-view extra relative to the viewer's embedding identity: chunks embedded under another identity, which that viewer's searches never return; re-index converts them.
 	EmbeddingStranded int `json:"embeddingStranded,omitempty"`
+	// State is KnowledgeDocumentPending or KnowledgeDocumentReady; PendingChunks the chunks of a pending document
+	// still to embed (a list-view extra, like ChunkCount, which counts them too).
+	State         string `json:"state,omitempty"`
+	PendingChunks int    `json:"pendingChunks,omitempty"`
+	// HasSource reports whether the source text is kept (v51): a document stored before cannot be re-chunked.
+	HasSource bool `json:"hasSource,omitempty"`
+	// Content is the (masked) source text the chunks were cut from; written by an upload, read by
+	// GetKnowledgeDocument only, never listed.
+	Content string `json:"-"`
 }
 
 type KnowledgeChunk struct {
@@ -85,6 +144,12 @@ type KnowledgeChunk struct {
 	EmbeddingIdentity string `json:"embeddingIdentity,omitempty"`
 	// Filename of the source document (joined at retrieval time) so RAG can attribute each chunk to its source.
 	Filename string `json:"filename,omitempty"`
+	// ChunkerVersion is the source document's (joined at retrieval time by the vector searches): which overlap the
+	// chunk carries (rag.stripOverlapPrefix). 0 = unknown, read as 1.
+	ChunkerVersion int `json:"chunkerVersion,omitempty"`
+	// Pending marks a chunk of a two-phase upload not yet finished (v51): written by SaveKnowledgeChunks (with no
+	// Embedding: one still to embed), cleared for the whole document by FinishKnowledgeDocument.
+	Pending bool `json:"pending,omitempty"`
 }
 
 // KnowledgeChunkCursor is a keyset position in an org's chunks ordered by (doc_id, id); zero value = start (TEXT columns, "" sorts first); also the re-index resume token — clients treat it as opaque.

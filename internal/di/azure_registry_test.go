@@ -75,13 +75,13 @@ func TestProvideAzureRegistry_Selection(t *testing.T) {
 // embeds with Azure, and installs the data-subject export's hook.
 func TestProvideAzureModelService_Wiring(t *testing.T) {
 	cfg := config.Default()
-	desktop := ProvideAzureModelService(storage.NewMemoryAzureRegistry(), testutil.NewFakeSecretStore(), nil, nil, nil, nil, nil, nil, cfg)
+	desktop := ProvideAzureModelService(storage.NewMemoryAzureRegistry(), testutil.NewFakeSecretStore(), nil, nil, nil, nil, nil, nil, cfg, nil)
 	if desktop.OrgRegistriesAvailable() || desktop.KnowledgeEmbeddingEnabled() {
 		t.Errorf("desktop: orgs %v, knowledge %v", desktop.OrgRegistriesAvailable(), desktop.KnowledgeEmbeddingEnabled())
 	}
 
 	db := &databaseRegistry{}
-	authOff := ProvideAzureModelService(storage.NewMemoryAzureRegistry(), testutil.NewFakeSecretStore(), nil, nil, nil, nil, testutil.NewFakeBackend(), db, cfg)
+	authOff := ProvideAzureModelService(storage.NewMemoryAzureRegistry(), testutil.NewFakeSecretStore(), nil, nil, nil, nil, testutil.NewFakeBackend(), db, cfg, nil)
 	if authOff.OrgRegistriesAvailable() || db.export != nil {
 		t.Errorf("database with auth off: orgs %v, export hook installed %v; want the file registry's single owner", authOff.OrgRegistriesAvailable(), db.export != nil)
 	}
@@ -92,12 +92,12 @@ func TestProvideAzureModelService_Wiring(t *testing.T) {
 	cfg.Auth.Enabled = true
 	cfg.Storage.EmbeddingProvider = "azure-foundry"
 	keys := testutil.NewFakeSecretStore()
-	localDB := ProvideAzureModelService(storagedb.NewPostgresAzureRegistry(nil), keys, keys, testutil.NewFakeOrgSecretStore(), nil, nil, testutil.NewFakeBackend(), db, cfg)
+	localDB := ProvideAzureModelService(storagedb.NewPostgresAzureRegistry(nil), keys, keys, testutil.NewFakeOrgSecretStore(), nil, nil, testutil.NewFakeBackend(), db, cfg, nil)
 	if !localDB.OrgRegistriesAvailable() || !localDB.KnowledgeEmbeddingEnabled() {
 		t.Errorf("local with a database and accounts: orgs %v, knowledge %v", localDB.OrgRegistriesAvailable(), localDB.KnowledgeEmbeddingEnabled())
 	}
 	cfg.Mode = config.ModeCloud
-	cloud := ProvideAzureModelService(storagedb.NewPostgresAzureRegistry(nil), keys, keys, testutil.NewFakeOrgSecretStore(), nil, nil, testutil.NewFakeBackend(), db, cfg)
+	cloud := ProvideAzureModelService(storagedb.NewPostgresAzureRegistry(nil), keys, keys, testutil.NewFakeOrgSecretStore(), nil, nil, testutil.NewFakeBackend(), db, cfg, nil)
 	if !cloud.OrgRegistriesAvailable() || !cloud.KnowledgeEmbeddingEnabled() {
 		t.Errorf("cloud: orgs %v, knowledge %v", cloud.OrgRegistriesAvailable(), cloud.KnowledgeEmbeddingEnabled())
 	}

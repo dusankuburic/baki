@@ -1,0 +1,17 @@
+{
+  "why": "A batch fix the user asked for and approved: list_findings, then apply_fixes behind one approval; the change is claimed only after the batch reports applied, and the removed blocks are named, not linked (their ids are gone).",
+  "flow": "edge_cases",
+  "decision": "approve",
+  "question": "Remove all the unused variables.",
+  "expect": {
+    "toolsSubset": [
+      "list_findings",
+      "apply_fixes"
+    ],
+    "mustMention": [
+      "EmptyVar",
+      "UnicodeVar",
+      "SpecialChars"
+    ]
+  }
+}

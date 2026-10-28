@@ -20,7 +20,10 @@ func TestToolGate_ViewerIsRefusedTheFixTools(t *testing.T) {
 	gate := NewToolGate(viewer(), true, false)
 	for _, spec := range ToolSpecs() {
 		want := ""
-		if spec.RequiresApproval {
+		switch {
+		case spec.NeedsKnowledge:
+			want = ToolRefusedKnowledgeUnavailable // NewToolGate wires no knowledge base
+		case spec.RequiresApproval:
 			want = ToolRefusedFlowPermission
 		}
 		if got := gate(spec); got != want {

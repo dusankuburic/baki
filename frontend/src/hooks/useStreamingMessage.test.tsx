@@ -3,6 +3,7 @@ import {renderHook} from '@testing-library/react'
 import {useStreamingMessage, type StreamHandler} from './useStreamingMessage'
 import {chatApi} from '@/api'
 import type {ErrorUsage} from '@/lib/chatEvent'
+import {notifyBackendRestarted} from '@/lib/backendRestart'
 
 type EventCb = (ev: {name: string; data: unknown}) => void
 type StateCb = (state: string) => void
@@ -41,7 +42,6 @@ vi.mock('@/api', () => ({
   chatApi: {
     resumeStream: vi.fn(),
     cancelStream: vi.fn().mockResolvedValue(undefined),
-    beginStream: vi.fn(),
   },
 }))
 
@@ -86,7 +86,7 @@ describe('registerStream open-wait timeout', () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
 
-    const p = result.current.registerStream('s1', false)
+    const p = result.current.registerStream('s1')
     const rejected = expect(p).rejects.toThrow(/Could not connect to the event stream/)
     await vi.advanceTimersByTimeAsync(15_000)
     await rejected
@@ -100,7 +100,7 @@ describe('registerStream open-wait timeout', () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
 
-    const p = result.current.registerStream('s1', false)
+    const p = result.current.registerStream('s1')
     await vi.advanceTimersByTimeAsync(1_000)
     setConnState('open')
     await expect(p).resolves.toBe(true)
@@ -112,7 +112,7 @@ describe('stall probe', () => {
   it('finishes a stream whose done event was dropped, via resume', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     capturedCb!(chunkEvent('s1', 'hel'))
     capturedCb!(chunkEvent('s1', 'lo'))
@@ -135,7 +135,7 @@ describe('stall probe', () => {
   it('surfaces a dropped error event via resume', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
       text: '',
@@ -153,7 +153,7 @@ describe('stall probe', () => {
   it("passes a live error event's code to the handler", async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     capturedCb!({
       name: 'chat:event',
@@ -175,7 +175,7 @@ describe('stall probe', () => {
   it('keeps a stream alive through heartbeats during a long silent phase', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     for (let i = 0; i < 15; i++) {
       await vi.advanceTimersByTimeAsync(20_000)
@@ -190,7 +190,7 @@ describe('stall probe', () => {
   it('gives up after repeated no-progress probes', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     vi.mocked(chatApi.resumeStream).mockResolvedValue({text: '', done: false, error: '', tokensOut: 0, tokensIn: 0})
 
@@ -207,7 +207,7 @@ describe('stall probe', () => {
     const handler = makeHandler()
     handler.getAccLength.mockReturnValue(0)
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
       text: 'partial',
@@ -226,7 +226,7 @@ describe('stall probe', () => {
   it('does not probe while chunks keep flowing', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     for (let i = 0; i < 5; i++) {
       await vi.advanceTimersByTimeAsync(20_000)
@@ -236,19 +236,141 @@ describe('stall probe', () => {
     expect(chatApi.resumeStream).not.toHaveBeenCalled()
   })
 
-  it('counts a failed probe request as a miss, not an instant error', async () => {
+  it('a probe the server answered with an error status still counts as a miss', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
+
+    vi.mocked(chatApi.resumeStream).mockRejectedValue(Object.assign(new Error('not found'), {status: 404}))
+    await vi.advanceTimersByTimeAsync(3 * 30_000)
+
+    expect(handler.onError).toHaveBeenCalledWith(expect.stringContaining('stalled'), 's1')
+  })
+
+  it('a probe that got no answer is not a miss: it says nothing about the stream, and probing goes on', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
 
     vi.mocked(chatApi.resumeStream).mockRejectedValue(new Error('network'))
-    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.advanceTimersByTimeAsync(5 * 30_000)
 
     expect(handler.onError).not.toHaveBeenCalled()
+    expect(chatApi.resumeStream).toHaveBeenCalledTimes(5)
+  })
+})
 
+describe('stall probe while the event stream is down (R-streaming-6)', () => {
+  // The client's buffer as the engine keeps it: a probe's onReplace sets it.
+  function trackingHandler() {
+    const handler = makeHandler()
+    let acc = 0
+    handler.onChunk.mockImplementation((t: string) => (acc += t.length))
+    handler.onReplace.mockImplementation((t: string) => (acc = t.length))
+    handler.getAccLength.mockImplementation(() => acc)
+    return handler
+  }
+
+  it('offline for minutes mid-answer (every probe fails) does not end the stream as stalled', async () => {
+    const handler = trackingHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+    capturedCb!(chunkEvent('s1', 'partial'))
+    setConnState('reconnecting')
+
+    vi.mocked(chatApi.resumeStream).mockRejectedValue(new TypeError('Failed to fetch'))
+    await vi.advanceTimersByTimeAsync(150_000)
+
+    expect(handler.onError).not.toHaveBeenCalled()
+  })
+
+  it('a reconnecting stream the server still runs is not counted as stalled, growing or not', async () => {
+    const handler = trackingHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+    capturedCb!(chunkEvent('s1', 'par'))
+    setConnState('reconnecting')
+
+    const live = (text: string) => ({text, done: false, error: '', tokensOut: 0, tokensIn: 0})
+    vi.mocked(chatApi.resumeStream)
+      .mockResolvedValueOnce(live('partial'))
+      .mockResolvedValueOnce(live('partial and more'))
+      .mockResolvedValue(live('partial and more'))
+    await vi.advanceTimersByTimeAsync(6 * 30_000)
+
+    expect(chatApi.resumeStream).toHaveBeenCalledTimes(6)
+    expect(handler.onError).not.toHaveBeenCalled()
+    expect(handler.onReplace).toHaveBeenLastCalledWith('partial and more', 's1')
+  })
+
+  it('commits a stream whose /resume answers done within one probe interval, though SSE is reconnecting', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+    capturedCb!(chunkEvent('s1', 'par'))
+    setConnState('reconnecting')
+
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'partial and the rest',
+      done: true,
+      error: '',
+      tokensOut: 7,
+      tokensIn: 3,
+    })
     await vi.advanceTimersByTimeAsync(30_000)
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(handler.onError).toHaveBeenCalledWith(expect.stringContaining('stalled'), 's1')
+
+    expect(chatApi.resumeStream).toHaveBeenCalledWith('s1', 0)
+    expect(handler.onDone).toHaveBeenCalledWith(7, 3, 's1', undefined)
+  })
+})
+
+describe('a backend restart (R-frontend-c7)', () => {
+  it('ends every stream in flight as interrupted, says the backend restarted, and never resumes it', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+    // Its create was answered: the old process ran it.
+    result.current.confirmStream('s1')
+    await result.current.registerStream('s2')
+    // The mock keeps the last subscriber: s2's.
+    const s2Events = capturedCb!
+    s2Events(chunkEvent('s2', 'partial'))
+
+    notifyBackendRestarted()
+
+    expect(handler.onError).toHaveBeenCalledTimes(2)
+    expect(handler.onError).toHaveBeenCalledWith(expect.stringMatching(/backend restarted/i), 's1', 'BACKEND_RESTARTED')
+    expect(handler.onError).toHaveBeenCalledWith(expect.stringMatching(/backend restarted/i), 's2', 'BACKEND_RESTARTED')
+
+    setConnState('reconnecting')
+    setConnState('open')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(chatApi.resumeStream).not.toHaveBeenCalled()
+    expect(chatApi.cancelStream).not.toHaveBeenCalled()
+    // Unsubscribed: the new process's events never reach it.
+    expect(capturedCb).toBeNull()
+  })
+
+  it('leaves a stream the old process never ran: it goes on against the new backend, nothing cancelled', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('live')
+    result.current.confirmStream('live')
+    // A send still waiting for the events stream: its create has not been sent yet.
+    setConnState('reconnecting')
+    const waiting = result.current.registerStream('starting')
+    await vi.advanceTimersByTimeAsync(0)
+    const startingEvents = capturedCb!
+
+    notifyBackendRestarted()
+    setConnState('open')
+
+    await expect(waiting).resolves.toBe(true)
+    expect(handler.onError).toHaveBeenCalledTimes(1)
+    expect(handler.onError).toHaveBeenCalledWith(expect.any(String), 'live', 'BACKEND_RESTARTED')
+    startingEvents(chunkEvent('starting', 'from the new process'))
+    expect(handler.onChunk).toHaveBeenCalledWith('from the new process', 'starting')
+    expect(chatApi.cancelStream).not.toHaveBeenCalled()
   })
 })
 
@@ -265,7 +387,7 @@ describe('reconnect resume of a lost stream', () => {
   it.each([403, 404, 410])('reports a live stream as interrupted at once when the resume answers %i', async status => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
     capturedCb!(chunkEvent('s1', 'partial'))
 
     vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(status))
@@ -279,7 +401,7 @@ describe('reconnect resume of a lost stream', () => {
   it('counts a confirmed stream as live before its first event', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
     result.current.confirmStream('s1')
 
     vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(403))
@@ -291,7 +413,7 @@ describe('reconnect resume of a lost stream', () => {
   it('does not report a stream whose create has not answered yet', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(404))
     await reconnect()
@@ -302,7 +424,7 @@ describe('reconnect resume of a lost stream', () => {
   it('keeps waiting when the resume fails transiently', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
     capturedCb!(chunkEvent('s1', 'partial'))
 
     vi.mocked(chatApi.resumeStream).mockRejectedValue(goneError(503))
@@ -316,7 +438,7 @@ describe('reconnect resume of a lost stream', () => {
   it('passes a SERVER_RESTARTING the resume reports to the handler with its code', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
     capturedCb!(chunkEvent('s1', 'partial'))
 
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
@@ -343,7 +465,7 @@ describe('done meta (served model)', () => {
   it('passes the served model of a live done to the handler and drops any rates', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     capturedCb!(chunkEvent('s1', 'hi'))
     capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 1, servedModel: 'gpt-4o', ...RATES}))
@@ -354,7 +476,7 @@ describe('done meta (served model)', () => {
   it('passes the stored conversation version a done names, and the version the turn began from', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     capturedCb!(chunkEvent('s1', 'hi'))
     capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 1, conversationVersion: 12, conversationBase: 10}))
@@ -362,10 +484,41 @@ describe('done meta (served model)', () => {
     expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {conversationVersion: 12, conversationBase: 10})
   })
 
+  it('passes a done that says the server could not store the answer (R-tool-loop-20)', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+
+    capturedCb!(chunkEvent('s1', 'hi'))
+    capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 1, answerStored: false}))
+
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {answerStored: false})
+  })
+
+  it('passes the unstored answer a resume reports after the done', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+    capturedCb!(chunkEvent('s1', 'hi'))
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'hi there',
+      done: true,
+      error: '',
+      tokensOut: 3,
+      tokensIn: 1,
+      answerStored: false,
+    })
+
+    capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 2}))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(handler.onDone).toHaveBeenCalledWith(3, 1, 's1', {answerStored: false})
+  })
+
   it('keeps the conversation version through a chunk-mismatch resume that does not know it', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
     capturedCb!(chunkEvent('s1', 'hi'))
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
       text: 'hi there',
@@ -384,7 +537,7 @@ describe('done meta (served model)', () => {
   it('passes no meta for a plain done', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     capturedCb!(chunkEvent('s1', 'hi'))
     capturedCb!(doneEvent('s1', {tokensOut: 3, tokensIn: 1, chunks: 1}))
@@ -395,7 +548,7 @@ describe('done meta (served model)', () => {
   it('takes the served model from a chunk-mismatch resume and drops any rates', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
     capturedCb!(chunkEvent('s1', 'hi'))
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
       text: 'hi there',
@@ -417,7 +570,7 @@ describe('done meta (served model)', () => {
   it('forwards the served model a stall-probe resume reports', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
     capturedCb!(chunkEvent('s1', 'hel'))
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
       text: 'hello',
@@ -433,46 +586,10 @@ describe('done meta (served model)', () => {
     expect(handler.onDone).toHaveBeenCalledWith(5, 2, 's1', {servedModel: 'gpt-4o-mini'})
   })
 
-  it('forwards the served model of a stream /begin reports as already finished', async () => {
-    const handler = makeHandler()
-    const {result} = renderHook(() => useStreamingMessage(handler))
-    vi.mocked(chatApi.beginStream).mockResolvedValue({
-      status: 'finished',
-      text: 'done already',
-      done: true,
-      tokensOut: 2,
-      tokensIn: 1,
-      servedModel: 'gpt-4o',
-    })
-
-    await result.current.registerStream('s1', true)
-
-    expect(handler.onReplace).toHaveBeenCalledWith('done already', 's1')
-    expect(handler.onDone).toHaveBeenCalledWith(2, 1, 's1', {servedModel: 'gpt-4o'})
-  })
-
-  it('takes the served model a finished /begin reports', async () => {
-    const handler = makeHandler()
-    const {result} = renderHook(() => useStreamingMessage(handler))
-    vi.mocked(chatApi.beginStream).mockResolvedValue({
-      status: 'finished',
-      text: 'done already',
-      done: true,
-      tokensOut: 2,
-      tokensIn: 1,
-      servedModel: 'gpt-4o',
-      ...RATES,
-    })
-
-    await result.current.registerStream('s1', true)
-
-    expect(handler.onDone).toHaveBeenCalledWith(2, 1, 's1', {servedModel: 'gpt-4o'})
-  })
-
   it('lets a finishing resume supply the served model, and drops any rate it still carries', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
     capturedCb!(chunkEvent('s1', 'hi'))
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
       text: 'hi there',
@@ -505,7 +622,7 @@ describe('fix_decision dispatch', () => {
   it('forwards per-item outcomes from a batch decision', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     capturedCb!(
       fixDecisionEvent('s1', {
@@ -528,7 +645,7 @@ describe('fix_decision dispatch', () => {
   it('passes undefined items for a single-fix decision', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
 
     capturedCb!(fixDecisionEvent('s1', {proposalId: 'p1', status: 'applied'}))
 
@@ -546,7 +663,7 @@ describe('cancel', () => {
     )
     result.current.cancel('s1')
     await vi.advanceTimersByTimeAsync(0)
-    expect(handler.onStopUnreachable).toHaveBeenCalledWith('s1')
+    expect(handler.onStopUnreachable).toHaveBeenCalledWith('s1', expect.anything())
 
     vi.mocked(chatApi.cancelStream).mockRejectedValueOnce(
       Object.assign(new Error('x'), {status: 403, code: 'STREAM_NOT_FOUND'}),
@@ -567,7 +684,7 @@ describe('replay gap marker', () => {
   it('resumes every registered stream by delta, as a reconnect does', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
     capturedCb!(chunkEvent('s1', 'partial'))
     vi.mocked(chatApi.resumeStream).mockClear()
     vi.mocked(chatApi.resumeStream).mockResolvedValue({
@@ -588,12 +705,140 @@ describe('replay gap marker', () => {
   it('does nothing when no stream is registered', async () => {
     const handler = makeHandler()
     const {result} = renderHook(() => useStreamingMessage(handler))
-    await result.current.registerStream('s1', false)
+    await result.current.registerStream('s1')
     result.current.teardownStream?.('s1')
     vi.mocked(chatApi.resumeStream).mockClear()
 
     gap()
     await vi.advanceTimersByTimeAsync(0)
     expect(chatApi.resumeStream).not.toHaveBeenCalled()
+  })
+})
+
+// R-streaming-5: every resume answer goes through one path, so its events reach onResumeState before done, error or
+// the next stall timer, whichever call fetched it.
+describe('resume answers apply their events', () => {
+  const toolResult = {type: 'tool_result', data: {name: 'list_findings', label: 'Listing findings', ok: true}}
+
+  it('applies the events of the full refetch when a live chunk raced a delta resume', async () => {
+    const handler = makeHandler()
+    let acc = 0
+    handler.onChunk.mockImplementation((t: string) => (acc += t.length))
+    handler.onReplace.mockImplementation((t: string) => (acc = t.length))
+    handler.getAccLength.mockImplementation(() => acc)
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+    const events = capturedCb!
+    events(chunkEvent('s1', 'abc'))
+
+    let answerDelta: (v: unknown) => void = () => {}
+    vi.mocked(chatApi.resumeStream)
+      .mockImplementationOnce(() => new Promise(r => (answerDelta = r)) as never)
+      .mockResolvedValueOnce({
+        text: 'abcdefgh',
+        done: false,
+        error: '',
+        tokensOut: 0,
+        tokensIn: 0,
+        events: [toolResult],
+      })
+    setConnState('reconnecting')
+    setConnState('open')
+    await vi.advanceTimersByTimeAsync(0)
+    events(chunkEvent('s1', 'de'))
+    answerDelta({text: 'de', done: false, error: '', tokensOut: 0, tokensIn: 0, events: []})
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(chatApi.resumeStream).toHaveBeenLastCalledWith('s1', 0)
+    expect(handler.onReplace).toHaveBeenLastCalledWith('abcdefgh', 's1')
+    expect(handler.onResumeState).toHaveBeenLastCalledWith(
+      [expect.objectContaining({kind: 'tool-result', name: 'list_findings'})],
+      's1',
+    )
+  })
+
+  it('applies the events a stall probe answer carries, before its done', async () => {
+    const handler = makeHandler()
+    const order: string[] = []
+    handler.onResumeState.mockImplementation(() => order.push('events'))
+    handler.onDone.mockImplementation(() => order.push('done'))
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+
+    vi.mocked(chatApi.resumeStream).mockResolvedValue({
+      text: 'all of it',
+      done: true,
+      error: '',
+      tokensOut: 4,
+      tokensIn: 2,
+      events: [toolResult],
+    })
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(handler.onResumeState).toHaveBeenCalledWith(
+      [expect.objectContaining({kind: 'tool-result', name: 'list_findings'})],
+      's1',
+    )
+    expect(order).toEqual(['events', 'done'])
+  })
+})
+
+// R-streaming-c20: a stop keeps the stream's subscription until the server confirms it or the stream ends, so a stop
+// that did not get through still hears the stream's end.
+describe('cancel keeps listening until the stop is confirmed', () => {
+  it('tears the subscription down only once the server confirms the stop', async () => {
+    const handler = makeHandler()
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+    let confirm: () => void = () => {}
+    vi.mocked(chatApi.cancelStream).mockImplementationOnce(() => new Promise<void>(r => (confirm = r)))
+
+    result.current.cancel('s1')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(capturedCb).not.toBeNull()
+
+    confirm()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(capturedCb).toBeNull()
+  })
+
+  it('offers the stop again after a 429, and keeps listening until the stream ends', async () => {
+    const handler = {...makeHandler(), onStopUnreachable: vi.fn()}
+    const {result} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+    const events = capturedCb!
+    vi.mocked(chatApi.cancelStream).mockRejectedValueOnce(
+      Object.assign(new Error('rate limit exceeded'), {status: 429, code: 'RATE_LIMITED'}),
+    )
+
+    result.current.cancel('s1')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(handler.onStopUnreachable).toHaveBeenCalledWith('s1', expect.anything())
+    expect(capturedCb).not.toBeNull()
+
+    // A stopping stream is not probed: nothing is left to commit.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(chatApi.resumeStream).not.toHaveBeenCalled()
+
+    events({name: 'chat:event', data: {streamId: 's1', type: 'done', data: {tokensOut: 1, tokensIn: 1}}})
+    expect(capturedCb).toBeNull()
+  })
+})
+
+describe('unmount while a stop is under way', () => {
+  it('does not send the stop again, and reports nothing once unmounted', async () => {
+    const handler = {...makeHandler(), onStopUnreachable: vi.fn()}
+    const {result, unmount} = renderHook(() => useStreamingMessage(handler))
+    await result.current.registerStream('s1')
+    let refuse: (err: unknown) => void = () => {}
+    vi.mocked(chatApi.cancelStream).mockImplementationOnce(() => new Promise<void>((_r, reject) => (refuse = reject)))
+
+    result.current.cancel('s1')
+    unmount()
+    refuse(Object.assign(new Error('rate limit exceeded'), {status: 429, code: 'RATE_LIMITED'}))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(chatApi.cancelStream).toHaveBeenCalledTimes(1)
+    expect(handler.onStopUnreachable).not.toHaveBeenCalled()
   })
 })

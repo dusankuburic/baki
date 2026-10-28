@@ -1,8 +1,12 @@
 package ai
 
+// xaiProviderID is the registry id: the constructors label their counters with it (a reference to xaiSpec.ID from a
+// constructor would be an initialization cycle through Ctor).
+const xaiProviderID = "xai"
+
 // xaiSpec: xAI's OpenAI-compatible endpoint with a bare key; chat only.
 var xaiSpec = ProviderSpec{
-	ID:           "xai",
+	ID:           xaiProviderID,
 	Name:         "xAI (Grok)",
 	AuthType:     AuthAPIKey,
 	Caps:         CapChat | CapStream | CapTools | CapReasoning | CapOrgShared,

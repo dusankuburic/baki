@@ -137,6 +137,8 @@ const (
 	replyScopeDenied = "scope_denied"
 	// replyUnsupported answers an op this release does not know (a newer replica during a rolling deploy).
 	replyUnsupported = "unsupported"
+	// replyRestarting answers an approve the owner refused because it is draining (R-approvals-c17).
+	replyRestarting = "restarting"
 )
 
 // chatCommand is the wire form of one command. Every field beside v and kind is additive: a replica ignores what it
@@ -248,7 +250,7 @@ var (
 	chatCommandsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pad_chat_commands_total",
-			Help: "Chat stream commands between replicas by op (cancel, decide), side (origin: the replica that got the request; owner: the replica running the stream) and outcome: ok, gone (the stream had ended), no_pending (no such approval), forbidden (not the caller's stream), scope_denied (the token lacks the tool's scope), unsupported (an op this release does not know), unreachable (origin only: the owner could not be reached, the request answered 503 REPLICA_UNREACHABLE), unknown_owner (origin only: the stream's snapshot names no owner replica, a stream of the release before the commands; answered STREAM_NOT_FOUND), owner_gone (origin only: the owner did not answer and its liveness key has lapsed, a replica that died; a stop is answered as for an ended stream, a decision as no longer pending), other (a reply status this release does not know). A steady unreachable rate is a stuck replica or a Redis outage; a replica that died shows as unreachable until its liveness key lapses (15 s), then as owner_gone.",
+			Help: "Chat stream commands between replicas by op (cancel, decide), side (origin: the replica that got the request; owner: the replica running the stream) and outcome: ok, gone (the stream had ended), no_pending (no such approval), forbidden (not the caller's stream), scope_denied (the token lacks the tool's scope), restarting (an approve the draining owner refused), unsupported (an op this release does not know), unreachable (origin only: the owner could not be reached, the request answered 503 REPLICA_UNREACHABLE), unknown_owner (origin only: the stream's snapshot names no owner replica, a stream of the release before the commands; answered STREAM_NOT_FOUND), owner_gone (origin only: the owner did not answer and its liveness key has lapsed, a replica that died; a stop is answered as for an ended stream, a decision as no longer pending), other (a reply status this release does not know). A steady unreachable rate is a stuck replica or a Redis outage; a replica that died shows as unreachable until its liveness key lapses (15 s), then as owner_gone.",
 		},
 		[]string{"op", "side", "outcome"},
 	)
@@ -320,6 +322,8 @@ func (s *ChatService) ownerDecide(ctx context.Context, cmd chatCommand) string {
 		return replyOK
 	case errors.Is(err, ErrScopeDenied):
 		return replyScopeDenied
+	case errors.Is(err, ErrServerRestarting):
+		return replyRestarting
 	default: // ErrNoPendingFix: unknown, decided already, or another stream's
 		return replyNoPending
 	}
@@ -531,6 +535,8 @@ func decisionResult(status, requiredScope string) (conclusive bool, err error) {
 		return true, scopeDenied(requiredScope)
 	case replyForbidden:
 		return true, ErrStreamNotOwned
+	case replyRestarting:
+		return true, ErrServerRestarting
 	}
 	return false, nil
 }
@@ -539,7 +545,7 @@ func decisionResult(status, requiredScope string) (conclusive bool, err error) {
 // (a newer release, or something that is not a replica), and what it says must not become a series.
 func statusLabel(status string) string {
 	switch status {
-	case replyOK, replyGone, replyNoPending, replyForbidden, replyScopeDenied, replyUnsupported:
+	case replyOK, replyGone, replyNoPending, replyForbidden, replyScopeDenied, replyUnsupported, replyRestarting:
 		return status
 	}
 	return "other"

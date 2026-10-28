@@ -35,7 +35,7 @@ func (s *ChatService) loadCallerPreferences(ctx context.Context) *models.AppSett
 					return m
 				}
 			} else if err != nil {
-				logger.Warn("chat: user settings unavailable; using deployment settings", "error", err)
+				logger.FromContext(ctx).Warn("chat: user settings unavailable; using deployment settings", "error", err)
 			}
 		}
 	}

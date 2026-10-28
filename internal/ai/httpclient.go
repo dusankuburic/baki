@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -34,16 +36,87 @@ func maxConnsPerHostFromEnv() int {
 var sharedHTTPClient = &http.Client{
 	Timeout: 0,
 	Transport: &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
+		Proxy: http.ProxyFromEnvironment,
+		// The connect and the TLS handshake are bounded on the base, so every clone inherits them: Go dials
+		// through a zero net.Dialer (no timeout) without a DialContext, and arms no handshake timer without
+		// TLSHandshakeTimeout, so a gateway that accepts TCP and stalls the handshake held a call until the
+		// caller's own deadline. The egress guards replace DialContext with a dialer of the same timeout.
+		DialContext:         (&net.Dialer{Timeout: providerDialTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: providerTLSHandshakeTimeout,
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 20,
 		MaxConnsPerHost:     maxConnsPerHostFromEnv(),
 		IdleConnTimeout:     90 * time.Second,
 		// B1.8: a header-only floor — a call site that forgets a per-request context gets bounded headers
 		// without killing long SSE bodies the way Client.Timeout would.
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: streamingHeaderTimeout,
 		ForceAttemptHTTP2:     true,
 	},
+}
+
+// The provider transports' connection bounds (R-provider-4) and header floors (R-provider-5).
+const (
+	providerDialTimeout         = 30 * time.Second
+	providerTLSHandshakeTimeout = 15 * time.Second
+	// streamingHeaderTimeout is the header floor of a streaming request: the upstream answers the headers as
+	// soon as it starts generating.
+	streamingHeaderTimeout = 30 * time.Second
+	// longWaitHeaderTimeout is the header floor of a non-streaming chat request (a stream-refusing deployment's
+	// fallback, streamViaChat): a reasoning model can think for minutes before the first header, and the
+	// streaming floor aborted the call while its tokens were billed. The same as Azure's.
+	longWaitHeaderTimeout = 5 * time.Minute
+)
+
+// doProviderRequest is client.Do for a provider call. A timeout the transport itself hit while the caller's
+// context is still live — the headers never came, the connect or the handshake stalled — is the upstream not
+// answering: ErrProviderDown, which the retry wrapper retries and the breaker counts (R-provider-3). A bare
+// header timeout matches context.DeadlineExceeded, which both treat as the caller's own. The caller's own
+// cancel or deadline is returned unchanged.
+func doProviderRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	resp, err := client.Do(req)
+	if err != nil && req.Context().Err() == nil && isTransportTimeout(err) {
+		return nil, &upstreamTimeoutError{cause: err, noReplay: waitsLong(client)}
+	}
+	return resp, err
+}
+
+// upstreamTimeoutError is ErrProviderDown for a request the provider did not answer in time. It keeps the
+// transport's text but does not unwrap to it: the cause matches context.DeadlineExceeded, which every layer above
+// reads as the caller's own deadline (no retry, a timeout code), the opposite of what this is.
+type upstreamTimeoutError struct {
+	cause error
+	// noReplay marks a request on a long-wait client (a non-streaming answer the upstream may have produced and
+	// billed by the time the floor fired): retrying it would bill again and run into the stream's wall clock.
+	noReplay bool
+}
+
+// waitsLong reports a client whose header floor is the long one: its timed-out requests are not replayed.
+func waitsLong(client *http.Client) bool {
+	t, ok := client.Transport.(*http.Transport)
+	return ok && t.ResponseHeaderTimeout >= longWaitHeaderTimeout
+}
+
+// replayForbidden reports an error the retry wrapper must not replay (upstreamTimeoutError.noReplay); the breaker
+// still counts it as the outage it is.
+func replayForbidden(err error) bool {
+	var timeout *upstreamTimeoutError
+	return errors.As(err, &timeout) && timeout.noReplay
+}
+
+func (e *upstreamTimeoutError) Error() string {
+	return ErrProviderDown.Error() + ": the provider did not answer in time: " + e.cause.Error()
+}
+
+func (e *upstreamTimeoutError) Unwrap() error { return ErrProviderDown }
+
+// isTransportTimeout reports a timeout error: context.DeadlineExceeded (net/http's header timeout matches it)
+// or a net.Error that says it timed out.
+func isTransportTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // authHTTPClient is used for OAuth device-flow and token-exchange calls (fixed
@@ -78,12 +151,32 @@ func guardedAuthTransport() *http.Transport {
 var fixedHostRuntime = struct {
 	mu     sync.RWMutex
 	client *http.Client
-}{client: sharedHTTPClient}
+	// longWait is the client for non-streaming chat requests (longWaitHeaderTimeout); otherwise identical.
+	longWait *http.Client
+}{client: sharedHTTPClient, longWait: longWaitClient(sharedTransportBase(), nil)}
 
 func fixedHostClient() *http.Client {
 	fixedHostRuntime.mu.RLock()
 	defer fixedHostRuntime.mu.RUnlock()
 	return fixedHostRuntime.client
+}
+
+// fixedHostClientFor is the fixed-host client for a request that streams (the streaming header floor) or waits
+// for the whole answer before its first header (the long one).
+func fixedHostClientFor(stream bool) *http.Client {
+	if stream {
+		return fixedHostClient()
+	}
+	fixedHostRuntime.mu.RLock()
+	defer fixedHostRuntime.mu.RUnlock()
+	return fixedHostRuntime.longWait
+}
+
+// longWaitClient clones base with the long header floor; checkRedirect is the client's redirect policy.
+func longWaitClient(base *http.Transport, checkRedirect func(*http.Request, []*http.Request) error) *http.Client {
+	t := base.Clone()
+	t.ResponseHeaderTimeout = longWaitHeaderTimeout
+	return &http.Client{Timeout: 0, Transport: t, CheckRedirect: checkRedirect}
 }
 
 // ConfigureFixedHostClient swaps in the guarded client for every fixed-host
@@ -94,9 +187,13 @@ func fixedHostClient() *http.Client {
 // concrete IP for direct connections and in the proxy hook for proxied ones.
 func ConfigureFixedHostClient(policy egress.Policy) {
 	base := sharedTransportBase().Clone()
-	egress.GuardAllowListedTransport(base, &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}, policy)
+	egress.GuardAllowListedTransport(base, &net.Dialer{Timeout: providerDialTimeout, KeepAlive: 30 * time.Second}, policy)
 	c := &http.Client{Timeout: 0, Transport: base, CheckRedirect: egress.NoRedirects}
+	// The long-wait client carries the same guard and redirect policy: only the header floor differs. Its pool is
+	// its own, so PAD_AI_MAX_CONNS_PER_HOST bounds streaming and non-streaming connections to a host separately.
+	long := longWaitClient(base, egress.NoRedirects)
 	fixedHostRuntime.mu.Lock()
 	fixedHostRuntime.client = c
+	fixedHostRuntime.longWait = long
 	fixedHostRuntime.mu.Unlock()
 }

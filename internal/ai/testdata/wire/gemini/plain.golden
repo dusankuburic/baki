@@ -1,0 +1,8 @@
+# gemini/plain.sse through parseGeminiSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 text="The flow reads " served="gemini-2.5-flash"
+02 text="the workbook, then loops " served="gemini-2.5-flash"
+03 text="over each row — café names included." served="gemini-2.5-flash"
+04 done finish="STOP" in=1290 out=18 cacheRead=1024 served="gemini-2.5-flash"
+return nil
+summary chunks=4 keepalives=0 text="The flow reads the workbook, then loops over each row — café names included."

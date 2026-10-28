@@ -1,0 +1,12 @@
+# openai/reasoning.sse through parseOpenAISSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="DeepSeek-R1-0528"
+02 reasoning="The user asks whether the loop exits. " served="DeepSeek-R1-0528"
+03 reasoning="Block 14 compares LoopIndex." served="DeepSeek-R1-0528"
+04 text="Yes: block 14 exits " served="DeepSeek-R1-0528"
+05 text="once LoopIndex reaches the row count." served="DeepSeek-R1-0528"
+06 keepalive served="DeepSeek-R1-0528"
+07 keepalive served="DeepSeek-R1-0528"
+08 done finish="stop" in=640 out=96 served="DeepSeek-R1-0528"
+return nil
+summary chunks=8 keepalives=3 text="Yes: block 14 exits once LoopIndex reaches the row count." reasoning="The user asks whether the loop exits. Block 14 compares LoopIndex."

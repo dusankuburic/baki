@@ -15,7 +15,7 @@ vi.mock('@/api', async importOriginal => {
       getProviderCatalog: vi.fn().mockRejectedValue(new ApiError('not found', 404, null)),
       getGitHubUser: vi.fn().mockResolvedValue(null),
       getCopilotUser: vi.fn().mockResolvedValue(null),
-      hasApiKey: vi.fn().mockResolvedValue(false),
+      keyStatus: vi.fn().mockResolvedValue({has: false, unreadable: false}),
       getLocalModelsConfig: vi.fn().mockResolvedValue({configured: false, baseUrl: ''}),
       listAzureConnections: vi.fn().mockResolvedValue({
         connections: [],

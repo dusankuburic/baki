@@ -1,0 +1,8 @@
+# responses/error.sse through parseResponsesSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="gpt-4.1-2025-04-14"
+02 keepalive served="gpt-4.1-2025-04-14"
+03 text="Looking at the" served="gpt-4.1-2025-04-14"
+04 error=provider_down msg="The server had an error while processing your request." served="gpt-4.1-2025-04-14"
+return nil
+summary chunks=4 keepalives=2 text="Looking at the"

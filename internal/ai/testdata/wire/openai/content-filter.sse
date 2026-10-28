@@ -1,0 +1,13 @@
+: hand-built from the Azure OpenAI content-filtering streaming docs (prompt_filter_results chunk, finish_reason content_filter), NOT a live capture; see ../README.md
+data: {"choices":[],"created":0,"id":"","model":"","object":"","prompt_filter_results":[{"prompt_index":0,"content_filter_results":{"hate":{"filtered":false,"severity":"safe"},"self_harm":{"filtered":false,"severity":"safe"},"sexual":{"filtered":false,"severity":"safe"},"violence":{"filtered":false,"severity":"safe"}}}]}
+
+data: {"choices":[{"content_filter_results":{},"delta":{"content":"","refusal":null,"role":"assistant"},"finish_reason":null,"index":0,"logprobs":null}],"created":1761523204,"id":"chatcmpl-WIRE0000000000000000000000005","model":"gpt-4o-2024-11-20","object":"chat.completion.chunk","system_fingerprint":"fp_wire00002","usage":null}
+
+data: {"choices":[{"content_filter_results":{"hate":{"filtered":false,"severity":"safe"},"self_harm":{"filtered":false,"severity":"safe"},"sexual":{"filtered":false,"severity":"safe"},"violence":{"filtered":false,"severity":"safe"}},"delta":{"content":"Here is how to"},"finish_reason":null,"index":0,"logprobs":null}],"created":1761523204,"id":"chatcmpl-WIRE0000000000000000000000005","model":"gpt-4o-2024-11-20","object":"chat.completion.chunk","system_fingerprint":"fp_wire00002","usage":null}
+
+data: {"choices":[{"content_filter_results":{"hate":{"filtered":false,"severity":"safe"},"self_harm":{"filtered":false,"severity":"safe"},"sexual":{"filtered":false,"severity":"safe"},"violence":{"filtered":true,"severity":"medium"}},"delta":{},"finish_reason":"content_filter","index":0,"logprobs":null}],"created":1761523204,"id":"chatcmpl-WIRE0000000000000000000000005","model":"gpt-4o-2024-11-20","object":"chat.completion.chunk","system_fingerprint":"fp_wire00002","usage":null}
+
+data: {"choices":[],"created":1761523204,"id":"chatcmpl-WIRE0000000000000000000000005","model":"gpt-4o-2024-11-20","object":"chat.completion.chunk","system_fingerprint":"fp_wire00002","usage":{"completion_tokens":6,"completion_tokens_details":{"accepted_prediction_tokens":0,"audio_tokens":0,"reasoning_tokens":0,"rejected_prediction_tokens":0},"prompt_tokens":88,"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":0},"total_tokens":94}}
+
+data: [DONE]
+

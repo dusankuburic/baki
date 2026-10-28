@@ -46,6 +46,17 @@ export function mergeHistory(loaded: ChatMessage[], local: readonly ChatMessage[
   return merged
 }
 
+/**
+ * Whether the server may hold a conversation for the thread, history saving aside: not when its loaded history is
+ * empty (a new thread, or one cleared); a thread whose history has not loaded may.
+ */
+export function mayHoldStoredConversation(
+  state: Pick<ChatState, 'historyStatus' | 'conversations'>,
+  threadId: string,
+): boolean {
+  return !(state.historyStatus[threadId]?.state === 'loaded' && (state.conversations.get(threadId)?.length ?? 0) === 0)
+}
+
 type HistorySlice = Pick<
   ChatState,
   | 'beginHistoryLoad'

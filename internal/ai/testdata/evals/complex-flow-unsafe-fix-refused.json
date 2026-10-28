@@ -1,0 +1,23 @@
+{
+  "why": "The user asks for a fix chat may not apply (it changes runtime behaviour): the answer explains the manual change and claims nothing.",
+  "flow": "complex_flow",
+  "selectedBlock": "B4",
+  "question": "Fix the hardcoded password for me.",
+  "expect": {
+    "toolsSubset": [
+      "propose_fix"
+    ],
+    "mustNotCall": [
+      "apply_fix",
+      "apply_fixes"
+    ],
+    "mustMention": [
+      "hardcoded-credential",
+      "B4"
+    ],
+    "mustLink": [
+      "finding:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

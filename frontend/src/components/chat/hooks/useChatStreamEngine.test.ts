@@ -41,6 +41,9 @@ vi.mock('@/api', () => ({
   },
 }))
 
+const toast = {warning: vi.fn(), error: vi.fn(), success: vi.fn(), info: vi.fn(), toast: vi.fn()}
+vi.mock('@/components/shared/Toast', () => ({useOptionalToast: () => toast}))
+
 vi.mock('@/platform/adapters', () => ({
   createAdapter: () => ({
     getBackendConfig: vi.fn().mockResolvedValue({apiUrl: 'http://localhost:9999', token: 't'}),
@@ -1429,6 +1432,7 @@ describe('useChatStreamEngine', () => {
           message: 'verified gone',
           items: [
             {
+              id: 'b1:r',
               ruleId: 'r',
               fixType: 'f',
               blockLabel: 'Call API',
@@ -1640,7 +1644,8 @@ describe('useChatStreamEngine', () => {
       expect(useChatStore.getState().providerEpoch).toBe(epoch0 + 1)
     })
 
-    it('keeps the generic bubble (and no code) for other failures', () => {
+    // R-provider-16: every coded failure keeps its code, so the bubble can branch on it later.
+    it('keeps the generic bubble for other failures, with their code', () => {
       const {result} = renderEngine()
       act(() => {
         result.current.beginAcc('streamA', 'threadA', seedThread('threadA', 'streamA', 'azure-foundry'))
@@ -1648,7 +1653,13 @@ describe('useChatStreamEngine', () => {
       })
       const msg = useChatStore.getState().conversations.get('threadA')![0]!
       expect(msg.content).toBe('*Error: timed out*')
-      expect(msg.errorCode).toBeUndefined()
+      expect(msg.errorCode).toBe('STREAM_TIMEOUT')
+
+      act(() => {
+        result.current.beginAcc('streamB', 'threadB', seedThread('threadB', 'streamB', 'claude'))
+        capturedHandler!.onError('conversation is too long for this model', 'streamB', 'CONTEXT_LIMIT')
+      })
+      expect(useChatStore.getState().conversations.get('threadB')![0]!.errorCode).toBe('CONTEXT_LIMIT')
     })
   })
 })
@@ -2132,6 +2143,41 @@ describe('useChatStreamEngine model labels', () => {
     expect(answer).not.toHaveProperty('modelLabel')
     expect(chatApi.saveConversation).not.toHaveBeenCalled()
   })
+
+  // R-tool-loop-20: the server could not store a server-owned turn's answer and says so on done: the client saves
+  // the turn itself.
+  it('saves a server-owned turn whose answer the server could not store', async () => {
+    const {result} = renderEngine()
+    seedIdle('threadA', {inFlight: {streamId: 'older', provider: 'openai', model: 'gpt-5'}}, [
+      {id: 'u1', role: 'user', content: 'q', timestamp: 't'},
+    ])
+    useChatStore.setState({historyStatus: {threadA: LOADED}})
+    await act(async () => {
+      result.current.resumeAfterReload('threadA', 'live-3')
+    })
+    await act(async () => {
+      capturedHandler!.onReplace('the answer', 'live-3')
+      capturedHandler!.onDone(1, 1, 'live-3', {answerStored: false})
+    })
+    expect(chatApi.saveConversation).toHaveBeenCalledTimes(1)
+  })
+
+  it('tells the user when the save of an answer the server could not store fails too', async () => {
+    vi.mocked(chatApi.saveConversation).mockRejectedValueOnce(new Error('offline'))
+    const {result} = renderEngine()
+    seedIdle('threadA', {inFlight: {streamId: 'older', provider: 'openai', model: 'gpt-5'}}, [
+      {id: 'u1', role: 'user', content: 'q', timestamp: 't'},
+    ])
+    useChatStore.setState({historyStatus: {threadA: LOADED}})
+    await act(async () => {
+      result.current.resumeAfterReload('threadA', 'live-3')
+    })
+    await act(async () => {
+      capturedHandler!.onReplace('the answer', 'live-3')
+      capturedHandler!.onDone(1, 1, 'live-3', {answerStored: false})
+    })
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1))
+  })
 })
 
 // The history-truncation notice (R-streaming-7): the stream slot keeps the count, the committed message stores it
@@ -2208,6 +2254,33 @@ describe('useChatStreamEngine history truncation notice', () => {
       )
     })
     expect(useChatStore.getState().streams.threadA!.truncated).toBe(3)
+  })
+
+  it('keeps a knowledge notice on the slot and the committed message (R-knowledge-1)', () => {
+    const {result} = renderEngine()
+    setupThread(result)
+    act(() => {
+      capturedHandler!.onNotice!({kind: 'notice', notice: 'knowledge', status: 'identity_mismatch'}, 'streamA')
+      capturedHandler!.onChunk('answer', 'streamA')
+    })
+    expect(useChatStore.getState().streams.threadA!.knowledge).toBe('identity_mismatch')
+    act(() => {
+      capturedHandler!.onDone(2, 10, 'streamA')
+    })
+    expect(useChatStore.getState().conversations.get('threadA')![0]!.knowledge).toBe('identity_mismatch')
+  })
+
+  it('rebuilds the knowledge notice from a resumed journal, and ignores one without a status', () => {
+    const {result} = renderEngine()
+    setupThread(result)
+    act(() => {
+      capturedHandler!.onNotice!({kind: 'notice', notice: 'knowledge'}, 'streamA')
+    })
+    expect(useChatStore.getState().streams.threadA!.knowledge).toBeUndefined()
+    act(() => {
+      capturedHandler!.onResumeState!([{kind: 'notice', notice: 'knowledge', status: 'deadline'}], 'streamA')
+    })
+    expect(useChatStore.getState().streams.threadA!.knowledge).toBe('deadline')
   })
 
   it('leaves the message without a count when nothing was omitted', () => {

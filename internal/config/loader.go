@@ -375,6 +375,8 @@ var envBindings = []envBinding{
 	intEnv("PAD_EMBEDDING_DIM", func(c *Config, n int) { c.Storage.EmbeddingDim = n }),
 	// Org knowledge-base leases one replica holds at once (each pins a database connection).
 	intEnv("PAD_KNOWLEDGE_LEASE_CAP", func(c *Config, n int) { c.Storage.KnowledgeLeaseCap = n }),
+	// A chat turn's wait for its knowledge-base guidelines, in milliseconds (0 = the 800 ms default).
+	intEnv("PAD_RAG_DEADLINE_MS", func(c *Config, n int) { c.Runtime.RAGDeadlineMS = n }),
 	// Knowledge-base embedding provider pin (the only way to embed the shared
 	// corpus with Azure AI Foundry). Validated against EmbeddingProviderIDs.
 	strEnv("PAD_EMBEDDING_PROVIDER", func(c *Config, v string) {
@@ -411,6 +413,10 @@ var envBindings = []envBinding{
 	floatEnv("PAD_RATE_LIMIT_CHANNEL_TEST_BURST", func(c *Config, f float64) { c.Runtime.RateLimitChannelTestBurst = f }),
 	floatEnv("PAD_RATE_LIMIT_AVATAR_RPS", func(c *Config, f float64) { c.Runtime.RateLimitAvatarRPS = f }),
 	floatEnv("PAD_RATE_LIMIT_AVATAR_BURST", func(c *Config, f float64) { c.Runtime.RateLimitAvatarBurst = f }),
+	floatEnv("PAD_RATE_LIMIT_CONTROL_RPS", func(c *Config, f float64) { c.Runtime.RateLimitControlRPS = f }),
+	floatEnv("PAD_RATE_LIMIT_CONTROL_BURST", func(c *Config, f float64) { c.Runtime.RateLimitControlBurst = f }),
+	floatEnv("PAD_RATE_LIMIT_EMBED_RPS", func(c *Config, f float64) { c.Runtime.RateLimitEmbedRPS = f }),
+	floatEnv("PAD_RATE_LIMIT_EMBED_BURST", func(c *Config, f float64) { c.Runtime.RateLimitEmbedBurst = f }),
 	floatEnv("PAD_RATE_LIMIT_PER_USER_RPS", func(c *Config, f float64) { c.Runtime.RateLimitPerUserRPS = f }),
 	floatEnv("PAD_RATE_LIMIT_PER_USER_BURST", func(c *Config, f float64) { c.Runtime.RateLimitPerUserBurst = f }),
 
@@ -654,11 +660,13 @@ func Validate(cfg *Config) error {
 	}
 	// The dedicated encryption key protects stored provider credentials at rest
 	// (AES-256-GCM); apply the same strength gate so a weak PAD_ENCRYPTION_KEY
-	// can't make a DB leak trivially brute-forceable. When unset, the auth
-	// secret is the backward-compat fallback (warned in internal/app), so only
-	// enforce when an explicit key is provided.
-	if cfg.Mode == ModeCloud && cfg.Auth.EncryptionKey.IsSet() && isWeakSecret(cfg.Auth.EncryptionKey.Reveal()) {
-		return fmt.Errorf("config: auth.encryption_key must be at least %d characters and not a known placeholder in cloud mode (set PAD_ENCRYPTION_KEY to a long random value)", minSecretLength)
+	// can't make a DB leak trivially brute-forceable, wherever a database
+	// keystore uses it: the cloud, and local mode with PAD_STORAGE=database. When
+	// unset, the auth secret is the backward-compat fallback (deprecated in the
+	// cloud, EncryptionKeyFallbackDeprecation; strength-checked above whenever
+	// auth is on), so only enforce when an explicit key is provided.
+	if sealsWithDatabaseKeystore(cfg) && cfg.Auth.EncryptionKey.IsSet() && isWeakSecret(cfg.Auth.EncryptionKey.Reveal()) {
+		return fmt.Errorf("config: auth.encryption_key must be at least %d characters and not a known placeholder with a database keystore (cloud mode, or PAD_STORAGE=database): set PAD_ENCRYPTION_KEY to a long random value", minSecretLength)
 	}
 	if err := validateEncryptionKeyPrevious(cfg); err != nil {
 		return err
@@ -733,6 +741,9 @@ func Validate(cfg *Config) error {
 		if n.v < 0 {
 			return fmt.Errorf("config: %s (%s) must be 0 (unknown) or more, not %d", n.env, n.field, n.v)
 		}
+	}
+	if n := cfg.Runtime.RAGDeadlineMS; n < 0 || n > MaxRAGDeadlineMS {
+		return fmt.Errorf("config: PAD_RAG_DEADLINE_MS (Runtime.RAGDeadlineMS) must be 0 (the default, %d) to %d milliseconds, not %d: a chat turn's first chunk waits on the knowledge-base lookup", DefaultRAGDeadline.Milliseconds(), MaxRAGDeadlineMS, n)
 	}
 	if cfg.Storage.KnowledgeLeaseCap < 0 {
 		return fmt.Errorf("config: PAD_KNOWLEDGE_LEASE_CAP (Storage.KnowledgeLeaseCap) must be 0 (the default, %d) or more, not %d", DefaultKnowledgeLeaseCap, cfg.Storage.KnowledgeLeaseCap)
@@ -821,10 +832,42 @@ func validateDBIdleTxTimeout(cfg *Config) error {
 	return nil
 }
 
+// EncryptionKeyFallbackRemoval is when the cloud's PAD_AUTH_SECRET fallback for the keystore key ends (R-security-7):
+// the first release on or after it refuses to start in cloud mode without PAD_ENCRYPTION_KEY. Until then a cloud boot
+// on the fallback logs EncryptionKeyFallbackDeprecation. Not refused today because the deployments on the fallback
+// have every stored credential sealed under the auth secret: a refusal would stop them booting on upgrade, before
+// their operator could move the values (docs/architecture/operations.md, "Encryption keys").
+const EncryptionKeyFallbackRemoval = "2027-02-01"
+
+// EncryptionKeyFallbackDeprecation is the boot warning of a cloud deployment whose keystore and sealed columns are
+// keyed by PAD_AUTH_SECRET because PAD_ENCRYPTION_KEY is unset: the removal date and exactly what to set, never a
+// key. "" when the deployment has a dedicated key, is not in cloud mode, or has no operator-provided auth secret.
+func EncryptionKeyFallbackDeprecation(cfg *Config) string {
+	if cfg.Mode != ModeCloud || cfg.Auth.EncryptionKey.IsSet() || !cfg.Auth.Secret.IsSet() || cfg.Auth.SecretEphemeral {
+		return ""
+	}
+	return "DEPRECATED: PAD_ENCRYPTION_KEY is unset, so stored provider keys, organisation credentials, the sealed " +
+		"secret columns and the Redis command signatures are keyed by PAD_AUTH_SECRET, and rotating that secret makes " +
+		"every stored credential unreadable. The first release on or after " + EncryptionKeyFallbackRemoval + " refuses " +
+		"to start in cloud mode without PAD_ENCRYPTION_KEY. Set PAD_ENCRYPTION_KEY=<a new random value: openssl rand -hex 32> " +
+		"and PAD_ENCRYPTION_KEY_PREVIOUS=<the current value of PAD_AUTH_SECRET> together (on Azure: the GitHub secrets " +
+		"of the same names, then redeploy); the next boot re-seals every stored value under the new key and logs " +
+		"\"secret re-seal complete\". Confirm with `bakicli keys check`, then remove PAD_ENCRYPTION_KEY_PREVIOUS; " +
+		"only then rotate PAD_AUTH_SECRET."
+}
+
+// sealsWithDatabaseKeystore reports whether the deployment keeps a database keystore, which seals every stored
+// provider key and secret column with PAD_ENCRYPTION_KEY: the cloud, and local mode with PAD_STORAGE=database. The
+// keystore keys' strength rule applies there; without a database, provider keys stay in the OS keyring.
+func sealsWithDatabaseKeystore(cfg *Config) bool {
+	return cfg.Mode == ModeCloud || cfg.Storage.Backend == StorageDatabase
+}
+
 // validateEncryptionKeyPrevious checks the keys PAD_ENCRYPTION_KEY replaced. They only open what they sealed, so
 // they need a dedicated current key (rotating away from the PAD_AUTH_SECRET fallback lists that secret here, beside
-// a new PAD_ENCRYPTION_KEY); a repeated key is a rotation that did not happen; and in cloud mode each meets the
-// current key's strength rule. Errors name an entry by its position, never by its value.
+// a new PAD_ENCRYPTION_KEY); and a repeated key is a rotation that did not happen. They are not held to the current
+// key's strength rule, in any mode: they only open what they sealed, and listing a weak key here beside a new strong
+// PAD_ENCRYPTION_KEY is how a deployment moves off it. Errors name an entry by its position, never by its value.
 func validateEncryptionKeyPrevious(cfg *Config) error {
 	previous := cfg.Auth.EncryptionKeyPrevious
 	if len(previous) == 0 {
@@ -840,9 +883,6 @@ func validateEncryptionKeyPrevious(cfg *Config) error {
 			return fmt.Errorf("config: PAD_ENCRYPTION_KEY_PREVIOUS entry %d repeats PAD_ENCRYPTION_KEY or an earlier entry", i+1)
 		}
 		seen[k] = true
-		if cfg.Mode == ModeCloud && isWeakSecret(k) {
-			return fmt.Errorf("config: PAD_ENCRYPTION_KEY_PREVIOUS entry %d must be at least %d characters and not a known placeholder in cloud mode", i+1, minSecretLength)
-		}
 	}
 	return nil
 }

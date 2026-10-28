@@ -1,0 +1,7 @@
+: hand-built from the Gemini thinking docs (includeThoughts off: thoughtsTokenCount only; a trailing empty part with a fake thoughtSignature), NOT a live capture; see ../README.md
+data: {"candidates": [{"content": {"parts": [{"text": "Yes: block 14 exits "}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 640,"candidatesTokenCount": 5,"totalTokenCount": 837,"thoughtsTokenCount": 192,"cachedContentTokenCount": 512},"modelVersion": "gemini-3-pro-preview","responseId": "WIREgeminiThink0001"}
+
+data: {"candidates": [{"content": {"parts": [{"text": "once LoopIndex reaches the row count."}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 640,"candidatesTokenCount": 13,"totalTokenCount": 845,"thoughtsTokenCount": 192,"cachedContentTokenCount": 512},"modelVersion": "gemini-3-pro-preview","responseId": "WIREgeminiThink0001"}
+
+data: {"candidates": [{"content": {"parts": [{"text": "","thoughtSignature": "CiQBWIREFIXTURENOTAREALTHOUGHTSIGNATURE=="}],"role": "model"},"finishReason": "STOP","index": 0}],"usageMetadata": {"promptTokenCount": 640,"candidatesTokenCount": 13,"totalTokenCount": 845,"thoughtsTokenCount": 192,"cachedContentTokenCount": 512},"modelVersion": "gemini-3-pro-preview","responseId": "WIREgeminiThink0001"}
+

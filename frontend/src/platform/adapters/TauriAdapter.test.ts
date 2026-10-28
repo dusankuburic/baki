@@ -57,3 +57,29 @@ describe('TauriAdapter.getBackendConfig deadline (L9-fe)', () => {
     expect(result.token).toBe('tok')
   })
 })
+
+describe('TauriAdapter.onBackendEvent (R-frontend-c7)', () => {
+  beforeEach(() => {
+    listenMock.mockReset()
+  })
+
+  it("hands a 'ready' event the new process's config, and the other kinds their message", async () => {
+    const handlers = new Map<string, (e: {payload: unknown}) => void>()
+    listenMock.mockImplementation(async (name: string, h: (e: {payload: unknown}) => void) => {
+      handlers.set(name, h)
+      return () => {}
+    })
+    const seen: unknown[] = []
+    new TauriAdapter().onBackendEvent(e => seen.push(e))
+    await Promise.resolve()
+
+    handlers.get('backend-terminated')!({payload: 'exit code 1'})
+    handlers.get('backend-ready')!({payload: {port: 5123, token: 'tok-new'}})
+
+    expect(seen).toEqual([
+      {kind: 'terminated', message: 'exit code 1'},
+      {kind: 'ready', message: '', config: {apiUrl: 'http://localhost:5123', token: 'tok-new', port: 5123}},
+    ])
+  })
+})
+

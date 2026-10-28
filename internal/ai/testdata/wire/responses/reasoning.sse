@@ -1,0 +1,34 @@
+: hand-built from the Responses API reasoning item and reasoning_summary_* events (encrypted_content is fake), NOT a live capture; see ../README.md
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_WIRE0000000000000000000000000007","object":"response","created_at":1761523306,"status":"in_progress","error":null,"incomplete_details":null,"model":"o4-mini-2025-04-16","output":[],"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"rs_WIRE0000000000000000000000000007","type":"reasoning","summary":[],"encrypted_content":"gAAAAAWIREFIXTURENOTREALENCRYPTEDCONTENT=="}}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","sequence_number":2,"item_id":"rs_WIRE0000000000000000000000000007","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":3,"item_id":"rs_WIRE0000000000000000000000000007","output_index":0,"summary_index":0,"delta":"**Checking the loop exit** Block 14 compares LoopIndex."}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","sequence_number":4,"item_id":"rs_WIRE0000000000000000000000000007","output_index":0,"summary_index":0,"text":"**Checking the loop exit** Block 14 compares LoopIndex."}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","sequence_number":5,"item_id":"rs_WIRE0000000000000000000000000007","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"**Checking the loop exit** Block 14 compares LoopIndex."}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":6,"output_index":0,"item":{"id":"rs_WIRE0000000000000000000000000007","type":"reasoning","summary":[{"type":"summary_text","text":"**Checking the loop exit** Block 14 compares LoopIndex."}],"encrypted_content":"gAAAAAWIREFIXTURENOTREALENCRYPTEDCONTENT=="}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":7,"output_index":1,"item":{"id":"msg_WIRE0000000000000000000000000007","type":"message","status":"in_progress","content":[],"role":"assistant"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":8,"item_id":"msg_WIRE0000000000000000000000000007","output_index":1,"content_index":0,"delta":"Yes: block 14 exits once LoopIndex reaches the row count.","logprobs":[]}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":9,"output_index":1,"item":{"id":"msg_WIRE0000000000000000000000000007","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"Yes: block 14 exits once LoopIndex reaches the row count."}],"role":"assistant"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":10,"response":{"id":"resp_WIRE0000000000000000000000000007","object":"response","created_at":1761523306,"status":"completed","error":null,"incomplete_details":null,"model":"o4-mini-2025-04-16","output":[{"id":"rs_WIRE0000000000000000000000000007","type":"reasoning","summary":[{"type":"summary_text","text":"**Checking the loop exit** Block 14 compares LoopIndex."}],"encrypted_content":"gAAAAAWIREFIXTURENOTREALENCRYPTEDCONTENT=="},{"id":"msg_WIRE0000000000000000000000000007","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"Yes: block 14 exits once LoopIndex reaches the row count."}],"role":"assistant"}],"usage":{"input_tokens":640,"input_tokens_details":{"cached_tokens":0},"output_tokens":214,"output_tokens_details":{"reasoning_tokens":192},"total_tokens":854}}}
+

@@ -103,6 +103,15 @@ const (
 	// RateAvatar: the avatar upload, a decode and re-encode of up to 16 M pixels per call. Not RateUpload, so a
 	// client syncing flows and a user picking an avatar do not refuse each other.
 	RateAvatar = "avatar"
+	// RateEmbed: the knowledge base's bulk embedding routes (upload and its continuations, re-index), per address.
+	// Each request can buy thousands of chunk embeddings, so they get a cost bucket of their own instead of the
+	// general one; a paged upload or re-index continues only after a request has spent its budget (tens of seconds),
+	// so the bucket never refuses one in progress (R-security-c22).
+	RateEmbed = "embed"
+	// RateControl: the commands that act on the caller's own running chat stream (Stop, an approval decision).
+	// They reduce spend, so they are never refused for the caller's other traffic: a bucket of their own per address,
+	// instead of the shared general one, and never charged to the per-user write cap (R-streaming-c20).
+	RateControl = "control"
 	// RatePerUser: the per-user write limiter, a limiter group of its own but never a route's bucket (the Router
 	// charges every authenticated write to it, after the route's own). Keys: ratelimit:peruser:<sha256 of the user
 	// id> and ratelimit:peruser:ip:<address> for an anonymous write.
@@ -161,6 +170,10 @@ type Policy struct {
 	// Idempotent: a request with an Idempotency-Key header runs once per user and key, and its retries get the
 	// first response back (ADR 0007).
 	Idempotent bool
+	// Billed: the handler can reach a billed provider call (ai.Provider Chat, Stream or Embed). Such a route must use
+	// a cost bucket (CostBucket); the router refuses to start otherwise, and TestBilledRoutes_MatchTheCallGraph in
+	// internal/api derives the billed set from the call graph (R-security-c22).
+	Billed bool
 	// Label is the metrics route label: the pattern for a route, a bounded catch-all otherwise.
 	Label string
 	// Allowed lists the methods registered on the path of a KindMethodNotAllowed policy (the Allow header).
@@ -226,6 +239,24 @@ func Needs(caps ...capability.Capability) Option {
 	return func(p *Policy) { p.Needs = append(append([]capability.Capability(nil), p.Needs...), caps...) }
 }
 
+// Billed marks a route whose handler can reach a billed provider call (ai.Provider Chat, Stream or Embed): a chat
+// turn, a context preview's query embedding, a connection test, a knowledge upload or re-index. The rate limit
+// follows from it: a route still on the general bucket moves to the chat bucket, where every model call a caller
+// starts is counted together; a route that names another cost bucket (RateEmbed) keeps it, whichever option comes
+// first. A billed route off the cost buckets does not boot.
+func Billed() Option {
+	return func(p *Policy) {
+		p.Billed = true
+		if p.RateLimit == "" || p.RateLimit == RateGeneral {
+			p.RateLimit = RateChat
+		}
+	}
+}
+
+// CostBucket reports whether bucket may carry a billed route: the chat bucket (model turns, previews, connection
+// tests) and the embed bucket (bulk knowledge embedding). Every other bucket is shared with free traffic.
+func CostBucket(bucket string) bool { return bucket == RateChat || bucket == RateEmbed }
+
 // Idempotent lets clients retry the route with an Idempotency-Key header: a retry gets the first response back
 // instead of creating a second record. The route must be authenticated and run in the request transaction, or the
 // router refuses to start.
@@ -236,7 +267,10 @@ func Idempotent() Option { return func(p *Policy) { p.Idempotent = true } }
 type Handler struct {
 	Policy *Policy
 	Next   http.Handler
-	reg    *registry
+	// Endpoint is the handler as registered, before the Builder's With middleware: what the route runs, for the
+	// checks that inspect it (the billed-route analysis in internal/api).
+	Endpoint http.Handler
+	reg      *registry
 }
 
 // ServeHTTP runs the guard set on the Builder (SetGuard), then the route's handler unless the guard answered.
@@ -335,7 +369,7 @@ func (b *Builder) Method(method, pattern string, h http.Handler, opts ...Option)
 	for _, mw := range slices.Backward(b.mws) {
 		next = mw(next)
 	}
-	b.mux.Method(method, pattern, &Handler{Policy: p, Next: next, reg: b.reg})
+	b.mux.Method(method, pattern, &Handler{Policy: p, Next: next, Endpoint: h, reg: b.reg})
 }
 
 // SetGuard installs g on every endpoint registered through this Builder or any Builder derived from it, including
@@ -391,7 +425,7 @@ func (b *Builder) child(mux chi.Router, opts []Option, mws []func(http.Handler) 
 // pattern chi reports for it, and fails when an endpoint was registered around the Builder (deny by default) or
 // when two registrations share a method and pattern.
 func (b *Builder) Build() (*Table, error) {
-	t := &Table{byMethod: map[string]map[string]*Policy{}}
+	t := &Table{byMethod: map[string]map[string]*Policy{}, endpoints: map[*Policy]http.Handler{}}
 	err := chi.Walk(b.reg.root, func(method, pattern string, h http.Handler, _ ...func(http.Handler) http.Handler) error {
 		e, ok := h.(*Handler)
 		if !ok {
@@ -416,6 +450,7 @@ func (b *Builder) Build() (*Table, error) {
 		}
 		byPattern[norm] = p
 		t.all = append(t.all, p)
+		t.endpoints[p] = e.Endpoint
 		return nil
 	})
 	if err != nil {
@@ -446,9 +481,13 @@ func NormalizePattern(pattern string) string {
 
 // Table is the policies of one router by method and pattern.
 type Table struct {
-	byMethod map[string]map[string]*Policy // keyed apart: the resolver looks up every request, without a key to build
-	all      []*Policy
+	byMethod  map[string]map[string]*Policy // keyed apart: the resolver looks up every request, without a key to build
+	all       []*Policy
+	endpoints map[*Policy]http.Handler
 }
+
+// Endpoint returns the handler registered for a route's policy (Handler.Endpoint), nil for a policy of no route.
+func (t *Table) Endpoint(p *Policy) http.Handler { return t.endpoints[p] }
 
 // Lookup returns the policy registered for method and pattern (as chi's Find or RoutePattern report it), or nil.
 func (t *Table) Lookup(method, pattern string) *Policy {

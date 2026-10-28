@@ -14,9 +14,10 @@ const reasoningOutputFloor = 16384
 
 // reasoningModelRe matches model ids (or deployment names that follow them) whose hidden reasoning is billed
 // as output: OpenAI o-series, GPT-5 (not gpt-5-chat) and GPT-6, gpt-chat-latest, gpt-oss, codex-mini,
-// DeepSeek R1 / MAI-DS-R1 / Speciale / V4-Pro, MAI-Thinking, Grok 4 and grok-code-fast, Phi-4 reasoning, and
-// the Claude families that think by default.
-var reasoningModelRe = regexp.MustCompile(`(^|[^a-z0-9])(o1|o3|o4)([^a-z0-9]|$)|gpt-5(?:[.-]\d+)?(?:-(?:mini|nano|pro|codex))*(?:$|[^a-z])|gpt-6(?:$|[^0-9])|gpt-chat-latest|codex-mini|gpt-oss|deepseek-r1|mai-ds-r1|deepseek-v3[.-]2-speciale|deepseek-v4-pro|mai-thinking|grok-4|grok-code-fast|phi-4-(?:mini-)?reasoning|claude-(?:opus|sonnet)-5|claude-(?:fable|mythos)`)
+// DeepSeek R1 / MAI-DS-R1 / Speciale / V4-Pro, MAI-Thinking, Grok 4, grok-3-mini and grok-code-fast, Phi-4 reasoning, the
+// Claude families that think by default, and the Gemini models that think by default (2.5, 3 and the
+// "-thinking" ids), whose thoughts Gemini bills as output.
+var reasoningModelRe = regexp.MustCompile(`(^|[^a-z0-9])(o1|o3|o4)([^a-z0-9]|$)|gpt-5(?:[.-]\d+)?(?:-(?:mini|nano|pro|codex))*(?:$|[^a-z])|gpt-6(?:$|[^0-9])|gpt-chat-latest|codex-mini|gpt-oss|deepseek-r1|mai-ds-r1|deepseek-v3[.-]2-speciale|deepseek-v4-pro|mai-thinking|grok-4|grok-3-mini|grok-code-fast|phi-4-(?:mini-)?reasoning|claude-(?:opus|sonnet)-5|claude-(?:fable|mythos)|gemini-(?:2\.5|3)(?:[.-]|$)|gemini-[\w.-]*thinking`)
 
 // ReasoningOutputFloor returns the minimum max-tokens budget for a turn whose model is known by any of names,
 // 0 when none is a reasoning model ("gpt-5-chat" never is). A model-router deployment always gets the floor —

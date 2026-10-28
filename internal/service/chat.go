@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -14,9 +15,11 @@ import (
 	"unicode/utf8"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/config"
 	"pad-analyzer/internal/platform/apperr"
+	"pad-analyzer/internal/platform/drain"
 	"pad-analyzer/internal/platform/eventbus"
 	"pad-analyzer/internal/rag"
 	"pad-analyzer/internal/redisx"
@@ -107,6 +110,43 @@ var ErrServerRestarting = errors.New("the server is restarting — try again in 
 // convMutexStripes: per-conversation locks are striped for bounded memory, not exact-keyed.
 const convMutexStripes = 256
 
+// stopped is closed once the server's stop has run out of budget (signalStop).
+func (s *ChatService) stopped() <-chan struct{} {
+	s.stopOnce.Do(func() { s.stopCh = make(chan struct{}) })
+	return s.stopCh
+}
+
+// signalStop closes stopped(); safe to call more than once.
+func (s *ChatService) signalStop() {
+	s.stopped()
+	s.stopClose.Do(func() { close(s.stopCh) })
+}
+
+// errChatStopping: a wait given up because the server's stop ran out of budget.
+var errChatStopping = errors.New("chat: the server's stop ran out of budget")
+
+// lockConversation takes a conversation's stripe lock unless ctx ends or the server's stop runs out of budget
+// first; on an error the lock is not held.
+func (s *ChatService) lockConversation(ctx context.Context, mu *sync.Mutex) error {
+	if mu.TryLock() {
+		return nil
+	}
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.stopped():
+			return errChatStopping
+		case <-tick.C:
+			if mu.TryLock() {
+				return nil
+			}
+		}
+	}
+}
+
 func (s *ChatService) convMutexFor(flowID, convKey string) *sync.Mutex {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(flowID))
@@ -117,7 +157,8 @@ func (s *ChatService) convMutexFor(flowID, convKey string) *sync.Mutex {
 
 // reconstructAndPersistUserTurn holds the per-conversation mutex across both steps (a file save is a full replace, and
 // in cloud mode the lock queues this replica's writers while the version check settles the other replicas').
-func (s *ChatService) reconstructAndPersistUserTurn(ctx context.Context, doc *models.FlowDocument, req *models.ChatRequest, convKey string) (stored bool, write *convWrite) {
+// historyFailed: the stored history could not be read, and the turn must not be answered without it.
+func (s *ChatService) reconstructAndPersistUserTurn(ctx context.Context, doc *models.FlowDocument, req *models.ChatRequest, convKey string) (stored bool, write *convWrite, historyFailed bool) {
 	mu := s.convMutexFor(doc.ID, convKey)
 	mu.Lock()
 	defer mu.Unlock()
@@ -127,13 +168,13 @@ func (s *ChatService) reconstructAndPersistUserTurn(ctx context.Context, doc *mo
 	history, err := s.reconstructHistory(ctx, doc, *req)
 	if err != nil {
 		// Do NOT persist: SaveConversation is a full-file replace — a history we failed to read would be destroyed.
-		logger.Warn("chat: history load failed; answering without prior context and "+
-			"skipping persistence so the stored conversation is not overwritten", "error", err)
+		logger.FromContext(ctx).Warn("chat: history load failed; the turn is not sent, and the stored conversation is left as it is",
+			"error", err)
 		req.Messages = nil
-		return false, nil
+		return false, nil, true
 	}
 	req.Messages = history
-	return s.persistInitialUserTurn(ctx, doc, *req), nil
+	return s.persistInitialUserTurn(ctx, doc, *req), nil, false
 }
 
 // tryStartStream checks the per-caller cap and reserves the stream ID atomically, counting the stream's worker for
@@ -230,6 +271,11 @@ type ChatService struct {
 	// mode: ModeLocal persists on disk (desktop); cloud via Postgres + RLS.
 	mode      config.DeploymentMode
 	knowledge *rag.KnowledgeService
+	// ragDeadline is a turn's wait for its knowledge-base guidelines (PAD_RAG_DEADLINE_MS); 0 => ragGuidelinesDeadline.
+	ragDeadline time.Duration
+	// ragWarned is the per-org gate of the knowledge lookup's failure WARN (ragWarnAllowed): orgID -> *atomic.Int64,
+	// the last one's time.
+	ragWarned sync.Map
 	// watchdogInterval / idleTimeout / hostedIdleTimeout: test overrides; 0 ⇒ defaults.
 	// flowEditCheck decides whether the stream's caller may edit its flow (the fix tools' gate); nil asks the flow
 	// service (canEditFlow). A test override.
@@ -247,10 +293,22 @@ type ChatService struct {
 	// streamCapMu, which so orders every workers.Add before Shutdown's Wait.
 	workers sync.WaitGroup
 	closing bool
+	// audit records approval decisions and chat-applied fixes; nil records nothing (a nil *audit.Recorder is a no-op).
+	audit *audit.Recorder
+	// draining is the server's draining state (ADR 0024); nil is the process's (drain.Process), tests set their own.
+	// From its start no approval is asked or approved: an apply then would be cut by the stop.
+	draining *drain.State
 	// shutdownBudget: test override of chatShutdownBudget; 0 ⇒ the default.
 	shutdownBudget time.Duration
+	// stopCh closes when Shutdown's budget runs out (signalStop): an answer write still waiting on the store or on
+	// its stripe lock gives up, so the worker can send its done before the connections close (R-streaming-c16).
+	stopOnce, stopClose sync.Once
+	stopCh              chan struct{}
 	// finishedStreams keeps completed streams for the resumeRetention grace period.
 	finishedStreams sync.Map // map[streamID]*streamCtl
+	// clearedThreads marks the threads a caller cleared on this replica (clearedThreadKey -> time), so a late title does
+	// not bring one back (SetThreadTitle).
+	clearedThreads sync.Map
 	// convMutexes stripes the reconstruct/persist critical section (bounded lock set).
 	convMutexes [convMutexStripes]sync.Mutex
 	// resume mirrors stream state for cross-replica reconnect resume; no-op single-replica.
@@ -283,6 +341,9 @@ type ChatService struct {
 type ChatOptions struct {
 	// Knowledge answers retrieval for org-scoped turns; nil = no RAG.
 	Knowledge *rag.KnowledgeService
+	// RAGDeadline is how long a turn waits for its knowledge-base guidelines (config Runtime.EffectiveRAGDeadline,
+	// PAD_RAG_DEADLINE_MS); 0 keeps the 800 ms default.
+	RAGDeadline time.Duration
 	// Azure resolves azure-foundry model ids on the model registry before the stream starts; nil keeps the
 	// single-document behaviour.
 	Azure *AzureModelService
@@ -301,6 +362,8 @@ type ChatOptions struct {
 	MultiReplica bool
 	// Health is Resume's health (nil: never degraded); with it a degraded Redis is not asked at a stream start.
 	Health *redisx.Health
+	// Audit records the approval decisions and the fixes the assistant writes (R-security-4); nil records nothing.
+	Audit *audit.Recorder
 }
 
 func NewChatService(
@@ -324,7 +387,9 @@ func NewChatService(
 		backend:       backend,
 		mode:          mode,
 		knowledge:     opts.Knowledge,
+		ragDeadline:   opts.RAGDeadline,
 		azure:         opts.Azure,
+		audit:         opts.Audit,
 		resume:        noopResumeStore{},
 		chatCtxCache:  newChatContextCache(),
 	}
@@ -365,18 +430,19 @@ func (s *ChatService) canEditFlow(ctx context.Context, doc *models.FlowDocument)
 	err := s.flowCache.CheckFlowPermission(ctx, doc.ID, FlowEdit)
 	if err != nil && !errors.Is(err, ErrPermissionDenied) {
 		// Not a denial but a failed check (a store error): the turn still runs, without the fix tools.
-		logger.Warn("chat: the flow edit permission could not be checked; the fix tools are not offered", "flow_id", doc.ID, "error", err)
+		logger.FromContext(ctx).Warn("chat: the flow edit permission could not be checked; the fix tools are not offered", "flow_id", doc.ID, "error", err)
 	}
 	return err == nil
 }
 
-// turnSetup is the resolved provider + model + attribution + RAG lookup for one turn; ragDone nil when RAG isn't wired.
+// turnSetup is the resolved provider + model + attribution + RAG lookup for one turn; rag nil when the turn has no
+// knowledge base.
 type turnSetup struct {
 	provider ai.Provider
 	// model is what the turn runs on; read from here, never from the request.
-	model   turnModel
-	orgID   string
-	ragDone <-chan string
+	model turnModel
+	orgID string
+	rag   *ragHandle
 }
 
 // turnModel is the model a turn runs on, fixed pre-stream and carried in turnSetup — never via the request.
@@ -434,18 +500,19 @@ func (s *ChatService) resolveAzureModel(ctx context.Context, scope string, doc *
 		return &res, nil
 	case errors.Is(err, ErrModelNotAvailable) && roleErr != nil:
 		// Not the caller's own and org entries unreadable: "not available" would be a guess.
-		return nil, providerSetupError(scope, req.Provider, roleErr)
+		return nil, providerSetupError(ctx, scope, req.Provider, roleErr)
 	case errors.Is(err, ErrModelNotAvailable):
 		return nil, ErrModelNotAvailable
 	default:
-		return nil, providerSetupError(scope, req.Provider, err)
+		return nil, providerSetupError(ctx, scope, req.Provider, err)
 	}
 }
 
 // turnProvider builds the turn's provider as exactly the resolved resource's credential; a gone key is a setup error.
 func (s *ChatService) turnProvider(ctx context.Context, scope, orgID string, req models.ChatRequest, res *AzureChatResolution) (ai.Provider, error) {
 	if res == nil {
-		return s.factory.ForOrg(ctx, scope, s.credentialOrg(ctx, orgID, scope), req.Provider)
+		p, err := s.factory.ForOrg(ctx, scope, s.credentialOrg(ctx, orgID, scope), req.Provider)
+		return p, unreadableKeyError(err)
 	}
 	build := s.azureConnection
 	if build == nil {
@@ -461,9 +528,15 @@ func (s *ChatService) turnProvider(ctx context.Context, scope, orgID string, req
 	return p, err
 }
 
-// prepareTurn resolves the provider (the factory's policy refuses a provider the deployment or the org does
-// not allow) and starts RAG after that gate — no provider call on refusal.
+// prepareTurn is prepareTurnFor without a report: the knowledge lookup reads the flow's current analysis.
 func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models.FlowDocument, req models.ChatRequest, azure *AzureChatResolution, ctl *streamCtl) (turnSetup, error) {
+	return s.prepareTurnFor(ctx, scope, doc, nil, req, azure, ctl)
+}
+
+// prepareTurnFor resolves the provider (the factory's policy refuses a provider the deployment or the org does
+// not allow) and starts RAG after that gate — no provider call on refusal. report names the selected block's
+// findings in the retrieval query.
+func (s *ChatService) prepareTurnFor(ctx context.Context, scope string, doc *models.FlowDocument, report *models.AnalysisReport, req models.ChatRequest, azure *AzureChatResolution, ctl *streamCtl) (turnSetup, error) {
 	// Org flows record the org's usage even for outsiders; the shared credential is for its admins and members.
 	orgID := ""
 	if doc != nil {
@@ -476,7 +549,10 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 	}
 	provider, err := s.turnProvider(ctx, scope, orgID, req, azure)
 	if err != nil {
-		return turnSetup{}, providerSetupError(scope, req.Provider, err)
+		if ctl != nil && errors.Is(err, errOrgKeyUnreadable) {
+			ctl.sharedCredential.Store(true) // the org admin's to repair: the error event carries the shared flag
+		}
+		return turnSetup{}, providerSetupError(ctx, scope, req.Provider, err)
 	}
 	if azure == nil {
 		shared = ai.UsedOrgCredential(provider)
@@ -487,27 +563,7 @@ func (s *ChatService) prepareTurn(ctx context.Context, scope string, doc *models
 	}
 	model := newTurnModel(req, azure)
 
-	var ragDone chan string
-	if s.knowledge != nil && doc != nil && doc.OrganizationID != "" {
-		ragDone = make(chan string, 1)
-		ragCtx, ragCancel := context.WithTimeout(ctx, ragGuidelinesDeadline)
-		go func() {
-			defer ragCancel()
-			defer func() {
-				if r := recover(); r != nil {
-					// A panic here must not crash the process: deliver empty RAG guidelines.
-					logger.Error("rag guidelines lookup panicked", "scope", scope, "panic", r)
-					select {
-					case ragDone <- "":
-					default:
-					}
-				}
-			}()
-			ragDone <- s.ragGuidelines(ragCtx, scope, doc, req.UserMessage)
-		}()
-	}
-
-	return turnSetup{provider: provider, model: model, orgID: orgID, ragDone: ragDone}, nil
+	return turnSetup{provider: provider, model: model, orgID: orgID, rag: s.startRAGLookup(ctx, scope, doc, report, req)}, nil
 }
 
 // persistInitialUserTurn stores the user's turn at stream start (a closed tab must not lose it); false on error or history-off.
@@ -522,7 +578,7 @@ func (s *ChatService) persistInitialUserTurn(ctx context.Context, doc *models.Fl
 	persisted = append(persisted, userMsg)
 	stored, err := s.saveConversation(ctx, doc.ID, convKey, persisted)
 	if err != nil {
-		logger.Warn("chat: failed to persist user turn at stream start", "error", err)
+		logger.FromContext(ctx).Warn("chat: failed to persist user turn at stream start", "error", err)
 	}
 	return stored
 }
@@ -534,15 +590,8 @@ func (s *ChatService) buildStreamRequest(ctx context.Context, ts turnSetup, scop
 	// RAG timeout → "". Guidelines go in the final user message, never the system prompt — Azure/OpenAI cache
 	// prefixes. Awaited after the context build, which runs while the lookup does.
 	guidelines := func() (string, bool) {
-		if ts.ragDone == nil {
-			return "", true
-		}
-		select {
-		case g := <-ts.ragDone:
-			return g, true
-		case <-ctx.Done():
-			return "", false
-		}
+		l, ok := ts.rag.wait(ctx)
+		return l.guidelines, ok
 	}
 	a, ok, err := s.assembleTurnRequest(ctx, scope, ts, doc, report, req, guidelines, gate, useTools)
 	if err != nil || !ok {
@@ -624,17 +673,29 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	}
 
 	// The stream outlives its HTTP request: do NOT inherit the request context (cancelled when the handler returns).
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxChatStreamDuration)
+	// Its cancellation carries the stopper's reason as the cause (streamCtl.cancelCause, read when it runs), which the
+	// AI layer counts a cut-short provider call by (R-observability-4); the cap is the deadline below.
+	ctx, cancelCause := context.WithCancelCause(context.WithoutCancel(ctx))
+	ctx, cancelTimeout := context.WithTimeout(ctx, maxChatStreamDuration)
+	var ctl *streamCtl
+	cancel := func() {
+		cancelCause(ctl.cancelCause())
+		cancelTimeout()
+	}
+	// Every line logged under the turn carries its stream, on top of its request, user and trace (R-observability-2).
+	ctx = logger.WithAttrs(ctx, slog.String("stream_id", streamID))
 	// orgID/flowID/convKey are read lock-free elsewhere once set — a later write would race.
 	orgID, flowID := "", ""
 	if doc != nil {
 		orgID = doc.OrganizationID
 		flowID = doc.ID
 	}
-	ctl := &streamCtl{cancel: cancel, started: make(chan struct{}), settled: make(chan struct{}), ownerID: scope, streamID: streamID, flowID: flowID, convKey: req.ConversationKey()}
+	ctl = &streamCtl{cancel: cancel, started: make(chan struct{}), settled: make(chan struct{}), ownerID: scope, streamID: streamID, flowID: flowID, convKey: req.ConversationKey()}
 	// Every provider call of the turn (the RAG query embed included) is recorded for the flow's organisation, and
 	// the provider policy sees it.
 	ctx = ai.WithUsageScope(ctx, scope, orgID)
+	// The turn's terminal record (chat_turn_record.go): set before the stream is published.
+	ctl.turn.start, ctl.turn.provider, ctl.turn.logCtx, ctl.turn.orgID = time.Now(), req.Provider, ctx, orgID
 	ctl.touch() // pre-first-chunk work (context build, provider dial) counts as activity
 	ctl.lastEmit.Store(time.Now().UnixNano())
 	// Per-caller cap + stream-ID reservation, atomically (tryStartStream).
@@ -672,17 +733,20 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	// storeAnswer is set by the worker once it owns the turn's history: the answer must be in the store before
 	// "done" leaves, and the event names the version it was stored at (ADR 0031, addendum).
 	var storeAnswer func()
+	// doneClaimed: the worker claimed the terminal event for its done before storing the answer (below), so the
+	// emit that follows does not claim it again.
+	doneClaimed := false
 	emit := func(eventType string, data map[string]interface{}) {
 		// One terminal event per stream, claimed before the answer is stored: after Shutdown ended the stream in a
 		// stuck worker's place, the worker's late done or error is dropped, and so is its answer.
-		if (eventType == "done" || eventType == "error") && !ctl.claimTerminalEvent(eventType) {
+		if (eventType == "done" || eventType == "error") && (eventType != "done" || !doneClaimed) && !ctl.claimTerminalEvent(eventType) {
 			return
-		}
-		if eventType == "done" && storeAnswer != nil {
-			storeAnswer()
 		}
 		if eventType == "done" || eventType == "error" {
 			ctl.stampConversationVersion(data)
+		}
+		if eventType == "done" {
+			ctl.stampAnswerStored(data)
 		}
 		// Journal first (under the ctl lock): agentic events survive a disconnect via replay.
 		ctl.mu.Lock()
@@ -694,7 +758,19 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	}
 	// Coalesce consecutive chunk deltas into one SSE event; wrap() flushes before non-chunk events, keeping order.
 	coalesce := newChunkCoalescer(emit)
-	emit = coalesce.wrap()
+	coalesced := coalesce.wrap()
+	// The answer of a server-owned turn is stored before its done is emitted, outside the coalescer's emit gate:
+	// a slow or failing write never holds the heartbeat or the batch flush behind it (R-streaming-3).
+	emit = func(eventType string, data map[string]interface{}) {
+		if eventType == "done" && storeAnswer != nil {
+			if !ctl.claimTerminalEvent("done") {
+				return
+			}
+			doneClaimed = true
+			storeAnswer()
+		}
+		coalesced(eventType, data)
+	}
 
 	started := false
 	awaitStart := func() bool {
@@ -717,7 +793,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		defer chatStreamEnd()
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Error("chat stream goroutine panicked", "streamID", streamID, "panic", r)
+				logger.FromContext(ctx).Error("chat stream goroutine panicked", "panic", r)
 			}
 		}()
 		// persistAnswer: server-owned turns store the answer before "done" (storeAnswer), else from cleanup, after
@@ -727,15 +803,19 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		var turn turnModel
 		defer func() {
 			// Every exit path must leave a terminal state; a stream that never began gets it via BeginStream/ResumeStream.
-			if code, msg, set := ctl.ensureTerminal(ctx); set {
-				select {
-				case <-ctl.started:
-					// Never shared: this path only records cancelled/interrupted streams.
-					emit("error", errorEventData(code, msg, false))
-				default:
+			// Best-effort: a delivery that panics (the panic this cleanup may be running for) must not skip the
+			// rest of the cleanup — the active slot, the share hold, the worker count (R-streaming-3).
+			bestEffort(ctx, "chat stream terminal event", func() {
+				if code, msg, set := ctl.ensureTerminal(ctx); set {
+					select {
+					case <-ctl.started:
+						// Never shared: this path only records cancelled/interrupted streams.
+						emit("error", errorEventData(code, msg, false))
+					default:
+					}
 				}
-			}
-			coalesce.flush() // deliver any batched-but-unsent tail before exit
+			})
+			bestEffort(ctx, "chat stream final flush", coalesce.flush) // deliver any batched-but-unsent tail
 			cancel()
 			if mirrorFinished != nil {
 				close(mirrorFinished) // done/error are recorded by now; the mirror publishes them last
@@ -745,9 +825,12 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 			s.activeStreams.Delete(streamID)
 			s.share.finish(ctl, ctl.shareHold)
 			time.AfterFunc(resumeRetention, func() { s.finishedStreams.Delete(streamID) })
+			bestEffort(ctx, "chat turn record", func() { s.recordTurnEnded(ctl) })
 			if persistAnswer && !answerAttempted {
-				// Read settings afresh: history-saving may have been switched off mid-stream.
-				s.persistAssistantTurn(withoutTurnMemo(ctx), doc, req, ctl, turn.requested, turn.label)
+				bestEffort(ctx, "chat answer write", func() {
+					// Read settings afresh: history-saving may have been switched off mid-stream.
+					s.persistAssistantTurn(withoutTurnMemo(ctx), doc, req, ctl, turn.requested, turn.label)
+				})
 			}
 			close(ctl.settled)
 		}()
@@ -768,34 +851,61 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		// The settings row is needed right after setup; read it while setup runs.
 		s.prefetchCallerPreferences(ctx)
 		// Provider resolution, budget checks (reservation first) and the RAG lookup.
-		ts, err := s.prepareTurn(ctx, scope, doc, req, azureRes, ctl)
+		ts, err := s.prepareTurnFor(ctx, scope, doc, report, req, azureRes, ctl)
 		if err != nil {
 			fail(ctl.classifyFailureShared(ctx, err))
 			return
 		}
+		// Setup boundaries touch the idle clock (provider built here, history loaded and context built below): each
+		// step gets the idle limit, and a step that stalls is reported in the setup phase (R-streaming-10).
+		ctl.touch()
 		turn = ts.model
+		ctl.setTurnModel(turn.requested)
 
 		// Server-side reconstruction: empty Messages loads the prior conversation; non-empty (legacy/resend) is used as-is.
 		serverOwnsHistory := len(req.Messages) == 0
 		if serverOwnsHistory {
+			// Under the per-conversation mutex (SaveConversation replaces the whole file); only then may a reload be sent back.
+			stored, write, historyFailed := s.reconstructAndPersistUserTurn(ctx, doc, &req, req.ConversationKey())
+			if historyFailed {
+				if ctx.Err() != nil {
+					// The stream ended while the history loaded (a stop, the server's stop, the watchdog): that
+					// ending is what the client sees, not a history failure.
+					fail(ctl.classifyFailureShared(ctx, ctx.Err()))
+					return
+				}
+				// An answer without the thread's history is silently wrong ("fix the second one" has no referent):
+				// fail before any provider call, retryable (R-tool-loop-19).
+				fail(ChatErrHistoryUnavailable, "couldn't load this conversation's history — nothing was sent; try again in a moment", false)
+				return
+			}
+			ctl.touch() // the history is loaded (it waited for the conversation's lock)
 			// Store the answer at finish (a closed tab must not lose it); from cleanup so every exit path does it.
 			persistAnswer = true
-			// Under the per-conversation mutex (SaveConversation replaces the whole file); only then may a reload be sent back.
-			stored, write := s.reconstructAndPersistUserTurn(ctx, doc, &req, req.ConversationKey())
 			if stored {
 				ctl.userTurnStored.Store(true)
 			}
 			ctl.convWrite.Store(write)
 			storeAnswer = func() {
 				answerAttempted = true
-				// Read settings afresh: history-saving may have been switched off mid-stream.
-				ans := s.persistAssistantTurn(withoutTurnMemo(ctx), doc, req, ctl, turn.requested, turn.label)
+				// A write that panics leaves Failed set: the done still goes out, and the client saves the turn.
+				ans, wrote := answerWrite{Failed: true}, false
+				bestEffort(ctx, "chat answer write", func() {
+					// Read settings afresh: history-saving may have been switched off mid-stream.
+					ans = s.persistAssistantTurn(withoutTurnMemo(ctx), doc, req, ctl, turn.requested, turn.label)
+					wrote = true
+				})
+				if !wrote {
+					chatAnswerWriteFailuresTotal.WithLabelValues("error").Inc()
+				}
 				// Kept only when contiguous with the question's write; else someone else's message is in the version.
 				if q := ctl.convWrite.Load(); q != nil && ans.Written && ans.Loaded == q.Version {
 					ctl.convWrite.Store(&convWrite{Base: q.Base, Version: ans.Version})
 				} else {
 					ctl.convWrite.Store(nil)
 				}
+				// The done says so when the write failed: the client saves the turn itself (R-tool-loop-20).
+				ctl.answerUnstored.Store(ans.Failed)
 			}
 		}
 
@@ -811,12 +921,12 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		// need the caller's edit permission, resolved here once, before anything is offered; a Foundry agent
 		// always runs the loop.
 		useTools := req.UseTools || ts.model.agent()
-		gate := ai.NewToolGate(auth.ActorFromContext(ctx), s.flowCache != nil, s.canEditFlow(ctx, doc))
+		gate := s.toolGate(ctx, doc)
 		aiReq, scrubbedDoc, dropped, ok, err := s.buildStreamRequest(ctx, ts, scope, doc, report, ctxReq, gate, useTools)
 		if err != nil {
 			if errors.Is(err, errContextScrub) {
 				// Fail closed: nothing was sent, and the document itself never stands in for its clone.
-				logger.Error("chat: the flow's redacting clone could not be made; the turn was not sent", "error", err, "flow_id", doc.ID)
+				logger.FromContext(ctx).Error("chat: the flow's redacting clone could not be made; the turn was not sent", "error", err, "flow_id", doc.ID)
 				fail(ChatErrContextUnavailable, errContextScrub.Error()+" — nothing was sent; try again", false)
 				return
 			}
@@ -827,10 +937,16 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		if !ok {
 			return // ctx cancelled while waiting on RAG
 		}
+		ctl.touch() // the context is built
 		if dropped > 0 {
 			// Said once, before the first chunk, and journaled: the user sees that earlier turns were left out.
 			ctl.setDroppedHistory(dropped)
 			emit("notice", historyTruncatedNotice(dropped, dropped))
+		}
+		if st := ts.rag.status(); st != "" {
+			// Said once, before the first chunk, and journaled: why the organisation's guidelines are not in this
+			// answer, when the member or an admin can do something about it (R-knowledge-1).
+			emit("notice", knowledgeNotice(st))
 		}
 		// The loops below refresh the reservation per iteration with actual
 		// spend plus one more response.
@@ -842,6 +958,8 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				Doc:      scrubbedDoc,
 				RealDoc:  doc,
 				Analysis: readOnlyAnalysis{s.analysisCache},
+				// The org's knowledge base for search_knowledge, when the gate offers it (R-knowledge-6).
+				Knowledge: s.knowledgeTool(scope, doc),
 			}
 			if ap := s.newFixApplier(doc, streamID, emit, ctl.touch, toolDocSwap(&tctx)); ap != nil {
 				if fa, ok := ap.(*chatFixApplier); ok && blockStatus == contextBlockResolved {
@@ -868,7 +986,16 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 		failUsage := func(code, msg string, shared bool, tokensIn, tokensOut int, served string) {
 			failUsageStream(ctl, emit, nil, code, msg, shared, tokensIn, tokensOut, served)
 		}
-		err = ts.provider.Stream(ctx, aiReq, func(chunk ai.Chunk) {
+		// The window the request was sized to, read before the call: a rejection that states a smaller one is
+		// retried once at it (R-provider-12).
+		ctxLimit := ai.ContextLimitFor(ctx, ts.provider, ts.model.resolved)
+		// delivered: a chunk of the call reached the handler (a provider-synthesised keepalive is not one); a
+		// rejected call that delivered nothing can be sent again.
+		delivered := false
+		onChunk := func(chunk ai.Chunk) {
+			if !chunk.LocalKeepalive {
+				delivered = true
+			}
 			ctl.touch()
 			ctl.sawOutput(chunk.Text != "", len(chunk.ToolCalls) > 0, chunk.Done)
 			// A silent non-hosted phase (ai.Chunk.SilentStep) holds the hosted-step idle limit.
@@ -876,7 +1003,7 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				ctl.hostedStep(chunk.SilentStep > 0)
 			}
 			if chunk.ToolEvent != nil {
-				ctl.hostedStep(!chunk.ToolEvent.Done)
+				ctl.hostedToolEvent(chunk.ToolEvent)
 			}
 			if chunk.ServedModel != "" {
 				lastServed = chunk.ServedModel
@@ -921,8 +1048,26 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 				sawText = true
 				out.text(chunk.Text)
 			}
-		})
+		}
+		err = ts.provider.Stream(ctx, aiReq, onChunk)
 		ctl.endProviderTurn()
+		if err != nil && !delivered {
+			if window, ok := statedWindow(err, ctxLimit); ok {
+				// The rejected call was billed once, by the audited wrapper; the done counts the answer only.
+				if resized, more, ok := resizeToStatedWindow(ctx, ts.provider, aiReq, window); ok {
+					aiReq = resized
+					if more > 0 {
+						// Said again, with the turn's total so far, before any chunk of the retry.
+						total := ctl.droppedHistoryCount() + more
+						ctl.setDroppedHistory(total)
+						emit("notice", historyTruncatedNotice(more, total))
+					}
+					ctl.beginProviderTurn()
+					err = ts.provider.Stream(ctx, aiReq, onChunk)
+					ctl.endProviderTurn()
+				}
+			}
+		}
 
 		if err != nil {
 			code, msg, shared := ctl.classifyFailureShared(ctx, err)
@@ -938,6 +1083,16 @@ func (s *ChatService) StreamChatMessage(ctx context.Context, scope string, doc *
 	}()
 
 	return streamID, nil
+}
+
+// bestEffort runs fn, logging instead of propagating a panic from it.
+func bestEffort(ctx context.Context, what string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.FromContext(ctx).Error(what+" panicked", "panic", r)
+		}
+	}()
+	fn()
 }
 
 // toolLoopState is the machinery both tool-loop drivers share: begin gate, per-iteration context re-trim, token totals.
@@ -963,6 +1118,11 @@ type toolLoopState struct {
 	// dropped is how many history messages the turn has left out so far (the request build's, then each
 	// iteration's): the keptFrom of the next history_truncated notice.
 	dropped int
+	// windowRetry is the in-turn retry of a call rejected with a stated window (R-provider-12): pending until the
+	// next trimmedTurn re-sizes the request to it, in flight until that call is answered (a second rejection then
+	// ends the turn); rejectedMaxTokens is the rejected call's output cap.
+	windowRetry       windowRetryState
+	rejectedMaxTokens int
 
 	// The turn's token totals across iterations and the model that answered last.
 	totalIn    int
@@ -1021,8 +1181,23 @@ func (st *toolLoopState) trimmedTurn(base ai.Request, msgs []ai.Message, pin int
 	turn := base
 	turn.Messages = msgs
 	newPin, err := truncateForContextWindowMemo(st.ctx, st.provider, &turn, st.ctxLimit, pin, st.tokens)
+	retrying := st.windowRetry == windowRetryPending
+	if retrying {
+		st.windowRetry = windowRetryInFlight
+	}
 	if err != nil {
+		if retrying {
+			// The stated window does not hold even the current turn: the provider's rejection stands.
+			st.fail(st.ctl.classifyFailureShared(st.ctx, ai.ErrContextLimit))
+			return turn, pin, false
+		}
 		st.fail(ChatErrContextLimit, "conversation is too long for this model's context window — too many tool results, try a simpler question", false)
+		return turn, pin, false
+	}
+	if retrying && sameMessages(msgs, turn.Messages) && turn.MaxTokens >= st.rejectedMaxTokens {
+		// Sized to the stated window the request is the one already rejected (the estimate says it fits, the
+		// provider's tokenizer said not): sending it again would be rejected again.
+		st.fail(st.ctl.classifyFailureShared(st.ctx, ai.ErrContextLimit))
 		return turn, pin, false
 	}
 	if dropped := pin - newPin; dropped > 0 && st.ensureStarted() {
@@ -1034,10 +1209,41 @@ func (st *toolLoopState) trimmedTurn(base ai.Request, msgs []ai.Message, pin int
 	return turn, newPin, true
 }
 
-// addTurnUsage folds one iteration's tokens into the turn's totals.
+// windowRetryState is where a tool loop's in-turn retry at a stated window stands (toolLoopState.windowRetry).
+type windowRetryState int
+
+const (
+	windowRetryNone windowRetryState = iota
+	windowRetryPending
+	windowRetryInFlight
+)
+
+// retryAtStatedWindow decides whether the iteration whose call (sent) was rejected with err is retried at the
+// window the rejection stated (R-provider-12): once per iteration, only before anything of the call reached the
+// client (untouched), and only for a stated window below the one the turn was sized to (statedWindow). Yes lowers
+// the turn's window for the rest of the turn and the output cap to it (on base, which later iterations copy); the
+// caller then re-enters the same iteration, whose trimmedTurn re-truncates. The rejected call was billed once,
+// by the audited wrapper, and is not in the turn's totals: they count the calls that answered.
+func (st *toolLoopState) retryAtStatedWindow(err error, base *ai.Request, sent ai.Request, untouched bool) bool {
+	if st.windowRetry != windowRetryNone || !untouched {
+		return false
+	}
+	window, ok := statedWindow(err, st.ctxLimit)
+	if !ok {
+		return false
+	}
+	st.ctxLimit = window
+	base.MaxTokens = capToWindow(base.MaxTokens, window)
+	st.windowRetry = windowRetryPending
+	st.rejectedMaxTokens = sent.MaxTokens
+	return true
+}
+
+// addTurnUsage folds one iteration's tokens into the turn's totals; an answered call ends any window retry.
 func (st *toolLoopState) addTurnUsage(turnIn, turnOut int) {
 	st.totalIn += turnIn
 	st.totalOut += turnOut
+	st.windowRetry = windowRetryNone
 }
 
 // emitDone is the success exit: mark done and emit the turn's totals.
@@ -1066,8 +1272,11 @@ func (s *ChatService) runToolLoop(
 	msgs := base.Messages
 	st := newToolLoopState(s, ctx, provider, base, scope, ctl, awaitStart, emit, doneChunks)
 
-	// replayItems: provider reasoning records replay verbatim; valid only while history stays APPEND-ONLY.
+	// replayItems: provider reasoning records replay verbatim; valid only while history stays APPEND-ONLY — unless
+	// the provider's records stand alone per message (Gemini's per-call thought signatures): a truncation then
+	// keeps the records of the messages it keeps, the current turn's calls among them.
 	replayItems := true
+	standAlone := ai.ReplayRecordsStandAlone(provider.ID())
 	stopReplay := func() {
 		if replayItems {
 			replayItems = false
@@ -1094,6 +1303,7 @@ func (s *ChatService) runToolLoop(
 			stepBase.SystemPrompt = withStepLimitNote(base.SystemPrompt)
 		}
 		recordChatToolIteration()
+		ctl.turn.iterations.Add(1)
 		turn, newPin, ok := st.trimmedTurn(stepBase, msgs, pin)
 		if !ok {
 			return
@@ -1101,7 +1311,7 @@ func (s *ChatService) runToolLoop(
 		pin = newPin
 		rewritten := !sameMessages(msgs, turn.Messages)
 		msgs = turn.Messages
-		if rewritten {
+		if rewritten && !standAlone {
 			// History rewritten by truncation: recorded turns are no longer valid to replay.
 			stopReplay()
 			turn.Messages = msgs
@@ -1116,6 +1326,9 @@ func (s *ChatService) runToolLoop(
 			turnOut    int
 			turnFinish string
 			chunkErr   error
+			// hosted: the provider ran a tool of its own in this call (it reached the trail and the turn's
+			// record), so the call is not sent again at a stated window.
+			hosted bool
 		)
 		ctl.beginProviderTurn()
 		streamErr := provider.Stream(ctx, turn, func(c ai.Chunk) {
@@ -1132,8 +1345,10 @@ func (s *ChatService) runToolLoop(
 			case c.Error != nil:
 				chunkErr = c.Error
 			case c.ToolEvent != nil:
-				// A server-side tool (agent web search, MCP): account for the idle watchdog, then forward to the trail.
-				ctl.hostedStep(!c.ToolEvent.Done)
+				// A server-side tool (agent web search, MCP): account for the idle watchdog and the turn's record, then
+				// forward to the trail.
+				hosted = true
+				ctl.hostedToolEvent(c.ToolEvent)
 				if !st.ensureStarted() {
 					return
 				}
@@ -1179,6 +1394,11 @@ func (s *ChatService) runToolLoop(
 				i-- // don't consume an iteration for the degradation retry
 				continue
 			}
+			// A context-length rejection that stated the window: the same iteration once more, sized to it.
+			if st.retryAtStatedWindow(streamErr, &base, turn, turnText.Len() == 0 && !hosted) {
+				i--
+				continue
+			}
 			st.fail(ctl.classifyFailureShared(ctx, streamErr))
 			return
 		}
@@ -1190,6 +1410,10 @@ func (s *ChatService) runToolLoop(
 				if st.ensureStarted() {
 					emit("tool", map[string]interface{}{"name": "tools_unsupported", "label": "This model can't use tools — answering without them"})
 				}
+				i--
+				continue
+			}
+			if st.retryAtStatedWindow(chunkErr, &base, turn, turnText.Len() == 0 && !hosted) {
 				i--
 				continue
 			}
@@ -1360,6 +1584,7 @@ func (s *ChatService) runPromptToolLoop(
 			stepBase.SystemPrompt = withStepLimitNote(base.SystemPrompt)
 		}
 		recordChatToolIteration()
+		ctl.turn.iterations.Add(1)
 		turn, newPin, ok := st.trimmedTurn(stepBase, msgs, pin)
 		if !ok {
 			return
@@ -1401,11 +1626,21 @@ func (s *ChatService) runPromptToolLoop(
 		if st.started {
 			out.flush()
 		}
+		// A context-length rejection that stated the window: the same iteration once more, sized to it (see
+		// runToolLoop). The turn's text is buffered, so nothing of the rejected call reached the client.
 		if streamErr != nil {
+			if st.retryAtStatedWindow(streamErr, &base, turn, true) {
+				i--
+				continue
+			}
 			st.fail(ctl.classifyFailureShared(ctx, streamErr))
 			return
 		}
 		if chunkErr != nil {
+			if st.retryAtStatedWindow(chunkErr, &base, turn, true) {
+				i--
+				continue
+			}
 			st.fail(ctl.classifyFailureShared(ctx, chunkErr))
 			return
 		}
@@ -1476,9 +1711,10 @@ func (s *ChatService) runPromptToolLoop(
 			}
 			emit("tool", map[string]interface{}{"name": tc.Name, "label": ai.ToolLabel(tc.Name)})
 			// Keep the idle watchdog aware of in-flight tool execution.
+			ctl.setPhase(phaseTool)
 			ctl.touch()
 			started := time.Now()
-			result := guardedToolRun(ai.ToolCall{Name: tc.Name}, func() toolExecResult {
+			result := guardedToolRun(tctx.Ctx, ai.ToolCall{Name: tc.Name}, func() toolExecResult {
 				return toolExecResult{name: tc.Name, result: mem.exec(tc.Name, tc.Input, tctx)}
 			}).result
 			ctl.touch()

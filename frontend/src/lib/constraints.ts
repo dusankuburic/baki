@@ -27,3 +27,16 @@ export const TOKEN_MAX_EXPIRY_DAYS = 365
 export const CI_CREDENTIAL_MAX_EXPIRY_DAYS = 365
 
 export const CI_CREDENTIAL_MAX_NAME = 100
+
+/** AI behaviour caps, mirrors of internal/service/settings_validation.go (a Go test compares them). */
+export const SYSTEM_PROMPT_SUFFIX_MAX_LENGTH = 4000
+
+export const AI_PROMPTS_PER_LIST_MAX = 20
+
+export const AI_PROMPT_MAX_LENGTH = 500
+
+/** The per-provider Max tokens field's ceiling (MaxOutputTokensSetting). */
+export const MAX_TOKENS_SETTING_MAX = 32000
+
+/** A stored API key's length cap, a mirror of internal/service/credential_errors.go (MaxAPIKeyBytes). */
+export const API_KEY_MAX_LENGTH = 8192

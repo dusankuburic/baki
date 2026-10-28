@@ -1,0 +1,43 @@
+: hand-built from the Anthropic extended-thinking streaming docs (thinking_delta, signature_delta, redacted_thinking), NOT a live capture; signatures are fake; see ../README.md
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_01WIRE0000000000000000006","type":"message","role":"assistant","model":"claude-opus-4-1-20250805","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":640,"cache_creation_input_tokens":0,"cache_read_input_tokens":1024,"output_tokens":3}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"The user asks whether the loop exits. "}}
+
+event: ping
+data: {"type": "ping"}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Block 12 sets LoopIndex; block 14 compares it."}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"EqQBCgIYAhIMWIREFIXTURENOTAREALSIGNATURE0000000000=="}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"EmwKAhgBEgyWIREFIXTURENOTREALREDACTEDDATA000000=="}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: content_block_start
+data: {"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"Yes: block 14 exits once LoopIndex reaches the row count."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":2}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":214}}
+
+event: message_stop
+data: {"type":"message_stop"}
+

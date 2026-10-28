@@ -109,6 +109,7 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/dashboard/home/SkeletonDashboard.tsx',
 
   'src/components/chat/hooks/stream-engine/accumulator.ts',
+  'src/components/chat/hooks/stream-engine/closing.ts',
   'src/components/chat/hooks/stream-engine/types.ts',
   'src/components/chat/hooks/useChatStreamEngine.ts',
   'src/components/chat/aitab/SelectionContextBar.tsx',
@@ -116,6 +117,7 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/chat/aitab/useMessageSearch.ts',
   'src/components/chat/aitab/useStreamFooter.tsx',
   'src/components/chat/aitab/useSuggestedPrompts.ts',
+  'src/components/chat/aitab/announce.ts',
   'src/components/chat/approval/preview.ts',
   'src/components/dashboard/analytics/SkeletonAnalytics.tsx',
   'src/components/dashboard/home/HomeChartCards.ts',
@@ -138,6 +140,7 @@ const NO_USER_FACING_COPY = new Set([
   'src/components/chat/ChatStreamProvider.tsx',
   'src/components/chat/chatStreamContext.ts',
   'src/components/chat/providerGlyphs.ts',
+  'src/components/chat/settledCard.ts',
 ])
 
 function usesI18n(src: string): boolean {

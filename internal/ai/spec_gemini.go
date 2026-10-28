@@ -5,7 +5,7 @@ var geminiSpec = ProviderSpec{
 	ID:           "gemini",
 	Name:         "Gemini",
 	AuthType:     AuthAPIKey,
-	Caps:         CapChat | CapStream | CapEmbeddings | CapTools | CapOrgShared,
+	Caps:         CapChat | CapStream | CapEmbeddings | CapTools | CapReasoning | CapOrgShared,
 	Modes:        allProfiles,
 	Egress:       EgressPolicy{Kind: EgressFixedHost},
 	Credential:   apiKeyCredential("AIza...", "https://aistudio.google.com/apikey"),

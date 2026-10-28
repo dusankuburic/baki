@@ -72,7 +72,8 @@ func TestChatError_EmptyBody401IsInvalidKey(t *testing.T) {
 
 // 403 is classified like 401: forbidden is a credential problem, not a
 // transient condition, whatever the body says.
-func TestChatError_403MapsToInvalidKey(t *testing.T) {
+// R-provider-25: a 403 is the provider refusing the account, which also keeps the auth failure's rules.
+func TestChatError_403MapsToAccessDenied(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"error":{"message":"access forbidden","code":"403"}}`))
@@ -80,8 +81,8 @@ func TestChatError_403MapsToInvalidKey(t *testing.T) {
 	defer srv.Close()
 	p := compatErrProvider(srv.Client(), srv.URL+"/chat/completions")
 
-	if _, err := p.Chat(context.Background(), compatChatReq()); !errors.Is(err, ErrApiKeyInvalid) {
-		t.Fatalf("403: want ErrApiKeyInvalid, got %v", err)
+	if _, err := p.Chat(context.Background(), compatChatReq()); !errors.Is(err, ErrProviderAccessDenied) || !errors.Is(err, ErrApiKeyInvalid) {
+		t.Fatalf("403: want ErrProviderAccessDenied (and ErrApiKeyInvalid), got %v", err)
 	}
 }
 

@@ -385,6 +385,19 @@ describe('providersApi.hasApiKey', () => {
   })
 })
 
+describe('providersApi.keyStatus', () => {
+  it('reads has and the unreadable flag, and a bare boolean from an older server', async () => {
+    const spy = respond({has: true, unreadable: true})
+    const {api} = await load()
+    await expect(api.keyStatus('openai')).resolves.toEqual({has: true, unreadable: true})
+    expect(call(spy)).toEqual({path: '/api/keys/has', method: 'POST', body: {provider: 'openai'}})
+    spy.mockImplementation(async () => Response.json({has: true}))
+    await expect(api.keyStatus('openai')).resolves.toEqual({has: true, unreadable: false})
+    spy.mockImplementation(async () => Response.json(false))
+    await expect(api.keyStatus('openai')).resolves.toEqual({has: false, unreadable: false})
+  })
+})
+
 describe('apiPath', () => {
   it('accepts a path of plain segments under /api/ and nothing else', async () => {
     const {apiPath} = await import('./providers')

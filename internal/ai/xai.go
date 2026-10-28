@@ -14,10 +14,13 @@ type XAIProvider struct {
 func NewXAIProvider(apiKey string) *XAIProvider {
 	return &XAIProvider{
 		openaiBase: openaiBase{
-			apiKey:        apiKey,
-			client:        fixedHostClient(),
-			baseURL:       &xaiBaseURL,
-			providerLabel: "xai",
+			apiKey:         apiKey,
+			client:         fixedHostClient(),
+			longWaitClient: fixedHostClientFor(false),
+			handle429:      quotaExhausted,
+			baseURL:        &xaiBaseURL,
+			providerLabel:  "xai",
+			providerID:     xaiProviderID,
 		},
 	}
 }

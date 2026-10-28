@@ -154,13 +154,13 @@ func (s *answerGateStore) SaveConversation(ctx context.Context, flowID, scope st
 	return s.FakeBackend.SaveConversation(ctx, flowID, scope, msgs)
 }
 
-func (s *answerGateStore) SaveConversationIf(ctx context.Context, flowID, scope string, expected int64, msgs []storageif.ChatMessage) (int64, error) {
+func (s *answerGateStore) SaveConversationIf(ctx context.Context, flowID, scope, owner string, expected int64, msgs []storageif.ChatMessage) (int64, error) {
 	if err := s.gate(ctx); err != nil {
 		return 0, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.FakeBackend.SaveConversationIf(ctx, flowID, scope, expected, msgs)
+	return s.FakeBackend.SaveConversationIf(ctx, flowID, scope, owner, expected, msgs)
 }
 
 // gate counts a save and parks the second one (the answer) until release.
@@ -180,10 +180,10 @@ func (s *answerGateStore) gate(ctx context.Context) error {
 	return nil
 }
 
-func (s *answerGateStore) LoadConversationVersioned(ctx context.Context, flowID, scope string) ([]storageif.ChatMessage, int64, error) {
+func (s *answerGateStore) LoadConversationVersioned(ctx context.Context, flowID, scope, owner string) ([]storageif.ChatMessage, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.FakeBackend.LoadConversationVersioned(ctx, flowID, scope)
+	return s.FakeBackend.LoadConversationVersioned(ctx, flowID, scope, owner)
 }
 
 func (s *answerGateStore) LoadConversation(ctx context.Context, flowID, scope string) ([]storageif.ChatMessage, error) {

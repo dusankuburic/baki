@@ -2,6 +2,7 @@ package di
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"go.uber.org/fx"
@@ -42,6 +43,7 @@ func TestServiceModule_BuildsInEveryMode(t *testing.T) {
 			cfg := config.Default()
 			cfg.Mode = m.mode
 			cfg.Auth.Enabled = m.auth
+			reads := &recordingKeyReads{keys: testutil.NewFakeSecretStore()}
 			var (
 				analysis  *service.AnalysisService
 				azure     *service.AzureModelService
@@ -63,7 +65,7 @@ func TestServiceModule_BuildsInEveryMode(t *testing.T) {
 					func() *collaboration.OrgService { return nil },
 				),
 				noDatabase(),
-				fakeKeyStore(),
+				fakeKeyStoreWith(reads),
 				ServiceModule,
 				redisx.Module,
 				fx.Populate(&analysis, &azure, &chat, &dashboard, &knowledge, &library, &providers, &system),
@@ -80,19 +82,69 @@ func TestServiceModule_BuildsInEveryMode(t *testing.T) {
 			if knowledge == nil || chat == nil || dashboard == nil || library == nil || system == nil {
 				t.Error("a service was not built")
 			}
+			// The keystore's request-scoped reads reach the services that read keys for a request (R-provider-19):
+			// the catalogue reads the caller's keys in one read, the key-status route under the request's context.
+			reads.calls.Store(0)
+			if _, err := providers.ProviderCatalog(context.Background(), "u1", ""); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := system.ApiKeyStatus(context.Background(), "u1", "openai"); err != nil {
+				t.Fatal(err)
+			}
+			if n := reads.calls.Load(); n != 2 {
+				t.Errorf("the keystore's request-scoped reads served %d reads, want 2 (the catalogue's scope read, the key status)", n)
+			}
 		})
 	}
 }
 
-// fakeKeyStore provides what internal/app's provideKeyStore provides, on the test keystore: the keys and the listing
-// of their families (as the database keystore does), no organisation credential store.
+// fakeKeyStore provides what internal/app's provideKeyStore provides, on the test keystore: the keys, the listing
+// of their families and the request-scoped reads (as the database keystore does), no organisation credential store.
 func fakeKeyStore() fx.Option {
-	keys := testutil.NewFakeSecretStore()
+	return fakeKeyStoreWith(&recordingKeyReads{keys: testutil.NewFakeSecretStore()})
+}
+
+// fakeKeyStoreWith is fakeKeyStore on reads' keystore.
+func fakeKeyStoreWith(reads *recordingKeyReads) fx.Option {
+	keys := reads.keys
 	return fx.Provide(
 		func() service.KeyStore { return keys },
 		func() storageif.SecretFamilyLister { return keys },
+		func() service.KeyReads { return reads },
 		func() service.OrgKeyStore { return nil },
+		func() service.OrgKeyReads { return nil },
 	)
+}
+
+// recordingKeyReads is the keystore's request-scoped reads over the test keystore, counting the reads it serves.
+type recordingKeyReads struct {
+	keys  *testutil.FakeSecretStore
+	calls atomic.Int32
+}
+
+func (r *recordingKeyReads) GetCtx(_ context.Context, scope, provider string) (string, error) {
+	r.calls.Add(1)
+	return r.keys.Get(scope, provider)
+}
+
+func (r *recordingKeyReads) HasCtx(_ context.Context, scope, provider string) (bool, error) {
+	r.calls.Add(1)
+	return r.keys.Has(scope, provider)
+}
+
+func (r *recordingKeyReads) KeyStates(_ context.Context, scope string, keys []string) (map[string]storageif.SecretState, error) {
+	r.calls.Add(1)
+	out := map[string]storageif.SecretState{}
+	for _, k := range keys {
+		if has, _ := r.keys.Has(scope, k); has {
+			if v, _ := r.keys.Get(scope, k); v != "" {
+				out[k] = storageif.SecretUsable
+			} else {
+				out[k] = storageif.SecretEmpty
+			}
+		}
+	}
+	return out, nil
 }
 
 // noDatabase provides what internal/app's provideStorageBackend provides beside the backend, as it does without a

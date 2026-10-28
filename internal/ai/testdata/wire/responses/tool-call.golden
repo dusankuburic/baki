@@ -1,0 +1,15 @@
+# responses/tool-call.sse through parseResponsesSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="gpt-4.1-2025-04-14"
+02 keepalive served="gpt-4.1-2025-04-14"
+03 keepalive served="gpt-4.1-2025-04-14"
+04 keepalive served="gpt-4.1-2025-04-14"
+05 keepalive served="gpt-4.1-2025-04-14"
+06 keepalive served="gpt-4.1-2025-04-14"
+07 keepalive served="gpt-4.1-2025-04-14"
+08 keepalive served="gpt-4.1-2025-04-14"
+09 keepalive served="gpt-4.1-2025-04-14"
+10 keepalive served="gpt-4.1-2025-04-14"
+11 done finish="tool_calls" in=2210 out=46 tool{id="call_WIRE00000000000000000001" name="get_block" input={"blockId":"b-12"}} tool{id="call_WIRE00000000000000000002" name="get_variable_lineage" input={"variable":"LoopIndex"}} items=[{"arguments":"{\"blockId\":\"b-12\"}","call_id":"call_WIRE00000000000000000001","id":"fc_WIRE0000000000000000000000000001","name":"get_block","status":"completed","type":"function_call"},{"arguments":"{\"variable\":\"LoopIndex\"}","call_id":"call_WIRE00000000000000000002","id":"fc_WIRE0000000000000000000000000002","name":"get_variable_lineage","status":"completed","type":"function_call"}] served="gpt-4.1-2025-04-14"
+return nil
+summary chunks=11 keepalives=10 text=""

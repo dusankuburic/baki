@@ -1,0 +1,5 @@
+: hand-built from the Gemini API FinishReason SAFETY docs (blocked safetyRatings, no content), NOT a live capture; see ../README.md
+data: {"candidates": [{"content": {"parts": [{"text": "Here is how to"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 88,"candidatesTokenCount": 4,"totalTokenCount": 92},"modelVersion": "gemini-2.5-flash","responseId": "WIREgeminiFilter001"}
+
+data: {"candidates": [{"finishReason": "SAFETY","index": 0,"safetyRatings": [{"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT","probability": "NEGLIGIBLE"},{"category": "HARM_CATEGORY_HATE_SPEECH","probability": "NEGLIGIBLE"},{"category": "HARM_CATEGORY_HARASSMENT","probability": "NEGLIGIBLE"},{"category": "HARM_CATEGORY_DANGEROUS_CONTENT","probability": "HIGH","blocked": true}]}],"usageMetadata": {"promptTokenCount": 88,"candidatesTokenCount": 6,"totalTokenCount": 94},"modelVersion": "gemini-2.5-flash","responseId": "WIREgeminiFilter001"}
+

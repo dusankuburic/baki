@@ -50,7 +50,15 @@ func copilotResolver(f *ProviderFactory, scope, _ string) (Credential, string, s
 	if patErr == nil && pat != "" {
 		return Credential{Key: pat}, scope, "", nil
 	}
-	return Credential{}, "", "", fmt.Errorf("%s not configured: no OAuth token or PAT found", copilotProviderID)
+	// Neither is usable: a store failure (a token the keystore cannot decrypt) is reported as itself, so the chat
+	// asks for the sign-in again instead of "try again in a moment".
+	if oauthErr != nil {
+		return Credential{}, "", "", fmt.Errorf("get %s token: %w", copilotProviderID, oauthErr)
+	}
+	if patErr != nil {
+		return Credential{}, "", "", fmt.Errorf("get %s key: %w", copilotProviderID, patErr)
+	}
+	return Credential{}, "", "", fmt.Errorf("%s: no OAuth token or PAT found: %w", copilotProviderID, ErrKeyNotConfigured)
 }
 
 func init() { mustRegisterSpec(copilotSpec) }

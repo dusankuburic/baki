@@ -1,0 +1,7 @@
+# openai/error-numeric-code.sse through parseOpenAISSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="Qwen/Qwen3-8B"
+02 text="The loop" served="Qwen/Qwen3-8B"
+03 error=provider_down msg="The model is overloaded; retry later." served="Qwen/Qwen3-8B"
+return nil
+summary chunks=3 keepalives=1 text="The loop"

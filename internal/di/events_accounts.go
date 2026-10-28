@@ -17,4 +17,5 @@ func SubscribeSettingsAndCredentialCaches(bus *eventbus.Bus, settings service.Se
 	service.SubscribeRuleProfiles(bus, profiles)
 	service.SubscribeModelCache(bus, providers)
 	rag.SubscribeCorpusCache(bus, knowledge)
+	rag.SubscribeEmbedderCache(bus, knowledge)
 }

@@ -54,6 +54,9 @@ type FixProposal struct {
 	Property    string
 	Fingerprint string // content-stable finding identity — survives the re-parse the apply triggers
 	Summary     string
+	// Anchor names the block by content in the document the proposal was made on, where BlockID is valid: an edit
+	// during the approval wait re-parses the flow, and the apply finds the block again by it.
+	Anchor *models.BlockAnchor
 }
 
 // ToolFixApplier is the human-in-the-loop apply hook implemented by the chat service: show the proposal to
@@ -79,6 +82,9 @@ type ToolContext struct {
 	RealDoc  *models.FlowDocument
 	Analysis ToolAnalysis
 	Fixes    ToolFixApplier
+	// Knowledge is the session's knowledge base (search_knowledge): the flow's organisation's, behind the same
+	// membership gate as the turn's guidelines; nil when the turn has none (no organisation, no knowledge service).
+	Knowledge ToolKnowledge
 	// Allow is the session's tool gate (NewToolGate): the same one that decided which tools were offered, asked
 	// again by ExecuteTool before any handler runs. A model can name a tool it was not offered (a hallucinated
 	// call, a replayed history, an Azure agent's own function_call), so the offer is not the boundary; this is.
@@ -93,6 +99,13 @@ func (tctx ToolContext) analysisDoc() *models.FlowDocument {
 		return tctx.RealDoc
 	}
 	return tctx.Doc
+}
+
+// ToolKnowledge is the slice of the chat's knowledge-base lookup search_knowledge needs, declared here so the ai
+// package stays a leaf: the guidelines for query, at most limit chunks, already scrubbed and bounded; an error the
+// model may read (the caller is not a member, has no embedder) otherwise.
+type ToolKnowledge interface {
+	SearchKnowledge(ctx context.Context, query string, limit int) (string, error)
 }
 
 type toolHandler func(tctx ToolContext, input json.RawMessage) (string, error)
@@ -116,7 +129,10 @@ type ToolSpec struct {
 	RequiredScope string
 	// PreviewKind names how the approval card previews the request ("" for read-only tools).
 	PreviewKind string
-	Exec        toolHandler
+	// NeedsKnowledge: the tool reads the session's knowledge base (ToolContext.Knowledge), so only a session that
+	// wired one is offered it (ToolSession.Knowledge); a nil gate does not offer it either.
+	NeedsKnowledge bool
+	Exec           toolHandler
 }
 
 // ToolGate decides whether a session may use a tool: built once per stream with NewToolGate, it selects the
@@ -133,29 +149,54 @@ const (
 	// ToolRefusedFlowPermission: the tool changes the flow (it needs an approval) and the caller may not edit it —
 	// a viewer's stream, which needs only ChatUse.
 	ToolRefusedFlowPermission = "flow_permission"
+	// ToolRefusedKnowledgeUnavailable: the tool reads a knowledge base and the session has none (a flow without an
+	// organisation, the desktop, a deployment without the knowledge service).
+	ToolRefusedKnowledgeUnavailable = "knowledge_unavailable"
 )
 
-// ToolRefusal reports why actor may not use spec in a session where approvalsWired says whether an approval
-// applier exists and canEditFlow whether the caller may edit the flow, or "" when it may. A nil actor is local
-// mode, which restricts nothing (the same rule as the fix applier's scope check); an unscoped session or token
-// allows every scope. The reasons are checked in that order: the scope names what the caller could change first.
-func ToolRefusal(spec ToolSpec, actor *auth.Actor, approvalsWired, canEditFlow bool) string {
-	if spec.RequiresApproval && !approvalsWired {
+// ToolSession is what one stream's tool gate is built from, resolved once at stream start: the actor (nil in local
+// mode), whether approvals can be requested, whether the caller may edit the flow and whether a knowledge base is
+// wired for the flow (R-knowledge-6).
+type ToolSession struct {
+	Actor          *auth.Actor
+	ApprovalsWired bool
+	CanEditFlow    bool
+	Knowledge      bool
+}
+
+// Refusal reports why the session may not use spec, or "" when it may. A nil actor is local mode, which restricts
+// nothing (the same rule as the fix applier's scope check); an unscoped session or token allows every scope. The
+// reasons are checked in that order: the scope names what the caller could change first; a knowledge tool needs a
+// knowledge base whoever asks.
+func (s ToolSession) Refusal(spec ToolSpec) string {
+	if spec.NeedsKnowledge && !s.Knowledge {
+		return ToolRefusedKnowledgeUnavailable
+	}
+	if spec.RequiresApproval && !s.ApprovalsWired {
 		return ToolRefusedApprovalUnavailable
 	}
-	if spec.RequiredScope != "" && actor != nil && !actor.Allows(spec.RequiredScope) {
+	if spec.RequiredScope != "" && s.Actor != nil && !s.Actor.Allows(spec.RequiredScope) {
 		return ToolRefusedScope
 	}
-	if spec.RequiresApproval && !canEditFlow {
+	if spec.RequiresApproval && !s.CanEditFlow {
 		return ToolRefusedFlowPermission
 	}
 	return ""
 }
 
-// NewToolGate builds the gate of one session from its actor, whether approvals can be requested and whether the
-// caller may edit the flow, all resolved once at stream start.
+// Gate is the session's tool gate.
+func (s ToolSession) Gate() ToolGate { return s.Refusal }
+
+// ToolRefusal reports why actor may not use spec in a session without a knowledge base where approvalsWired says
+// whether an approval applier exists and canEditFlow whether the caller may edit the flow (ToolSession.Refusal).
+func ToolRefusal(spec ToolSpec, actor *auth.Actor, approvalsWired, canEditFlow bool) string {
+	return ToolSession{Actor: actor, ApprovalsWired: approvalsWired, CanEditFlow: canEditFlow}.Refusal(spec)
+}
+
+// NewToolGate builds the gate of one session without a knowledge base from its actor, whether approvals can be
+// requested and whether the caller may edit the flow; a session with one builds a ToolSession.
 func NewToolGate(actor *auth.Actor, approvalsWired, canEditFlow bool) ToolGate {
-	return func(spec ToolSpec) string { return ToolRefusal(spec, actor, approvalsWired, canEditFlow) }
+	return ToolSession{Actor: actor, ApprovalsWired: approvalsWired, CanEditFlow: canEditFlow}.Gate()
 }
 
 // toolRegistry is the grounding and fix tool set the model can be offered.
@@ -182,12 +223,12 @@ func ToolSpecOf(name string) (ToolSpec, bool) {
 }
 
 // ToolDefinitionsFor returns the tool schemas to attach to a provider Request for a session gated by gate (nil
-// ⇒ every tool), in a stable order.
+// ⇒ every tool that needs no session resource: not the knowledge tools), in a stable order.
 func ToolDefinitionsFor(gate ToolGate) []ToolDefinition {
 	specs := ToolSpecs()
 	out := make([]ToolDefinition, 0, len(specs))
 	for _, s := range specs {
-		if gate == nil || gate(s) == "" {
+		if (gate == nil && !s.NeedsKnowledge) || (gate != nil && gate(s) == "") {
 			out = append(out, s.Def)
 		}
 	}
@@ -196,7 +237,14 @@ func ToolDefinitionsFor(gate ToolGate) []ToolDefinition {
 
 // ToolDefinitions returns every tool's schema: the closed set behind the metric labels. A stream's request
 // uses ToolDefinitionsFor with its gate.
-func ToolDefinitions() []ToolDefinition { return ToolDefinitionsFor(nil) }
+func ToolDefinitions() []ToolDefinition {
+	specs := ToolSpecs()
+	out := make([]ToolDefinition, 0, len(specs))
+	for _, s := range specs {
+		out = append(out, s.Def)
+	}
+	return out
+}
 
 // ToolRequiresApproval reports whether a registered tool asks the user before acting (apply_fix, apply_fixes);
 // false for an unknown name.
@@ -219,7 +267,8 @@ func ToolLabel(name string) string {
 func ExecuteTool(name string, input json.RawMessage, tctx ToolContext) string {
 	t, ok := toolRegistry[name]
 	if !ok {
-		return "error: unknown tool " + name
+		// The name is the model's, unbounded: error results are capped like any other (truncateResult).
+		return truncateResult("error: unknown tool " + name)
 	}
 	// The session's gate, before the handler: the offer is not the boundary (see ToolContext.Allow).
 	if tctx.Allow != nil && tctx.Allow(t) != "" {
@@ -249,7 +298,8 @@ func ExecuteTool(name string, input json.RawMessage, tctx ToolContext) string {
 		// Every success path scrubs; the error branch must too — a handler whose
 		// error embeds flow content would otherwise bypass the scrubber on the
 		// provider path.
-		return "error: " + scrubber.ScrubText(err.Error())
+		// Capped too: a decode error quotes the offending input ("cannot unmarshal number 999…" whole).
+		return truncateResult("error: " + scrubber.ScrubText(err.Error()))
 	}
 	return truncateResult(res)
 }
@@ -351,7 +401,47 @@ func buildToolRegistry() map[string]ToolSpec {
 		},
 		Exec: toolGetVariableLineage,
 	})
+	add(ToolSpec{
+		Label: "Searching knowledge base",
+		Def: ToolDefinition{
+			Name:        "search_knowledge",
+			Description: "Search the organisation's knowledge base (its own PAD standards, policies and guidelines) for passages relevant to the query, e.g. a rule, connector or pattern list_findings or get_block turned up. Returns the best passages with their source file; cite the file when you rely on one.",
+			InputSchema: schema(`{"type":"object","properties":{"query":{"type":"string","description":"What to look for: name the action, rule, connector or practice"},"limit":{"type":"integer","description":"Max passages (default and at most 5)"}},"required":["query"]}`),
+		},
+		// The query embedding goes to the embedding provider: longer than the in-memory reads, bounded all the same.
+		Timeout:        15 * time.Second,
+		NeedsKnowledge: true,
+		Exec:           toolSearchKnowledge,
+	})
 	return reg
+}
+
+// MaxKnowledgeToolLimit is the most passages one search_knowledge call returns: one page of the knowledge search.
+const MaxKnowledgeToolLimit = 5
+
+// toolSearchKnowledge asks the session's knowledge base, which bounds and scrubs what it answers.
+func toolSearchKnowledge(tctx ToolContext, input json.RawMessage) (string, error) {
+	var in struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if len(input) > 0 {
+		if err := json.Unmarshal(input, &in); err != nil {
+			return "", fmt.Errorf("invalid input: %w", err)
+		}
+	}
+	query := strings.TrimSpace(in.Query)
+	if query == "" {
+		return "", errors.New("query is required")
+	}
+	if tctx.Knowledge == nil {
+		return "", errors.New("the organisation's knowledge base is not available in this conversation")
+	}
+	limit := in.Limit
+	if limit <= 0 || limit > MaxKnowledgeToolLimit {
+		limit = MaxKnowledgeToolLimit
+	}
+	return tctx.Knowledge.SearchKnowledge(tctx.Ctx, query, limit)
 }
 
 // --- handlers ---------------------------------------------------------------
@@ -841,6 +931,7 @@ func buildFixProposal(tctx ToolContext, in fixTargetInput) (FixProposal, string)
 		Property:    property,
 		Fingerprint: finding.Fingerprint,
 		Summary:     renderPatchPreview(finding, block, patch),
+		Anchor:      tctx.analysisDoc().AnchorOf(block.ID),
 	}, ""
 }
 

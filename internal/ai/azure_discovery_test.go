@@ -249,15 +249,9 @@ func assertNoProcessCacheWrites(t *testing.T) {
 	azureModelsCache.mu.Lock()
 	listings := len(azureModelsCache.m)
 	azureModelsCache.mu.Unlock()
-	agentKinds.Lock()
-	kinds := len(agentKinds.m)
-	agentKinds.Unlock()
-	servedMu.Lock()
-	served := len(servedMemo)
-	servedMu.Unlock()
-	learnedMu.Lock()
-	learned := len(learnedWindows)
-	learnedMu.Unlock()
+	kinds := agentKinds.Len()
+	served := servedMemo.Len() + servedByResource.Len()
+	learned := learnedWindows.Len()
 	if listings+kinds+served+learned != 0 {
 		t.Errorf("process caches written: %d listings, %d agent kinds, %d served models, %d learned windows", listings, kinds, served, learned)
 	}

@@ -50,7 +50,7 @@ func TestChatService_CloudConversationRoundTrip(t *testing.T) {
 	}
 
 	// Clear deletes it; a later read returns empty, not an error.
-	if err := svc.ClearConversation(ctx, doc.ID, "claude"); err != nil {
+	if err := svc.ClearConversation(ctx, doc.ID, "claude", true); err != nil {
 		t.Fatalf("ClearConversation: %v", err)
 	}
 	if got, err := svc.GetConversation(ctx, doc.ID, "claude"); err != nil || len(got) != 0 {

@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"pad-analyzer/internal/ai"
+	"pad-analyzer/internal/audit"
 	"pad-analyzer/internal/auth"
 	"pad-analyzer/internal/events"
 	"pad-analyzer/internal/lifecycle"
@@ -20,8 +23,6 @@ import (
 	"pad-core/ai/scrubber"
 	"pad-core/logger"
 	"pad-core/models"
-
-	"github.com/google/uuid"
 )
 
 // Embedding-provider sentinels. Exported so the HTTP layer can map them to distinct machine-readable error codes.
@@ -113,6 +114,9 @@ type KnowledgeService struct {
 	searchOnce sync.Once
 	// bus announces corpus changes (KnowledgeDocChanged); the corpus count cache drops on them. nil publishes nothing.
 	bus *eventbus.Bus
+	// audit records the changes no request handler sees (WithAuditRecorder): the identity stamp of proven legacy
+	// documents. nil records nothing.
+	audit AuditRecorder
 	// jobLeaser is the deployment's cross-replica lock (WithJobLeaser): the background re-embed's job lease and
 	// the per-org lease of an upload or re-index (lockOrg); nil runs both without one, in this process alone.
 	jobLeaser lock.Leaser
@@ -288,6 +292,13 @@ func (s *KnowledgeService) embedderFor(ctx context.Context, scope, orgID string)
 				return nil, refusal
 			}
 		}
+		// The key store could not be read: the caller may well hold the key, so this is neither "no embedder" nor a
+		// reason for another provider to stand in (its vectors may not be the corpus's). The setup sentinel is
+		// retryable, and the search's memo never keeps it.
+		if errors.Is(err, ai.ErrCredentialUnreadable) {
+			logger.Warn("knowledge: the embedding provider's credential could not be read", "provider", providerID, "error", err)
+			return nil, ErrEmbeddingSetupUnavailable
+		}
 	}
 	if s.factory == nil {
 		return nil, fmt.Errorf("%w (configured %q: %w)", ErrEmbeddingUnavailable, providerID, err)
@@ -295,13 +306,23 @@ func (s *KnowledgeService) embedderFor(ctx context.Context, scope, orgID string)
 
 	// Fallback: first keyed, embedding-capable provider in fixed priority order; having a usable key
 	// (which ForEmbedding decides) is the whole test. Azure AI Foundry is never a fallback.
+	var unreadable error
 	for _, pid := range ai.EmbeddingFallbackOrder() {
 		if pid == providerID || registryEmbedded(pid) {
 			continue // already tried above / opt-in only
 		}
-		if p2, err2 := s.factory.ForEmbedding(ctx, scope, pid, embeddingModel); err2 == nil {
+		p2, err2 := s.factory.ForEmbedding(ctx, scope, pid, embeddingModel)
+		if err2 == nil {
 			return p2, nil
 		}
+		if errors.Is(err2, ai.ErrCredentialUnreadable) {
+			unreadable = err2
+		}
+	}
+	// A fallback whose key could not be read might have been the one: not "no key had a key" either.
+	if unreadable != nil {
+		logger.Warn("knowledge: an embedding provider's credential could not be read", "error", unreadable)
+		return nil, ErrEmbeddingSetupUnavailable
 	}
 	return nil, fmt.Errorf("%w (configured %q: %w; no embedding-capable fallback had a key)", ErrEmbeddingUnavailable, providerID, err)
 }
@@ -361,8 +382,13 @@ const (
 // legacy rows from before the column, and every row for a provider that names none — still take the sample
 // proof: up to corpusSampleSize indexed chunks (one per document) are re-embedded and compared with their stored
 // vectors; the WORST same-width pair decides, so a mixed corpus (partial re-index, race) refuses everyone until a
-// forced re-index repairs it; no same-width pair is corpusOtherWidth (corpusStranded). A proof over legacy rows
-// stamps them with the caller's identity: the lenient match ends for the org, and the next upload is a column compare.
+// forced re-index repairs it; no same-width pair is corpusOtherWidth (corpusStranded). Where the caller's identity is
+// known and the census shows legacy rows beside it (and none of another identity), the proof is about those rows
+// alone and samples them: the first and the last legacy chunk of up to corpusSampleSize documents holding legacy rows
+// — the rows the caller's identity already names need no proof, and a re-index that stopped inside a document
+// converted a prefix of it. A proof stamps the caller's identity on the legacy rows of the documents it PROVED and no
+// other (R-knowledge-3, ADR 0027 §3): a document outside the sample keeps the lenient match, and the next proof
+// samples the documents still legacy; each stamp is in the audit trail with the documents it names.
 // embedderWidth is the width of the vectors the proof bought, 0 when the census decided without embedding.
 func (s *KnowledgeService) checkCorpusModel(ctx context.Context, provider ai.Provider, orgID string) (verdict corpusVerdict, embedderWidth int, err error) {
 	identity := ai.EmbeddingIdentity(provider)
@@ -378,11 +404,17 @@ func (s *KnowledgeService) checkCorpusModel(ctx context.Context, provider ai.Pro
 			return corpusSameModel, 0, nil
 		}
 	}
-	samples, err := s.store.SampleKnowledgeChunkEmbeddings(ctx, orgID, corpusSampleSize)
+	legacyProof := identity != "" && counts.Stranded == 0 && counts.Legacy() > 0
+	var samples []interfaces.KnowledgeChunk
+	if legacyProof {
+		samples, err = s.store.SampleLegacyKnowledgeChunkEmbeddings(ctx, orgID, corpusSampleSize)
+	} else {
+		samples, err = s.store.SampleKnowledgeChunkEmbeddings(ctx, orgID, corpusSampleSize)
+	}
 	if err != nil {
 		return corpusEmpty, 0, fmt.Errorf("sample indexed chunks: %w", err)
 	}
-	verdict, embedderWidth, err = s.compareSamples(ctx, provider, orgID, samples)
+	verdict, embedderWidth, proven, err := s.compareSampleDocs(ctx, provider, orgID, samples)
 	if err != nil || identity == "" {
 		return verdict, embedderWidth, err
 	}
@@ -403,26 +435,49 @@ func (s *KnowledgeService) checkCorpusModel(ctx context.Context, provider ai.Pro
 			"org_id", orgID, "stranded_chunks", counts.Stranded, "total_chunks", counts.Total)
 		return corpusOtherModel, embedderWidth, nil
 	}
-	if verdict == corpusSameModel {
-		userID := ""
-		if claims := auth.ClaimsFromContext(ctx); claims != nil {
-			userID = claims.UserID
-		}
-		if n, err := s.store.StampKnowledgeChunkIdentity(ctx, userID, orgID, "", identity); err != nil {
-			logger.Warn("knowledge base: could not stamp the legacy chunks with the proven identity", "org_id", orgID, "error", err)
-		} else if n > 0 {
-			logger.Info("knowledge base: legacy chunks stamped with the proven embedding identity", "org_id", orgID, "chunks", n)
-		}
+	if verdict == corpusSameModel && legacyProof {
+		s.stampProvenDocuments(ctx, orgID, identity, proven)
 	}
 	return verdict, embedderWidth, nil
 }
 
-// compareSamples re-embeds the sampled chunks' text with provider and classifies against their
+// stampProvenDocuments stamps identity on the legacy rows of the documents a proof covered, and records the stamp —
+// the identity, the documents, how many rows — in the audit trail: the one change to a chunk's identity no embedding
+// wrote. A failure is logged; the rows stay legacy, matched leniently, and the next proof tries again.
+func (s *KnowledgeService) stampProvenDocuments(ctx context.Context, orgID, identity string, docIDs []string) {
+	if len(docIDs) == 0 {
+		return
+	}
+	n, err := s.store.StampKnowledgeDocumentIdentity(ctx, callerUserID(ctx), orgID, docIDs, identity)
+	if err != nil {
+		logger.Warn("knowledge base: could not stamp the proven documents' legacy chunks with their identity", "org_id", orgID, "documents", len(docIDs), "error", err)
+		return
+	}
+	if n == 0 {
+		return
+	}
+	logger.Info("knowledge base: legacy chunks of the proven documents stamped with the proven embedding identity", "org_id", orgID, "documents", len(docIDs), "chunks", n)
+	if s.audit != nil {
+		s.audit.Record(ctx, audit.Entry{Action: audit.ActionKnowledgeIdentityStamp, ResourceType: "org", ResourceID: orgID, OrgID: orgID,
+			Meta: map[string]string{"identity": identity, "documents": strings.Join(docIDs, ","), "chunks": strconv.Itoa(n)}})
+	}
+}
+
+// compareSamples is compareSampleDocs without the proven documents.
+func (s *KnowledgeService) compareSamples(ctx context.Context, provider ai.Provider, orgID string, samples []interfaces.KnowledgeChunk) (corpusVerdict, int, error) {
+	verdict, width, _, err := s.compareSampleDocs(ctx, provider, orgID, samples)
+	return verdict, width, err
+}
+
+// compareSampleDocs re-embeds the sampled chunks' text with provider and classifies against their
 // stored vectors (worst same-width pair decides; no same-width pair = corpusOtherWidth). The fresh vectors are
 // what the org's embedder produces, so their width is noted like an upload's (noteEmbeddingWidth) and returned.
-func (s *KnowledgeService) compareSamples(ctx context.Context, provider ai.Provider, orgID string, samples []interfaces.KnowledgeChunk) (corpusVerdict, int, error) {
+// proven are the sampled documents every sampled chunk of which reproduced its stored vector (same width, cosine at
+// or above sameModelMinCosine), in sample order.
+func (s *KnowledgeService) compareSampleDocs(ctx context.Context, provider ai.Provider, orgID string, samples []interfaces.KnowledgeChunk) (corpusVerdict, int, []string, error) {
 	texts := make([]string, 0, len(samples))
 	stored := make([][]float32, 0, len(samples))
+	docs := make([]string, 0, len(samples))
 	for _, c := range samples {
 		if strings.TrimSpace(c.Content) == "" || len(c.Embedding) == 0 {
 			continue
@@ -432,43 +487,62 @@ func (s *KnowledgeService) compareSamples(ctx context.Context, provider ai.Provi
 		// threshold absorbs a mask in a 1000-rune chunk.
 		texts = append(texts, scrubText(c.Content))
 		stored = append(stored, c.Embedding)
+		docs = append(docs, c.DocID)
 	}
 	if len(texts) == 0 {
-		return corpusEmpty, 0, nil
+		return corpusEmpty, 0, nil, nil
 	}
 	fresh, err := provider.Embed(ctx, texts)
 	if err != nil {
-		return corpusEmpty, 0, fmt.Errorf("%w: %w", ErrEmbeddingFailed, ai.EmbeddingFailureCause(err))
+		return corpusEmpty, 0, nil, fmt.Errorf("%w: %w", ErrEmbeddingFailed, ai.EmbeddingFailureCause(err))
 	}
 	if len(fresh) != len(texts) {
-		return corpusEmpty, 0, fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(fresh), len(texts))
+		return corpusEmpty, 0, nil, fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(fresh), len(texts))
 	}
 	s.noteEmbeddingWidth(orgID, provider, fresh)
 	width := len(fresh[0])
 	worst, sameWidth, compared := 2.0, false, false
+	// reproduced[doc] is false once any sampled chunk of doc failed to reproduce its vector.
+	reproduced := map[string]bool{}
+	var order []string
 	for i := range texts {
+		if _, seen := reproduced[docs[i]]; !seen {
+			order = append(order, docs[i])
+			reproduced[docs[i]] = true
+		}
 		if len(fresh[i]) != len(stored[i]) {
+			reproduced[docs[i]] = false
 			continue
 		}
 		sameWidth = true
 		sim, ok := cosineSimilarity(stored[i], fresh[i])
 		if !ok {
+			reproduced[docs[i]] = false
 			continue
 		}
 		compared = true
 		worst = min(worst, sim)
+		if sim < sameModelMinCosine {
+			reproduced[docs[i]] = false
+		}
+	}
+	var proven []string
+	for _, d := range order {
+		if reproduced[d] {
+			proven = append(proven, d)
+		}
 	}
 	switch {
 	case !sameWidth:
-		return corpusOtherWidth, width, nil
+		return corpusOtherWidth, width, nil, nil
 	case !compared:
-		return corpusEmpty, width, nil // only undefined (all-zero) vectors at this width
+		return corpusEmpty, width, nil, nil // only undefined (all-zero) vectors at this width
 	case worst < sameModelMinCosine:
 		logger.Warn("knowledge base: caller's embedding model differs from the indexed corpus",
 			"org_id", orgID, "worst_similarity", worst, "width", width)
-		return corpusOtherModel, width, nil
+		return corpusOtherModel, width, nil, nil
 	}
-	return corpusSameModel, width, nil
+	return corpusSameModel, width, proven, nil
 }
 
 // corpusStranded: nothing in the org's corpus is in the vector index at the deployment's width — the
@@ -611,7 +685,8 @@ func (s *KnowledgeService) EmbeddingWidthMismatch(ctx context.Context, orgID str
 	}
 	unindexed := false
 	for _, d := range docs {
-		unindexed = unindexed || d.ChunkCount > d.VectorIndexed
+		// A pending upload's chunks still to embed have no vector at all: not outside the index at some width.
+		unindexed = unindexed || d.ChunkCount-d.PendingChunks > d.VectorIndexed
 	}
 	if !unindexed {
 		return nil
@@ -628,141 +703,6 @@ func (s *KnowledgeService) EmbeddingWidthMismatch(ctx context.Context, orgID str
 	return nil
 }
 
-// AddDocument chunks content, embeds in the caller's scope, then persists document + chunks.
-// Embedding happens before the document row is written so a failure leaves no orphan "indexed" document.
-func (s *KnowledgeService) AddDocument(ctx context.Context, scope, orgID, filename, content string) (err error) {
-	if strings.TrimSpace(content) == "" {
-		return fmt.Errorf("document is empty")
-	}
-	ctx = usageRun(ctx, scope, orgID)
-	provider, err := s.embedderFor(ctx, scope, orgID)
-	if err != nil {
-		return fmt.Errorf("embedding provider unavailable: %w", err)
-	}
-
-	// Defense-in-depth: a service without a store (nil backend, local mode) must fail cleanly, not panic.
-	if s.store == nil {
-		return fmt.Errorf("knowledge service has no storage backend (cloud mode required)")
-	}
-
-	// Secrets are masked in the document BEFORE it is chunked, never chunk by chunk: the mask is then in the text
-	// every chunk is cut from, so neighbouring chunks carry an identical overlap and stripOverlapPrefix's exact
-	// match keeps de-duplicating it — scrubbed on its own, a chunk whose carried tail begins inside a secret keeps
-	// a key-less fragment of the value while its neighbour masks it. The provider and the store see the masked
-	// text only; the render-time scrub of retrieved guidelines stays as defence in depth. The filename is masked
-	// too: it is stored, listed and rendered beside the chunk (ADR 0027 §10).
-	scrubbed := scrubText(content)
-	filename = scrubText(filename)
-	chunks := chunkText(scrubbed, knowledgeChunkRunes)
-	if len(chunks) > maxKnowledgeChunks {
-		return fmt.Errorf("%w: %d passages exceed the limit of %d", ErrDocumentTooLarge, len(chunks), maxKnowledgeChunks)
-	}
-
-	// Taken after the cheap validation, so a bad request never waits on a running re-index. It holds the org's
-	// lease over every replica for the check -> embed -> write window; ctx is cancelled if the lease is lost.
-	callerCtx := ctx
-	ctx, unlock, err := s.lockOrg(ctx, orgID)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	defer func() { err = lostOr(ctx, err) }()
-	// Whatever the outcome, the org's cached corpus size is stale once this returns.
-	var docID string
-	defer func() {
-		s.bus.Publish(callerCtx, events.KnowledgeDocChanged{OrgID: orgID, DocID: docID, Kind: events.KnowledgeDocAdded})
-	}()
-
-	// Replace semantics: re-uploading a filename supersedes the old version (chunks cascade). Superseded
-	// IDs are captured up front and deleted BY ID, because DeleteKnowledgeDocumentByName would also match the new document.
-	superseded, total, err := s.supersededDocIDs(ctx, orgID, filename)
-	if err != nil {
-		return fmt.Errorf("replace existing document: %w", err)
-	}
-
-	// Never mix embedding models in one corpus: a document embedded with a different model is unfindable
-	// for members on the other model. Checked before embedding so a refused upload costs one small request;
-	// no force option — switch models by re-indexing with force first. Replacing every document skips the guard.
-	if len(superseded) < total {
-		verdict, _, err := s.checkCorpusModel(ctx, provider, orgID)
-		if err != nil {
-			return err
-		}
-		switch verdict {
-		case corpusOtherModel:
-			return ErrEmbeddingModelChanged
-		case corpusOtherWidth:
-			// Another width is a recovery only when the rows at it are the caller's own, outside the index
-			// (a PAD_EMBEDDING_DIM change under one identity): no second model enters the corpus and the
-			// re-index converts them. Anyone else's rows at another width would make a mixed corpus.
-			own, err := s.ownRowsStranded(ctx, orgID, ai.EmbeddingIdentity(provider))
-			if err != nil {
-				return err
-			}
-			if !own {
-				return ErrEmbeddingModelChanged
-			}
-		}
-	}
-
-	embeddings, err := embedBatched(ctx, provider, chunks)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrEmbeddingFailed, ai.EmbeddingFailureCause(err))
-	}
-	if len(embeddings) != len(chunks) {
-		return fmt.Errorf("embedding count mismatch: got %d for %d chunks", len(embeddings), len(chunks))
-	}
-	s.noteEmbeddingWidth(orgID, provider, embeddings)
-
-	// Extract the caller's userID once: every storage call below is RLS-scoped to them ("" in local mode).
-	userID := ""
-	if claims := auth.ClaimsFromContext(ctx); claims != nil {
-		userID = claims.UserID
-	}
-
-	identity := ai.EmbeddingIdentity(provider)
-	doc := &interfaces.KnowledgeDocument{
-		ID:             uuid.NewString(),
-		OrgID:          orgID,
-		Filename:       filename,
-		ChunkerVersion: chunkerVersion,
-	}
-	docID = doc.ID
-	knowledgeChunks := make([]interfaces.KnowledgeChunk, len(chunks))
-	for i := range chunks {
-		knowledgeChunks[i] = interfaces.KnowledgeChunk{
-			ID:                uuid.NewString(),
-			DocID:             doc.ID,
-			OrgID:             orgID,
-			Content:           chunks[i],
-			Embedding:         embeddings[i],
-			EmbeddingIdentity: identity,
-		}
-	}
-
-	// ORDERING: write the new version FIRST, delete the old only once the new document AND its chunks
-	// have committed — deleting first meant a failure left the org with NEITHER version, so a failed
-	// re-upload is a no-op. The document and its chunks are one transaction: written apart, a crash
-	// between them left a document with no chunks (a failure there was rolled back by a delete, which a
-	// crash never runs). The previous version is untouched either way and still serves retrieval.
-	if err := s.store.SaveKnowledgeDocumentWithChunks(ctx, userID, doc, knowledgeChunks); err != nil {
-		return err
-	}
-	if scrubbed != content {
-		recordRAGScrubbedChunks("upload", maskedChunks(chunks))
-	}
-
-	// The new version is durable; retire the ones it supersedes. A failure here leaves a duplicate,
-	// not a gap — the safe direction.
-	for _, id := range superseded {
-		if err := s.store.DeleteKnowledgeDocument(ctx, userID, orgID, id); err != nil {
-			logger.Warn("knowledge: failed to remove superseded document version",
-				"orgId", orgID, "filename", filename, "docId", id, "error", err)
-		}
-	}
-	return nil
-}
-
 // ListDocuments returns up to limit of the org's documents (<=0 = all), newest first, skipping offset, each with
 // the number of its chunks the caller's searches would never return (EmbeddingStranded: embedded under another
 // identity than the caller's embedder's). A caller without an embedder has nothing to compare with and sees none.
@@ -775,7 +715,8 @@ func (s *KnowledgeService) ListDocuments(ctx context.Context, scope, orgID strin
 	if identity == "" {
 		return docs, nil
 	}
-	stranded, err := s.store.CountStrandedKnowledgeChunksByDocument(ctx, orgID, identity)
+	// Per corpus generation (strandedByDocument): every list request used to aggregate the org's chunks again.
+	stranded, err := s.strandedByDocument(ctx, orgID, identity)
 	if err != nil {
 		logger.Warn("knowledge: could not count the documents' stranded chunks", "org_id", orgID, "error", err)
 		return docs, nil
@@ -787,13 +728,14 @@ func (s *KnowledgeService) ListDocuments(ctx context.Context, scope, orgID strin
 }
 
 // viewerIdentity is the embedding identity of the caller's embedder, "" when none resolves (no key, a provider
-// that names none): resolving one reads credentials and settings, never the provider.
+// that names none): resolving one reads credentials and settings, never the provider. The resolution is the
+// search's memo (resolvedEmbedder), so a list in the memo's TTL resolves nothing.
 func (s *KnowledgeService) viewerIdentity(ctx context.Context, scope, orgID string) string {
 	if s.embedOverride == nil && s.factory == nil && s.azureEmbedder == nil {
 		return ""
 	}
 	// Outside a run nothing seeds the usage scope: name the org for the policy's reads here.
-	provider, err := s.embedderFor(ai.WithUsageScope(ctx, scope, orgID), scope, orgID)
+	provider, err := s.resolvedEmbedder(ai.WithUsageScope(ctx, scope, orgID), scope, orgID)
 	if err != nil {
 		return ""
 	}
@@ -816,68 +758,15 @@ func (s *KnowledgeService) supersededDocIDs(ctx context.Context, orgID, filename
 	return s.store.ListKnowledgeDocumentIDsByFilename(ctx, orgID, filename)
 }
 
-func (s *KnowledgeService) Search(ctx context.Context, scope, orgID, query string) (string, error) {
-	// An org without a single indexed chunk has nothing to retrieve: without this check every
-	// org-flow chat turn would pay a billed embedding call only to find nothing (count is cached briefly).
-	if s.store != nil && s.corpusEmpty(ctx, orgID) {
-		return "", nil
-	}
-	ctx = usageRun(ctx, scope, orgID)
-	provider, err := s.embedderFor(ctx, scope, orgID)
-	if err != nil {
-		return "", err
-	}
-
-	// Defense-in-depth: nil store (local mode) → empty augmentation instead of a panic; chat works
-	// without org-guideline context.
-	if s.store == nil {
-		return "", nil
-	}
-
-	// Scrub the query before it leaves the process: ragGuidelines hands this path the RAW message, so
-	// the embeddings request was the one place a pasted credential reached a provider verbatim; scrubbed
-	// before truncation so a cut cannot hide half a secret from the patterns.
-	query = scrubText(query)
-
-	// Truncate before embedding: an oversized message would become a multi-million-token,
-	// billed-per-token request above every provider's per-request cap.
-	if utf8.RuneCountInString(query) > maxQueryRunes {
-		query = string([]rune(query)[:maxQueryRunes])
-	}
-
-	vec, ok, err := s.embedQuery(ctx, provider, scope, orgID, query)
-	if err != nil || !ok {
-		return "", err
-	}
-	s.noteEmbeddingWidth(orgID, provider, [][]float32{vec})
-
-	// Top-k retrieval: 5 chunks — more context improves grounding cheaply; the pgvector query
-	// applies a distance threshold to exclude irrelevant chunks. Only chunks this embedder produced
-	// (or legacy rows of unknown origin) are candidates: another model's vectors at the same width
-	// are noise cosine cannot tell from a miss.
-	identity := ai.EmbeddingIdentity(provider)
-	chunks, err := s.store.SearchKnowledge(ctx, orgID, vec, 5, identity)
-	if err != nil {
-		return "", err
-	}
-
-	var sb strings.Builder
-	if len(chunks) > 0 {
-		sb.WriteString(assembleGuidelines(chunks))
-	} else {
-		s.explainEmptySearch(ctx, orgID, identity, len(vec))
-	}
-
-	return sb.String(), nil
-}
-
 // explainEmptySearch tells an empty result's reasons apart for ops, since a corpus stranded by an embedding
 // switch returns empty silently: chunks the caller's identity cannot see (a model switch at the same width)
 // and a corpus with nothing in the vector index at the configured width (a width switch) are each logged and
 // metered on their own counter; a corpus that simply has nothing above the relevance floor is a miss, not a
-// signal (R4), and so is every empty result where there is no vector index to be outside of.
+// signal (R4), and so is every empty result where there is no vector index to be outside of. It is a search's
+// follow-up (SearchResult.FollowUp), run after the result is delivered: the census is the one the search read
+// before embedding (identityCounts), so it is normally a cache hit.
 func (s *KnowledgeService) explainEmptySearch(ctx context.Context, orgID, identity string, queryDim int) {
-	counts, err := s.store.CountKnowledgeChunksByIdentity(ctx, orgID, identity)
+	counts, err := s.identityCounts(ctx, orgID, identity)
 	if err != nil || counts.Total == 0 {
 		return
 	}
@@ -902,6 +791,21 @@ type ReindexResult struct {
 	Docs       int                              `json:"docs"`
 	Truncated  bool                             `json:"truncated,omitempty"`
 	NextCursor *interfaces.KnowledgeChunkCursor `json:"nextCursor,omitempty"`
+	// The rechunk re-index (RechunkOrg) also reports how many documents this request cut again at the current
+	// chunker version and finished (Rechunked; each now has a new id), how many below it kept no source text to cut
+	// (SkippedNoSource: stored before v51; re-upload them), how many the new split would take past what one upload
+	// may index (SkippedTooLarge) and how many have an unfinished upload of their name, which a rechunk never
+	// supersedes (SkippedPending: finish or delete that upload first). Its Chunks are the new chunks embedded, its
+	// Docs the documents worked on.
+	//
+	// Rechunked counts this request only, but the Skipped counts are recounted by every request: each one walks the
+	// corpus from its start and meets every skipped document it reaches again (a skipped document stays below the
+	// version). They are not to be summed across the requests of a run: the request that ends the run (no
+	// NextCursor) has walked them all, so its counts — or the largest seen — are the run's.
+	Rechunked       int `json:"rechunked,omitempty"`
+	SkippedNoSource int `json:"skippedNoSource,omitempty"`
+	SkippedTooLarge int `json:"skippedTooLarge,omitempty"`
+	SkippedPending  int `json:"skippedPending,omitempty"`
 }
 
 // ReindexOrg re-embeds an org's whole corpus with the CURRENT embedding provider — the recovery path for a
@@ -1158,8 +1062,8 @@ func assembleGuidelines(chunks []interfaces.KnowledgeChunk) string {
 		if strings.TrimSpace(content) == "" {
 			continue // fully duplicated by a neighbour — nothing new to add
 		}
-		if c.Filename != "" {
-			fmt.Fprintf(&sb, "- [%s] %s\n", c.Filename, content)
+		if name := sourceLabel(c.Filename); name != "" {
+			fmt.Fprintf(&sb, "- [%s] %s\n", name, content)
 		} else {
 			fmt.Fprintf(&sb, "- %s\n", content)
 		}
@@ -1167,28 +1071,64 @@ func assembleGuidelines(chunks []interfaces.KnowledgeChunk) string {
 	return sb.String()
 }
 
+// sourceLabel is a document's name as a chunk's "[name]" attribution shows it: brackets become parentheses, so a name
+// cannot close the attribution early, and format characters (bidi overrides, zero-width marks), line separators and
+// controls are dropped — uploads refuse them now, documents stored before may still carry them.
+func sourceLabel(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '[':
+			return '('
+		case r == ']':
+			return ')'
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r), unicode.Is(unicode.Zl, r), unicode.Is(unicode.Zp, r):
+			return -1
+		}
+		return r
+	}, name)
+}
+
 // embedConcurrency is how many embedBatched batches are in flight at once: three overlaps round
 // trips without opening a burst a low-TPM deployment would throttle.
 const embedConcurrency = 3
 
-// embedBatched embeds items in provider-safe batches, results in item order. For a provider that may
-// embed concurrently (ai.EmbedsConcurrently) up to embedConcurrency batches run at once; the first failure
-// cancels in-flight batches and launches no more. Any other provider runs one batch at a time.
+// embedBatched embeds items in provider-safe batches, results in item order (embedBatchedEach).
 func embedBatched(ctx context.Context, provider ai.Provider, items []string) ([][]float32, error) {
+	out := make([][]float32, len(items))
+	err := embedBatchedEach(ctx, provider, items, func(start, end int, batch [][]float32) error {
+		copy(out[start:end], batch)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// embedBatchedEach embeds items in provider-safe batches and hands each batch's vectors to each as it completes
+// (start and end index items; each runs on the batch's goroutine, so it must be safe for concurrent use). For a
+// provider that may embed concurrently (ai.EmbedsConcurrently) up to embedConcurrency batches run at once; the first
+// failure (the provider's or each's) cancels in-flight batches and launches no more. Any other provider runs one
+// batch at a time, and no batch after the first starts once ctx has ended (it would be bought for nobody).
+func embedBatchedEach(ctx context.Context, provider ai.Provider, items []string, each func(start, end int, batch [][]float32) error) error {
 	if !ai.EmbedsConcurrently(provider) || len(items) <= embedBatchSize {
-		var out [][]float32
 		for start := 0; start < len(items); start += embedBatchSize {
-			batch, err := embedOneBatch(ctx, provider, items[start:min(start+embedBatchSize, len(items))])
-			if err != nil {
-				return nil, err
+			if err := ctx.Err(); err != nil && start > 0 {
+				return err
 			}
-			out = append(out, batch...)
+			end := min(start+embedBatchSize, len(items))
+			batch, err := embedOneBatch(ctx, provider, items[start:end])
+			if err != nil {
+				return err
+			}
+			if err := each(start, end, batch); err != nil {
+				return err
+			}
 		}
-		return out, nil
+		return nil
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	out := make([][]float32, len(items))
 	var (
 		mu       sync.Mutex
 		firstErr error
@@ -1226,21 +1166,22 @@ func embedBatched(ctx context.Context, provider ai.Provider, items []string) ([]
 				}
 			}()
 			batch, err := embedOneBatch(ctx, provider, items[start:end])
+			if err == nil {
+				err = each(start, end, batch)
+			}
 			if err != nil {
 				fail(err)
-				return
 			}
-			copy(out[start:end], batch)
 		}(start, end)
 	}
 	wg.Wait()
 	if firstErr != nil {
-		return nil, firstErr
+		return firstErr
 	}
 	if !launchedAll {
-		return nil, ctx.Err() // the caller's context ended before every batch launched
+		return ctx.Err() // the caller's context ended before every batch launched
 	}
-	return out, nil
+	return nil
 }
 
 // embedOneBatch embeds one provider-safe batch and checks the vector count.
@@ -1258,11 +1199,12 @@ func embedOneBatch(ctx context.Context, provider ai.Provider, items []string) ([
 // Chunking geometry: knowledgeChunkRunes is the chunk size AddDocument hands to chunkText;
 // chunkOverlapPercent is the share of each chunk carried verbatim into the next.
 const (
-	// chunkerVersion names this geometry on every document it splits (knowledge_documents.chunker_version,
-	// ADR 0027). A document is chunked once — the original text is not kept — so a change to the geometry
-	// below cannot be applied to stored documents; it must bump the version (TestChunkText_GoldenGeometry pins
-	// the split) so that stripOverlapPrefix can tell which overlap a retrieved chunk carries.
-	chunkerVersion      = 1
+	// chunkerVersion names the chunker an upload splits with (knowledge_documents.chunker_version, ADR 0027):
+	// version 2 (chunker_v2.go). A stored document keeps the split of its version — version 1 is chunkText,
+	// TestChunkText_GoldenGeometry and TestChunkTextV2_GoldenGeometry pin both — so stripOverlapPrefix can tell
+	// which overlap a retrieved chunk carries; a change to a split is a new version. A document uploaded since
+	// v51 keeps its source text, which a rechunk re-index cuts again at this version (RechunkOrg).
+	chunkerVersion      = 2
 	knowledgeChunkRunes = 1000
 	chunkOverlapPercent = 15
 	// chunkOverlapRunes is the exact length of the tail carried from one chunk into the next
@@ -1303,8 +1245,13 @@ func maskedChunks(chunks []string) int {
 // the SAME document is also in the result set: chunk N+1 begins with the exact tail of chunk N, so
 // retrieving both duplicates that passage. Exact-string match, same-DocID scoping, longest first; a chunk
 // fully contained in its neighbour trims to "" (caller skips it). Runs per retrieved chunk on every RAG
-// chat turn — must not allocate: prefixes are byte slices at rune boundaries, tested with HasSuffix.
+// chat turn — must not allocate: prefixes are byte slices at rune boundaries, tested with HasSuffix. The
+// overlap a chunk carries is its document's chunker version's (the hits carry it): a v2 chunk carries it
+// after its heading path (stripOverlapV2).
 func stripOverlapPrefix(content, docID string, all []interfaces.KnowledgeChunk) string {
+	if documentChunkerVersion(docID, all) >= 2 {
+		return stripOverlapV2(content, docID, all)
+	}
 	// offs[k] is the byte length of content's k-rune prefix, up to the probe cap; fixed-size (stack).
 	var offs [maxOverlapProbeRunes + 1]int
 	k, i := 0, 0

@@ -1,0 +1,21 @@
+{
+  "why": "Answers from the context alone (no tool), links the selected block and its finding, and does not offer to change anything unasked.",
+  "flow": "disabled_call",
+  "selectedBlock": "B2",
+  "question": "Should I delete this disabled call?",
+  "expect": {
+    "mustNotCall": [
+      "apply_fix",
+      "apply_fixes"
+    ],
+    "mustMention": [
+      "B2",
+      "disabled-block"
+    ],
+    "mustLink": [
+      "block:",
+      "finding:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -487,15 +488,15 @@ func TestConfigureAzureFoundry_GuardedClientKeepsTheProxy(t *testing.T) {
 		t.Error("the local transport must keep the proxy function")
 	}
 	// No dial guard in local mode: the transport keeps the shared client's
-	// DialContext (nil = the default dialer), which never answers with the
-	// egress refusal.
-	if local.DialContext != nil {
+	// plain dialer (a connect timeout, R-provider-4), which never answers with
+	// the egress refusal.
+	if !sameDialer(local.DialContext, sharedTransportBase().DialContext) {
 		t.Error("desktop/local mode installs no dial guard")
 	}
 	if local.ResponseHeaderTimeout != azureResponseHeaderTimeout {
 		t.Errorf("local transport ResponseHeaderTimeout = %v, want %v", local.ResponseHeaderTimeout, azureResponseHeaderTimeout)
 	}
-	if shared, ok := sharedHTTPClient.Transport.(*http.Transport); !ok || shared.ResponseHeaderTimeout != 30*time.Second {
+	if shared, ok := sharedHTTPClient.Transport.(*http.Transport); !ok || shared.ResponseHeaderTimeout != streamingHeaderTimeout {
 		t.Error("the shared client must keep its 30 s ResponseHeaderTimeout")
 	}
 }
@@ -545,7 +546,7 @@ func TestAzureRuntimeZeroValueClientIsNoRedirectsAndWarnsOnce(t *testing.T) {
 	if tr.ResponseHeaderTimeout != azureResponseHeaderTimeout {
 		t.Errorf("zero-value transport ResponseHeaderTimeout = %v, want %v", tr.ResponseHeaderTimeout, azureResponseHeaderTimeout)
 	}
-	if tr.DialContext != nil {
+	if !sameDialer(tr.DialContext, sharedTransportBase().DialContext) {
 		t.Error("the zero-value transport installs no dial guard")
 	}
 	if client.CheckRedirect == nil || !errors.Is(client.CheckRedirect(nil, nil), http.ErrUseLastResponse) {
@@ -630,4 +631,10 @@ func TestAzureFoundry_EntraCLIMode(t *testing.T) {
 func isAzureCode(err error, code string) bool {
 	var ce *AzureConfigError
 	return errors.As(err, &ce) && ce.Code == code
+}
+
+// sameDialer reports whether two DialContext funcs are the same code: the shared transport's plain dialer, not
+// an egress guard's closure.
+func sameDialer(a, b func(context.Context, string, string) (net.Conn, error)) bool {
+	return a != nil && b != nil && reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
 }

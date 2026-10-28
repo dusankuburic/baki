@@ -1,0 +1,85 @@
+{
+  "done": true,
+  "error": "",
+  "events": [
+    {
+      "data": {
+        "label": "Listing findings",
+        "name": "list_findings"
+      },
+      "type": "tool"
+    },
+    {
+      "data": {
+        "durationMs": 1,
+        "label": "Listing findings",
+        "name": "list_findings",
+        "ok": true,
+        "summary": "4 finding(s) (showing 1-4 of 4):"
+      },
+      "type": "tool_result"
+    },
+    {
+      "data": {
+        "label": "Requesting fix approval",
+        "name": "apply_fix"
+      },
+      "type": "tool"
+    },
+    {
+      "data": {
+        "blockId": "b1",
+        "blockLabel": "Call API",
+        "fixType": "wrap-error-handler",
+        "items": [
+          {
+            "blockId": "b1",
+            "blockLabel": "Call API",
+            "fixType": "wrap-error-handler",
+            "id": "b1:unhandled-error",
+            "line": 3,
+            "ruleId": "unhandled-error",
+            "summary": "Fix \"wrap-error-handler\" for rule \"unhandled-error\" on block b1 (HTTPClient.InvokeUrl, line 3):\n  wrap lines 3-3 (re-indent +1 level):\n    + ON BLOCK ERROR\n    · lines 3-3 kept, re-indented\n    + END"
+          }
+        ],
+        "line": 3,
+        "previewKind": "fix-patch",
+        "proposalId": "proposal-1",
+        "requiredScope": "write",
+        "ruleId": "unhandled-error",
+        "summary": "Fix \"wrap-error-handler\" for rule \"unhandled-error\" on block b1 (HTTPClient.InvokeUrl, line 3):\n  wrap lines 3-3 (re-indent +1 level):\n    + ON BLOCK ERROR\n    · lines 3-3 kept, re-indented\n    + END",
+        "tool": "apply_fix"
+      },
+      "type": "fix_proposal"
+    },
+    {
+      "data": {
+        "proposalId": "proposal-1",
+        "status": "applying"
+      },
+      "type": "fix_decision"
+    },
+    {
+      "data": {
+        "message": "the finding no longer appears after re-analysis (flow now has 0 findings). The flow was re-parsed: ALL block IDs have changed — call list_findings again before referencing any block",
+        "proposalId": "proposal-1",
+        "status": "applied"
+      },
+      "type": "fix_decision"
+    },
+    {
+      "data": {
+        "durationMs": 1,
+        "label": "Requesting fix approval",
+        "name": "apply_fix",
+        "ok": true,
+        "summary": "APPLIED and verified: the finding no longer appears after re-analysis (flow now has 0 findings). The flow was re-parsed:…"
+      },
+      "type": "tool_result"
+    }
+  ],
+  "servedModel": "fake-model-2026-10",
+  "text": "Fixed it.",
+  "tokensIn": 30,
+  "tokensOut": 13
+}

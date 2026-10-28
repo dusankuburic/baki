@@ -45,6 +45,16 @@ describe('chatApi.getConversation payload shapes', () => {
     chatApi = await getChatApi()
     await expect(chatApi.getConversation('flow-1', 't-1')).resolves.toMatchObject({messages: [{id: 'm1'}]})
   })
+
+  it("keeps a stored answer's knowledge notice status through the load (R-knowledge-1)", async () => {
+    mockFetch({
+      messages: [{id: 'a1', role: 'assistant', content: 'answer', timestamp: 't', knowledge: 'no_embedder'}],
+      version: 3,
+    })
+    const chatApi = await getChatApi()
+    const load = await chatApi.getConversation('flow-1', 't-1')
+    expect(load.messages[0]!.knowledge).toBe('no_embedder')
+  })
 })
 
 describe('chatApi.streamChatMessage refused while the server restarts', () => {
@@ -188,5 +198,165 @@ describe('chatApi.cancelStream when the stream runs on a server that cannot be r
     const chatApi = await getChatApi()
     await expect(chatApi.cancelStream('s1')).rejects.toMatchObject({status: 403})
     expect(spy).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('chatApi.respondFixDecision wire shape (R-testing-7)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  // The router test (internal/api TestApprovals_BatchOptOutThroughRouter) decodes exactly these keys; renaming one on
+  // either side fails a test.
+  it('posts the decision with the batch opt-outs as excludedItemIndices', async () => {
+    const fetchSpy = mockFetch({status: 'ok'})
+    const chatApi = await getChatApi()
+    await chatApi.respondFixDecision('stream-1', 'proposal-1', true, [1])
+    const [url, init] = fetchSpy.mock.calls[0]!
+    expect(String(url)).toContain('/api/chat/fix-decision')
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({
+      streamId: 'stream-1',
+      proposalId: 'proposal-1',
+      approved: true,
+      excludedItemIndices: [1],
+    })
+  })
+})
+
+// R-frontend-18: the web client never begins a stream with /api/chat/begin (it sends clientStreamId and subscribes
+// first), so the client keeps no path to it.
+describe('chatApi without the legacy begin handshake', () => {
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  it('has no begin call', async () => {
+    const chatApi = await getChatApi()
+    expect(Object.keys(chatApi).filter(k => /^begin/i.test(k))).toEqual([])
+  })
+})
+
+// R-streaming-c20: a stop or a decision refused by a rate limit never reached the stream: it is sent again after the
+// wait the 429's Retry-After names, so the billed stream does not run on because a bucket was empty.
+describe('chatApi stream control under a rate limit', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  const limited = (retryAfter = '3') =>
+    new Response(JSON.stringify({code: 'RATE_LIMITED', message: 'rate limit exceeded'}), {
+      status: 429,
+      headers: {'Content-Type': 'application/json', 'Retry-After': retryAfter},
+    })
+  const ok = () =>
+    new Response(JSON.stringify({status: 'ok'}), {status: 200, headers: {'Content-Type': 'application/json'}})
+
+  it('sends a rate-limited stop again after Retry-After', async () => {
+    vi.useFakeTimers()
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(limited('3')).mockResolvedValueOnce(ok())
+    const chatApi = await getChatApi()
+
+    const done = chatApi.cancelStream('s1')
+    await vi.advanceTimersByTimeAsync(2_999)
+    expect(spy).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(done).resolves.toBeUndefined()
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects with the 429 once its retries are spent', async () => {
+    vi.useFakeTimers()
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => limited('1'))
+    const chatApi = await getChatApi()
+
+    const done = chatApi.cancelStream('s1').catch(e => e)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(await done).toMatchObject({status: 429})
+    expect(spy.mock.calls.length).toBeGreaterThan(2)
+  })
+
+  it('sends a rate-limited fix decision again after Retry-After', async () => {
+    vi.useFakeTimers()
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(limited('2')).mockResolvedValueOnce(ok())
+    const chatApi = await getChatApi()
+
+    const done = chatApi.respondFixDecision('s1', 'p1', true)
+    await vi.advanceTimersByTimeAsync(2_000)
+    await expect(done).resolves.toBeDefined()
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+})
+
+// R-frontend-c26 (c): the caller's own threads of a flow, listed by the server, and their titles.
+describe('chatApi thread index', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it('lists one page of threads, keeping what the index needs and dropping malformed rows', async () => {
+    const spy = mockFetch({
+      items: [
+        {
+          id: 't1',
+          title: 'Retry loop',
+          createdAt: '2026-10-01T00:00:00Z',
+          updatedAt: '2026-10-02T00:00:00Z',
+          messageCount: 4,
+          version: 3,
+        },
+        {id: '', title: 'no id'},
+        {id: 't2', createdAt: '2026-10-03T00:00:00Z', updatedAt: '2026-10-03T00:00:00Z', messageCount: 0, version: 1},
+      ],
+      nextCursor: 'c-2',
+    })
+    const chatApi = await getChatApi()
+    const page = await chatApi.listThreads('flow-1', {limit: 50, cursor: 'c-1'})
+    expect(JSON.parse(String(spy.mock.calls[0]![1]!.body))).toEqual({flowId: 'flow-1', limit: 50, cursor: 'c-1'})
+    expect(String(spy.mock.calls[0]![0])).toMatch(/\/api\/chat\/threads$/)
+    expect(page).toEqual({
+      items: [
+        {
+          id: 't1',
+          title: 'Retry loop',
+          createdAt: '2026-10-01T00:00:00Z',
+          updatedAt: '2026-10-02T00:00:00Z',
+          messageCount: 4,
+          version: 3,
+        },
+        {
+          id: 't2',
+          title: '',
+          createdAt: '2026-10-03T00:00:00Z',
+          updatedAt: '2026-10-03T00:00:00Z',
+          messageCount: 0,
+          version: 1,
+        },
+      ],
+      nextCursor: 'c-2',
+    })
+  })
+
+  it('reads an empty index (the desktop app, no accounts) as no threads', async () => {
+    mockFetch({items: null})
+    const chatApi = await getChatApi()
+    await expect(chatApi.listThreads('flow-1')).resolves.toEqual({items: []})
+  })
+
+  it("sets a thread's title and hands back the version the server names", async () => {
+    const spy = mockFetch({status: 'ok', version: 2})
+    const chatApi = await getChatApi()
+    await expect(chatApi.setThreadTitle('flow-1', 't1', 'Retry loop')).resolves.toEqual({version: 2})
+    expect(JSON.parse(String(spy.mock.calls[0]![1]!.body))).toEqual({
+      flowId: 'flow-1',
+      conversationId: 't1',
+      title: 'Retry loop',
+    })
+    vi.restoreAllMocks()
+    mockFetch({status: 'ok'})
+    await expect(chatApi.setThreadTitle('flow-1', 't1', '')).resolves.toEqual({})
   })
 })

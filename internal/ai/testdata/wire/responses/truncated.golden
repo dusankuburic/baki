@@ -1,0 +1,8 @@
+# responses/truncated.sse through parseResponsesSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="gpt-4.1-2025-04-14"
+02 keepalive served="gpt-4.1-2025-04-14"
+03 text="The subflow " served="gpt-4.1-2025-04-14"
+04 text="Process_Invoices calls" served="gpt-4.1-2025-04-14"
+return error=truncated msg=none
+summary chunks=4 keepalives=2 text="The subflow Process_Invoices calls"

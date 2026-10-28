@@ -4,9 +4,12 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"pad-analyzer/internal/ai"
 	"pad-analyzer/internal/platform/drain"
+	"pad-analyzer/internal/storage"
 	"pad-core/logger"
 )
 
@@ -22,9 +25,18 @@ const (
 	// ChatErrContextUnavailable: the flow's redacting clone could not be made, so nothing was sent (errContextScrub).
 	ChatErrContextUnavailable = "CONTEXT_UNAVAILABLE"
 	ChatErrStopped            = "STREAM_STOPPED"
-	ChatErrTimeout            = "STREAM_TIMEOUT"
-	ChatErrInterrupted        = "STREAM_INTERRUPTED"
-	ChatErrToolLoopLimit      = "TOOL_LOOP_LIMIT"
+	// ChatErrIdleTimeout: the watchdog stopped a stream that made no progress for the idle limit; the message names
+	// the phase it stalled in (setup, the provider, a tool, an approval, an apply) — R-streaming-10.
+	ChatErrIdleTimeout = "STREAM_IDLE_TIMEOUT"
+	// ChatErrClientGone: the watchdog stopped a begun stream whose owner had no live event connection for its grace
+	// period (the tab was closed or lost its connection).
+	ChatErrClientGone    = "STREAM_CLIENT_GONE"
+	ChatErrTimeout       = "STREAM_TIMEOUT"
+	ChatErrInterrupted   = "STREAM_INTERRUPTED"
+	ChatErrToolLoopLimit = "TOOL_LOOP_LIMIT"
+	// ChatErrHistoryUnavailable: the thread's stored history could not be read at the start of the turn, so the
+	// turn was not sent (an answer without its context would be silently wrong). Retryable.
+	ChatErrHistoryUnavailable = "HISTORY_UNAVAILABLE"
 	ChatErrContentFiltered    = "PROVIDER_CONTENT_FILTERED"
 	// ChatErrProviderPermission: credentials accepted, but the identity lacks the role for the model or agent.
 	ChatErrProviderPermission = "PROVIDER_PERMISSION"
@@ -67,6 +79,55 @@ const (
 	azureUnreadableSharedMsg = "the stored credentials of your organisation's shared Azure AI Foundry resource could not be read (the server's encryption key may have changed) — ask your organisation admin to enter them again under Settings → Organizations (or choose one of your own models)"
 )
 
+// errKeyUnreadable marks a turn whose bare key the keystore cannot decrypt (ErrSecretDecryptFailed — the server's
+// encryption key changed): the Azure resource case's twin for every other provider. errOrgKeyUnreadable is the
+// organisation's shared key. Both are PROVIDER_NOT_CONFIGURED with copy that asks for the key again.
+var (
+	errKeyUnreadable    = errors.New("the stored API key for this provider could not be read")
+	errOrgKeyUnreadable = errors.New("the organisation's shared API key for this provider could not be read")
+)
+
+// Copy for errKeyUnreadable and errOrgKeyUnreadable.
+const (
+	keyUnreadableMsg       = "the stored credential for this provider could not be read (the server's encryption key may have changed) — enter the key again, or sign in again, in Settings → AI Accounts"
+	keyUnreadableSharedMsg = "your organisation's shared API key for this provider could not be read (the server's encryption key may have changed) — ask your organisation admin to enter it again under Settings → Organizations (or add a key of your own)"
+)
+
+// unreadableKeyError marks err when a bare key the turn needed could not be decrypted: the organisation's when the
+// failing read was its shared credential's, else the caller's own. Any other err is returned unchanged.
+func unreadableKeyError(err error) error {
+	if !errors.Is(err, storage.ErrSecretDecryptFailed) {
+		return err
+	}
+	if orgErr := (*ai.OrgKeyError)(nil); errors.As(err, &orgErr) {
+		return fmt.Errorf("%w: %w", errOrgKeyUnreadable, err)
+	}
+	return fmt.Errorf("%w: %w", errKeyUnreadable, err)
+}
+
+// circuitOpenMsg is the ErrCircuitOpen copy naming the model and when to try again (R-observability-7).
+func circuitOpenMsg(model string, wait time.Duration) string {
+	subject := "this model"
+	switch model {
+	case "", "none", "uncatalogued":
+	case "deployment":
+		subject = "this deployment"
+	default:
+		subject = model
+	}
+	secs := int(wait.Round(time.Second) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	return fmt.Sprintf("the AI provider is temporarily unavailable for %s after repeated failures — try again in %d s", subject, secs)
+}
+
+// accessDeniedMsg is the ErrProviderAccessDenied copy: the vendor's own reason, and where to look.
+func accessDeniedMsg(err error) string {
+	return "the provider refused this request for your account (" + ai.AccessDeniedMessage(err) +
+		") — check the account's region, project permissions or billing with the provider"
+}
+
 // outputLimitMsg is the ChatErrOutputLimit copy.
 const outputLimitMsg = "the model used its whole Max tokens budget before writing an answer (reasoning models count their thinking against it) — raise Max tokens in Settings → AI Behavior and try again"
 
@@ -103,12 +164,12 @@ var errProviderSetup = errors.New("couldn't load the AI provider configuration �
 // fix and keeps its sentinel, as does an unknown provider id (the client's, not an incident) and a resource
 // whose credentials cannot be decrypted (logged too — the operator's concern); anything else is logged and
 // replaced by errProviderSetup. No kept error's text reaches the client: classifyFailure words them all.
-func providerSetupError(scope, providerID string, cause error) error {
+func providerSetupError(ctx context.Context, scope, providerID string, cause error) error {
 	if errors.Is(cause, ai.ErrKeyNotConfigured) || errors.Is(cause, ErrProviderUnknown) || errors.Is(cause, ai.ErrProviderNotAllowed) {
 		return cause
 	}
-	logger.Warn("chat: provider setup failed", "scope", scope, "provider", providerID, "error", cause)
-	if errors.Is(cause, errAzureUnreadableCredentials) {
+	logger.FromContext(ctx).Warn("chat: provider setup failed", "scope", scope, "provider", providerID, "error", cause)
+	if errors.Is(cause, errAzureUnreadableCredentials) || errors.Is(cause, errKeyUnreadable) || errors.Is(cause, errOrgKeyUnreadable) {
 		return cause
 	}
 	return errProviderSetup
@@ -157,6 +218,9 @@ func sharedCredentialFailureMsg(code string, err error) (string, bool) {
 	const ask = "ask your organisation admin to check the shared Azure AI Foundry resource under Settings → Organizations"
 	const own = " (or choose one of your own models)"
 	switch {
+	case code == ChatErrProviderPermission && errors.Is(err, ai.ErrProviderAccessDenied):
+		return "the provider refused your organisation's shared key for this request (" + ai.AccessDeniedMessage(err) +
+			") — ask your organisation admin to check the account under Settings → Organizations (or add a key of your own)", true
 	case code == ChatErrProviderPermission:
 		return "Azure accepted your organisation's shared credentials, but their identity lacks permission for this model or agent — " + ask + own, true
 	case code == ChatErrProviderAuth:
@@ -165,6 +229,8 @@ func sharedCredentialFailureMsg(code string, err error) (string, bool) {
 		return "your organisation's shared Azure AI Foundry resource has no credentials (for example, the admin who shared them is no longer an admin) — " + ask + own, true
 	case code == ChatErrProviderNotConfigured && errors.Is(err, errAzureUnreadableCredentials):
 		return azureUnreadableSharedMsg, true
+	case code == ChatErrProviderNotConfigured && errors.Is(err, errOrgKeyUnreadable):
+		return keyUnreadableSharedMsg, true
 	case code == ChatErrProviderNotConfigured && errors.Is(err, ai.ErrProviderConfigInvalid):
 		return "the settings of your organisation's shared Azure AI Foundry resource are no longer valid — " + ask, true
 	}
@@ -190,6 +256,9 @@ func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, m
 	case errors.Is(err, ai.ErrRateLimited):
 		return ChatErrProviderRateLimited, "the AI provider is rate-limiting requests — wait a moment and try again"
 	case errors.Is(err, ai.ErrCircuitOpen):
+		if model, wait, ok := ai.CircuitOpenDetail(err); ok {
+			return ChatErrProviderUnavailable, circuitOpenMsg(model, wait)
+		}
 		return ChatErrProviderUnavailable, "the AI provider is temporarily unavailable after repeated failures — wait a moment and try again"
 	case errors.Is(err, ai.ErrProviderDown):
 		return ChatErrProviderUnavailable, "the AI provider is temporarily unavailable — try again shortly"
@@ -209,6 +278,10 @@ func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, m
 		// Before ErrProviderPermissionDenied and ErrApiKeyInvalid, which it also matches: a valid key against a
 		// Claude Mythos deployment is not a key or role problem — the family accepts Entra ID only.
 		return ChatErrProviderAuth, "Azure AI Foundry refused the API key for this Claude deployment — Claude Mythos deployments accept Microsoft Entra ID only — switch the Azure AI Foundry credential to Microsoft Entra ID"
+	case errors.Is(err, ai.ErrProviderAccessDenied):
+		// Before ErrProviderPermissionDenied, whose copy is Azure's: the key was read, and the provider refused
+		// this account (a region block, a project permission, a billing hard limit).
+		return ChatErrProviderPermission, accessDeniedMsg(err)
 	case errors.Is(err, ai.ErrProviderPermissionDenied):
 		// Before ErrApiKeyInvalid, which it also matches: the credentials work, a role is missing.
 		return ChatErrProviderPermission, "the provider accepted these credentials, but the service principal lacks permission for this model or agent — assign it the Foundry User role on the Azure AI Foundry resource, then use Test in Settings → AI Accounts for details"
@@ -233,6 +306,12 @@ func (c *streamCtl) classifyFailureBase(ctx context.Context, err error) (code, m
 		return ChatErrProviderNotConfigured, "this model's Azure AI Foundry resource has no stored credentials — enter them again under Settings → AI Accounts → Azure AI Foundry"
 	case errors.Is(err, errAzureUnreadableCredentials):
 		return ChatErrProviderNotConfigured, azureUnreadableMsg
+	case errors.Is(err, errKeyUnreadable):
+		return ChatErrProviderNotConfigured, keyUnreadableMsg
+	case errors.Is(err, errOrgKeyUnreadable):
+		// The shared-credential flag is set when the turn was set up (prepareTurn), so classifyFailureShared
+		// words it for the org's admin; this is the base copy.
+		return ChatErrProviderNotConfigured, keyUnreadableSharedMsg
 	case errors.Is(err, ai.ErrKeyNotConfigured):
 		return ChatErrProviderNotConfigured, "no API key is configured for this provider — add one in Settings → AI Accounts"
 	case errors.Is(err, ErrProviderUnknown):

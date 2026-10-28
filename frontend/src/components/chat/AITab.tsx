@@ -25,12 +25,25 @@ import {useMessageSearch} from './aitab/useMessageSearch'
 import {useStreamFooter} from './aitab/useStreamFooter'
 import {
   StatusRegion,
+  TurnAnnouncer,
   ProvidersPendingState,
   ProvidersErrorState,
   ProvidersNotConfiguredState,
 } from './aitab/StatusRegion'
 import {SelectionContextBar} from './aitab/SelectionContextBar'
 import {SelectionPromptTemplates} from './aitab/SelectionPromptTemplates'
+import {answerAfter, answerAnnouncement} from './aitab/announce'
+import {threadUsesTools} from './hooks/useChatRequestBuilder'
+import {isAgentModel} from '@/lib/modelIds'
+
+interface TurnWatch {
+  threadId: string | null
+  /** The stream whose answer is awaited (or was announced). */
+  messageId?: string
+  /** The thread's last message when that stream started: its answer is the first assistant message after it. */
+  lastIdAtStart?: string
+  answered: boolean
+}
 
 const ContextPreviewModal = lazy(() => import('./ContextPreviewModal'))
 const ChatHelpPopover = lazy(() => import('./ChatHelpPopover'))
@@ -39,6 +52,7 @@ export default function AITab() {
   const {t} = useTranslation('chat')
   const hasSelectedBlock = useFlowStore(s => s.selectedBlockId != null)
   const chatTextSize = useSettingsStore(s => s.settings.appearance.chatTextSize)
+  const toolsOffByDefault = useSettingsStore(s => s.settings.ai.toolsOffByDefault)
   const updateAppearance = useSettingsStore(s => s.updateAppearance)
   const chatPanel = useChatPanel()
 
@@ -104,6 +118,8 @@ export default function AITab() {
     handleQueue,
     cancelQueued,
     queuedForActiveThread,
+    queuePaused,
+    resumeQueue,
     handlePreviewContext,
     handleResend,
     handleExport,
@@ -181,7 +197,7 @@ export default function AITab() {
     enabled: configured === true,
     handlers: {
       'ai.clear.chat': () => {
-        if (!readOnly) confirmClear()
+        confirmClear()
       },
       'ai.cancel.stream': e => {
         if (e.defaultPrevented || isImeKeydown(e)) return
@@ -242,12 +258,69 @@ export default function AITab() {
     return last?.role === 'assistant' ? last.id : null
   }, [activeThreadMessages])
 
+  // R-frontend-5: the message list is not a live region, so the turn announcer reads each committed answer once. A
+  // turn is watched from its stream's start; the first assistant message after the one that was last then is its
+  // answer (or its error). The answer is looked for before a new stream is taken up, so a queued follow-up that
+  // starts in the same update does not hide it; a new turn clears the line. History, scrolling, re-renders and
+  // thread switches announce nothing.
+  const streamingMessageId = useChatStore(s => (s.activeThreadId ? s.streams[s.activeThreadId]?.messageId : undefined))
+  const lastMessageId = activeThreadMessages[activeThreadMessages.length - 1]?.id
+  const [turnWatch, setTurnWatch] = useState<TurnWatch>({threadId: activeThreadId, answered: true})
+  const [turnLine, setTurnLine] = useState({text: '', seq: 0})
+  if (turnWatch.threadId !== activeThreadId) {
+    // Only a reply already streaming on the thread switched to is awaited; its history is never announced.
+    setTurnWatch({
+      threadId: activeThreadId,
+      messageId: streamingMessageId,
+      lastIdAtStart: lastMessageId,
+      answered: !streamingMessageId,
+    })
+    if (turnLine.text) setTurnLine({text: '', seq: turnLine.seq})
+  } else {
+    let watch = turnWatch
+    let line: string | undefined
+    const answer = watch.answered ? undefined : answerAfter(activeThreadMessages, watch.lastIdAtStart)
+    if (answer) {
+      watch = {...watch, answered: true, lastIdAtStart: answer.id}
+      line = t('a11y.answerAnnouncement', {text: answerAnnouncement(answer.content)})
+    }
+    if (streamingMessageId && streamingMessageId !== watch.messageId) {
+      watch = {threadId: activeThreadId, messageId: streamingMessageId, lastIdAtStart: lastMessageId, answered: false}
+      line ??= ''
+    }
+    if (watch !== turnWatch) setTurnWatch(watch)
+    if (line !== undefined && (line || turnLine.text)) setTurnLine({text: line, seq: turnLine.seq + 1})
+  }
+
   const clearBlockScope = useCallback(() => setThreadContextBlock(null), [setThreadContextBlock])
-  const onSelectPrompt = useCallback((text: string) => handleSend(text, [], false), [handleSend])
-  const toggleTools = useCallback(
-    () => setThreadUseTools(!(activeThread?.useTools ?? false)),
-    [setThreadUseTools, activeThread],
+  const usesTools = threadUsesTools(activeThread, {toolsOffByDefault})
+  const isAgent = selection.provider === 'azure-foundry' && isAgentModel(selection.model, threadModelDetail)
+  // A prompt that needs lookups (search_flow, get_subflow_blocks…) turns the thread's tools on, as stageFindingFix
+  // does (R-frontend-6): in the store before engine.send reads it, put back if the send does not go ahead, and told
+  // to the user when it does (the choice stays with the thread).
+  const onSelectPrompt = useCallback(
+    (text: string, needsTools: boolean) => {
+      const thread = activeThread ? useChatStore.getState().threads.find(th => th.id === activeThread.id) : undefined
+      const turnOn = needsTools && !!thread && !usesTools
+      const before = thread?.useTools
+      if (turnOn) useChatStore.getState().updateThread(thread.id, {useTools: true})
+      const sent = handleSend(text, [], false)
+      if (!turnOn) return
+      if (!sent) {
+        useChatStore.getState().updateThread(thread.id, {useTools: before})
+        return
+      }
+      toast.info(t('composer.toolsTurnedOn'), {description: t('composer.toolsTurnedOnBody')})
+    },
+    [activeThread, handleSend, usesTools, toast, t],
   )
+  const onSelectSuggestedPrompt = useCallback(
+    // Suggested prompts are the server's strings and cannot be told apart: every one is a question about the flow.
+    (text: string) => onSelectPrompt(text, true),
+    [onSelectPrompt],
+  )
+  const toggleTools = useCallback(() => setThreadUseTools(!usesTools), [setThreadUseTools, usesTools])
+  const enableTools = useCallback(() => setThreadUseTools(true), [setThreadUseTools])
 
   const renderMessage = useCallback(
     (i: number, m: ChatMessage) => (
@@ -278,7 +351,12 @@ export default function AITab() {
     notice ?? (legacyDefaultNotice ? {kind: 'legacyDefault', ...legacyDefaultNotice} : null)
   const noticeText =
     configured && activeThread && noticeView ? modelNoticeSentences(t, noticeView, providerName).join(' ') : ''
-  const statusRegion = <StatusRegion text={noticeText} />
+  const statusRegion = (
+    <>
+      <StatusRegion text={noticeText} />
+      <TurnAnnouncer line={turnLine} />
+    </>
+  )
 
   if (configured === null) {
     if (!providersError) {
@@ -339,10 +417,12 @@ export default function AITab() {
             pickerDisabled={!activeThread}
             isStreaming={isCurrentThreadStreaming}
             messageCount={messages.length}
-            useTools={activeThread?.useTools ?? false}
+            useTools={usesTools}
             onToggleTools={toggleTools}
             onNewChat={handleCreateThread}
-            onClearContext={readOnly ? undefined : handleClearContext}
+            onClearContext={handleClearContext}
+            // Clear works for a viewer (a conversation is its owner's to delete), Compact does not: it stores the
+            // kept turns with /api/chat/save, which still needs edit access to the flow.
             onCompact={readOnly ? undefined : handleCompact}
             onExport={handleExport}
             onToggleSearch={toggleSearch}
@@ -441,12 +521,12 @@ export default function AITab() {
                     </div>
                     <SuggestedPrompts
                       prompts={suggestedPrompts}
-                      onSelect={onSelectPrompt}
+                      onSelect={onSelectSuggestedPrompt}
                       disabledReason={sendBlockedReason}
                     />
                     <SelectionPromptTemplates
                       onSelect={onSelectPrompt}
-                      hasBlock={!!contextBlockId}
+                      contextBlockId={contextBlockId}
                       flowName={doc?.name}
                       disabledReason={sendBlockedReason}
                     />
@@ -474,16 +554,19 @@ export default function AITab() {
               onSend={handleSend}
               onPreview={handlePreviewContext}
               onCancel={handleCancelStream}
-              onClearThread={readOnly || isCurrentThreadStreaming ? undefined : confirmClear}
+              onClearThread={isCurrentThreadStreaming ? undefined : confirmClear}
               onShowHelp={showHelp}
               onQueue={handleQueue}
               queued={queuedForActiveThread ?? null}
               onCancelQueue={cancelQueued}
+              queuePaused={queuePaused ?? null}
+              onResumeQueue={resumeQueue}
               sourceFiles={sourceFiles}
               promptTokens={activeThread.tokensIn ?? 0}
               completionTokens={activeThread.tokensOut ?? 0}
               contextLimit={threadModelDetail?.contextLimit || undefined}
               guidance={guidance}
+              onEnableTools={usesTools || isAgent ? undefined : enableTools}
             />
           </div>
         )}

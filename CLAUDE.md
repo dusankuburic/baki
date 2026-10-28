@@ -56,6 +56,8 @@ go test ./internal/lifecycle/ -run TestJobRegistry_Golden -update-jobs
 go test ./internal/ai/ -run TestProviderSpecs_Golden -update-provider-specs
 go test ./internal/ai/ -run TestToolSpecsGolden -update-tools
 go test ./internal/ai/ -run TestPromptsGolden -update-prompts
+go test ./internal/ai/ -run TestWireGolden -update-wire
+go test ./internal/service/ -run TestChatEvents_Golden -update-chat-events   # frontend chatEvent.contract.test.ts reads them
 go test ./internal/service/ -run TestRequestSnapshots_Golden -update-request-snapshots
 ```
 

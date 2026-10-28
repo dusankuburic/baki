@@ -358,6 +358,11 @@ func (m *Migrator) migrateConversations(ctx context.Context, res *Result) error 
 // conversation is left untouched, so re-running migration cannot clobber
 // conversations the user has continued in cloud mode since the first run.
 // Mirrors migrateOneFlow's idempotency contract.
+//
+// The thread is imported as the importing user's (the default owner, R-security-3): a desktop has one user, and the
+// owner's thread index then lists it. The write is a create (SaveConversationIf at version 0), so a conversation
+// already stored under the key — an owned one with no messages yet (a thread named before its first turn) included,
+// which the message check above lets through — is never replaced: the create conflicts, and the thread is skipped.
 func (m *Migrator) migrateOneConversation(ctx context.Context, ref ConversationRef) error {
 	conv, err := m.src.LoadConversation(ctx, ref)
 	if err != nil {
@@ -367,5 +372,10 @@ func (m *Migrator) migrateOneConversation(ctx context.Context, ref ConversationR
 		logger.Info("migration: dst already has conversation — skipping", "flowID", conv.FlowID, "scope", conv.Scope)
 		return errSkipped
 	}
-	return m.dst.SaveConversation(ctx, conv.FlowID, conv.Scope, conv.Messages)
+	_, err = m.dst.SaveConversationIf(ctx, conv.FlowID, conv.Scope, m.defaultOwner, 0, conv.Messages)
+	if errors.Is(err, interfaces.ErrConversationConflict) || errors.Is(err, interfaces.ErrConversationKeyTaken) {
+		logger.Info("migration: dst already has conversation — skipping", "flowID", conv.FlowID, "scope", conv.Scope)
+		return errSkipped
+	}
+	return err
 }

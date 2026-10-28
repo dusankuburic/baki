@@ -1,7 +1,6 @@
 import {useEffect, useMemo, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {providerConfig, useSettingsStore} from '@/stores/settingsStore'
-import {useChatStore} from '@/stores/chatStore'
 import {useSystemStore} from '@/stores/systemStore'
 import {providersApi} from '@/api'
 import Switch from '@/components/shared/Switch'
@@ -9,8 +8,14 @@ import Input from '@/components/shared/Input'
 import {NumberField} from '@/components/shared'
 import SegmentedControl from '@/components/shared/SegmentedControl'
 import SettingRow from './SettingRow'
+import SaveErrorLine from './SaveErrorLine'
 import {isTauri} from '@/platform/guards'
-import {CONTEXT_TOKEN_BUDGET_MAX} from '@/lib/constraints'
+import {
+  CONTEXT_TOKEN_BUDGET_MAX,
+  EMBEDDING_MODEL_MAX_LENGTH,
+  MAX_TOKENS_SETTING_MAX,
+  SYSTEM_PROMPT_SUFFIX_MAX_LENGTH,
+} from '@/lib/constraints'
 import type {ProviderID, AIProviderConfig, ProviderSpec} from '@/types'
 import {PROVIDER_CAP_EMBEDDINGS, PROVIDER_OPTIONS, isKnownProviderId} from '@/types/providers'
 
@@ -31,6 +36,9 @@ export default function AIBehaviorPanel() {
   const azureEmbedding = ai.embeddingProvider === 'azure-foundry'
   const systemInfo = useSystemStore(s => s.info)
   const localBackend = systemInfo ? systemInfo.capabilities.sessionAnalytics : isTauri()
+  // On a cloud server this route writes the member's own document, which the knowledge indexer never reads: the
+  // deployment's embedding pair has one writer, the admin's AI embeddings card.
+  const adminEmbeddings = !!systemInfo && !systemInfo.capabilities.sessionAnalytics
   const [catalog, setCatalog] = useState<ProviderSpec[] | null>(null)
   useEffect(() => {
     let cancelled = false
@@ -39,8 +47,7 @@ export default function AIBehaviorPanel() {
       .then(specs => {
         if (!cancelled) setCatalog(specs)
       })
-      .catch(() => {
-      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
@@ -73,14 +80,12 @@ export default function AIBehaviorPanel() {
 
   return (
     <div className="space-y-8">
+      <SaveErrorLine />
       <div>
         <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.activeAssistant')}</label>
         <SegmentedControl
           value={activeProvider}
-          onChange={v => {
-            void updateAI({activeProvider: v})
-            useChatStore.getState().setProvider(v)
-          }}
+          onChange={v => void updateAI({activeProvider: v})}
           options={assistantOptions}
           activation="manual"
           className="flex-wrap"
@@ -88,40 +93,53 @@ export default function AIBehaviorPanel() {
         <p className="text-xs text-text-tertiary mt-2">{t('behavior.activeAssistantHint')}</p>
       </div>
 
-      <div>
-        <label className="text-sm font-medium text-text-primary block mb-3">{t('behavior.embeddingAssistant')}</label>
-        <SegmentedControl
-          value={ai.embeddingProvider}
-          onChange={v => updateAI({embeddingProvider: v})}
-          label={t('behavior.embeddingAssistant')}
-          activation="manual"
-          options={embeddingOptions}
-          className="flex-wrap"
-        />
-        <p className="text-xs text-text-tertiary mt-2">{t('behavior.embeddingAssistantHint')}</p>
-      </div>
-
-      {azureEmbedding ? (
+      {adminEmbeddings ? (
         <div>
-          <p className="text-sm font-medium text-text-primary mb-3">{t('behavior.embeddingModel')}</p>
-          <p className="text-xs text-text-tertiary">{t('behavior.embeddingModelHintAzure')}</p>
+          <p className="text-sm font-medium text-text-primary mb-3">{t('behavior.embeddingAssistant')}</p>
+          <p className="text-xs text-text-tertiary">{t('behavior.embeddingManagedByAdmin')}</p>
         </div>
       ) : (
-        <div>
-          <label htmlFor="embedding-model" className="text-sm font-medium text-text-primary block mb-3">
-            {t('behavior.embeddingModel')}
-          </label>
-          <Input
-            id="embedding-model"
-            value={ai.embeddingModel ?? ''}
-            onChange={e => updateAI({embeddingModel: e.target.value})}
-            placeholder={t('behavior.embeddingModelPlaceholder')}
-          />
-          <p className="text-xs text-text-tertiary mt-2">
-            {t('behavior.embeddingModelHintPrefix')} <code className="text-text-secondary">text-embedding-3-large</code>
-            {t('behavior.embeddingModelHintSuffix')}
-          </p>
-        </div>
+        <>
+          <div>
+            <label className="text-sm font-medium text-text-primary block mb-3">
+              {t('behavior.embeddingAssistant')}
+            </label>
+            <SegmentedControl
+              value={ai.embeddingProvider}
+              onChange={v => updateAI({embeddingProvider: v})}
+              label={t('behavior.embeddingAssistant')}
+              activation="manual"
+              options={embeddingOptions}
+              className="flex-wrap"
+            />
+            <p className="text-xs text-text-tertiary mt-2">{t('behavior.embeddingAssistantHint')}</p>
+          </div>
+
+          {azureEmbedding ? (
+            <div>
+              <p className="text-sm font-medium text-text-primary mb-3">{t('behavior.embeddingModel')}</p>
+              <p className="text-xs text-text-tertiary">{t('behavior.embeddingModelHintAzure')}</p>
+            </div>
+          ) : (
+            <div>
+              <label htmlFor="embedding-model" className="text-sm font-medium text-text-primary block mb-3">
+                {t('behavior.embeddingModel')}
+              </label>
+              <Input
+                id="embedding-model"
+                maxLength={EMBEDDING_MODEL_MAX_LENGTH}
+                value={ai.embeddingModel ?? ''}
+                onChange={e => updateAI({embeddingModel: e.target.value})}
+                placeholder={t('behavior.embeddingModelPlaceholder')}
+              />
+              <p className="text-xs text-text-tertiary mt-2">
+                {t('behavior.embeddingModelHintPrefix')}{' '}
+                <code className="text-text-secondary">text-embedding-3-large</code>
+                {t('behavior.embeddingModelHintSuffix')}
+              </p>
+            </div>
+          )}
+        </>
       )}
 
       <div className="space-y-4 pt-2">
@@ -139,8 +157,22 @@ export default function AIBehaviorPanel() {
             />
           }
         />
+      </div>
 
-
+      <div className="space-y-4 pt-2">
+        <label className="text-sm font-medium text-text-primary block">{t('behavior.toolsHeading')}</label>
+        <SettingRow
+          title={t('behavior.toolsByDefault')}
+          hint={t('behavior.toolsByDefaultHint')}
+          control={
+            <Switch
+              label={t('behavior.toolsByDefault')}
+              labelHidden
+              checked={!ai.toolsOffByDefault}
+              onChange={v => updateAI({toolsOffByDefault: !v})}
+            />
+          }
+        />
       </div>
 
       <div className="pt-2">
@@ -166,9 +198,16 @@ function CustomInstructionsInput() {
   const suffix = useSettingsStore(s => s.settings.ai.systemPromptSuffix ?? '')
   const updateAI = useSettingsStore(s => s.updateAI)
   const [local, setLocal] = useState(suffix)
+  // The stored value moves without a keystroke too: a refused save is put back, another tab saves its own.
+  const [lastSuffix, setLastSuffix] = useState(suffix)
+  if (suffix !== lastSuffix) {
+    setLastSuffix(suffix)
+    setLocal(suffix)
+  }
 
   return (
     <textarea
+      maxLength={SYSTEM_PROMPT_SUFFIX_MAX_LENGTH}
       className="w-full h-24 px-3 py-2 text-sm bg-surface-2 border border-border-default rounded-md text-text-primary placeholder:text-text-tertiary resize-none focus:outline-hidden focus:ring-1 focus:ring-brand-500"
       placeholder={t('behavior.customInstructionsPlaceholder')}
       aria-label={t('behavior.customInstructions')}
@@ -218,7 +257,7 @@ function ProviderAdvancedSettings({
         <label className="text-xs font-medium text-text-secondary block mb-1.5">{t('behavior.maxTokens')}</label>
         <NumberField
           min={1}
-          max={32000}
+          max={MAX_TOKENS_SETTING_MAX}
           fallback={4096}
           value={config.maxTokens}
           onCommit={v => onUpdate({maxTokens: v})}

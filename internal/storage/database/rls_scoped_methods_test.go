@@ -401,6 +401,9 @@ var tablesWithoutRLS = map[string]string{
 	"provider_keys":      "keystore: sealed secrets keyed by their owner's id, on the keystore's own connection",
 	"org_provider_keys":  "keystore: sealed secrets keyed by org id, on the keystore's own connection",
 	"job_runs":           "background job state: written and read by the jobs on the pool, never inside a request; no tenant's data",
+
+	// v50: the knowledge base's lexical index (0050_knowledge_chunk_search.up.sql).
+	"knowledge_chunk_search": "derived from knowledge_chunks and only read through them (the lexical search's candidates, joined to the chunks under their policy); a policy would make its trigram index unusable",
 }
 
 // TestRLS_TablesWithoutRowSecurityAreListed: every table of the schema has row-level security or is listed in

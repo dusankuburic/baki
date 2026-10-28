@@ -86,7 +86,7 @@ func TestCopilotProvider_Models(t *testing.T) {
 // unbounded io.ReadAll on the /models error path: the server returning an error
 // status with a multi-megabyte body used to buffer the whole thing into memory
 // (OOM risk on a misbehaving / compromised upstream). The read must now be
-// capped at 10 MiB like every other response-body read in the package.
+// capped (copilotErrorBodyMax on the error path; R-observability-16 keeps one line of it).
 func TestCopilotProvider_Models_BoundedErrorBodyRead(t *testing.T) {
 	const capBytes = 10 << 20 // matches the LimitReader cap used across the package
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -480,5 +480,51 @@ func TestCopilotProvider_WithAuth_CachesSessionToken(t *testing.T) {
 	}
 	if chatCallCount != 3 {
 		t.Errorf("expected 3 chat calls, got %d", chatCallCount)
+	}
+}
+
+// R-observability-16: a listing failure keeps the status, one line of the body and the request id, never the page: the
+// error is cached for copilotModelsErrCacheTTL and logged by every listing in that window.
+func TestCopilotProvider_Models_ErrorIsBoundedToOneLine(t *testing.T) {
+	page := "<html><head><title>502 Bad Gateway</title></head>\n<body>" + strings.Repeat("<p>upstream unavailable</p>", (1<<20)/27) + "</body></html>"
+	for _, tc := range []struct {
+		name, want string
+		status     int
+	}{
+		{"a 1 MiB HTML 502", "status 502", http.StatusBadGateway},
+		{"a 1 MiB HTML 200", "decode copilot models", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				w.Header().Set("X-GitHub-Request-Id", "C0DE:1234:ABCD")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(page))
+			}))
+			defer server.Close()
+			orig := copilotModelsURL
+			defer func() { copilotModelsURL = orig }()
+			copilotModelsURL = server.URL + "/models"
+
+			p := NewCopilotProvider("tok")
+			p.client = server.Client()
+			_, err := p.Models(context.Background())
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			msg := err.Error()
+			if len(msg) >= 1024 {
+				t.Errorf("error is %d bytes, want under 1 KiB", len(msg))
+			}
+			if !strings.Contains(msg, tc.want) {
+				t.Errorf("error %q does not contain %q", msg, tc.want)
+			}
+			if !strings.Contains(msg, "C0DE:1234:ABCD") {
+				t.Errorf("error %q does not name the request id", msg)
+			}
+			if strings.Contains(msg, "\n") {
+				t.Errorf("error %q spans lines", msg)
+			}
+		})
 	}
 }

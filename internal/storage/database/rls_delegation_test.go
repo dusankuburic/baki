@@ -177,13 +177,18 @@ func TestPolicyDelegation_V27_MatchesOldVisibility(t *testing.T) {
 // TestPolicyDelegation_V27_CatalogBodies pins the catalog: each of the seven
 // tables has exactly its one named FOR ALL policy, whose USING and WITH
 // CHECK reference flows and no longer repeat the collaborator / org-member
-// / owner test.
+// / owner test. conversations' policy is v52's from that step on (owned conversations, R-security-3), pinned by
+// TestMigration0052_Policies instead.
 func TestPolicyDelegation_V27_CatalogBodies(t *testing.T) {
 	b := openMigrationTestDB(t)
-	if v, _ := b.CurrentSchemaVersion(context.Background()); v < 27 {
+	v, _ := b.CurrentSchemaVersion(context.Background())
+	if v < 27 {
 		t.Skipf("DB at v%d; another test may have rolled it back", v)
 	}
 	for _, p := range v27DelegatedPolicies {
+		if p.table == "conversations" && v >= 52 {
+			continue
+		}
 		pols := tablePolicies(t, b, p.table)
 		if len(pols) != 1 {
 			t.Errorf("%s has %d policies, want 1: %+v", p.table, len(pols), pols)

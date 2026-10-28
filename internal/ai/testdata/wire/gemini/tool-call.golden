@@ -1,0 +1,5 @@
+# gemini/tool-call.sse through parseGeminiSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 done finish="STOP" in=2210 out=190 tool{id="fc_WIRE00000000000000000001" name="get_block" input={"blockId":"b-12"}} tool{id=<minted 1> name="get_variable_lineage" input={"variable":"LoopIndex"}} tool{id=<minted 2> name="list_findings" input={}} items={"calls":[{"id":"fc_WIRE00000000000000000001","signature":"CiQBWIREFIXTURENOTAREALTHOUGHTSIGNATURE==","providerId":true}]} served="gemini-2.5-pro"
+return nil
+summary chunks=1 keepalives=0 text=""

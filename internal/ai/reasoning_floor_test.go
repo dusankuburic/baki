@@ -38,6 +38,9 @@ func TestReasoningOutputFloor(t *testing.T) {
 		{[]string{"DeepSeek-V3.2-Speciale"}, reasoningOutputFloor},
 		{[]string{"DeepSeek-V4-Pro"}, reasoningOutputFloor},
 		{[]string{"grok-code-fast-1"}, reasoningOutputFloor},
+		// grok-3-mini reasons by default (xAI: "a lightweight model that thinks before responding"); grok-3 does not.
+		{[]string{"grok-3-mini"}, reasoningOutputFloor},
+		{[]string{"grok-3-mini-fast"}, reasoningOutputFloor},
 		{[]string{"my-deployment", "MAI-Thinking-1"}, reasoningOutputFloor},
 		{[]string{"claude:claude-opus-5-5"}, reasoningOutputFloor},
 		{[]string{"claude-sonnet-5"}, reasoningOutputFloor},

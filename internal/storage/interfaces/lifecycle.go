@@ -19,7 +19,10 @@ type UserDataExport struct {
 	Sessions        []RefreshTokenInfo      `json:"sessions"`
 	// AzureRegistry is the user's personal Azure AI Foundry resources and models — metadata only, never a secret.
 	AzureRegistry *ExportedAzureRegistry `json:"azureRegistry"`
-	ExportedAt    time.Time              `json:"exportedAt"`
+	// AIUsage is the user's AI usage rows, oldest first: personal ones and those billed to an organisation (with its
+	// orgId). An erased member's organisation-billed rows lose their userId and so leave the export with the account.
+	AIUsage    []UsageMetric `json:"aiUsage"`
+	ExportedAt time.Time     `json:"exportedAt"`
 }
 
 // ExportedAuditEvent is an AuditEvent with the camelCase keys the bundle uses; AuditEvent stays untagged because the on-disk spill queue persists it as JSON.
@@ -51,10 +54,13 @@ func NewExportedAuditEvents(events []*AuditEvent) []ExportedAuditEvent {
 	return out
 }
 
-// ExportedConversation is one stored chat conversation on a flow the user owns, keyed by the ConversationStore's (flowId, scope) pair.
+// ExportedConversation is one stored chat conversation of the user, keyed by the ConversationStore's (flowId, scope)
+// pair: the user's own conversations on any flow, and the unowned (pre-owner) ones on the flows the user owns
+// (R-security-3). Title is the name the user gave the thread, omitted when unnamed.
 type ExportedConversation struct {
 	FlowID   string        `json:"flowId"`
 	Scope    string        `json:"scope"`
+	Title    string        `json:"title,omitempty"`
 	Messages []ChatMessage `json:"messages"`
 }
 
@@ -75,4 +81,6 @@ type PurgeResult struct {
 	CICredentials       int `json:"ciCredentials"`
 	CIDeliveries        int `json:"ciDeliveries"`
 	FlowSnapshots       int `json:"flowSnapshots"`
+	// KnowledgeUploads: unfinished knowledge uploads older than KnowledgePendingTTL (their chunks go with them).
+	KnowledgeUploads int `json:"knowledgeUploads"`
 }

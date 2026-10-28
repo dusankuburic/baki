@@ -6,9 +6,12 @@ import {anchorOf, hasBlock, resolveAnchor} from '@/lib/blockAnchor'
 import {useFlowStore} from '../flowStore'
 import type {ChatState} from './state'
 import {MAX_THREADS} from './types'
+import {conversationKey} from './types'
 import type {ChatThread, HistoryStatus, ThreadPinFields} from './types'
-import {nextHistoryToken} from './history'
+import {logger} from '@/lib/logger'
+import {mayHoldStoredConversation, nextHistoryToken} from './history'
 import {persistFlowThreads, readStoredThreads} from './persistence'
+import {serverThreadIndexAvailable} from './serverIndex'
 
 function nextThreadOfFlow(threads: readonly ChatThread[], flowId: string | undefined): string | null {
   if (!flowId) return null
@@ -17,6 +20,29 @@ function nextThreadOfFlow(threads: readonly ChatThread[], flowId: string | undef
     if (t && t.flowId === flowId) return t.id
   }
   return null
+}
+
+/**
+ * Deletes an evicted thread's stored conversation where the server keeps no index of the user's threads (the
+ * desktop app, a web deployment without accounts; R-frontend-c26), once its flow's stored index no longer lists it
+ * (so it cannot come back on the next hydrate), on the version this client holds. A conflict means another tab or
+ * session is writing it, so it stays; any failure is logged. Where the server keeps an index, an evicted thread
+ * stays reachable through it — the next sync of the flow's list brings it back — so eviction only drops it from
+ * this client and deletes nothing.
+ */
+function clearEvicted(victim: ChatThread, stored: boolean, version: number | undefined): void {
+  if (serverThreadIndexAvailable()) return
+  // Only on a version this client holds. A thread whose history it never loaded (hydrated, never opened) has none,
+  // and an unversioned clear could wipe a conversation another tab is using: its row is left on the server.
+  if (!stored || version === undefined) return
+  // Loaded on use: a static import would put the settings store in the API's module graph (api → flowStore →
+  // chatStore → here), so a test that mocks '@/api' around its original would bind the settings store to the real API.
+  import('@/lib/chatHistory')
+    .then(({conversationHistoryEnabled}) => {
+      if (!conversationHistoryEnabled()) return
+      return chatApi.clearConversation(victim.flowId, conversationKey(victim), version)
+    })
+    .catch(err => logger.warn('Could not delete the evicted thread’s conversation', err))
 }
 
 type ThreadSlice = Pick<
@@ -38,6 +64,8 @@ type ThreadSlice = Pick<
 export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (set, get) => ({
   createThread: flowId => {
     const id = uuid()
+    // The thread the cap evicts, and what of it the server holds: read before the eviction drops its state.
+    const evicted: {current: {thread: ChatThread; stored: boolean; version?: number} | null} = {current: null}
     const thread: ChatThread = {
       id,
       flowId,
@@ -58,8 +86,16 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
       }
       let threads = [...state.threads, thread]
       if (threads.length > MAX_THREADS) {
-        const victim = threads.find(t => t.id !== id && t.id !== state.activeThreadId && !(t.id in state.streams))
+        // The oldest idle thread of the creating flow first: another flow's thread goes only when none of this
+        // flow's can.
+        const idle = (t: ChatThread) => t.id !== id && t.id !== state.activeThreadId && !(t.id in state.streams)
+        const victim = threads.find(t => t.flowId === flowId && idle(t)) ?? threads.find(idle)
         if (victim) {
+          evicted.current = {
+            thread: victim,
+            stored: mayHoldStoredConversation(state, victim.id),
+            version: state.historyStatus[victim.id]?.version,
+          }
           threads = threads.filter(t => t.id !== victim.id)
           nextConversations.delete(victim.id)
           const drafts = victim.id in state.drafts ? {...state.drafts} : state.drafts
@@ -90,6 +126,11 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
       }
     })
     persistFlowThreads(flowId, get().threads)
+    if (evicted.current) {
+      const {thread: victim, stored, version} = evicted.current
+      if (victim.flowId !== flowId) persistFlowThreads(victim.flowId, get().threads)
+      clearEvicted(victim, stored, version)
+    }
     return id
   },
 
@@ -134,11 +175,9 @@ export const createThreadSlice: StateCreator<ChatState, [], [], ThreadSlice> = (
     return null
   },
 
+  // State only: the stream engine owns cancellation (R-frontend-17) — the close path stops the stream first
+  // (engine.abandon), and the engine cancels any stream whose slot vanished without it.
   closeThread: threadId => {
-    const slot = get().streams[threadId]
-    if (slot?.streamId) {
-      chatApi.cancelStream(slot.streamId).catch(() => {})
-    }
     const closedFlowId = get().threads.find(t => t.id === threadId)?.flowId
     set(state => {
       const remaining = state.threads.filter(t => t.id !== threadId)

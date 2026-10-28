@@ -36,7 +36,7 @@ func TestKnowledgeUpload_AuditsTheStoredFilename(t *testing.T) {
 
 	const secret = "hunter2secretx"
 	rr := postJSON(t, router, "/api/orgs/"+org.ID+"/knowledge/upload", `{"filename":"db Password=`+secret+`.md","content":"retry every call three times"}`)
-	if rr.Code != http.StatusOK {
+	if rr.Code != http.StatusCreated {
 		t.Fatalf("upload: status = %d, body = %s", rr.Code, rr.Body.String())
 	}
 	e := store.lastEvent(t, string(audit.ActionKnowledgeUpload))

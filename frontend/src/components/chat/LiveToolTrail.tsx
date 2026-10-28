@@ -1,44 +1,28 @@
 import {useTranslation} from 'react-i18next'
-import {TRAIL_REFRESH_MS} from '@/lib/constants'
-import {useEffect, useState} from 'react'
+import {useState} from 'react'
 import {ChevronDown, ChevronUp} from 'lucide-react'
 import {useChatStore} from '@/stores/chatStore'
 import type {ToolCallRecord} from '@/types'
 
+const NO_CALLS: ToolCallRecord[] = []
+
+// R-frontend-4: the trail subscribes to the active stream's toolStatus and toolCalls (no polling), so a tool shows
+// the moment its event lands and nothing runs while no tool is active.
 export default function LiveToolTrail() {
   const {t} = useTranslation('chat')
   const isStreaming = useChatStore(s => !!(s.activeThreadId && s.streams[s.activeThreadId]))
-  const [toolStatus, setToolStatus] = useState<string | null>(null)
-  const [calls, setCalls] = useState<ToolCallRecord[]>([])
-  const [totalCalls, setTotalCalls] = useState(0)
+  const toolStatus = useChatStore(s => (s.activeThreadId ? (s.streams[s.activeThreadId]?.toolStatus ?? null) : null))
+  const all = useChatStore(s => (s.activeThreadId ? (s.streams[s.activeThreadId]?.toolCalls ?? NO_CALLS) : NO_CALLS))
   const [expanded, setExpanded] = useState(false)
   const [prevStreaming, setPrevStreaming] = useState(isStreaming)
 
   if (prevStreaming !== isStreaming) {
     setPrevStreaming(isStreaming)
-    if (!isStreaming) {
-      setToolStatus(null)
-      setCalls([])
-      setTotalCalls(0)
-      setExpanded(false)
-    }
+    if (!isStreaming) setExpanded(false)
   }
 
-  useEffect(() => {
-    if (!isStreaming) return
-    const read = () => {
-      const st = useChatStore.getState()
-      const slot = st.activeThreadId ? st.streams[st.activeThreadId] : undefined
-      setToolStatus(slot?.toolStatus ?? null)
-      const all = slot ? slot.toolCalls : []
-      setTotalCalls(all.length)
-      setCalls(expanded ? all : all.slice(-3))
-    }
-    read()
-    const id = setInterval(read, TRAIL_REFRESH_MS)
-    return () => clearInterval(id)
-  }, [isStreaming, expanded])
-
+  const totalCalls = all.length
+  const calls = expanded ? all : all.slice(-3)
   const hiddenCount = Math.max(0, totalCalls - calls.length)
 
   if (!isStreaming || (toolStatus == null && calls.length === 0)) return null

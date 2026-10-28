@@ -164,12 +164,12 @@ func (b *slowAnswerBackend) SaveConversation(ctx context.Context, flowID, scope 
 	return b.FakeBackend.SaveConversation(ctx, flowID, scope, messages)
 }
 
-func (b *slowAnswerBackend) SaveConversationIf(ctx context.Context, flowID, scope string, expected int64, messages []storageif.ChatMessage) (int64, error) {
+func (b *slowAnswerBackend) SaveConversationIf(ctx context.Context, flowID, scope, owner string, expected int64, messages []storageif.ChatMessage) (int64, error) {
 	if b.saves.Add(1) == 2 {
 		close(b.answerSaving)
 		time.Sleep(b.pause)
 	}
-	return b.FakeBackend.SaveConversationIf(ctx, flowID, scope, expected, messages)
+	return b.FakeBackend.SaveConversationIf(ctx, flowID, scope, owner, expected, messages)
 }
 
 // R2: a stream that finished just before the stop is still storing its answer; Shutdown waits for that write (the

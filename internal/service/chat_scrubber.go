@@ -90,9 +90,9 @@ func (c *chunkCoalescer) wrap() func(string, map[string]interface{}) {
 			// emitMu: a concurrent timer flush cannot slip a chunk out AFTER this
 			// done/error/tool event.
 			c.emitMu.Lock()
+			defer c.emitMu.Unlock() // a panicking delivery must not leave the gate shut (R-streaming-3)
 			c.flushLocked()
 			c.emit(eventType, data)
-			c.emitMu.Unlock()
 			return
 		}
 		content, _ := data["content"].(string)
@@ -116,9 +116,7 @@ func (c *chunkCoalescer) add(content string) {
 		// batch mutex across it would couple the batch critical section to every
 		// client (a latency hazard). content is a Go string (immutable), safe after
 		// unlocking mu.
-		c.emitMu.Lock()
-		c.emit("chunk", map[string]interface{}{"content": content})
-		c.emitMu.Unlock()
+		c.emitFirst(content)
 		return
 	}
 	c.buf.WriteString(content)
@@ -126,6 +124,13 @@ func (c *chunkCoalescer) add(content string) {
 		c.timer = time.AfterFunc(chunkBatchInterval, c.flush)
 	}
 	c.mu.Unlock()
+}
+
+// emitFirst emits the stream's first delta under emitMu, released even when the delivery panics.
+func (c *chunkCoalescer) emitFirst(content string) {
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
+	c.emit("chunk", map[string]interface{}{"content": content})
 }
 
 // flush emits any pending batch, serialized against other emits via emitMu.

@@ -1,6 +1,6 @@
 # 26. Tool specs with scopes, a two-point gate, and one approvals component
 
-Date: 2026-10-10. Status: accepted, implemented (Phase 4b, tools wave 1). Amended by ADR 0038: the gate takes the caller's flow permission and returns a refusal reason, and the approval tools have no tool deadline.
+Date: 2026-10-10. Status: accepted, implemented (Phase 4b, tools wave 1). Amended by ADR 0038: the gate takes the caller's flow permission and returns a refusal reason, and the approval tools have no tool deadline. Amended by ADR 0039: the card's `already-resolved` and the item's `skipped` statuses, and the envelope's shared fixture (`internal/service/testdata/chat_events/`).
 
 ## Context
 

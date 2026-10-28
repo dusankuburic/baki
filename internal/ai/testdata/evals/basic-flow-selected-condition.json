@@ -1,0 +1,20 @@
+{
+  "why": "Explains a selected block from the context and traces its variable with get_variable_lineage; links only the blocks the context and the lineage name.",
+  "flow": "basic_flow",
+  "selectedBlock": "B7",
+  "question": "What does the selected block do, and where does ButtonPressed come from?",
+  "expect": {
+    "toolsSubset": [
+      "get_variable_lineage"
+    ],
+    "mustMention": [
+      "B7",
+      "B2",
+      "ButtonPressed"
+    ],
+    "mustLink": [
+      "block:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

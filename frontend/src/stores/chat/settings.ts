@@ -3,12 +3,10 @@ import type {ChatState} from './state'
 
 type SettingsSlice = Pick<
   ChatState,
-  'setProvider' | 'bumpProviderEpoch' | 'openModelPicker' | 'setModelRefusal' | 'setStagedPrompt' | 'setDraft'
+  'bumpProviderEpoch' | 'openModelPicker' | 'setModelRefusal' | 'setStagedPrompt' | 'setDraft'
 >
 
 export const createSettingsSlice: StateCreator<ChatState, [], [], SettingsSlice> = set => ({
-  setProvider: p => set({selectedProvider: p}),
-
   bumpProviderEpoch: () => set(s => ({providerEpoch: s.providerEpoch + 1})),
   openModelPicker: () => set(s => ({modelPickerRequest: s.modelPickerRequest + 1})),
   setModelRefusal: (threadId, refusal) =>

@@ -1,0 +1,49 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "list_findings",
+          "input": {
+            "category": "Style"
+          }
+        }
+      ],
+      "tokensIn": 1620,
+      "tokensOut": 20
+    },
+    {
+      "toolCalls": [
+        {
+          "id": "call_2",
+          "name": "apply_fixes",
+          "input": {
+            "targets": [
+              {
+                "blockId": "B2",
+                "ruleId": "unused-variable"
+              },
+              {
+                "blockId": "B3",
+                "ruleId": "unused-variable"
+              },
+              {
+                "blockId": "B4",
+                "ruleId": "unused-variable"
+              }
+            ]
+          }
+        }
+      ],
+      "tokensIn": 1830,
+      "tokensOut": 58
+    },
+    {
+      "text": "Done — I removed the three unused variables after your approval: `Set EmptyVar`, `Set UnicodeVar` and `Set SpecialChars` (lines 3–5). The re-analysis no longer reports `unused-variable` on them. The repeated comment pattern on lines 15–18 is still reported as a style issue; it is harmless.",
+      "tokensIn": 2010,
+      "tokensOut": 79
+    }
+  ]
+}

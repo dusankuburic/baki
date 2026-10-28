@@ -76,8 +76,9 @@ Trailer.`
 
 func TestToolPromptInstructions_ListsAllTools(t *testing.T) {
 	instr := ToolPromptInstructions()
-	// Every registered tool name should appear in the instructions.
-	for _, td := range ToolDefinitions() {
+	// Every tool a session without a knowledge base is offered appears in the instructions (search_knowledge is
+	// listed for a session that wires one: TestSearchKnowledge_OfferedOnlyWithAKnowledgeBase).
+	for _, td := range ToolDefinitionsFor(nil) {
 		if !strings.Contains(instr, td.Name) {
 			t.Errorf("instructions missing tool %q", td.Name)
 		}

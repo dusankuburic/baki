@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef} from 'react'
 import i18n from '@/i18n'
 import {chatApi} from '@/api'
-import {isReplicaUnreachable} from '@/lib/chatErrors'
+import {isRateLimited, isStreamControlRetryable} from '@/lib/streamControl'
 import {useChatStore} from '@/stores/chatStore'
 import {useOptionalToast} from '@/components/shared/Toast'
 import {useStreamingMessage} from '@/hooks/useStreamingMessage'
@@ -10,23 +10,19 @@ import {useCommit} from './stream-engine/commit'
 import {useStreamEvents} from './stream-engine/events'
 import {useFixEvents} from './stream-engine/fixes'
 import {useTurnLifecycle} from './stream-engine/lifecycle'
+import {useClosingStreams} from './stream-engine/closing'
+import {onThreadRekeyed} from '@/lib/threadIndex'
 import type {StreamAcc, ToastApi} from './stream-engine/types'
 
 export type {StreamMeta, SendOptions, TurnModel} from './stream-engine/types'
 
-// A stop the server could not relay to the replica running the stream: the stream keeps running there until it ends
-// by itself, so say so and offer the stop again (which offers itself again while the replica stays out of reach).
-function offerStopRetry(toast: ToastApi | null, streamId: string): void {
+// A stop that did not get through: the server could not relay it to the replica running the stream, or a rate limit
+// refused it (R-streaming-c20). The stream keeps running until it ends by itself, so say which, and offer the stop
+// again through retry — the same stop that failed, which offers itself again if it fails again.
+function offerStopRetry(toast: ToastApi | null, err: unknown, retry: () => void): void {
   toast?.warning(i18n.t('chat:errors.stopUnreachable'), {
-    description: i18n.t('chat:errors.stopUnreachableBody'),
-    action: {
-      label: i18n.t('chat:errors.stopRetry'),
-      onClick: () => {
-        chatApi.cancelStream(streamId).catch(err => {
-          if (isReplicaUnreachable(err)) offerStopRetry(toast, streamId)
-        })
-      },
-    },
+    description: i18n.t(isRateLimited(err) ? 'chat:errors.stopRateLimitedBody' : 'chat:errors.stopUnreachableBody'),
+    action: {label: i18n.t('chat:errors.stopRetry'), onClick: retry},
   })
 }
 
@@ -39,6 +35,7 @@ export function useChatStreamEngine() {
 
   const appendMessage = useChatStore(s => s.appendMessage)
   const updateThread = useChatStore(s => s.updateThread)
+  const updateMessage = useChatStore(s => s.updateMessage)
   const updateStream = useChatStore(s => s.updateStream)
   const setStreamMeta = useChatStore(s => s.setStreamMeta)
   const addToolCall = useChatStore(s => s.addToolCall)
@@ -58,12 +55,18 @@ export function useChatStreamEngine() {
   const {onChunk, onReplace, onToolStatus, onToolResult, onNotice, takeAcc, dropAcc, beginAcc, onAppend, getAccLength} =
     useStreamAccumulators({streamAccRef, teardownRef, updateStream, setStreamMeta, addToolCall})
 
-  const {commitAssistantMessage, bumpThreadTokens} = useCommit({toastRef, appendMessage, updateThread})
+  const {commitAssistantMessage, bumpThreadTokens, persistThread} = useCommit({toastRef, appendMessage, updateThread})
+  const closing = useClosingStreams(teardownRef)
+  const rekeyClosing = closing.rekey
+  useEffect(() => onThreadRekeyed(rekeyClosing), [rekeyClosing])
 
   const {onDone, onError} = useStreamEvents({
     takeAcc,
     commitAssistantMessage,
     bumpThreadTokens,
+    persistThread,
+    updateThread,
+    closing,
     endStream,
     bumpProviderEpoch,
     appendMessage,
@@ -72,6 +75,9 @@ export function useChatStreamEngine() {
 
   const {onFixProposal, onFixDecision, respondFixProposal, onResumeState} = useFixEvents({
     streamAccRef,
+    closing,
+    persistThread,
+    updateMessage,
     toastRef,
     setFixProposal,
     patchFixProposal,
@@ -80,7 +86,11 @@ export function useChatStreamEngine() {
     setStreamMeta,
   })
 
-  const onStopUnreachable = useCallback((streamId: string) => offerStopRetry(toastRef.current, streamId), [toastRef])
+  // The hook's stop failed: Try again goes through the hook's stop too, so the stopping subscription ends with it.
+  const onStopUnreachable = useCallback(
+    (streamId: string, err?: unknown) => offerStopRetry(toastRef.current, err, () => cancelRef.current(streamId)),
+    [toastRef],
+  )
 
   const handler = useMemo(
     () => ({
@@ -124,6 +134,16 @@ export function useChatStreamEngine() {
   }, [cancel])
 
   const cancelStream = useCallback((streamId: string) => cancelRef.current(streamId), [])
+  // The stop of a stream whose events must keep coming (an apply in progress): the subscription stays until its
+  // terminal event (useClosingStreams).
+  const stopKeepListening = useCallback((streamId: string) => {
+    const send = () => {
+      chatApi.cancelStream(streamId).catch(err => {
+        if (isStreamControlRetryable(err)) offerStopRetry(toastRef.current, err, send)
+      })
+    }
+    send()
+  }, [])
 
   const {bumpGen, isCurrentGen, stopAndCommit, send, resumeAfterReload, stop, abandon} = useTurnLifecycle({
     toastRef,
@@ -137,6 +157,8 @@ export function useChatStreamEngine() {
     dropAcc,
     beginAcc,
     commitAssistantMessage,
+    closing,
+    stopKeepListening,
     startStream,
     endStream,
     updateStream,

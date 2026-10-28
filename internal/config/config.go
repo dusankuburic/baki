@@ -77,6 +77,23 @@ func (c *Config) EffectiveDBIdleTxTimeout() time.Duration {
 	return c.Runtime.RequestTimeout.Std() + DBIdleTxTimeoutMargin
 }
 
+// DefaultRAGDeadline is how long a chat turn waits for its knowledge-base guidelines when PAD_RAG_DEADLINE_MS is unset:
+// the turn's first chunk waits on the lookup (corpus count, embedder, query embedding, search), so it stays short.
+const DefaultRAGDeadline = 800 * time.Millisecond
+
+// MaxRAGDeadlineMS is the longest PAD_RAG_DEADLINE_MS Validate accepts: past it a slow embedding provider would hold
+// every org turn's first chunk for longer than the user waits for an answer to start.
+const MaxRAGDeadlineMS = 10000
+
+// EffectiveRAGDeadline is a chat turn's wait for its knowledge-base guidelines: RAGDeadlineMS, or DefaultRAGDeadline
+// when unset.
+func (r RuntimeConfig) EffectiveRAGDeadline() time.Duration {
+	if r.RAGDeadlineMS > 0 {
+		return time.Duration(r.RAGDeadlineMS) * time.Millisecond
+	}
+	return DefaultRAGDeadline
+}
+
 // EffectiveKnowledgeLeaseCap is the per-replica cap of org knowledge-base leases in force: KnowledgeLeaseCap, or
 // DefaultKnowledgeLeaseCap when unset.
 func (s StorageConfig) EffectiveKnowledgeLeaseCap() int {
@@ -373,6 +390,15 @@ type RuntimeConfig struct {
 	// to 16 M pixels), apart from the flow uploads' so neither refuses the other.
 	RateLimitAvatarRPS   float64
 	RateLimitAvatarBurst float64
+	// RateLimitControl is the bucket of the chat stream commands (Stop, an approval decision), per address: apart
+	// from the general one, so a client whose other requests drained that bucket can still stop a billed stream.
+	RateLimitControlRPS   float64
+	RateLimitControlBurst float64
+	// RateLimitEmbed is the knowledge base's bulk embedding bucket (upload and its continuations, re-index), per
+	// address: each request can buy thousands of chunk embeddings, so it is a cost bucket of its own, not the
+	// general one (R-security-c22).
+	RateLimitEmbedRPS   float64
+	RateLimitEmbedBurst float64
 	// RateLimitPerUser caps one authenticated user's total WRITE throughput
 	// (POST/PUT/PATCH/DELETE) across all endpoints — an additional ceiling on
 	// the per-group per-IP buckets, so an account can't rotate across
@@ -396,6 +422,11 @@ type RuntimeConfig struct {
 	// while it still serves, before it ends the open streams, so probes and load balancers move traffic first
 	// (PAD_SHUTDOWN_DRAIN_DELAY; ADR 0024). Default 3 s in the cloud profile, 0 for local and desktop; at most 5 s.
 	ShutdownDrainDelay Duration
+	// RAGDeadlineMS is how long, in milliseconds, a chat turn on an organisation's flow waits for its knowledge-base
+	// guidelines before it answers without them (PAD_RAG_DEADLINE_MS; R-observability-5): a lookup past it is counted
+	// as pad_chat_rag_lookups_total{outcome="deadline"} and the turn says so in a knowledge notice. 0 =>
+	// DefaultRAGDeadline (EffectiveRAGDeadline); Validate refuses a negative value and one above MaxRAGDeadlineMS.
+	RAGDeadlineMS int
 	// AzureFoundryAllowedHosts extends the hosts a user may configure as an
 	// Azure AI Foundry endpoint beyond Microsoft's own suffixes
 	// (*.openai.azure.com, *.services.ai.azure.com, …): exact hosts or
@@ -430,6 +461,15 @@ func DefaultRuntimeConfig() RuntimeConfig {
 		// users behind one NAT address share it).
 		RateLimitAvatarRPS:   1,
 		RateLimitAvatarBurst: 3,
+		// Stream commands: a person's Stop and approval clicks never come near it, even with others behind one NAT
+		// address; a flood (bogus tokens included) is still refused before authentication.
+		RateLimitControlRPS:   2,
+		RateLimitControlBurst: 20,
+		// Knowledge embedding: one request per 5 s sustained, ten back to back. A paged upload or re-index sends its
+		// next request only after one has spent its embedding budget (90 s) or finished, so it is never refused; ten
+		// small documents uploaded in a row pass at once.
+		RateLimitEmbedRPS:   0.2,
+		RateLimitEmbedBurst: 10,
 		// Per-user default: generous enough that a legit user doing one thing at
 		// a time (already bounded by the tighter per-group per-IP caps) never
 		// hits it, but caps a runaway account's total write volume.

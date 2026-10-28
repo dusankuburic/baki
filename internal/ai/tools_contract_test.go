@@ -28,6 +28,9 @@ func TestPromptsGolden(t *testing.T) {
 	section("SystemPromptFor(ToolAccessFixes) = SystemPromptDefault", SystemPromptFor(ToolAccessFixes))
 	section("SystemPromptFor(ToolAccessReadOnly)", SystemPromptFor(ToolAccessReadOnly))
 	section("SystemPromptFor(ToolAccessNone)", SystemPromptFor(ToolAccessNone))
+	// A session offered search_knowledge (an org flow with a knowledge base): the one added line (R-knowledge-6).
+	section("SystemPromptFor(ToolAccessFixes|ToolAccessKnowledge)", SystemPromptFor(ToolAccessFixes|ToolAccessKnowledge))
+	section("SystemPromptFor(ToolAccessReadOnly|ToolAccessKnowledge)", SystemPromptFor(ToolAccessReadOnly|ToolAccessKnowledge))
 	section("ToolPromptInstructionsFor(nil)", ToolPromptInstructionsFor(nil))
 	section("ToolPromptInstructionsFor(chat-only token)", ToolPromptInstructionsFor(NewToolGate(scopedTokenActor("chat"), true, true)))
 	if SystemPromptFor(ToolAccessFixes) != SystemPromptDefault {

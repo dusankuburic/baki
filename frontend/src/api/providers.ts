@@ -80,6 +80,13 @@ export const providersApi = {
       typeof r === 'boolean' ? r : r?.has === true,
     ),
 
+  /** The key's own state: has, and unreadable when the server holds it but cannot decrypt it (its encryption key
+   * changed). An older server sends no unreadable flag. */
+  keyStatus: (provider: string): Promise<{has: boolean; unreadable: boolean}> =>
+    request<{has?: unknown; unreadable?: unknown} | boolean | null>('/api/keys/has', {body: {provider}}).then(r =>
+      typeof r === 'boolean' ? {has: r, unreadable: false} : {has: r?.has === true, unreadable: r?.unreadable === true},
+    ),
+
   deleteApiKey: (provider: string): Promise<void> => request('/api/keys/delete', {body: {provider}}),
 
   testProviderConnection: (provider: string): Promise<ProviderTestResult> =>

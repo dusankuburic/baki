@@ -32,6 +32,22 @@ describe('ToolTrail', () => {
     expect(screen.queryByText('Searching flow')).not.toBeInTheDocument()
   })
 
+  // The trail names a call by the server's label, with no closed map of tool names: a tool the client has never heard
+  // of (search_knowledge, R-knowledge) reads as the server words it, and one without a label by its name.
+  it("names a call by the server's label, so a new tool needs no client change", () => {
+    render(
+      <ToolTrail
+        calls={[
+          {name: 'search_knowledge', label: 'Searching knowledge base', ok: true, summary: '2 passages'},
+          {name: 'search_knowledge', ok: true},
+        ]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button'))
+    expect(screen.getByText('Searching knowledge base')).toBeInTheDocument()
+    expect(screen.getByText('search_knowledge')).toBeInTheDocument()
+  })
+
   it('uses singular "tool" for one call', () => {
     render(<ToolTrail calls={[calls[0]!]} />)
     expect(screen.getByText(/Used 1 tool/)).toBeInTheDocument()

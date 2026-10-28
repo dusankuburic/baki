@@ -35,6 +35,10 @@ export type AuthType = (typeof AUTH_TYPES)[number]
 export const CREDENTIAL_KINDS = ['api_key', 'oauth_device', 'document', 'none'] as const
 export type CredentialKind = (typeof CREDENTIAL_KINDS)[number]
 
+/** What the keystore holds for a credential (internal/service CredentialStatus). */
+export const CREDENTIAL_STATUSES = ['configured', 'unreadable', 'missing'] as const
+export type CredentialStatus = (typeof CREDENTIAL_STATUSES)[number]
+
 export const CREDENTIAL_FIELD_TYPES = ['text', 'secret', 'url', 'select', 'number', 'json'] as const
 export type CredentialFieldType = (typeof CREDENTIAL_FIELD_TYPES)[number]
 
@@ -87,6 +91,11 @@ export interface ProviderSpec {
   credential: CredentialSchema
   endpoints: ProviderEndpoints
   configured: boolean
+  /** The caller's own credential; unreadable: stored, but the server cannot decrypt it (enter it again). Absent
+   * from an older server. */
+  credentialStatus?: Tolerant<CredentialStatus>
+  /** The organisation's shared credential, in the same words; absent without an organisation. */
+  orgCredentialStatus?: Tolerant<CredentialStatus>
   color?: string
   icon?: string
 }
@@ -122,6 +131,7 @@ export interface ProviderInfo {
   models: ModelDetail[]
   defaultModel: string
   configured: boolean
+  credentialStatus?: Tolerant<CredentialStatus>
   shared?: boolean
   suggestDiscovery?: boolean
   modes?: Tolerant<ProviderMode>[]

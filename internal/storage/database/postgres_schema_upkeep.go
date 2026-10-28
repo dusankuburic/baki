@@ -106,6 +106,12 @@ var schemaUpkeepIndexes = []concurrentIndex{
 	// skipped it, so this finds nothing. The searchable indexes are the per-width knowledge_chunks_hnsw_<dims>
 	// (EnsureVectorIndex).
 	{49, "knowledge_chunks_embedding_hnsw", ""},
+
+	// v52 (0052_conversation_owner.up.sql, R-security-3): a user's threads on a flow (ListConversations: owner_id =
+	// $1 AND flow_id = $2 ORDER BY updated_at DESC, scope DESC, read backwards), and the user's own conversations
+	// wherever they are (erasure's `OR owner_id = $1`, the export). Partial: unowned rows are never looked up by owner.
+	{52, "conversations_owner_idx",
+		`CREATE INDEX CONCURRENTLY IF NOT EXISTS conversations_owner_idx ON conversations (owner_id, flow_id, updated_at, scope) WHERE owner_id IS NOT NULL`},
 }
 
 // schemaUpkeepJob runs the upkeep on one replica at a time: two replicas booting together would validate the same
@@ -252,6 +258,18 @@ func (b *PostgresStorageBackend) runSchemaUpkeep(ctx context.Context) (err error
 			}
 			slog.Warn("schema upkeep: index not built; tried again at the next boot", "index", ix.name, "error", err)
 			failed = append(failed, ix.name)
+		}
+	}
+	for _, bf := range schemaUpkeepBackfills {
+		if bf.since > version {
+			continue
+		}
+		if err := upkeepRetry(ctx, func() error { return runBackfill(ctx, conn, bf) }); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			slog.Warn("schema upkeep: backfill not finished; resumed at the next boot", "backfill", bf.name, "error", err)
+			failed = append(failed, bf.name)
 		}
 	}
 	if len(failed) > 0 {

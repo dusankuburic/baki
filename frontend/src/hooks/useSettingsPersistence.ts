@@ -1,11 +1,14 @@
 import {useEffect} from 'react'
 import {useSettingsStore, onSettingsLoaded} from '@/stores/settingsStore'
 import {useUIStore} from '@/stores/uiStore'
-import {useChatStore} from '@/stores/chatStore'
+import {useAuthStore} from '@/stores/authStore'
+import {isTauri} from '@/platform/guards'
+import {useSettingsSaveToast} from './useSettingsSaveToast'
 
 export function useSettingsPersistence(canLoad: boolean) {
   const loadFromBackend = useSettingsStore(s => s.loadFromBackend)
   const updateLayout = useSettingsStore(s => s.updateLayout)
+  useSettingsSaveToast()
 
   useEffect(() => {
     if (!canLoad) return
@@ -18,14 +21,17 @@ export function useSettingsPersistence(canLoad: boolean) {
       if (s.layout?.sidebarCollapsed !== undefined) useUIStore.getState().setSidebarCollapsed(s.layout.sidebarCollapsed)
       if (s.layout?.inspectorCollapsed !== undefined)
         useUIStore.getState().setInspectorCollapsed(s.layout.inspectorCollapsed)
-      if (s.ai?.activeProvider) useChatStore.getState().setProvider(s.ai.activeProvider)
     })
     void loadFromBackend()
     return unsub
   }, [loadFromBackend, canLoad])
 
+  // The stores reset on sign-out move the panes back to home: no layout write is made for that, or for anything
+  // else while signed out (it would be refused and reported on the login screen). Sign-out clears the session
+  // before it resets the stores, so the check is made when the panes move.
   useEffect(() => {
     const unsub = useUIStore.subscribe((state, prev) => {
+      if (!isTauri() && !useAuthStore.getState().isAuthenticated) return
       if (
         state.sidebarCollapsed !== prev.sidebarCollapsed ||
         state.inspectorCollapsed !== prev.inspectorCollapsed ||

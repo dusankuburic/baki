@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -22,6 +23,8 @@ type FakeTurn struct {
 	TokensOut    int
 	FinishReason string
 	ServedModel  string
+	// ProviderItems is the turn's replay record, on its Done chunk (ai.Chunk.ProviderItems).
+	ProviderItems json.RawMessage
 	// Err fails this call before any chunk; the next call takes the next turn.
 	Err error
 	// ChunkErr ends the turn, after its text, with an error chunk carrying the turn's token counts and served
@@ -151,7 +154,7 @@ func (p *FakeProvider) Stream(ctx context.Context, req ai.Request, onChunk func(
 		return nil
 	}
 	onChunk(ai.Chunk{Done: true, ToolCalls: turn.ToolCalls, TokensIn: turn.TokensIn, TokensOut: turn.TokensOut,
-		FinishReason: turn.FinishReason, ServedModel: turn.ServedModel})
+		FinishReason: turn.FinishReason, ServedModel: turn.ServedModel, ProviderItems: turn.ProviderItems})
 	return nil
 }
 

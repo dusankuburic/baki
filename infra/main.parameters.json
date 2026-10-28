@@ -24,7 +24,7 @@
     "alertEmails":        { "value": "ops@example.com" },
 
     "authSecret":         { "value": "<openssl rand -hex 32>" },
-    "encryptionKey":      { "value": "<openssl rand -hex 32, DIFFERENT from authSecret; set it before users store provider keys — changing it later makes them unreadable>" },
+    "encryptionKey":      { "value": "<openssl rand -hex 32, DIFFERENT from authSecret; REQUIRED. Changing it later without listing the old value in encryptionKeyPrevious makes every stored credential unreadable; a deployment that ran without it lists the current authSecret there (docs/architecture/operations.md, Encryption keys)>" },
     "databaseUrl":        { "value": "postgres://baki_app:<app-password>@<server>.postgres.database.azure.com:5432/baki?sslmode=verify-full" },
     "metricsToken":       { "value": "<openssl rand -hex 32; without it GET /metrics is public, because PAD_BEHIND_PROXY makes the private-IP allowlist vacuous>" },
 

@@ -1,0 +1,7 @@
+# responses/failed.sse through parseResponsesSSE (go test ./internal/ai/ -run TestWireGolden -update-wire)
+# one line per chunk; then the parser's return; errors by class (the sentinel) and provider message, not wrapping prose
+01 keepalive served="gpt-4.1-2025-04-14"
+02 keepalive served="gpt-4.1-2025-04-14"
+03 error=rate_limited msg="Rate limit reached for gpt-4.1 in organization org-WIRE on tokens per min (TPM). Please try again in 2s." in=512 served="gpt-4.1-2025-04-14"
+return nil
+summary chunks=3 keepalives=2 text=""

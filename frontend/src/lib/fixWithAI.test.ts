@@ -24,7 +24,6 @@ beforeEach(() => {
     activeThreadId: null,
     conversations: new Map(),
     streams: {},
-    selectedProvider: 'claude',
     stagedPrompt: null,
     drafts: {},
   })

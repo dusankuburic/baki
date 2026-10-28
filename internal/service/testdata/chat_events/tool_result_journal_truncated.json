@@ -1,0 +1,11 @@
+{
+  "data": {
+    "durationMs": 1,
+    "label": "Earlier tool calls omitted",
+    "name": "journal_truncated",
+    "ok": true,
+    "summary": "50 earlier tool calls omitted"
+  },
+  "streamId": "stream-1",
+  "type": "tool_result"
+}

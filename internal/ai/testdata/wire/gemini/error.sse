@@ -1,0 +1,5 @@
+: hand-built from the Gemini API error object ({"error":{code,message,status}}) sent after the 200, NOT a live capture; see ../README.md
+data: {"candidates": [{"content": {"parts": [{"text": "Looking at the"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 388,"candidatesTokenCount": 3,"totalTokenCount": 391},"modelVersion": "gemini-2.5-flash","responseId": "WIREgeminiError0001"}
+
+data: {"error": {"code": 503,"message": "The model is overloaded. Please try again later.","status": "UNAVAILABLE"}}
+

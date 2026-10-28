@@ -44,8 +44,6 @@ func TestValidate_EncryptionKeyPrevious(t *testing.T) {
 		previous []string
 		wantIn   string
 	}{
-		"weak in cloud mode":        {ModeCloud, strongEncKey, []string{strongPrevKey, weak}, "entry 2"},
-		"placeholder in cloud mode": {ModeCloud, strongEncKey, []string{"please-change-this-secret-in-production"}, "entry 1"},
 		"without a dedicated key":   {ModeCloud, "", []string{strongPrevKey}, "PAD_ENCRYPTION_KEY"},
 		"local without a key":       {ModeLocal, "", []string{strongPrevKey}, "PAD_ENCRYPTION_KEY"},
 		"repeats the current key":   {ModeCloud, strongEncKey, []string{strongEncKey}, "entry 1"},
@@ -77,7 +75,19 @@ func TestValidate_EncryptionKeyPrevious(t *testing.T) {
 		}
 	}
 
-	// Outside cloud mode the strength rule does not apply, as for PAD_ENCRYPTION_KEY itself.
+	// The strength rule is the current key's only: a weak or placeholder previous key is how a deployment moves off
+	// it (TestValidate_AWeakKeyCanBeRotatedAway), in every mode.
+	for _, prev := range [][]string{{strongPrevKey, weak}, {"please-change-this-secret-in-production"}} {
+		cfg := cloudCfg()
+		cfg.Auth.EncryptionKey = secret.New(strongEncKey)
+		cfg.Auth.EncryptionKeyPrevious = []secret.Value{}
+		for _, k := range prev {
+			cfg.Auth.EncryptionKeyPrevious = append(cfg.Auth.EncryptionKeyPrevious, secret.New(k))
+		}
+		if err := Validate(cfg); err != nil {
+			t.Errorf("cloud mode refused a weak previous key %d: %v", len(prev), err)
+		}
+	}
 	local := Default()
 	local.Auth.EncryptionKey = secret.New("local-key")
 	local.Auth.EncryptionKeyPrevious = []secret.Value{secret.New(weak)}

@@ -15,14 +15,20 @@ import type {
 
 const SIDEKICK_READY_DEADLINE_MS = 60_000
 
+function toConfig(raw: {port: number; token: string}): BackendConfig {
+  return {apiUrl: `http://localhost:${raw.port}`, token: raw.token, port: raw.port}
+}
+
+// The config a backend-ready event carries ({port, token} of the new process), or undefined for any other payload.
+function readyConfig(payload: unknown): BackendConfig | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const {port, token} = payload as {port?: unknown; token?: unknown}
+  if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0 || typeof token !== 'string') return undefined
+  return toConfig({port, token})
+}
+
 export class TauriAdapter implements PlatformAdapter {
   async getBackendConfig(): Promise<BackendConfig> {
-    const toConfig = (raw: {port: number; token: string}): BackendConfig => ({
-      apiUrl: `http://localhost:${raw.port}`,
-      token: raw.token,
-      port: raw.port,
-    })
-
     try {
       const raw = await invoke<{port: number; token: string}>('get_backend_config')
       return toConfig(raw)
@@ -163,7 +169,8 @@ export class TauriAdapter implements PlatformAdapter {
       listen<unknown>(name, event => {
         if (!active) return
         const payload = event.payload
-        cb({kind, message: typeof payload === 'string' ? payload : ''})
+        const config = kind === 'ready' ? readyConfig(payload) : undefined
+        cb({kind, message: typeof payload === 'string' ? payload : '', ...(config ? {config} : {})})
       })
         .then(fn => {
           if (active) unlisteners.push(fn)

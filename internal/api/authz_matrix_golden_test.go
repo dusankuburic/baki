@@ -78,6 +78,9 @@ func TestAuthzMatrix_Golden(t *testing.T) {
 		{http.MethodPost, "/api/analysis/triage/list", map[string]any{"flowId": "{orgflow}"}},
 		{http.MethodPost, "/api/analysis/comments/list", map[string]any{"flowId": "{orgflow}", "findingKey": "k-1"}},
 		{http.MethodPost, "/api/chat/fix-decision", map[string]any{"streamId": "s-1", "proposalId": "p-1", "approved": true}},
+		// Chat access to the flow (viewer, scope chat): the caller's own threads (R-security-3, R-frontend-c26).
+		{http.MethodPost, "/api/chat/threads", map[string]any{"flowId": "{orgflow}"}},
+		{http.MethodPost, "/api/chat/clear", map[string]any{"flowId": "{orgflow}", "provider": "matrix-thread"}},
 		{http.MethodPost, "/api/admin/scanner/scan", map[string]any{}},
 		{http.MethodPost, "/api/integrations/ci", map[string]any{"flowId": "{orgflow}"}},
 	}

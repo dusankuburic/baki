@@ -1,0 +1,22 @@
+{
+  "why": "Summarises one subflow from get_subflow_blocks and list_findings filtered by subflow; the most important issue (it is never called) first.",
+  "flow": "excel_workflow",
+  "question": "Give me a short overview of the FormatReport subflow and its most important issue.",
+  "expect": {
+    "toolsSubset": [
+      "get_subflow_blocks",
+      "list_findings"
+    ],
+    "mustMention": [
+      "uncalled-subflow",
+      "unhandled-error",
+      "B18"
+    ],
+    "mentionOrder": true,
+    "mustLink": [
+      "block:",
+      "finding:"
+    ],
+    "mustNotClaimChange": true
+  }
+}

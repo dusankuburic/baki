@@ -141,11 +141,13 @@ func TestMigrate_ChecksumDriftFailsBoot(t *testing.T) {
 func TestMigrateDown_RunsOnADriftedChecksum(t *testing.T) {
 	b, dsn := openIsolatedMigrationDB(t)
 	ctx := context.Background()
+	// The latest step, whichever it is: rolling back to the one before crosses it alone.
+	latest := migrations[len(migrations)-1].version
 
-	// Tamper v49's checksum
+	// Tamper the latest step's checksum
 	if _, err := b.db.ExecContext(ctx,
-		`UPDATE schema_migrations SET checksum = 'tampered_49' WHERE version = 49`); err != nil {
-		t.Fatalf("tamper v49: %v", err)
+		`UPDATE schema_migrations SET checksum = 'tampered_latest' WHERE version = $1`, latest); err != nil {
+		t.Fatalf("tamper v%d: %v", latest, err)
 	}
 
 	// New() now fails with drift
@@ -160,15 +162,15 @@ func TestMigrateDown_RunsOnADriftedChecksum(t *testing.T) {
 	}
 	defer maint.Close()
 
-	rolled, err := maint.MigrateDown(ctx, 48)
+	rolled, err := maint.MigrateDown(ctx, latest-1)
 	if err != nil {
-		t.Fatalf("MigrateDown(48) failed: %v", err)
+		t.Fatalf("MigrateDown(%d) failed: %v", latest-1, err)
 	}
-	if len(rolled) != 1 || rolled[0] != 49 {
-		t.Fatalf("expected rolled back [49], got %v", rolled)
+	if len(rolled) != 1 || rolled[0] != latest {
+		t.Fatalf("expected rolled back [%d], got %v", latest, rolled)
 	}
 
-	// New() can now boot and re-apply v49 with the valid checksum
+	// New() can now boot and re-apply the step with the valid checksum
 	b2, err := New(ctx, DefaultConfig(dsn))
 	if err != nil {
 		t.Fatalf("New() after down failed: %v", err)
@@ -176,8 +178,8 @@ func TestMigrateDown_RunsOnADriftedChecksum(t *testing.T) {
 	defer b2.Close()
 
 	cur, err := b2.CurrentSchemaVersion(ctx)
-	if err != nil || cur != 49 {
-		t.Fatalf("expected schema version 49 after re-apply, got %d (err: %v)", cur, err)
+	if err != nil || cur != latest {
+		t.Fatalf("expected schema version %d after re-apply, got %d (err: %v)", latest, cur, err)
 	}
 }
 

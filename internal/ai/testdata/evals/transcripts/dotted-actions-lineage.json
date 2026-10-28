@@ -1,0 +1,23 @@
+{
+  "recorded": "hand-authored 2026-10-27 (no live capture yet; re-record with -record-evals)",
+  "turns": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "get_variable_lineage",
+          "input": {
+            "name": "Item"
+          }
+        }
+      ],
+      "tokensIn": 2210,
+      "tokensOut": 22
+    },
+    {
+      "text": "`Item` is the loop variable of [LOOP FOREACH Item IN %ItemList%](block:B6) (line 7), which assigns it on every iteration. It is then read in:\n\n- [IF %Item% = Special](block:B7) — line 8\n- [To Upper](block:B8) — line 9\n- [Set Variable](block:B11) — line 12, in the `Else` branch\n\nNo other action writes it. Note that `ItemList` itself is never initialised, so the loop may not run at all.",
+      "tokensIn": 2300,
+      "tokensOut": 118
+    }
+  ]
+}

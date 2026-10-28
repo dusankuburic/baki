@@ -1,0 +1,17 @@
+: hand-built from the OpenAI chat-completions streaming docs (parallel tool_calls fragments keyed by index), NOT a live capture; see ../README.md
+data: {"id":"chatcmpl-WIRE0000000000000000000000002","object":"chat.completion.chunk","created":1761523201,"model":"gpt-4.1-2025-04-14","system_fingerprint":"fp_wire00001","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_WIRE00000000000000000001","type":"function","function":{"name":"get_block","arguments":""}}],"refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000002","object":"chat.completion.chunk","created":1761523201,"model":"gpt-4.1-2025-04-14","system_fingerprint":"fp_wire00001","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"block"}}]},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000002","object":"chat.completion.chunk","created":1761523201,"model":"gpt-4.1-2025-04-14","system_fingerprint":"fp_wire00001","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"Id\": \"b-12\"}"}}]},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000002","object":"chat.completion.chunk","created":1761523201,"model":"gpt-4.1-2025-04-14","system_fingerprint":"fp_wire00001","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_WIRE00000000000000000002","type":"function","function":{"name":"get_variable_lineage","arguments":""}}]},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000002","object":"chat.completion.chunk","created":1761523201,"model":"gpt-4.1-2025-04-14","system_fingerprint":"fp_wire00001","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"variable\": \"LoopIndex\"}"}}]},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000002","object":"chat.completion.chunk","created":1761523201,"model":"gpt-4.1-2025-04-14","system_fingerprint":"fp_wire00001","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"tool_calls"}],"usage":null}
+
+data: {"id":"chatcmpl-WIRE0000000000000000000000002","object":"chat.completion.chunk","created":1761523201,"model":"gpt-4.1-2025-04-14","system_fingerprint":"fp_wire00001","choices":[],"usage":{"prompt_tokens":2210,"completion_tokens":46,"total_tokens":2256,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}}
+
+data: [DONE]
+
